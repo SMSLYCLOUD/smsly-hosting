@@ -7,6 +7,7 @@ from .views_cron import CronJobViewSet
 from .views_storage import VolumeViewSet
 from .views_topology import TopologyViewSet
 from .views_analysis import RepoAnalysisView
+from .views_chat import AIChatView
 from django.urls import path
 from django.http import HttpResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -32,5 +33,6 @@ def prometheus_metrics(request):
 
 urlpatterns = router.urls + [
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
+    path('ai/chat/', AIChatView.as_view(), name='ai-chat'),
     path('metrics/prometheus/', prometheus_metrics, name='prometheus-metrics'),
 ]

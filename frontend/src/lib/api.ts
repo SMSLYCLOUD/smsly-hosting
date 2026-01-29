@@ -10,12 +10,20 @@ export interface Service {
   id: string;
   name: string;
   repository_url: string;
-  branch?: string;
-  internal_port?: number;
+  branch: string;
+  build_command?: string;
+  start_command?: string;
+  internal_port: number;
+  cpu_cores: number;
+  memory_mb: number;
+  min_replicas: number;
+  max_replicas: number;
+  autoscale_cpu_target: number;
+  use_blue_green: boolean;
+  is_preview: boolean;
+  pr_number?: number;
   public_domain?: string;
   created_at?: string;
-  cpu_cores?: number;
-  memory_mb?: number;
   latest_deployment?: {
     id: string;
     status: string;
@@ -60,8 +68,8 @@ export const servicesApi = {
     return response.data;
   },
   updateEnv: async (id: string, envVars: EnvVar[]): Promise<any> => {
-     const response = await api.post(`/services/${id}/env-vars/`, envVars);
-     return response.data;
+    const response = await api.post(`/services/${id}/env-vars/`, envVars);
+    return response.data;
   }
 };
 

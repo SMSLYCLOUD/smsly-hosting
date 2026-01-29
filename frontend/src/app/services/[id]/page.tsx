@@ -4,8 +4,13 @@ import { useEffect, useState, useRef } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
 import { useParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign } from 'lucide-react';
 import Editor from "@monaco-editor/react";
+import dynamic from 'next/dynamic';
+import { LogsTab } from '@/components/logs/LogsTab';
+import { AdvancedTab } from '@/components/settings/AdvancedTab';
+
+const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 
 export default function ServiceDetailPage() {
   const params = useParams();
@@ -35,6 +40,10 @@ export default function ServiceDetailPage() {
 
   if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
+  // Simple cost estimation logic
+  const hourlyRate = (service.cpu_cores * 0.04) + ((service.memory_mb / 1024) * 0.02);
+  const monthlyEstimate = hourlyRate * 730;
+
   return (
     <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
       {activeTab === 'overview' && (
@@ -51,9 +60,9 @@ export default function ServiceDetailPage() {
                   <p className="text-xs text-muted-foreground mt-2 font-medium">Global CDN</p>
               </div>
               <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-                  <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Error Rate</h4>
-                  <p className="text-3xl font-bold text-foreground">0.01%</p>
-                  <p className="text-xs text-emerald-500 mt-2 font-medium">All systems normal</p>
+                  <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Est. Cost</h4>
+                  <p className="text-3xl font-bold text-foreground">${monthlyEstimate.toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground mt-2 font-medium">/month (approx)</p>
               </div>
 
               <div className="col-span-1 md:col-span-2 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
@@ -103,30 +112,7 @@ export default function ServiceDetailPage() {
           </div>
       )}
 
-      {activeTab === 'logs' && (
-          <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
-              <div className="bg-white/5 p-3 border-b border-white/10 flex justify-between items-center">
-                  <div className="flex gap-2">
-                    <div className="w-3 h-3 rounded-full bg-red-500/80" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
-                    <div className="w-3 h-3 rounded-full bg-green-500/80" />
-                  </div>
-                  <div className="text-zinc-500 font-sans text-xs">live tail</div>
-              </div>
-              <div className="flex-1 p-6 overflow-y-auto text-zinc-300 leading-relaxed">
-                  {deployment?.ai_diagnosis && (
-                      <div className="bg-indigo-500/10 border-l-2 border-indigo-500 p-4 mb-6 text-indigo-200 rounded-r-lg">
-                          <strong className="flex items-center gap-2 mb-2 text-indigo-400 font-sans uppercase tracking-wider text-[10px]">
-                              <Zap size={12} /> AI Insight
-                          </strong>
-                          {deployment.ai_diagnosis}
-                      </div>
-                  )}
-                  <pre className="whitespace-pre-wrap font-mono">{deployment?.build_logs || 'Waiting for logs...'}</pre>
-                  <div ref={logsEndRef} />
-              </div>
-          </div>
-      )}
+      {activeTab === 'logs' && <LogsTab deployment={deployment} />}
 
       {activeTab === 'metrics' && (
           <div className="p-8 md:p-16 text-center border-2 border-dashed border-border rounded-xl bg-muted/20">
@@ -136,6 +122,7 @@ export default function ServiceDetailPage() {
           </div>
       )}
 
+<<<<<<< HEAD
       {activeTab === 'settings' && (
         <div className="space-y-6">
             {/* AI Configuration */}
@@ -198,6 +185,17 @@ export default function ServiceDetailPage() {
                     </button>
                 </div>
             </div>
+=======
+      {activeTab === 'advanced' && <AdvancedTab service={service} />}
+
+      {activeTab === 'console' && (
+        <div className="h-[600px] bg-zinc-950 rounded-xl overflow-hidden border border-border shadow-2xl">
+            <XtermConsole
+                wsUrl={(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1')
+                    .replace('http', 'ws')
+                    .replace('/api/v1', `/ws/terminal/${service.id}/`)}
+            />
+>>>>>>> 93e8fbee69581aeeea859dc4a341d3a35f49abaf
         </div>
       )}
     </ServiceLayout>
