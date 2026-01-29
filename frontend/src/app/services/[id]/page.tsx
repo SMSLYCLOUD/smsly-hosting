@@ -34,7 +34,7 @@ export default function ServiceDetailPage() {
   return (
     <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
       {activeTab === 'overview' && (
-          <div className="grid grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
               {/* Stats Cards */}
               <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
                   <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Uptime</h4>
@@ -52,7 +52,7 @@ export default function ServiceDetailPage() {
                   <p className="text-xs text-emerald-500 mt-2 font-medium">All systems normal</p>
               </div>
 
-              <div className="col-span-2 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
+              <div className="col-span-1 md:col-span-2 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                   <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>
                   <div className="space-y-5 text-sm">
                       <div className="flex justify-between border-b border-border pb-3">
@@ -125,7 +125,7 @@ export default function ServiceDetailPage() {
       )}
 
       {activeTab === 'metrics' && (
-          <div className="p-16 text-center border-2 border-dashed border-border rounded-xl bg-muted/20">
+          <div className="p-8 md:p-16 text-center border-2 border-dashed border-border rounded-xl bg-muted/20">
               <Activity size={48} className="mx-auto mb-4 text-muted-foreground" />
               <h3 className="text-lg font-bold text-foreground">Metrics Visualization</h3>
               <p className="text-muted-foreground max-w-sm mx-auto mt-2">Historical CPU and Memory data will be visualized here.</p>
