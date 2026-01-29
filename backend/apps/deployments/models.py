@@ -47,6 +47,10 @@ class Service(TimeStampedModel):
     parent_service = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='previews')
     pr_number = models.IntegerField(null=True, blank=True)
 
+    # Coolify Integration
+    coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True, 
+                                    help_text="UUID of the application in Coolify")
+
     def __str__(self):
         return self.name
 
