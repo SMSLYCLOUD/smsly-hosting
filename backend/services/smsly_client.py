@@ -131,6 +131,35 @@ class SMSLYClient:
         except Exception as e:
             logger.error(f"Failed to fetch user API keys: {str(e)}")
             return {}
+
+    def analyze_logs_sync(self, logs: str) -> str:
+        """
+        Analyze build logs using Jules AI to find root causes and fixes.
+
+        Args:
+            logs: Build/Runtime logs
+
+        Returns:
+            str: AI diagnosis and fix suggestion
+        """
+        try:
+            # Truncate logs if too long to avoid token limits
+            truncated_logs = logs[-10000:] if len(logs) > 10000 else logs
+
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.platform_api_url}/ai/analyze",
+                    headers=self.headers,
+                    json={
+                        "logs": truncated_logs,
+                        "context": "deployment_failure"
+                    }
+                )
+                response.raise_for_status()
+                return response.json().get("diagnosis", "No diagnosis returned.")
+        except Exception as e:
+            logger.error(f"Failed to analyze logs with Jules AI: {str(e)}")
+            return "AI Analysis failed. Please check logs manually."
     
     def send_sms_sync(
         self,

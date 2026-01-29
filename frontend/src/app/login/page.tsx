@@ -1,15 +1,52 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Github, Chrome } from 'lucide-react';
+import { Github, Chrome, Mail, Lock, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useRouter } from 'next/navigation';
+import axios from 'axios';
 
 export default function LoginPage() {
-  const handleLogin = (provider: string) => {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSocialLogin = (provider: string) => {
     // Redirect to backend auth endpoint
     window.location.href = `${process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '')}/accounts/${provider}/login/`;
+  };
+
+  const handleEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      // Assuming backend uses dj-rest-auth standard login endpoint
+      // Adjust URL if prefix is different, e.g. /api/v1/auth/login/
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+      const response = await axios.post(`${API_URL}/auth/login/`, {
+        username: email, // dj-rest-auth often uses 'username' or 'email' depending on config. Trying username=email first.
+        email: email,
+        password: password
+      });
+
+      if (response.data.key || response.data.access) {
+        // Store token (if using token auth) or just rely on cookie if session
+        // For Token/JWT: localStorage.setItem('token', response.data.key);
+        router.push('/services');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.response?.data?.non_field_errors?.[0] || 'Failed to login with provided credentials.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -37,26 +74,73 @@ export default function LoginPage() {
                 <p className="text-muted-foreground">Sign in to your SMSly Hosting console</p>
             </div>
 
-            <div className="space-y-4">
+            {/* Email Login Form */}
+            <form onSubmit={handleEmailLogin} className="space-y-4 mb-6">
+                {error && (
+                    <div className="p-3 text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-md">
+                        {error}
+                    </div>
+                )}
+                <div className="space-y-2">
+                    <div className="relative">
+                        <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                        <input
+                            type="text"
+                            placeholder="Email or Username"
+                            className="w-full pl-9 pr-4 py-2 bg-background border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                        />
+                    </div>
+                </div>
+                <div className="space-y-2">
+                    <div className="relative">
+                        <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                        <input
+                            type="password"
+                            placeholder="Password"
+                            className="w-full pl-9 pr-4 py-2 bg-background border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
+                        />
+                    </div>
+                </div>
                 <Button
-                    size="lg"
+                    type="submit"
+                    className="w-full bg-primary hover:bg-primary/90"
+                    disabled={loading}
+                >
+                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Sign In'}
+                </Button>
+            </form>
+
+            <div className="relative mb-6">
+                <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-muted" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+                <Button
                     variant="outline"
                     className="w-full relative overflow-hidden group hover:border-foreground/50 transition-all"
-                    onClick={() => handleLogin('github')}
+                    onClick={() => handleSocialLogin('github')}
                 >
-                    <Github className="mr-2 h-5 w-5" />
-                    Continue with GitHub
-                    <div className="absolute inset-0 bg-foreground/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Github className="mr-2 h-4 w-4" />
+                    <span className="ml-2">GitHub</span>
                 </Button>
                 <Button
-                    size="lg"
                     variant="outline"
                     className="w-full relative overflow-hidden group hover:border-blue-500/50 transition-all"
-                    onClick={() => handleLogin('google')}
+                    onClick={() => handleSocialLogin('google')}
                 >
-                    <Chrome className="mr-2 h-5 w-5 text-blue-500" />
-                    Continue with Google
-                    <div className="absolute inset-0 bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <Chrome className="mr-2 h-4 w-4 text-blue-500" />
+                    <span className="ml-2">Google</span>
                 </Button>
             </div>
 
