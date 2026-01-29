@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import axios from 'axios';
+import { Navbar } from '@/components/layout/Navbar';
+import { Activity, Server, Box, DollarSign } from 'lucide-react';
 
 export default function AdminDashboardPage() {
   const [stats, setStats] = useState({
@@ -24,61 +25,86 @@ export default function AdminDashboardPage() {
   }, []);
 
   return (
-    <main className="flex min-h-screen flex-col items-center p-24 bg-gray-50 dark:bg-black">
-      <h1 className="text-4xl font-bold mb-8">Operator Command Center</h1>
+    <main className="min-h-screen bg-background flex flex-col">
+      <Navbar />
 
-      <div className="grid grid-cols-4 gap-6 w-full max-w-6xl mb-12">
-        <div className="bg-white dark:bg-zinc-800 p-6 rounded-xl shadow border-l-4 border-blue-500">
-            <h3 className="text-gray-500 text-sm font-bold uppercase">Total Services</h3>
-            <p className="text-4xl font-bold mt-2">{stats.total_services}</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-800 p-6 rounded-xl shadow border-l-4 border-green-500">
-            <h3 className="text-gray-500 text-sm font-bold uppercase">Active Instances</h3>
-            <p className="text-4xl font-bold mt-2">{stats.active_instances}</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-800 p-6 rounded-xl shadow border-l-4 border-purple-500">
-            <h3 className="text-gray-500 text-sm font-bold uppercase">Total Deployments</h3>
-            <p className="text-4xl font-bold mt-2">{stats.total_deployments}</p>
-        </div>
-        <div className="bg-white dark:bg-zinc-800 p-6 rounded-xl shadow border-l-4 border-yellow-500">
-            <h3 className="text-gray-500 text-sm font-bold uppercase">Est. Monthly Revenue</h3>
-            <p className="text-4xl font-bold mt-2">${stats.revenue_estimate}</p>
-        </div>
-      </div>
+      <div className="flex-1 p-6 md:p-12 max-w-7xl mx-auto w-full">
+        <h1 className="text-3xl font-bold mb-8 text-foreground">Operator Command Center</h1>
 
-      <div className="w-full max-w-6xl bg-white dark:bg-zinc-800 rounded-xl shadow p-8">
-        <h3 className="text-xl font-bold mb-6">Recent Platform Events</h3>
-        <table className="w-full text-left">
-            <thead>
-                <tr className="border-b dark:border-zinc-700">
-                    <th className="pb-4">Event</th>
-                    <th className="pb-4">User</th>
-                    <th className="pb-4">Service</th>
-                    <th className="pb-4">Time</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr className="border-b border-gray-100 dark:border-zinc-700">
-                    <td className="py-4 text-green-600">Deployment Success</td>
-                    <td>user_123</td>
-                    <td>django-api-prod</td>
-                    <td>2 mins ago</td>
-                </tr>
-                <tr className="border-b border-gray-100 dark:border-zinc-700">
-                    <td className="py-4 text-red-600">Build Failed</td>
-                    <td>user_456</td>
-                    <td>react-frontend</td>
-                    <td>15 mins ago</td>
-                </tr>
-                <tr>
-                    <td className="py-4 text-blue-600">Add-on Provisioned</td>
-                    <td>user_789</td>
-                    <td>redis-cache-01</td>
-                    <td>1 hour ago</td>
-                </tr>
-            </tbody>
-        </table>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+            <StatsCard
+                title="Total Services"
+                value={stats.total_services}
+                icon={<Server size={20} className="text-blue-500" />}
+                color="border-blue-500"
+            />
+            <StatsCard
+                title="Active Instances"
+                value={stats.active_instances}
+                icon={<Activity size={20} className="text-green-500" />}
+                color="border-green-500"
+            />
+            <StatsCard
+                title="Total Deployments"
+                value={stats.total_deployments}
+                icon={<Box size={20} className="text-purple-500" />}
+                color="border-purple-500"
+            />
+            <StatsCard
+                title="Est. Revenue"
+                value={`$${stats.revenue_estimate.toLocaleString()}`}
+                icon={<DollarSign size={20} className="text-yellow-500" />}
+                color="border-yellow-500"
+            />
+        </div>
+
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-border">
+                <h3 className="text-xl font-bold">Recent Platform Events</h3>
+            </div>
+            <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                    <thead className="bg-muted/50">
+                        <tr>
+                            <th className="px-6 py-3 font-medium text-muted-foreground">Event</th>
+                            <th className="px-6 py-3 font-medium text-muted-foreground">User</th>
+                            <th className="px-6 py-3 font-medium text-muted-foreground">Service</th>
+                            <th className="px-6 py-3 font-medium text-muted-foreground">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                        <EventRow type="success" event="Deployment Success" user="user_123" service="django-api-prod" time="2 mins ago" />
+                        <EventRow type="error" event="Build Failed" user="user_456" service="react-frontend" time="15 mins ago" />
+                        <EventRow type="info" event="Add-on Provisioned" user="user_789" service="redis-cache-01" time="1 hour ago" />
+                    </tbody>
+                </table>
+            </div>
+        </div>
       </div>
     </main>
   );
+}
+
+function StatsCard({ title, value, icon, color }: any) {
+    return (
+        <div className={`bg-card p-6 rounded-xl shadow-sm border-l-4 ${color} border-y border-r border-border`}>
+            <div className="flex items-center justify-between mb-2">
+                <h3 className="text-muted-foreground text-xs font-bold uppercase tracking-wider">{title}</h3>
+                {icon}
+            </div>
+            <p className="text-3xl font-bold text-foreground">{value}</p>
+        </div>
+    );
+}
+
+function EventRow({ type, event, user, service, time }: any) {
+    const color = type === 'success' ? 'text-emerald-500' : type === 'error' ? 'text-red-500' : 'text-blue-500';
+    return (
+        <tr className="hover:bg-muted/50 transition-colors">
+            <td className={`px-6 py-4 font-medium ${color}`}>{event}</td>
+            <td className="px-6 py-4 text-foreground">{user}</td>
+            <td className="px-6 py-4 text-muted-foreground">{service}</td>
+            <td className="px-6 py-4 text-muted-foreground">{time}</td>
+        </tr>
+    );
 }
