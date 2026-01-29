@@ -5,8 +5,9 @@ Provides native integration with SMSLY's SMS, Voice, and Verification services
 for the hosting platform's internal use (alerts, notifications, 2FA).
 """
 import logging
-from typing import Dict, Any
 import httpx
+from typing import Optional, Dict, Any
+from django.conf import settings
 from decouple import config
 
 logger = logging.getLogger(__name__)
@@ -70,14 +71,11 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info("SMS sent to %s***: %s",
-                            to_phone[:6], result.get('message_id'))
+                logger.info(
+                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
-        except httpx.HTTPError as e:
-            logger.error("Failed to send SMS: %s", str(e))
-            return {"error": str(e), "status": "failed"}
         except Exception as e:
-            logger.error("Unexpected error sending SMS: %s", str(e))
+            logger.error(f"Failed to send SMS: {str(e)}")
             return {"error": str(e), "status": "failed"}
 
     async def send_voice_alert(
@@ -112,14 +110,11 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info("Voice alert initiated to %s***: %s",
-                            to_phone[:6], result.get('call_id'))
+                logger.info(
+                    f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
                 return result
-        except httpx.HTTPError as e:
-            logger.error("Failed to send voice alert: %s", str(e))
-            return {"error": str(e), "status": "failed"}
         except Exception as e:
-            logger.error("Unexpected error sending voice alert: %s", str(e))
+            logger.error(f"Failed to send voice alert: {str(e)}")
             return {"error": str(e), "status": "failed"}
 
     async def get_user_api_keys(self, user_id: str) -> Dict[str, str]:
@@ -141,11 +136,8 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 return response.json()
-        except httpx.HTTPError as e:
-            logger.error("Failed to fetch user API keys: %s", str(e))
-            return {}
         except Exception as e:
-            logger.error("Unexpected error fetching user API keys: %s", str(e))
+            logger.error(f"Failed to fetch user API keys: {str(e)}")
             return {}
 
     def analyze_logs_sync(self, logs: str) -> str:
@@ -173,11 +165,8 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 return response.json().get("diagnosis", "No diagnosis returned.")
-        except httpx.HTTPError as e:
-            logger.error("Failed to analyze logs with Jules AI: %s", str(e))
-            return "AI Analysis failed. Please check logs manually."
         except Exception as e:
-            logger.error("Unexpected error analyzing logs: %s", str(e))
+            logger.error(f"Failed to analyze logs with Jules AI: {str(e)}")
             return "AI Analysis failed. Please check logs manually."
 
     def send_sms_sync(
@@ -203,14 +192,11 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info("SMS sent to %s***: %s",
-                            to_phone[:6], result.get('message_id'))
+                logger.info(
+                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
-        except httpx.HTTPError as e:
-            logger.error("Failed to send SMS: %s", str(e))
-            return {"error": str(e), "status": "failed"}
         except Exception as e:
-            logger.error("Unexpected error sending SMS: %s", str(e))
+            logger.error(f"Failed to send SMS: {str(e)}")
             return {"error": str(e), "status": "failed"}
 
 

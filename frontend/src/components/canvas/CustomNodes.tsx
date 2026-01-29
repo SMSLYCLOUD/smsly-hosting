@@ -53,14 +53,11 @@ const NodeCard = ({ data, icon: Icon, colorClass, status }: any) => {
 export const ServiceNode = memo(({ data }: any) => (
   <NodeCard data={data} icon={Globe} colorClass="bg-emerald-500" status={data.status} />
 ));
-ServiceNode.displayName = 'ServiceNode';
 
 export const DatabaseNode = memo(({ data }: any) => (
   <NodeCard data={data} icon={Database} colorClass="bg-blue-500" status="ACTIVE" />
 ));
-DatabaseNode.displayName = 'DatabaseNode';
 
 export const RedisNode = memo(({ data }: any) => (
   <NodeCard data={data} icon={Activity} colorClass="bg-red-500" status="ACTIVE" />
 ));
-RedisNode.displayName = 'RedisNode';

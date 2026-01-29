@@ -99,8 +99,7 @@ def tunnel_list(request):
         if limits['tunnels'] != -1 and len(user_tunnels) >= limits['tunnels']:
             return Response(
                 {
-                    'error': f"Tunnel limit reached ({
-                        limits['tunnels']} for {tier} tier)"},
+                    'error': f"Tunnel limit reached ({limits['tunnels']} for {tier} tier)"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -266,8 +265,7 @@ def subdomain_list(request):
                 1 and len(user_subdomains) >= limits['custom_subdomains']:
             return Response(
                 {
-                    'error': f"Subdomain limit reached ({
-                        limits['custom_subdomains']} for {tier} tier)"},
+                    'error': f"Subdomain limit reached ({limits['custom_subdomains']} for {tier} tier)"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
