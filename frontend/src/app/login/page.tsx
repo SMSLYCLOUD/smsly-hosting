@@ -37,9 +37,12 @@ export default function LoginPage() {
       });
 
       if (response.data.key || response.data.access) {
-        // Store token (if using token auth) or just rely on cookie if session
-        // For Token/JWT: localStorage.setItem('token', response.data.key);
-        router.push('/services');
+        const token = response.data.key || response.data.access;
+        // Store token for API calls
+        localStorage.setItem('auth_token', token);
+        // Set cookie for middleware redirection checks
+        document.cookie = `auth_token=${token}; path=/; max-age=604800; SameSite=Lax`;
+        router.push('/');
       }
     } catch (err: any) {
       console.error(err);

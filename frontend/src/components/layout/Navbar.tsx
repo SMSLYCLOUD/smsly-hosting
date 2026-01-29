@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Box, Settings, Layout, Globe, Menu, X } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 
@@ -22,6 +22,9 @@ export function Navbar() {
             </Link>
 
             <nav className="hidden md:flex items-center space-x-6 text-sm font-medium">
+                <Link href="/" className="transition-colors hover:text-foreground/80 text-foreground/60 flex items-center gap-2">
+                    <Home size={16} /> Dashboard
+                </Link>
                 <Link href="/services" className="transition-colors hover:text-foreground/80 text-foreground/60 flex items-center gap-2">
                     <Layout size={16} /> Canvas
                 </Link>
@@ -36,7 +39,7 @@ export function Navbar() {
 
         {/* Right Side Buttons (Desktop) */}
         <div className="hidden md:flex items-center space-x-4">
-          <Link href="/get-started">
+          <Link href="/new">
               <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105">
                   Deploy Project
               </Button>
@@ -63,6 +66,9 @@ export function Navbar() {
       {isMenuOpen && (
           <div className="md:hidden bg-background border-b border-border p-4 space-y-4 shadow-xl">
             <nav className="flex flex-col space-y-4">
+                <Link href="/" className="text-foreground/80 hover:text-foreground font-medium flex items-center gap-2 p-2 rounded-lg hover:bg-muted" onClick={() => setIsMenuOpen(false)}>
+                    <Home size={18} /> Dashboard
+                </Link>
                 <Link href="/services" className="text-foreground/80 hover:text-foreground font-medium flex items-center gap-2 p-2 rounded-lg hover:bg-muted" onClick={() => setIsMenuOpen(false)}>
                     <Layout size={18} /> Canvas
                 </Link>
@@ -74,7 +80,7 @@ export function Navbar() {
                 </Link>
             </nav>
             <div className="pt-4 border-t border-border flex flex-col gap-3">
-                <Link href="/get-started" onClick={() => setIsMenuOpen(false)}>
+                <Link href="/new" onClick={() => setIsMenuOpen(false)}>
                     <Button className="w-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold">
                         Deploy Project
                     </Button>

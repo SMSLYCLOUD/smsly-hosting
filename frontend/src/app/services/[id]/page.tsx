@@ -13,9 +13,13 @@ export default function ServiceDetailPage() {
   const [service, setService] = useState<Service | null>(null);
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [aiKey, setAiKey] = useState('');
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const key = localStorage.getItem('smsly_ai_key');
+    if (key) setAiKey(key);
+
     const fetchData = async () => {
       try {
         const s = await servicesApi.get(id);
@@ -132,8 +136,37 @@ export default function ServiceDetailPage() {
           </div>
       )}
 
-      {activeTab === 'advanced' && (
+      {activeTab === 'settings' && (
         <div className="space-y-6">
+            {/* AI Configuration */}
+            <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
+                <h3 className="font-bold mb-4 text-xl">Jules AI Configuration</h3>
+                <p className="text-muted-foreground text-sm mb-4">
+                    Configure your personal API key for Jules AI to enable advanced failure analysis and suggestions.
+                </p>
+                <div className="max-w-xl">
+                    <label className="block text-sm font-medium mb-2">Jules AI API Key</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="password"
+                            placeholder="sk_..."
+                            className="flex-1 p-2 border rounded bg-background"
+                            value={aiKey}
+                            onChange={(e) => setAiKey(e.target.value)}
+                        />
+                        <button
+                            className="bg-primary text-primary-foreground px-4 py-2 rounded font-bold hover:opacity-90"
+                            onClick={() => {
+                                localStorage.setItem('smsly_ai_key', aiKey);
+                                alert('AI Key saved locally!');
+                            }}
+                        >
+                            Save
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
                 <h3 className="font-bold mb-4 text-xl">Advanced Container Configuration</h3>
                 <p className="text-muted-foreground text-sm mb-6">
