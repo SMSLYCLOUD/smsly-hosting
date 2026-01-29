@@ -1,6 +1,25 @@
 # SMSly Hosting - Installation Guide
 
-This guide covers installing SMSly Hosting on your own infrastructure.
+Deploy your own PaaS in under 2 minutes! 🚀
+
+---
+
+## ⚡ One-Line Install (Recommended)
+
+**Full automatic mode** — no prompts, just deploy:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/scripts/quick-install.sh | sudo bash -s -- --auto --domain=hosting.yoursite.com --email=admin@yoursite.com
+```
+
+**Interactive mode** — prompts for configuration:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/scripts/quick-install.sh | sudo bash
+```
+
+> [!TIP]
+> The installer will: clone repo → install Docker → configure nginx + SSL → start all services → run migrations. Done in ~2 minutes!
 
 ---
 
@@ -8,26 +27,14 @@ This guide covers installing SMSly Hosting on your own infrastructure.
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| **Control Plane** | 4GB RAM, 2 CPUs | 8GB RAM, 4 CPUs |
-| **Worker Node** | 8GB RAM, 4 CPUs | 16GB RAM, 8 CPUs |
+| **RAM** | 2GB | 4GB+ |
+| **CPU** | 2 cores | 4 cores |
 | **OS** | Ubuntu 22.04+ | Ubuntu 24.04 LTS |
 | **Domain** | Required for SSL | - |
 
 ---
 
 ## 1. Control Plane Installation
-
-The Control Plane hosts the Dashboard, API, Orchestrator, and Celery workers.
-
-### Quick Install (Recommended)
-
-```bash
-# SSH into your server
-ssh root@<your-server-ip>
-
-# Download and run the installer
-curl -sL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/scripts/install-control-plane.sh | sudo bash
-```
 
 ### Manual Install
 
@@ -116,6 +123,7 @@ docker compose restart backend celery
 ## 3. Firewall Rules
 
 ### Control Plane
+
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 22 | TCP | SSH |
@@ -124,6 +132,7 @@ docker compose restart backend celery
 | 6443 | TCP | Kubernetes API (for worker comms) |
 
 ### Worker Node
+
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 22 | TCP | SSH |
@@ -136,6 +145,7 @@ docker compose restart backend celery
 ## 4. Post-Installation
 
 ### Access Dashboard
+
 - **URL**: `https://your-domain.com`
 - **API**: `https://your-domain.com/api/v1/`
 - **Admin**: `https://your-domain.com/api/admin/`
