@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { servicesApi } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { Navbar } from '@/components/layout/Navbar';
 
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
@@ -42,78 +43,82 @@ function NewServiceForm() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center p-24">
-      <h1 className="text-4xl font-bold mb-8">Deploy New Service</h1>
-      <div className="w-full max-w-xl bg-white dark:bg-zinc-800 rounded-lg shadow p-8">
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
-              {error}
-            </div>
-          )}
+    <main className="min-h-screen flex flex-col bg-background">
+      <Navbar />
+      <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8">
+        <div className="w-full max-w-lg bg-card text-card-foreground border rounded-lg shadow-lg p-6 md:p-8">
+          <h1 className="text-3xl font-bold mb-6 text-center">Deploy New Service</h1>
 
-          <div>
-            <label className="block text-sm font-medium mb-2">Service Name</label>
-            <input
-              type="text"
-              required
-              className="w-full p-2 border rounded dark:bg-zinc-700 dark:border-zinc-600"
-              placeholder="my-awesome-app"
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">GitHub Repository URL</label>
-            <input
-              type="url"
-              required
-              className="w-full p-2 border rounded dark:bg-zinc-700 dark:border-zinc-600"
-              placeholder="https://github.com/user/repo"
-              value={formData.repository_url}
-              onChange={e => setFormData({...formData, repository_url: e.target.value})}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {error && (
+              <div className="bg-destructive/15 border border-destructive/50 text-destructive text-sm px-4 py-3 rounded relative">
+                {error}
+              </div>
+            )}
+
             <div>
-                <label className="block text-sm font-medium mb-2">Branch</label>
-                <input
+              <label className="block text-sm font-medium mb-2 text-foreground">Service Name</label>
+              <input
                 type="text"
-                className="w-full p-2 border rounded dark:bg-zinc-700 dark:border-zinc-600"
-                value={formData.branch}
-                onChange={e => setFormData({...formData, branch: e.target.value})}
-                />
+                required
+                className="w-full p-2 border rounded bg-background text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                placeholder="my-awesome-app"
+                value={formData.name}
+                onChange={e => setFormData({...formData, name: e.target.value})}
+              />
             </div>
             <div>
-                <label className="block text-sm font-medium mb-2">Port</label>
-                <input
-                type="number"
-                className="w-full p-2 border rounded dark:bg-zinc-700 dark:border-zinc-600"
-                value={formData.internal_port}
-                onChange={e => setFormData({...formData, internal_port: parseInt(e.target.value)})}
-                />
+              <label className="block text-sm font-medium mb-2 text-foreground">GitHub Repository URL</label>
+              <input
+                type="url"
+                required
+                className="w-full p-2 border rounded bg-background text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                placeholder="https://github.com/user/repo"
+                value={formData.repository_url}
+                onChange={e => setFormData({...formData, repository_url: e.target.value})}
+              />
             </div>
-          </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                  <label className="block text-sm font-medium mb-2 text-foreground">Branch</label>
+                  <input
+                  type="text"
+                  className="w-full p-2 border rounded bg-background text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                  value={formData.branch}
+                  onChange={e => setFormData({...formData, branch: e.target.value})}
+                  />
+              </div>
+              <div>
+                  <label className="block text-sm font-medium mb-2 text-foreground">Port</label>
+                  <input
+                  type="number"
+                  className="w-full p-2 border rounded bg-background text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                  value={formData.internal_port}
+                  onChange={e => setFormData({...formData, internal_port: parseInt(e.target.value)})}
+                  />
+              </div>
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium mb-2">Custom Domain (Optional)</label>
-            <input
-              type="text"
-              className="w-full p-2 border rounded dark:bg-zinc-700 dark:border-zinc-600"
-              placeholder="myapp.example.com"
-              value={formData.public_domain}
-              onChange={e => setFormData({...formData, public_domain: e.target.value})}
-            />
-          </div>
+            <div>
+              <label className="block text-sm font-medium mb-2 text-foreground">Custom Domain (Optional)</label>
+              <input
+                type="text"
+                className="w-full p-2 border rounded bg-background text-foreground focus:ring-2 focus:ring-primary focus:outline-none"
+                placeholder="myapp.example.com"
+                value={formData.public_domain}
+                onChange={e => setFormData({...formData, public_domain: e.target.value})}
+              />
+            </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white p-3 rounded font-bold hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Deploying...' : 'Deploy Now'}
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-primary text-primary-foreground p-3 rounded font-bold hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {loading ? 'Deploying...' : 'Deploy Now'}
+            </button>
+          </form>
+        </div>
       </div>
     </main>
   );

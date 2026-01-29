@@ -9,6 +9,16 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-smsly-hosting-dev-key
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
+# Security hardening
+if not DEBUG:
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # Container Registry
 CONTAINER_REGISTRY_URL = config('CONTAINER_REGISTRY_URL', default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
@@ -32,6 +42,8 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'django_celery_results',
     'encrypted_model_fields',
+    'rest_framework.authtoken',
+    'dj_rest_auth',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',

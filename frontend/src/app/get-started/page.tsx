@@ -57,9 +57,9 @@ export default function LivingOnboarding() {
 
             {phase === 'IDLE' && (
                 <div className="text-center animate-in fade-in zoom-in duration-500">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wider mb-6 border border-emerald-200">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        AI Agent Online
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold uppercase tracking-wider mb-6 border border-indigo-200">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                        Powered by Jules AI
                     </div>
                     <h1 className="text-5xl font-extrabold tracking-tight mb-6 text-foreground">
                         What are we shipping?
