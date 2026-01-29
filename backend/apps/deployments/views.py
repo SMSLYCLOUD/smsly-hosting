@@ -20,10 +20,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Auto-inject SMSly API Keys (Vertical Integration)
         # This is the key differentiator - native SMSLY platform integration
         self._inject_smsly_keys(service, self.request.user)
-        
-        # Create application in Coolify (async via Celery)
-        from .tasks import create_coolify_app_task
-        create_coolify_app_task.delay(str(service.id), str(self.request.user.id))
+    
     
     def _inject_smsly_keys(self, service, user):
         """
