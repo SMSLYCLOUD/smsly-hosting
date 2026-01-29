@@ -10,6 +10,22 @@ SMSly Hosting is an open-source Platform-as-a-Service (PaaS) that makes deployin
 
 ---
 
+## ⚡ Install in 2 Minutes
+
+```bash
+curl -fsSL https://get.smsly.cloud/hosting | sudo bash
+```
+
+Or with options:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/scripts/quick-install.sh | sudo bash -s -- --auto --domain=hosting.yoursite.com --email=admin@yoursite.com
+```
+
+> **That's it!** The script installs Docker, configures SSL, starts all services, and runs migrations automatically.
+
+---
+
 ## ✨ Key Features
 
 ### 🚀 Deployment
@@ -38,7 +54,7 @@ SMSly Hosting is an open-source Platform-as-a-Service (PaaS) that makes deployin
 
 ### 🔧 Developer Experience
 
-- **One-click Add-ons** - PostgreSQL, Redis with a single click
+- **One-click Add-ons** - PostgreSQL, Redis, MySQL, MongoDB with a single click
 - **CronJobs** - Scheduled tasks via Kubernetes CronJobs
 - **Persistent Volumes** - Stateful workloads supported
 - **Web Terminal** - SSH into running containers
@@ -74,7 +90,7 @@ SMSly Hosting is an open-source Platform-as-a-Service (PaaS) that makes deployin
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Manual Installation
 
 ### Prerequisites
 
@@ -91,7 +107,7 @@ git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
 cd smsly-hosting
 
 # Run the installer (as root)
-sudo ./scripts/install-control-plane.sh
+sudo ./scripts/quick-install.sh --domain=yourdomain.com --email=you@email.com
 ```
 
 The installer will:
