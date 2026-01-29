@@ -26,6 +26,7 @@ DOMAIN_NAME=""
 ADMIN_EMAIL=""
 AUTO_MODE=false
 SKIP_SSL=false
+NO_CLONE=false
 GITHUB_REPO="https://github.com/SMSLYCLOUD/smsly-hosting.git"
 GITHUB_RAW="https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main"
 
@@ -64,6 +65,10 @@ parse_args() {
                 ;;
             --skip-ssl)
                 SKIP_SSL=true
+                shift
+                ;;
+            --no-clone)
+                NO_CLONE=true
                 shift
                 ;;
             --help|-h)
@@ -191,6 +196,11 @@ setup_firewall() {
 
 # Clone from GitHub
 clone_repo() {
+    if [[ "$NO_CLONE" == true ]]; then
+        step "Skipping clone (using existing files)..."
+        return
+    fi
+
     step "Downloading SMSly Hosting from GitHub..."
     
     rm -rf "$INSTALL_DIR"
