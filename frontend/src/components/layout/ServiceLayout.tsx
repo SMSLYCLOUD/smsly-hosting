@@ -58,7 +58,7 @@ export const ServiceLayout = ({ service, activeTab, setActiveTab, children }: an
       {/* Sidebar */}
       <div className={clsx(
           "w-64 border-r border-zinc-200 flex flex-col bg-zinc-50/50",
-          "fixed inset-y-0 left-0 z-50 transition-transform duration-300 md:relative md:translate-x-0 bg-white",
+          "fixed inset-y-0 left-0 z-[60] transition-transform duration-300 md:relative md:translate-x-0 bg-white",
           isSidebarOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
       )}>
         <div className="p-6 border-b border-zinc-200 flex justify-between items-start">
