@@ -1,0 +1,75 @@
+{
+  "name": "SMSLY Full Ecosystem",
+  "description": "The complete SMSLY communication stack including Voice, Video, SMS, and AI services.",
+  "version": "2.0.0",
+  "services": [
+    {
+      "name": "smsly-identity-service",
+      "image": "smsly/identity-service:latest",
+      "port": 8001,
+      "env": {
+        "DATABASE_URL": "${DATABASE_URL}",
+        "REDIS_URL": "${REDIS_URL}"
+      },
+      "depends_on": []
+    },
+    {
+      "name": "smsly-backend",
+      "image": "smsly/backend:latest",
+      "port": 8000,
+      "env": {
+        "IDENTITY_SERVICE_URL": "http://smsly-identity-service:8001",
+        "DATABASE_URL": "${DATABASE_URL}",
+        "REDIS_URL": "${REDIS_URL}"
+      },
+      "depends_on": ["smsly-identity-service"]
+    },
+    {
+      "name": "smsly-video",
+      "image": "smsly/video:latest",
+      "port": 8002,
+      "env": {
+        "BACKEND_URL": "http://smsly-backend:8000"
+      },
+      "depends_on": ["smsly-backend"]
+    },
+    {
+      "name": "smsly-voice",
+      "image": "smsly/voice:latest",
+      "port": 8003,
+      "env": {
+        "BACKEND_URL": "http://smsly-backend:8000"
+      },
+      "depends_on": ["smsly-backend"]
+    },
+    {
+      "name": "smsly-sms",
+      "image": "smsly/sms:latest",
+      "port": 8004,
+      "env": {
+        "BACKEND_URL": "http://smsly-backend:8000"
+      },
+      "depends_on": ["smsly-backend"]
+    },
+    {
+      "name": "smsly-security-gateway",
+      "image": "smsly/security-gateway:latest",
+      "port": 8080,
+      "env": {
+        "UPSTREAM_BACKEND": "http://smsly-backend:8000",
+        "UPSTREAM_IDENTITY": "http://smsly-identity-service:8001"
+      },
+      "depends_on": ["smsly-backend", "smsly-identity-service"]
+    }
+  ],
+  "addons": [
+    {
+      "type": "POSTGRES",
+      "name": "shared-postgres"
+    },
+    {
+      "type": "REDIS",
+      "name": "shared-redis"
+    }
+  ]
+}

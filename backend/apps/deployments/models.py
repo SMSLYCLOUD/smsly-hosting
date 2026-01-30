@@ -2,6 +2,7 @@ import uuid
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 from django.utils.translation import gettext_lazy as _
+from apps.cloud.models import CloudProvider
 
 # Import AuditLog explicitly to register it with the app
 from .models_audit import AuditLog
@@ -19,10 +20,15 @@ class Service(TimeStampedModel):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
+
+    # Provider Integration
+    provider = models.ForeignKey(CloudProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
+
+    # Source Config
     repository_url = models.URLField(help_text="Git repository URL", blank=True, null=True)
     branch = models.CharField(max_length=255, default='main')
 
-    # New Deployment Fields
+    # Deployment Config
     DEPLOY_TYPE_CHOICES = [
         ('GIT', 'Git Repository'),
         ('DOCKER', 'Docker Image'),

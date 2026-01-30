@@ -82,6 +82,8 @@ INSTALLED_APPS = [
 
     # Local
     'apps.deployments',
+    'apps.cloud',
+    'apps.intelligence',
 ]
 
 MIDDLEWARE = [
