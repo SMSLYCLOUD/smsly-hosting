@@ -1,4 +1,5 @@
 from rest_framework import serializers, viewsets
+from rest_framework.permissions import IsAuthenticated
 from .models_templates import Template
 
 class TemplateSerializer(serializers.ModelSerializer):
@@ -9,6 +10,7 @@ class TemplateSerializer(serializers.ModelSerializer):
 class TemplateViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Template.objects.all()
     serializer_class = TemplateSerializer
+    permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
 
     def get_queryset(self):
         # Allow pre-populating dummy data for MVP if table is empty

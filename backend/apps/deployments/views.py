@@ -10,12 +10,19 @@ from .serializers import (
 from .rate_limiting import DeploymentRateThrottle, BurstRateThrottle
 
 class ServiceViewSet(viewsets.ModelViewSet):
-    queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [IsAuthenticated]
 
+    # ==========================================================================
+    # SECURITY: Zero Trust - Only return services owned by the current user
+    # ==========================================================================
+    def get_queryset(self):
+        """Filter services to only those owned by the authenticated user."""
+        return Service.objects.filter(owner=self.request.user)
+
     def perform_create(self, serializer):
-        service = serializer.save()
+        # SECURITY: Always assign owner to the authenticated user
+        service = serializer.save(owner=self.request.user)
         
         # Auto-inject SMSly API Keys (Vertical Integration)
         # This is the key differentiator - native SMSLY platform integration
@@ -88,7 +95,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='env-vars')
     def add_env_var(self, request, pk=None):
-        service = self.get_object()
+        service = self.get_object()  # SECURITY: get_object uses filtered queryset
         serializer = EnvironmentVariableSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(service=service)
@@ -97,11 +104,28 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='env-vars')
     def list_env_vars(self, request, pk=None):
-        service = self.get_object()
-        # In real world, filter out secrets or mask them
+        service = self.get_object()  # SECURITY: get_object uses filtered queryset
         queryset = service.env_vars.all()
-        serializer = EnvironmentVariableSerializer(queryset, many=True)
-        return Response(serializer.data)
+        
+        # SECURITY: Mask secret values - never expose actual secrets via API
+        data = []
+        for env_var in queryset:
+            item = {
+                'id': env_var.id,
+                'key': env_var.key,
+                'is_secret': env_var.is_secret,
+                'created_at': env_var.created_at,
+                'updated_at': env_var.updated_at,
+            }
+            # Only expose value for non-secrets
+            if env_var.is_secret:
+                item['value'] = '********'
+            else:
+                item['value'] = env_var.value
+            data.append(item)
+        
+        return Response(data)
+
 
     @action(detail=True, methods=['post'])
     def verify_domain(self, request, pk=None):
@@ -156,9 +180,15 @@ class DeploymentViewSet(mixins.CreateModelMixin,
                        mixins.RetrieveModelMixin,
                        mixins.ListModelMixin,
                        viewsets.GenericViewSet):
-    queryset = Deployment.objects.all()
     permission_classes = [IsAuthenticated]
     throttle_classes = [DeploymentRateThrottle, BurstRateThrottle]
+
+    # ==========================================================================
+    # SECURITY: Zero Trust - Only return deployments for user's own services
+    # ==========================================================================
+    def get_queryset(self):
+        """Filter deployments to only those belonging to the user's services."""
+        return Deployment.objects.filter(service__owner=self.request.user)
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -166,7 +196,15 @@ class DeploymentViewSet(mixins.CreateModelMixin,
         return DeploymentSerializer
 
     def create(self, request, *args, **kwargs):
-        # Allow creating a deployment manually (triggering a build)
+        # SECURITY: Verify user owns the service before allowing deployment
+        service_id = request.data.get('service')
+        if service_id:
+            if not Service.objects.filter(id=service_id, owner=request.user).exists():
+                return Response(
+                    {"detail": "Service not found or access denied."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
         response = super().create(request, *args, **kwargs)
         # Trigger Celery task
         from .tasks import run_deployment_task
@@ -176,8 +214,15 @@ class DeploymentViewSet(mixins.CreateModelMixin,
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
         """Rollback to this deployment."""
-        target_deployment = self.get_object()
+        target_deployment = self.get_object()  # SECURITY: Uses filtered queryset
         service = target_deployment.service
+
+        # SECURITY: Double-check ownership before rollback
+        if service.owner != request.user:
+            return Response(
+                {"detail": "Access denied."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         # Create new deployment based on the target
         new_deployment = Deployment.objects.create(
@@ -187,7 +232,7 @@ class DeploymentViewSet(mixins.CreateModelMixin,
             status=Deployment.Status.QUEUED
         )
 
-        # Trigger deployment logic (Re-build might be redundant if image exists, but safe)
+        # Trigger deployment logic
         from .tasks import run_deployment_task
         run_deployment_task.delay(new_deployment.id)
 
