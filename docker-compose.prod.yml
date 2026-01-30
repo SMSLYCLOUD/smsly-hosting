@@ -61,6 +61,12 @@ services:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
       - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - smsly-net
 
@@ -102,6 +108,12 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://hosting.smsly.cloud/api/v1}
     restart: unless-stopped
     env_file: .env
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - smsly-net
 
@@ -117,8 +129,10 @@ services:
       - media_volume:/app/media:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
-      - backend
-      - frontend
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
     networks:
       - smsly-net
 

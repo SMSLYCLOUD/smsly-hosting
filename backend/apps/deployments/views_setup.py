@@ -68,26 +68,18 @@ class SetupInitView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # 2. Set Env Variables (Persist to .env file for global config)
-        # Note: In a real container setup, modifying .env at runtime might not update process env immediately
-        # without restart, but we can update the DB-backed Global Config if we had one.
-        # For now, we will append to .env so they persist on next restart, and potentially
-        # set them in os.environ for current process visibility (limited scope).
+        # 2. Set Env Variables
+        # Update process env for immediate effect
+        for key, value in env_vars.items():
+            clean_key = key.upper().strip()
+            clean_val = value.strip()
+            if clean_key and clean_val:
+                os.environ[clean_key] = clean_val
 
-        env_file_path = os.path.join(settings.BASE_DIR, '.env')
-        try:
-            with open(env_file_path, "a") as f:
-                f.write("\n# Added via Setup Wizard\n")
-                for key, value in env_vars.items():
-                    # Basic sanitization
-                    clean_key = key.upper().strip()
-                    clean_val = value.strip()
-                    if clean_key and clean_val:
-                        f.write(f"{clean_key}={clean_val}\n")
-                        # Update current process too (hacky but useful for immediate feedback)
-                        os.environ[clean_key] = clean_val
-        except Exception as e:
-            # Non-blocking error, user created
-            print(f"Failed to write .env: {e}")
+        # Note: Writing to .env in container is ephemeral.
+        # Ideally, we should persist this to a database model or volume.
+        # But for "One-Liner" setup without external DB config, this is a best-effort.
+        # We assume the user might restart the container manually later, at which point
+        # they should put these in the docker-compose env.
 
-        return Response({"message": "Setup complete. Please login."})
+        return Response({"message": "Setup complete. Admin created. Env vars set for current session."})

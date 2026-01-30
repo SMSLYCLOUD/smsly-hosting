@@ -74,6 +74,16 @@ fi
 echo "Starting services..."
 docker compose -f docker-compose.prod.yml up -d --build
 
+echo "Waiting for services to be healthy..."
+sleep 10
+if docker compose -f docker-compose.prod.yml ps | grep -q "unhealthy"; then
+    echo "WARNING: Some services are unhealthy. Checking logs..."
+    docker compose -f docker-compose.prod.yml logs --tail=20 backend frontend nginx
+    echo "Check configuration and try again."
+else
+    echo "Services started successfully."
+fi
+
 echo "=================================================="
 echo "Installation Complete!"
 echo "Dashboard: https://$DOMAIN"
