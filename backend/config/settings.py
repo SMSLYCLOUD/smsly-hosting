@@ -274,3 +274,30 @@ LOGGING = {
         },
     },
 }
+
+# =============================================================================
+# Sentry Integration & Error Reporting
+# =============================================================================
+SENTRY_DSN = config('SENTRY_DSN', default=None)
+
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.redis import RedisIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            DjangoIntegration(),
+            CeleryIntegration(),
+            RedisIntegration(),
+        ],
+        traces_sample_rate=1.0,
+        send_default_pii=True,
+        environment=ENVIRONMENT,
+    )
+
+# Email Admins on 500 Error (if Sentry not configured or as backup)
+ADMINS = [('Admin', config('ADMIN_EMAIL', default='admin@smsly.io'))]
+SERVER_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@smsly.io')

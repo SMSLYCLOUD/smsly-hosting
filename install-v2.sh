@@ -70,6 +70,53 @@ if [ ! -f .env ]; then
     fi
 fi
 
+# Ensure ALLOWED_HOSTS is correctly configured (fixes 502/400 errors)
+# This runs even if .env already exists
+echo "Updating ALLOWED_HOSTS in .env..."
+NEW_ALLOWED_HOSTS="localhost,127.0.0.1,backend,$DOMAIN"
+if grep -q "ALLOWED_HOSTS=" .env; then
+    sed -i "s|ALLOWED_HOSTS=.*|ALLOWED_HOSTS=$NEW_ALLOWED_HOSTS|" .env
+else
+    echo "ALLOWED_HOSTS=$NEW_ALLOWED_HOSTS" >> .env
+fi
+
+# Ensure CSRF/CORS are updated (fixes 403 Forbidden on Login)
+echo "Updating CSRF/CORS settings..."
+NEW_CORS="http://localhost:3000,https://$DOMAIN"
+NEW_CSRF="https://$DOMAIN"
+
+if grep -q "CORS_ALLOWED_ORIGINS=" .env; then
+    sed -i "s|CORS_ALLOWED_ORIGINS=.*|CORS_ALLOWED_ORIGINS=$NEW_CORS|" .env
+else
+    echo "CORS_ALLOWED_ORIGINS=$NEW_CORS" >> .env
+fi
+
+if grep -q "CSRF_TRUSTED_ORIGINS=" .env; then
+    sed -i "s|CSRF_TRUSTED_ORIGINS=.*|CSRF_TRUSTED_ORIGINS=$NEW_CSRF|" .env
+else
+    echo "CSRF_TRUSTED_ORIGINS=$NEW_CSRF" >> .env
+fi
+
+# Update Nginx Configuration
+if [ -f nginx.conf ]; then
+    echo "Updating nginx.conf with domain $DOMAIN..."
+    # Replace hardcoded domain in server_name and ssl paths
+    sed -i "s/hosting.smsly.cloud/$DOMAIN/g" nginx.conf
+fi
+
+# Check/Generate SSL Certificates to prevent Nginx crash
+CERT_PATH="/etc/letsencrypt/live/$DOMAIN"
+if [ ! -f "$CERT_PATH/fullchain.pem" ]; then
+    echo "WARNING: SSL certificates for $DOMAIN not found."
+    echo "Generating self-signed certificates so Nginx can start..."
+    mkdir -p "$CERT_PATH"
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$CERT_PATH/privkey.pem" \
+        -out "$CERT_PATH/fullchain.pem" \
+        -subj "/CN=$DOMAIN"
+    echo "Self-signed certificates created at $CERT_PATH"
+fi
+
 # Build & Start
 echo "Starting services..."
 docker compose -f docker-compose.prod.yml up -d --build
