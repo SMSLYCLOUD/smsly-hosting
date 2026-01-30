@@ -1,3 +1,5 @@
+"use client"
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -45,8 +47,8 @@ export function Sidebar() {
       <div className="px-3 py-2 flex-1">
         <Link href="/dashboard" className="flex items-center pl-3 mb-14">
           <div className="relative w-8 h-8 mr-4">
-             {/* Logo Placeholder */}
-             <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold">S</div>
+            {/* Logo Placeholder */}
+            <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold">S</div>
           </div>
           <h1 className="text-2xl font-bold">SMSLY</h1>
         </Link>
