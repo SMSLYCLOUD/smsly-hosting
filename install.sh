@@ -375,9 +375,33 @@ sleep 5
 echo -e "${GREEN}✓ Backend deployed${NC}"
 
 # ============================================================
-# STEP 11: CONFIGURE NGINX
+# STEP 11: BUILD & DEPLOY FRONTEND
 # ============================================================
-echo -e "\n${YELLOW}[11/12] Configuring Nginx...${NC}"
+echo -e "\n${YELLOW}[11/13] Building and deploying frontend...${NC}"
+
+cd /opt/smsly-hosting/frontend
+
+# Build frontend Docker image with production API URL
+docker build \
+    --build-arg NEXT_PUBLIC_API_URL=https://${DOMAIN}/api/v1 \
+    -t smsly-hosting-frontend:latest .
+
+# Start frontend
+docker run -d \
+    --name smsly-frontend \
+    --restart unless-stopped \
+    -p 3000:3000 \
+    -e NEXT_PUBLIC_API_URL=https://${DOMAIN}/api/v1 \
+    smsly-hosting-frontend:latest
+
+sleep 3
+
+echo -e "${GREEN}✓ Frontend deployed${NC}"
+
+# ============================================================
+# STEP 12: CONFIGURE NGINX
+# ============================================================
+echo -e "\n${YELLOW}[12/13] Configuring Nginx...${NC}"
 
 # Remove default site
 rm -f /etc/nginx/sites-enabled/default
@@ -451,6 +475,24 @@ server {
         proxy_pass http://127.0.0.1:8000;
         access_log off;
     }
+
+    # OAuth / Social Auth (django-allauth)
+    location /accounts/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # Frontend (Next.js) - catch all
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
 }
 EOF
 
@@ -466,9 +508,9 @@ systemctl reload nginx
 echo -e "${GREEN}✓ Nginx configured${NC}"
 
 # ============================================================
-# STEP 12: SSL CERTIFICATE
+# STEP 13: SSL CERTIFICATE
 # ============================================================
-echo -e "\n${YELLOW}[12/12] Setting up SSL certificate...${NC}"
+echo -e "\n${YELLOW}[13/13] Setting up SSL certificate...${NC}"
 
 mkdir -p /var/www/certbot
 
@@ -521,6 +563,12 @@ echo -e "1. Change admin password at https://${DOMAIN}/admin/"
 echo -e "2. Configure cloud providers (AWS/Azure/GCP) in admin"
 echo -e "3. Test deployment: Create a service and deploy"
 echo -e "4. Set up monitoring and backups"
+
+if [ -n "$GITHUB_CLIENT_ID" ] || [ -n "$GOOGLE_CLIENT_ID" ]; then
+    echo -e "\n${BLUE}🔗 OAuth Callback URLs (configure in provider dashboards):${NC}"
+    echo -e "GitHub: https://${DOMAIN}/accounts/github/login/callback/"
+    echo -e "Google: https://${DOMAIN}/accounts/google/login/callback/"
+fi
 
 echo -e "\n${GREEN}✓ Ready to deploy applications!${NC}"
 
