@@ -3,6 +3,9 @@ from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
 from django.utils.translation import gettext_lazy as _
 
+# Import AuditLog explicitly to register it with the app
+from .models_audit import AuditLog
+
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -16,8 +19,20 @@ class Service(TimeStampedModel):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
-    repository_url = models.URLField(help_text="Git repository URL")
+    repository_url = models.URLField(help_text="Git repository URL", blank=True, null=True)
     branch = models.CharField(max_length=255, default='main')
+
+    # New Deployment Fields
+    DEPLOY_TYPE_CHOICES = [
+        ('GIT', 'Git Repository'),
+        ('DOCKER', 'Docker Image'),
+        ('UPLOAD', 'File Upload'),
+        ('TEMPLATE', 'Predefined Template'),
+    ]
+    deploy_type = models.CharField(max_length=20, choices=DEPLOY_TYPE_CHOICES, default='GIT')
+    docker_image = models.CharField(max_length=255, blank=True, null=True)
+
+    owner = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
 
     # Build & Run Config
     build_command = models.CharField(max_length=255, blank=True, null=True)

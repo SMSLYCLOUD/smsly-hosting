@@ -9,6 +9,16 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-smsly-hosting-dev-key
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
+# Security hardening
+if not DEBUG:
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # Container Registry
 CONTAINER_REGISTRY_URL = config('CONTAINER_REGISTRY_URL', default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
@@ -32,6 +42,8 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'django_celery_results',
     'encrypted_model_fields',
+    'rest_framework.authtoken',
+    'dj_rest_auth',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -59,6 +71,14 @@ ROOT_URLCONF = 'config.urls'
 
 SITE_ID = 1
 
+# Redirect to frontend callback after login
+LOGIN_REDIRECT_URL = '/auth/callback'
+ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
+
+# Custom Adapters to inject Token into redirect URL
+ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
+
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
@@ -71,6 +91,15 @@ SOCIALACCOUNT_PROVIDERS = {
             'repo',
             'read:org',
         ],
+    },
+    'google': {
+        'SCOPE': [
+            'profile',
+            'email',
+        ],
+        'AUTH_PARAMS': {
+            'access_type': 'online',
+        }
     }
 }
 
@@ -155,8 +184,10 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # CORS - Use allowlist in production
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL', default=False, cast=bool)
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',

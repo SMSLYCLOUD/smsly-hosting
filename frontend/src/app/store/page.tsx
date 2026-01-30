@@ -49,7 +49,7 @@ export default function AppStorePage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
                 <Input
                     placeholder="Search templates..."
-                    className="pl-10 h-12 text-base bg-white"
+                    className="pl-10 h-12 text-base bg-background text-foreground"
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                 />

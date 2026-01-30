@@ -11,12 +11,10 @@ RUN apt-get update \
         git \
         libpq-dev \
         postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Docker CLI (for DinD or socket mounting)
-RUN apt-get install -y curl \
+        curl \
     && curl -fsSL https://get.docker.com -o get-docker.sh \
-    && sh get-docker.sh
+    && sh get-docker.sh \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
