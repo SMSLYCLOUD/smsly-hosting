@@ -18,22 +18,28 @@ class SMSLYClient:
     Client for SMSLY Platform APIs.
     Used to send SMS alerts, voice calls, and verification codes.
     """
-    
+
     def __init__(self):
         # Internal SMSLY Platform API endpoints
-        self.sms_api_url = config('SMSLY_SMS_API_URL', default='http://smsly-sms:8000/api/v1')
-        self.voice_api_url = config('SMSLY_VOICE_API_URL', default='http://smsly-voice:8000/api/v1')
-        self.platform_api_url = config('SMSLY_PLATFORM_API_URL', default='http://smsly-platform-api:8000/api/v1')
-        
+        self.sms_api_url = config(
+            'SMSLY_SMS_API_URL',
+            default='http://smsly-sms:8000/api/v1')
+        self.voice_api_url = config(
+            'SMSLY_VOICE_API_URL',
+            default='http://smsly-voice:8000/api/v1')
+        self.platform_api_url = config(
+            'SMSLY_PLATFORM_API_URL',
+            default='http://smsly-platform-api:8000/api/v1')
+
         # Internal service-to-service API key
         self.internal_api_key = config('SMSLY_INTERNAL_API_KEY', default='')
-        
+
         self.headers = {
             'Authorization': f'Bearer {self.internal_api_key}',
             'Content-Type': 'application/json',
             'X-Service-Name': 'smsly-hosting'
         }
-    
+
     async def send_sms(
         self,
         to_phone: str,
@@ -42,12 +48,12 @@ class SMSLYClient:
     ) -> Dict[str, Any]:
         """
         Send SMS via SMSLY-SMS service.
-        
+
         Args:
             to_phone: Recipient phone number (E.164 format)
             message: SMS message content
             sender_id: Sender ID / alphanumeric sender
-            
+
         Returns:
             dict with message_id, status, cost
         """
@@ -65,12 +71,13 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
+                logger.info(
+                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send SMS: {str(e)}")
             return {"error": str(e), "status": "failed"}
-    
+
     async def send_voice_alert(
         self,
         to_phone: str,
@@ -80,12 +87,12 @@ class SMSLYClient:
         """
         Send voice call alert via SMSLY-VOICE service.
         Uses text-to-speech to deliver urgent alerts.
-        
+
         Args:
             to_phone: Recipient phone number (E.164 format)
             message: Message to speak
             voice: TTS voice ID
-            
+
         Returns:
             dict with call_id, status
         """
@@ -103,20 +110,21 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
+                logger.info(
+                    f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send voice alert: {str(e)}")
             return {"error": str(e), "status": "failed"}
-    
+
     async def get_user_api_keys(self, user_id: str) -> Dict[str, str]:
         """
         Fetch user's SMSLY API keys from Platform API.
         Used to auto-inject keys into deployed services.
-        
+
         Args:
             user_id: User's unique identifier
-            
+
         Returns:
             dict with api_key, api_secret
         """
@@ -160,7 +168,7 @@ class SMSLYClient:
         except Exception as e:
             logger.error(f"Failed to analyze logs with Jules AI: {str(e)}")
             return "AI Analysis failed. Please check logs manually."
-    
+
     def send_sms_sync(
         self,
         to_phone: str,
@@ -184,7 +192,8 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
+                logger.info(
+                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send SMS: {str(e)}")
