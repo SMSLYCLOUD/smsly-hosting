@@ -58,13 +58,26 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             pass
 
+        # Prepare Traefik Labels for Ingress
+        # Defaulting to .localhost for dev/local use. In prod, env var would set base domain.
+        domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
+        port = env.get('PORT', '8000')
+
+        labels = {
+            'managed_by': 'smsly-hosting',
+            'traefik.enable': 'true',
+            f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
+            f'traefik.http.routers.{name}.entrypoints': 'web',
+            f'traefik.http.services.{name}.loadbalancer.server.port': port
+        }
+
         container = self.docker_client.containers.run(
             image,
             name=name,
             environment=env,
             detach=True,
-            network=network_name, # Critical for service discovery
-            labels={'managed_by': 'smsly-hosting'}
+            network=network_name,
+            labels=labels
         )
         return container.id
 
@@ -132,7 +145,6 @@ class LocalAdapter(BaseCloudAdapter):
     def provision_database(self, db_name: str, engine: str, version: str) -> str:
         if self.docker_client:
              network_name = 'smsly-net'
-             # Ensure network exists (duplicate check for safety)
              try:
                 self.docker_client.networks.get(network_name)
              except docker.errors.NotFound:

@@ -21,9 +21,10 @@ NC='\033[0m'
 # Configuration
 DOMAIN="${DOMAIN:-smsly-hosting.com}"
 EMAIL="${EMAIL:-admin@smsly.com}"
-DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -base64 32)}"
-REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -base64 32)}"
-SECRET_KEY="$(openssl rand -base64 64)"
+# Use alphanumeric passwords to avoid URL encoding issues
+DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 24)}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 24)}"
+SECRET_KEY="$(openssl rand -hex 48)"
 INSTALL_DIR="/opt/smsly-hosting"
 
 # Generate encryption key (requires Python)

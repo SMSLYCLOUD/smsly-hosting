@@ -10,19 +10,36 @@ SMSLY Hosting v2 is a complete rewrite of the hosting platform, designed to be t
 
 ---
 
-## ⚡ Quick Install
+## ⚡ Quick Install (Local)
+
+Run this single command on Ubuntu 22.04+ to install Docker, Build Services, and the Platform:
 
 ```bash
 curl -fsSL https://get.smsly.cloud/v2/install | sudo bash
 ```
 
-Or clone and run:
+Or manually:
 
 ```bash
 git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
 cd smsly-hosting
 sudo ./install-v2.sh
 ```
+
+---
+
+## 🌐 Accessing Your Platform
+
+Once installed, the services are available at:
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| **Dashboard** | `http://localhost:3000` | The main UI for managing deployments. |
+| **API** | `http://localhost:8000` | The backend REST API. |
+| **Traefik** | `http://localhost:8080` | Edge Router Dashboard. |
+| **Deployed Apps** | `http://<app-name>.localhost` | Your deployed services (auto-routed). |
+
+> **Note:** If deploying to a remote server, replace `localhost` with your server's IP or Domain.
 
 ---
 
@@ -51,7 +68,7 @@ Manage resources across all major providers from one UI:
 - **Project Canvas:** Visual graph view of your architecture.
 - **Web Terminal:** SSH into any container directly from the browser.
 - **Real-time Logs:** WebSocket-based live streaming.
-- **Previews:** Automatic ephemeral environments for every PR.
+- **Marketplace:** One-click deploy for the full SMSLY Ecosystem (30+ services).
 
 ---
 
@@ -66,20 +83,17 @@ graph TD
         API -->|Task Queue| Celery[Celery Workers]
         API -->|Cache/Broker| Redis
         API -->|State| PG[PostgreSQL]
-        API -->|AI Analysis| Intel[Intelligence Engine]
-    end
-
-    subgraph "Data Fabric"
-        Celery -->|Provision| RDS[AWS RDS / Azure SQL]
-        Celery -->|Store| S3[S3 / Blob Storage]
+        API -->|Registry| Reg[Docker Registry :5000]
     end
 
     subgraph "Compute Fabric"
+        Celery -->|Build & Push| Reg
         Celery -->|Deploy| AWS[AWS ECS/Lambda]
         Celery -->|Deploy| Azure[Azure Apps]
-        Celery -->|Deploy| GCP[GCP Cloud Run]
-        Celery -->|Deploy| K8s[Local K3s]
+        Celery -->|Deploy| Local[Docker / K3s]
     end
+
+    Local -->|Route| Traefik[Traefik Ingress]
 ```
 
 ---
