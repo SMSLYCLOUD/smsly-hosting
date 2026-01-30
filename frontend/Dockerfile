@@ -1,6 +1,11 @@
 # Stage 1: Build
 FROM node:18-alpine AS builder
 WORKDIR /app
+
+# Accept build arguments for Next.js public env vars (baked at build time)
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 COPY package.json package-lock.json* ./
 RUN npm install
 COPY . .

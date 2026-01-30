@@ -11,9 +11,19 @@ class VolumeViewSet(viewsets.ModelViewSet):
     serializer_class = VolumeSerializer
     permission_classes = [IsAuthenticated]
 
+    # ==========================================================================
+    # SECURITY: Zero Trust - Only return volumes for user's own services
+    # ==========================================================================
     def get_queryset(self):
-        return Volume.objects.all()
+        """Filter volumes to only those belonging to the user's services."""
+        return Volume.objects.filter(service__owner=self.request.user)
 
     def perform_create(self, serializer):
+        # SECURITY: Verify user owns the service before creating volume
+        service = serializer.validated_data.get('service')
+        if service and service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Access denied to this service.")
+        
         vol = serializer.save()
         # In prod: ClusterManager.create_pvc(vol)

@@ -11,9 +11,19 @@ class CronJobViewSet(viewsets.ModelViewSet):
     serializer_class = CronJobSerializer
     permission_classes = [IsAuthenticated]
 
+    # ==========================================================================
+    # SECURITY: Zero Trust - Only return cron jobs for user's own services
+    # ==========================================================================
     def get_queryset(self):
-        return CronJob.objects.all()
+        """Filter cron jobs to only those belonging to the user's services."""
+        return CronJob.objects.filter(service__owner=self.request.user)
 
     def perform_create(self, serializer):
+        # SECURITY: Verify user owns the service before creating cron job
+        service = serializer.validated_data.get('service')
+        if service and service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Access denied to this service.")
+        
         cron = serializer.save()
         # In prod: ClusterManager.create_cronjob(cron)

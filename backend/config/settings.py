@@ -1,15 +1,40 @@
 import os
 from pathlib import Path
-from decouple import config, Csv
+from decouple import config, Csv, UndefinedValueError
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-smsly-hosting-dev-key')
-FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
+# =============================================================================
+# SECURITY: Environment Detection
+# =============================================================================
+ENVIRONMENT = config('ENVIRONMENT', default='development').lower()
+_is_production = ENVIRONMENT in ('production', 'staging', 'prod')
+
+# =============================================================================
+# SECURITY: Fail-fast for secrets in production
+# =============================================================================
+try:
+    SECRET_KEY = config('SECRET_KEY')
+except UndefinedValueError:
+    if _is_production:
+        raise RuntimeError("FATAL: SECRET_KEY is required in production!")
+    SECRET_KEY = 'django-insecure-dev-only-key-never-use-in-production'
+
+try:
+    FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
+except UndefinedValueError:
+    if _is_production:
+        raise RuntimeError("FATAL: FIELD_ENCRYPTION_KEY is required in production!")
+    FIELD_ENCRYPTION_KEY = None  # Will fail at runtime if encryption is used
+
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-# Security hardening
+# SECURITY: Prevent DEBUG=True in production
+if _is_production and DEBUG:
+    raise RuntimeError("FATAL: DEBUG=True is not allowed in production!")
+
+# Security hardening (always enabled in non-DEBUG mode)
 if not DEBUG:
     if SECRET_KEY == 'django-insecure-smsly-hosting-dev-key':
         from django.core.exceptions import ImproperlyConfigured
@@ -27,7 +52,12 @@ if not DEBUG:
 CONTAINER_REGISTRY_URL = config('CONTAINER_REGISTRY_URL', default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
+
+# SECURITY: ALLOWED_HOSTS must be explicit in production
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
+if _is_production and '*' in ALLOWED_HOSTS:
+    raise RuntimeError("FATAL: ALLOWED_HOSTS='*' is not allowed in production!")
+
 CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app', cast=Csv())
 
 INSTALLED_APPS = [
@@ -75,6 +105,14 @@ ROOT_URLCONF = 'config.urls'
 
 SITE_ID = 1
 
+# Redirect to frontend callback after login
+LOGIN_REDIRECT_URL = '/auth/callback'
+ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
+
+# Custom Adapters to inject Token into redirect URL
+ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
+SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
+
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
     'allauth.account.auth_backends.AuthenticationBackend',
@@ -87,6 +125,15 @@ SOCIALACCOUNT_PROVIDERS = {
             'repo',
             'read:org',
         ],
+    },
+    'google': {
+        'SCOPE': [
+            'profile',
+            'email',
+        ],
+        'AUTH_PARAMS': {
+            'access_type': 'online',
+        }
     }
 }
 
@@ -171,8 +218,10 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # CORS - Use allowlist in production
+CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL', default=False, cast=bool)
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',

@@ -17,11 +17,23 @@ class AddonSerializer(serializers.ModelSerializer):
 
 
 class AddonViewSet(viewsets.ModelViewSet):
-    queryset = Addon.objects.all()
     serializer_class = AddonSerializer
     permission_classes = [IsAuthenticated]
 
+    # ==========================================================================
+    # SECURITY: Zero Trust - Only return addons for user's own services
+    # ==========================================================================
+    def get_queryset(self):
+        """Filter addons to only those belonging to the user's services."""
+        return Addon.objects.filter(service__owner=self.request.user)
+
     def perform_create(self, serializer):
+        # SECURITY: Verify user owns the service before creating addon
+        service = serializer.validated_data.get('service')
+        if service and service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Access denied to this service.")
+        
         addon = serializer.save()
         # Trigger async provisioning via Celery (uses Docker-native provisioner)
         from .tasks import provision_addon_task

@@ -7,6 +7,8 @@ export const metadata: Metadata = {
   description: "Next-gen hosting platform",
 };
 
+import { FloatingAI } from "@/components/ai/FloatingAI";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -22,6 +24,7 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             {children}
+            <FloatingAI />
         </ThemeProvider>
       </body>
     </html>
