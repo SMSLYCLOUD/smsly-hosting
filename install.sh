@@ -38,6 +38,23 @@ fi
 echo -e "${GREEN}✓ Configuration loaded${NC}"
 
 # ============================================================
+# OAUTH CONFIGURATION (Optional)
+# ============================================================
+echo -e "\n${BLUE}OAuth Configuration (for social login)${NC}"
+echo "Press Enter to skip any field if you don't have the credentials yet."
+echo ""
+
+# GitHub OAuth
+read -p "GitHub OAuth Client ID (optional): " GITHUB_CLIENT_ID
+read -p "GitHub OAuth Client Secret (optional): " GITHUB_CLIENT_SECRET
+
+# Google OAuth
+read -p "Google OAuth Client ID (optional): " GOOGLE_CLIENT_ID
+read -p "Google OAuth Client Secret (optional): " GOOGLE_CLIENT_SECRET
+
+echo -e "${GREEN}✓ OAuth configuration collected${NC}"
+
+# ============================================================
 # STEP 1: COMPLETE DATA WIPE
 # ============================================================
 echo -e "\n${RED}[1/12] Wiping existing data...${NC}"
@@ -214,6 +231,14 @@ CONTAINER_REGISTRY_URL=
 
 # AI Features (optional)
 # GEMINI_API_KEY=
+
+# OAuth - GitHub
+GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+
+# OAuth - Google
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
 EOF
 
 echo -e "${GREEN}✓ Backend configured${NC}"
@@ -250,6 +275,55 @@ if not User.objects.filter(username='admin').exists():
 else:
     print('Superuser already exists');
 "
+
+# Configure social auth if OAuth credentials provided
+if [ -n "$GITHUB_CLIENT_ID" ] || [ -n "$GOOGLE_CLIENT_ID" ]; then
+    echo "Configuring social authentication..."
+    docker run --rm \
+        --network host \
+        --env-file .env \
+        smsly-hosting-backend:latest \
+        python manage.py shell -c "
+from django.contrib.sites.models import Site
+from allauth.socialaccount.models import SocialApp
+
+# Update site domain
+site, _ = Site.objects.get_or_create(id=1)
+site.domain = '${DOMAIN}'
+site.name = 'SMSLY Hosting'
+site.save()
+print('Site configured: ${DOMAIN}')
+
+# Configure GitHub OAuth
+github_client_id = '${GITHUB_CLIENT_ID}'
+github_client_secret = '${GITHUB_CLIENT_SECRET}'
+if github_client_id:
+    SocialApp.objects.filter(provider='github').delete()
+    github = SocialApp.objects.create(
+        provider='github',
+        name='GitHub',
+        client_id=github_client_id,
+        secret=github_client_secret
+    )
+    github.sites.add(site)
+    print('GitHub OAuth configured')
+
+# Configure Google OAuth
+google_client_id = '${GOOGLE_CLIENT_ID}'
+google_client_secret = '${GOOGLE_CLIENT_SECRET}'
+if google_client_id:
+    SocialApp.objects.filter(provider='google').delete()
+    google = SocialApp.objects.create(
+        provider='google',
+        name='Google',
+        client_id=google_client_id,
+        secret=google_client_secret
+    )
+    google.sites.add(site)
+    print('Google OAuth configured')
+"
+    echo -e "${GREEN}✓ Social authentication configured${NC}"
+fi
 
 # Collect static files
 echo "Collecting static files..."
