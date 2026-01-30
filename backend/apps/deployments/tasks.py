@@ -158,3 +158,102 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             logger.info(f"Cleaned up build directory after failure: {source_dir}")
         
         raise self.retry(exc=e, countdown=30)
+
+
+@shared_task(bind=True, max_retries=3)
+def provision_addon_task(self, addon_id: str):
+    """
+    Provisions an addon (database, cache, etc.) on the cloud provider.
+    """
+    from apps.deployments.models_addons import Addon
+    
+    try:
+        addon = Addon.objects.get(id=addon_id)
+        addon.status = Addon.Status.PROVISIONING
+        addon.save()
+        
+        logger.info(f"Provisioning addon: {addon.name} ({addon.addon_type})")
+        
+        # Get the cloud provider's data service
+        provider = addon.service.provider if addon.service else None
+        if not provider:
+            raise ValueError("No cloud provider associated with addon")
+        
+        data_service = DataService(provider)
+        
+        # Provision based on addon type
+        if addon.addon_type == 'POSTGRES':
+            resource = data_service.provision_database(
+                name=addon.name,
+                engine='postgres',
+                size='db.t3.micro'
+            )
+            addon.connection_string = resource.get('connection_string', '')
+            
+        elif addon.addon_type == 'REDIS':
+            resource = data_service.provision_cache(
+                name=addon.name,
+                engine='redis',
+                size='cache.t3.micro'
+            )
+            addon.connection_string = resource.get('connection_string', '')
+            
+        elif addon.addon_type == 'MYSQL':
+            resource = data_service.provision_database(
+                name=addon.name,
+                engine='mysql',
+                size='db.t3.micro'
+            )
+            addon.connection_string = resource.get('connection_string', '')
+        
+        else:
+            raise ValueError(f"Unsupported addon type: {addon.addon_type}")
+        
+        addon.status = Addon.Status.ACTIVE
+        addon.save()
+        
+        logger.info(f"Addon {addon.name} provisioned successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to provision addon {addon_id}: {e}")
+        addon.status = Addon.Status.FAILED
+        addon.save()
+        raise self.retry(exc=e, countdown=60)
+
+
+@shared_task(bind=True, max_retries=3)
+def deprovision_addon_task(self, addon_id: str):
+    """
+    Deprovisions (deletes) an addon from the cloud provider.
+    """
+    from apps.deployments.models_addons import Addon
+    
+    try:
+        addon = Addon.objects.get(id=addon_id)
+        addon.status = Addon.Status.DEPROVISIONING
+        addon.save()
+        
+        logger.info(f"Deprovisioning addon: {addon.name}")
+        
+        provider = addon.service.provider if addon.service else None
+        if not provider:
+            logger.warning(f"No provider for addon {addon.name}, marking as deleted")
+            addon.delete()
+            return
+        
+        data_service = DataService(provider)
+        
+        # Deprovision based on addon type
+        if addon.addon_type in ['POSTGRES', 'MYSQL']:
+            data_service.delete_database(addon.name)
+        elif addon.addon_type == 'REDIS':
+            data_service.delete_cache(addon.name)
+        
+        # Delete the addon record
+        addon.delete()
+        logger.info(f"Addon {addon.name} deprovisioned successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to deprovision addon {addon_id}: {e}")
+        raise self.retry(exc=e, countdown=60)
+
