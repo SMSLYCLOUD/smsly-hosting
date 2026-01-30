@@ -1,5 +1,4 @@
 # SMSLY Hosting Production Stack
-# No version - docker compose v2+ handles this
 
 services:
   db:
@@ -36,7 +35,7 @@ services:
     image: registry:2
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5000:5000"  # Localhost only
+      - "127.0.0.1:5000:5000"
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     volumes:
@@ -62,12 +61,6 @@ services:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
       - /var/run/docker.sock:/var/run/docker.sock
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`hosting.smsly.cloud`) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/accounts`))"
-      - "traefik.http.routers.backend.entrypoints=websecure"
-      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.backend.loadbalancer.server.port=8000"
     networks:
       - smsly-net
 
@@ -109,41 +102,23 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://hosting.smsly.cloud/api/v1}
     restart: unless-stopped
     env_file: .env
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`hosting.smsly.cloud`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
     networks:
       - smsly-net
 
-  traefik:
-    image: traefik:v2.10
+  nginx:
+    image: nginx:alpine
     restart: unless-stopped
-    command:
-      - "--api.dashboard=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@smsly.cloud}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - letsencrypt_data:/letsencrypt
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.dashboard.rule=Host(`traefik.hosting.smsly.cloud`)"
-      - "traefik.http.routers.dashboard.service=api@internal"
-      - "traefik.http.routers.dashboard.entrypoints=websecure"
-      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - backend
+      - frontend
     networks:
       - smsly-net
 
@@ -157,4 +132,3 @@ volumes:
   registry_data:
   static_volume:
   media_volume:
-  letsencrypt_data:
