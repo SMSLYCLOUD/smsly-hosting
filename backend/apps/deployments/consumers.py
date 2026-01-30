@@ -4,7 +4,6 @@ import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
-from rest_framework.authtoken.models import Token
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +84,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user."""
+        # Import inside method to avoid AppRegistryNotReady error
+        from rest_framework.authtoken.models import Token
         try:
             token = Token.objects.select_related('user').get(key=token_key)
             return token.user
