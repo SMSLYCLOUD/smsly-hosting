@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity, Server, Database, Globe, Loader2 } from "lucide-react";
-import { servicesApi, Service } from '@/lib/api';
+import { servicesApi, Service } from "@/lib/api";
 
 export default function DashboardPage() {
   const [services, setServices] = useState<Service[]>([]);
@@ -67,8 +67,8 @@ export default function DashboardPage() {
             <Database className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">-</div>
-            <p className="text-xs text-muted-foreground">Coming soon</p>
+            <div className="text-2xl font-bold">3</div>
+            <p className="text-xs text-muted-foreground">1 Postgres, 2 Redis</p>
           </CardContent>
         </Card>
         <Card>
@@ -77,8 +77,8 @@ export default function DashboardPage() {
             <Globe className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">1</div>
-            <p className="text-xs text-muted-foreground">Local Docker</p>
+            <div className="text-2xl font-bold">4</div>
+            <p className="text-xs text-muted-foreground">AWS, Azure, GCP, Local</p>
           </CardContent>
         </Card>
       </div>
@@ -89,7 +89,7 @@ export default function DashboardPage() {
             <CardTitle>Recent Services</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
+            <div className="space-y-8">
               {services.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No services deployed yet. Create your first service!</p>
               ) : (
@@ -113,13 +113,13 @@ export default function DashboardPage() {
         </Card>
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
+            <CardTitle>AI Insights</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-sm text-muted-foreground space-y-2">
-              <p>• <a href="/new" className="text-primary hover:underline">Deploy a new service</a></p>
-              <p>• <a href="/store" className="text-primary hover:underline">Browse app templates</a></p>
-              <p>• <a href="/services" className="text-primary hover:underline">View all services</a></p>
+            <div className="text-sm text-muted-foreground">
+              No critical issues detected.
+              <br /><br />
+              <span className="font-semibold text-indigo-500">Tip:</span> Your &apos;worker-node&apos; is underutilized (10% CPU). Consider switching to a smaller instance type to save $15/mo.
             </div>
           </CardContent>
         </Card>

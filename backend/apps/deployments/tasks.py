@@ -163,103 +163,65 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         raise self.retry(exc=e, countdown=30)
 
 # ==============================================================================
-# LEGACY: Addon Provisioning (Restored)
+# LEGACY: Addon Provisioning (Docker-native)
 # ==============================================================================
 
 @shared_task(bind=True, max_retries=3)
 def provision_addon_task(self, addon_id: str):
     """
-    Provisions an addon (database, cache, etc.) on the cloud provider.
+    Provision a database addon using Docker containers.
     """
     from apps.deployments.models_addons import Addon
+    from apps.deployments.models import EnvironmentVariable
+    from services.addon_provisioner import addon_provisioner
+    
+    ENV_KEY_MAP = {
+        Addon.Type.POSTGRES: 'DATABASE_URL',
+        Addon.Type.REDIS: 'REDIS_URL',
+        Addon.Type.MYSQL: 'MYSQL_URL',
+        Addon.Type.MONGODB: 'MONGODB_URI',
+    }
     
     try:
         addon = Addon.objects.get(id=addon_id)
-        addon.status = Addon.Status.PROVISIONING
-        addon.save()
+        logger.info(f"Provisioning addon {addon.name} ({addon.addon_type})")
         
-        logger.info(f"Provisioning addon: {addon.name} ({addon.addon_type})")
+        # Create container via Docker
+        container_id, connection_url = addon_provisioner.provision(addon)
         
-        # Get the cloud provider's data service
-        provider = addon.service.provider if addon.service else None
-        if not provider:
-            raise ValueError("No cloud provider associated with addon")
-        
-        data_service = DataService(provider)
-        
-        # Provision based on addon type
-        if addon.addon_type == 'POSTGRES':
-            resource = data_service.provision_database(
-                name=addon.name,
-                engine='postgres',
-                size='db.t3.micro'
-            )
-            addon.connection_string = resource.get('connection_string', '')
-            
-        elif addon.addon_type == 'REDIS':
-            resource = data_service.provision_cache(
-                name=addon.name,
-                engine='redis',
-                size='cache.t3.micro'
-            )
-            addon.connection_string = resource.get('connection_string', '')
-            
-        elif addon.addon_type == 'MYSQL':
-            resource = data_service.provision_database(
-                name=addon.name,
-                engine='mysql',
-                size='db.t3.micro'
-            )
-            addon.connection_string = resource.get('connection_string', '')
-        
-        else:
-            raise ValueError(f"Unsupported addon type: {addon.addon_type}")
-        
+        addon.connection_url = connection_url
         addon.status = Addon.Status.ACTIVE
+        addon.coolify_uuid = container_id
         addon.save()
+        
+        # Inject connection URL if attached to a service
+        if addon.service:
+            env_key = ENV_KEY_MAP.get(addon.addon_type, f"{addon.addon_type}_URL")
+            EnvironmentVariable.objects.update_or_create(
+                service=addon.service,
+                key=env_key,
+                defaults={'value': connection_url, 'is_secret': True}
+            )
         
         logger.info(f"Addon {addon.name} provisioned successfully")
         
     except Exception as e:
         logger.error(f"Failed to provision addon {addon_id}: {e}")
-        addon.status = Addon.Status.FAILED
-        addon.save()
-        raise self.retry(exc=e, countdown=60)
+        raise self.retry(exc=e, countdown=30)
 
-
-@shared_task(bind=True, max_retries=3)
-def deprovision_addon_task(self, addon_id: str):
-    """
-    Deprovisions (deletes) an addon from the cloud provider.
-    """
+@shared_task
+def deprovision_addon_task(addon_id: str):
+    """Delete addon container."""
     from apps.deployments.models_addons import Addon
+    from apps.deployments.models import EnvironmentVariable
+    from services.addon_provisioner import addon_provisioner
     
     try:
         addon = Addon.objects.get(id=addon_id)
-        addon.status = Addon.Status.DEPROVISIONING
+        if addon.coolify_uuid:
+            addon_provisioner.deprovision(addon.coolify_uuid, f"addon-{addon.id}")
+        
+        addon.status = Addon.Status.DELETED
         addon.save()
-        
-        logger.info(f"Deprovisioning addon: {addon.name}")
-        
-        provider = addon.service.provider if addon.service else None
-        if not provider:
-            logger.warning(f"No provider for addon {addon.name}, marking as deleted")
-            addon.delete()
-            return
-        
-        data_service = DataService(provider)
-        
-        # Deprovision based on addon type
-        if addon.addon_type in ['POSTGRES', 'MYSQL']:
-            data_service.delete_database(addon.name)
-        elif addon.addon_type == 'REDIS':
-            data_service.delete_cache(addon.name)
-        
-        # Delete the addon record
-        addon.delete()
-        logger.info(f"Addon {addon.name} deprovisioned successfully")
-        
     except Exception as e:
-        logger.error(f"Failed to deprovision addon {addon_id}: {e}")
-        raise self.retry(exc=e, countdown=60)
-
+        logger.error(f"Failed to deprovision: {e}")

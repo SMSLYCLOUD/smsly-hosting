@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { LayoutDashboard, PlusCircle, Settings, Box, Activity } from "lucide-react";
 
 export function Sidebar() {

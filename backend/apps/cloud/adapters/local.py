@@ -58,8 +58,7 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             pass
 
-        # Prepare Traefik Labels for Ingress
-        # Defaulting to .localhost for dev/local use. In prod, env var would set base domain.
+        # Traefik Labels with Let's Encrypt Support
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
         port = env.get('PORT', '8000')
 
@@ -67,7 +66,8 @@ class LocalAdapter(BaseCloudAdapter):
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
-            f'traefik.http.routers.{name}.entrypoints': 'web',
+            f'traefik.http.routers.{name}.entrypoints': 'websecure',  # HTTPS
+            f'traefik.http.routers.{name}.tls.certresolver': 'myresolver',  # Let's Encrypt
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
@@ -144,20 +144,20 @@ class LocalAdapter(BaseCloudAdapter):
 
     def provision_database(self, db_name: str, engine: str, version: str) -> str:
         if self.docker_client:
-             network_name = 'smsly-net'
-             try:
+            network_name = 'smsly-net'
+            try:
                 self.docker_client.networks.get(network_name)
-             except docker.errors.NotFound:
+            except docker.errors.NotFound:
                 self.docker_client.networks.create(network_name, driver="bridge")
 
-             container = self.docker_client.containers.run(
+            container = self.docker_client.containers.run(
                 f"{engine}:{version}-alpine",
                 name=f"db-{db_name}",
                 environment={"POSTGRES_PASSWORD": "password"},
                 detach=True,
                 network=network_name
             )
-             return container.id
+            return container.id
         return "local-db-provisioned"
 
     def create_vpc(self, cidr_block: str) -> str:

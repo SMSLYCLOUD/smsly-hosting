@@ -1,4 +1,5 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import DeploymentViewSet, ServiceViewSet
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
@@ -7,6 +8,7 @@ from .views_storage import VolumeViewSet
 from .views_cron import CronJobViewSet
 from .views_topology import TopologyViewSet
 from .views_blueprints import BlueprintViewSet
+from .views_webhooks import GitHubWebhookView
 
 router = DefaultRouter()
 
@@ -23,4 +25,6 @@ router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'deployments', DeploymentViewSet, basename='deployments')
 router.register(r'blueprints', BlueprintViewSet, basename='blueprints')
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path('integrations/github/', GitHubWebhookView.as_view(), name='github-webhook'),
+]

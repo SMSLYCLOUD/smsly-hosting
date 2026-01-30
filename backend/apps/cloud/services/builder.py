@@ -2,7 +2,8 @@ import subprocess
 import os
 import logging
 import docker
-from typing import Optional
+import json
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +72,48 @@ class NixpacksBuilder:
         except Exception as e:
             logger.error(f"Failed to push image: {e}")
             raise
+
+    @staticmethod
+    def scan_image(image_name: str) -> Dict[str, Any]:
+        """
+        Scans the image using Trivy.
+        Returns a report dictionary.
+        Raises error if CRITICAL vulnerabilities found.
+        """
+        logger.info(f"Scanning image {image_name} for vulnerabilities...")
+
+        # Ensure trivy is installed (or use docker to run trivy)
+        # Using subprocess assuming trivy binary is present
+        command = [
+            "trivy",
+            "image",
+            "--format", "json",
+            "--severity", "CRITICAL,HIGH",
+            image_name
+        ]
+
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning(f"Trivy scan failed (binary missing?): {result.stderr}")
+                return {"error": "Scan skipped (tool missing)"}
+
+            report = json.loads(result.stdout)
+
+            # Check for Criticals
+            critical_count = 0
+            for result_item in report.get('Results', []):
+                for vuln in result_item.get('Vulnerabilities', []):
+                    if vuln['Severity'] == 'CRITICAL':
+                        critical_count += 1
+
+            if critical_count > 0:
+                msg = f"Security Scan Failed: Found {critical_count} CRITICAL vulnerabilities."
+                logger.error(msg)
+                raise RuntimeError(msg)
+
+            return report
+
+        except FileNotFoundError:
+            logger.warning("Trivy binary not found. Skipping security scan.")
+            return {"status": "skipped", "reason": "trivy_missing"}

@@ -84,6 +84,9 @@ INSTALLED_APPS = [
     'apps.deployments',
     'apps.cloud',
     'apps.intelligence',
+    'apps.billing',
+    'apps.teams',
+    'apps.domains',
 ]
 
 MIDDLEWARE = [
@@ -138,7 +141,7 @@ SOCIALACCOUNT_PROVIDERS = {
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates'],
+        'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

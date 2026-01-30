@@ -15,7 +15,7 @@ import dagre from 'dagre';
 import { ServiceNode, DatabaseNode, RedisNode } from '@/components/canvas/CustomNodes';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import { Plus, LayoutGrid, Network, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, LayoutGrid, Network } from 'lucide-react';
 import { Navbar } from '@/components/layout/Navbar';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -61,39 +61,27 @@ export default function ServicesPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [services, setServices] = useState<Service[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const svcs = await servicesApi.list();
-        setServices(svcs || []);
+      const svcs = await servicesApi.list();
+      setServices(svcs);
 
-        const newNodes: Node[] = [];
-        const newEdges: Edge[] = [];
+      const newNodes: Node[] = [];
+      const newEdges: Edge[] = [];
 
-        (svcs || []).forEach((svc: Service) => {
-          newNodes.push({
-            id: svc.id,
-            type: 'SERVICE',
-            data: { label: svc.name, subLabel: svc.repository_url, status: svc.latest_deployment?.status || 'UNKNOWN' },
-            position: { x: 0, y: 0 }
-          });
+      svcs.forEach((svc: Service) => {
+        newNodes.push({
+          id: svc.id,
+          type: 'SERVICE',
+          data: { label: svc.name, subLabel: svc.repository_url, status: svc.latest_deployment?.status || 'UNKNOWN' },
+          position: { x: 0, y: 0 }
         });
+      });
 
-        const layout = getLayoutedElements(newNodes, newEdges);
-        setNodes(layout.nodes);
-        setEdges(layout.edges);
-      } catch (err: any) {
-        console.error('Failed to fetch services:', err);
-        setError(err?.response?.status === 401 ? 'Please log in to view services' : 'Failed to load services');
-        setServices([]);
-      } finally {
-        setLoading(false);
-      }
+      const layout = getLayoutedElements(newNodes, newEdges);
+      setNodes(layout.nodes);
+      setEdges(layout.edges);
     };
     fetchData();
   }, [setNodes, setEdges]);
@@ -109,25 +97,25 @@ export default function ServicesPage() {
       {/* View Toggle Bar */}
       <div className="border-b border-border bg-card/50 backdrop-blur px-6 py-3 flex justify-between items-center z-20">
         <div className="flex gap-2">
-          <Button
-            variant={viewMode === 'GRID' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => setViewMode('GRID')}
-            className="gap-2"
-          >
-            <LayoutGrid size={16} /> Grid
-          </Button>
-          <Button
-            variant={viewMode === 'CANVAS' ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => setViewMode('CANVAS')}
-            className="gap-2"
-          >
-            <Network size={16} /> Canvas
-          </Button>
+            <Button
+                variant={viewMode === 'GRID' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('GRID')}
+                className="gap-2"
+            >
+                <LayoutGrid size={16} /> Grid
+            </Button>
+            <Button
+                variant={viewMode === 'CANVAS' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('CANVAS')}
+                className="gap-2"
+            >
+                <Network size={16} /> Canvas
+            </Button>
         </div>
         <Button onClick={() => router.push('/new')} className="shadow-lg bg-primary hover:bg-primary/90 text-white font-bold rounded-full px-6 h-8 text-xs">
-          <Plus className="mr-2 h-3 w-3" /> New Service
+            <Plus className="mr-2 h-3 w-3" /> New Service
         </Button>
       </div>
 
@@ -137,35 +125,25 @@ export default function ServicesPage() {
         transition={{ duration: 0.5 }}
         className="flex-1 relative overflow-hidden bg-dot-pattern"
       >
-        {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4">
-            <AlertCircle className="h-12 w-12 text-destructive" />
-            <p className="text-muted-foreground">{error}</p>
-            <Button onClick={() => router.push('/login')} variant="outline">Go to Login</Button>
-          </div>
-        ) : viewMode === 'CANVAS' ? (
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={onNodeClick}
-            nodeTypes={nodeTypes}
-            connectionLineType={ConnectionLineType.SmoothStep}
-            fitView
-            className="bg-background/50"
-          >
-            <Background color="currentColor" gap={30} size={1} className="text-muted-foreground/20" />
-            <Controls className="!bg-card !border-border !fill-foreground !shadow-lg !rounded-xl m-4" />
-          </ReactFlow>
+        {viewMode === 'CANVAS' ? (
+            <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                nodeTypes={nodeTypes}
+                connectionLineType={ConnectionLineType.SmoothStep}
+                fitView
+                className="bg-background/50"
+            >
+                <Background color="currentColor" gap={30} size={1} className="text-muted-foreground/20" />
+                <Controls className="!bg-card !border-border !fill-foreground !shadow-lg !rounded-xl m-4" />
+            </ReactFlow>
         ) : (
-          <div className="h-full overflow-y-auto">
-            <ServicesGrid services={services} />
-          </div>
+            <div className="h-full overflow-y-auto">
+                <ServicesGrid services={services} />
+            </div>
         )}
       </motion.div>
     </main>

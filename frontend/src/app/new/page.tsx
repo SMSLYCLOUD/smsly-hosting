@@ -158,7 +158,7 @@ function NewServiceContent() {
         <p className="text-muted-foreground">Get your code running in minutes.</p>
       </div>
 
-      <Tabs defaultValue="git" className="w-full">
+      <Tabs defaultValue={templateConfig ? "docker" : "git"} className="w-full">
         <TabsList className="grid w-full grid-cols-2 mb-8">
           <TabsTrigger value="git" onClick={() => setDeployType("GIT")}>
             <Github className="mr-2 h-4 w-4" /> Git Repository
