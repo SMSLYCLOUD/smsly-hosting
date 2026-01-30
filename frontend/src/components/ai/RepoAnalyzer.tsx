@@ -1,11 +1,20 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2, CheckCircle2, AlertCircle, Sparkles, Github, Zap } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import axios from 'axios';
-import debounce from 'lodash.debounce';
+
+// Simple debounce utility
+function useDebounce<T extends (...args: any[]) => any>(fn: T, delay: number): T {
+    const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    return useCallback((...args: Parameters<T>) => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(() => fn(...args), delay);
+    }, [fn, delay]) as T;
+}
 
 // Framework icons/colors
 const FRAMEWORK_INFO: Record<string, { color: string; label: string; icon: string }> = {
@@ -82,11 +91,8 @@ export function RepoAnalyzer({ onAnalysisComplete, initialUrl = '' }: RepoAnalyz
         }
     }, [onAnalysisComplete]);
 
-    // Debounced analysis
-    const debouncedAnalyze = useCallback(
-        debounce((url: string) => analyzeRepo(url), 800),
-        [analyzeRepo]
-    );
+    // Debounced analysis using custom hook
+    const debouncedAnalyze = useDebounce(analyzeRepo, 800);
 
     useEffect(() => {
         if (repoUrl && repoUrl.includes('github.com')) {
