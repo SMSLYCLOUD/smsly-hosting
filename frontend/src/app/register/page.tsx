@@ -1,10 +1,13 @@
+"use client";
+
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Github, Chrome } from "lucide-react";
 
 export default function RegisterPage() {
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    // Use backend base URL (without /api/v1) for OAuth endpoints
+    const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
@@ -20,13 +23,13 @@ export default function RegisterPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <Button variant="outline" className="w-full h-11 relative" asChild>
-                        <a href={`${API_URL}/accounts/github/login/`}>
+                        <a href={`${BACKEND_URL}/accounts/github/login/`}>
                             <Github className="mr-2 h-4 w-4" />
                             Sign up with GitHub
                         </a>
                     </Button>
                     <Button variant="outline" className="w-full h-11 relative" asChild>
-                        <a href={`${API_URL}/accounts/google/login/`}>
+                        <a href={`${BACKEND_URL}/accounts/google/login/`}>
                             <Chrome className="mr-2 h-4 w-4" />
                             Sign up with Google
                         </a>
@@ -44,7 +47,7 @@ export default function RegisterPage() {
                     </div>
 
                     <Button className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white" asChild>
-                        <a href={`${API_URL}/accounts/signup/`}>
+                        <a href={`${BACKEND_URL}/accounts/signup/`}>
                             Sign up with Email
                         </a>
                     </Button>
