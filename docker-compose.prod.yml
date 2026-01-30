@@ -1,9 +1,10 @@
-version: '3.8'
+# SMSLY Hosting Production Stack
+# No version - docker compose v2+ handles this
 
 services:
   db:
     image: postgres:16-alpine
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
@@ -15,10 +16,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - smsly-net
 
   redis:
     image: redis:7-alpine
-    restart: always
+    restart: unless-stopped
     volumes:
       - redis_data:/data
     healthcheck:
@@ -26,23 +29,27 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - smsly-net
 
   registry:
     image: registry:2
-    restart: always
+    restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"  # Localhost only
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     volumes:
       - registry_data:/var/lib/registry
+    networks:
+      - smsly-net
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --workers 4
-    restart: always
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    restart: unless-stopped
     env_file: .env
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
@@ -51,43 +58,48 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      registry:
-        condition: service_started
     volumes:
-      - ./backend:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
-      - /var/run/docker.sock:/var/run/docker.sock # Required for LocalAdapter
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`hosting.smsly.cloud`) && (PathPrefix(`/api`) || PathPrefix(`/admin`) || PathPrefix(`/accounts`))"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+    networks:
+      - smsly-net
 
   celery:
     build:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A config worker -l info --concurrency=4
-    restart: always
+    restart: unless-stopped
     env_file: .env
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
     depends_on:
       - db
       - redis
-      - registry
     volumes:
-      - ./backend:/app
-      - /var/run/docker.sock:/var/run/docker.sock # Required for LocalAdapter
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - smsly-net
 
   celery-beat:
     build:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A config beat -l info
-    restart: always
+    restart: unless-stopped
     env_file: .env
     depends_on:
       - db
       - redis
-    volumes:
-      - ./backend:/app
+    networks:
+      - smsly-net
 
   frontend:
     build:
@@ -95,25 +107,49 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://hosting.smsly.cloud/api/v1}
-    restart: always
-    ports:
-      - "3000:3000"
+    restart: unless-stopped
     env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`hosting.smsly.cloud`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    networks:
+      - smsly-net
 
   traefik:
     image: traefik:v2.10
-    restart: always
+    restart: unless-stopped
     command:
-      - "--api.insecure=true"
+      - "--api.dashboard=true"
       - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@smsly.cloud}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080" # Dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt_data:/letsencrypt
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.hosting.smsly.cloud`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+    networks:
+      - smsly-net
+
+networks:
+  smsly-net:
+    driver: bridge
 
 volumes:
   postgres_data:
@@ -121,3 +157,4 @@ volumes:
   registry_data:
   static_volume:
   media_volume:
+  letsencrypt_data:
