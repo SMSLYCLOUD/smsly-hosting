@@ -1,15 +1,13 @@
 from celery import shared_task
 from .models import Deployment
-<<<<<<< HEAD
 from services.smsly_client import smsly_client
-=======
+from services.smsly_client import smsly_client
 from services.ai_engine import DevOpsAgent
->>>>>>> 93e8fbee69581aeeea859dc4a341d3a35f49abaf
+
 
 @shared_task
 def analyze_failure_task(deployment_id):
     """
-<<<<<<< HEAD
     Uses Jules AI (via SMSLY Platform) to analyze build logs and suggest fixes.
     """
     try:
@@ -21,7 +19,6 @@ def analyze_failure_task(deployment_id):
 
         # Call Jules AI
         diagnosis = smsly_client.analyze_logs_sync(deployment.build_logs)
-=======
     Uses the AI Engine (Gemini) to analyze build logs.
     """
     try:
@@ -29,7 +26,7 @@ def analyze_failure_task(deployment_id):
         agent = DevOpsAgent()
 
         diagnosis = agent.diagnose_logs(deployment.build_logs)
->>>>>>> 93e8fbee69581aeeea859dc4a341d3a35f49abaf
+
 
         # Update deployment with AI insight
         deployment.ai_diagnosis = diagnosis

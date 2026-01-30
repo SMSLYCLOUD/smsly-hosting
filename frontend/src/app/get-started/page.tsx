@@ -50,7 +50,6 @@ export default function LivingOnboarding() {
     <main className="min-h-screen bg-background font-sans flex flex-col">
       <Navbar />
 
-<<<<<<< HEAD
       <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden bg-dot-pattern">
 
         <div className="max-w-3xl w-full z-10 space-y-8">
@@ -60,33 +59,6 @@ export default function LivingOnboarding() {
                     <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold uppercase tracking-wider mb-6 border border-indigo-200">
                         <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
                         Powered by Jules AI
-=======
-      <div className="flex-1 max-w-4xl mx-auto w-full p-6 flex flex-col">
-        <div className="flex-1 space-y-6 overflow-y-auto mb-6 custom-scrollbar pr-4">
-            {messages.map((msg, i) => (
-                <div key={i} className={`flex gap-4 ${msg.role === 'USER' ? 'justify-end' : ''}`}>
-                    {msg.role === 'AI' && (
-                        <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 text-white shadow-lg">
-                            <Bot size={20} />
-                        </div>
-                    )}
-                    <Card className={`p-4 max-w-[80%] ${msg.role === 'USER' ? 'bg-primary text-primary-foreground' : 'bg-card'}`}>
-                        <div className="prose prose-sm dark:prose-invert">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                        </div>
-                    </Card>
-                    {msg.role === 'USER' && (
-                        <div className="w-10 h-10 rounded-full bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center flex-shrink-0">
-                            <User size={20} />
-                        </div>
-                    )}
-                </div>
-            ))}
-            {loading && (
-                <div className="flex gap-4">
-                    <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 text-white animate-pulse">
-                        <Bot size={20} />
->>>>>>> 93e8fbee69581aeeea859dc4a341d3a35f49abaf
                     </div>
                     <Card className="p-4 bg-card flex items-center gap-2 text-muted-foreground">
                         <Loader2 size={16} className="animate-spin" /> Thinking...

@@ -122,7 +122,6 @@ export default function ServiceDetailPage() {
           </div>
       )}
 
-<<<<<<< HEAD
       {activeTab === 'settings' && (
         <div className="space-y-6">
             {/* AI Configuration */}
@@ -185,7 +184,7 @@ export default function ServiceDetailPage() {
                     </button>
                 </div>
             </div>
-=======
+
       {activeTab === 'advanced' && <AdvancedTab service={service} />}
 
       {activeTab === 'console' && (
@@ -195,7 +194,6 @@ export default function ServiceDetailPage() {
                     .replace('http', 'ws')
                     .replace('/api/v1', `/ws/terminal/${service.id}/`)}
             />
->>>>>>> 93e8fbee69581aeeea859dc4a341d3a35f49abaf
         </div>
       )}
     </ServiceLayout>
