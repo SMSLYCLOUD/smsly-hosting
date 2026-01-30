@@ -7,18 +7,21 @@ import tempfile
 import shutil
 import git
 from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.data import DataService
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.services.git import GitManager
 from apps.cloud.models import CloudProvider
 
 logger = logging.getLogger(__name__)
 
+# ==============================================================================
+# NEW: Smart Multi-Cloud Deployment
+# ==============================================================================
+
 @shared_task(bind=True, max_retries=3)
 def smart_deploy_task(self, deployment_id: str, provider_id: str):
     """
     Orchestrates a deployment to any cloud provider with REAL Build Pipeline.
-    
+
     1. Clone Git Repo (if Git source).
     2. Build Image via Nixpacks.
     3. Push to Registry.
@@ -32,7 +35,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment = Deployment.objects.get(id=deployment_id)
         service = deployment.service
         provider = CloudProvider.objects.get(id=provider_id)
-        
+
         deployment.status = Deployment.Status.BUILDING
         deployment.started_at = timezone.now()
         deployment.save()
@@ -120,10 +123,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.save()
 
         compute = ComputeService(provider)
-        
+
         # Prepare Env Vars
         env_vars = {env.key: env.value for env in service.env_vars.all()}
-        
+
         # Call Universal Adapter
         resource = compute.deploy_container(
             name=service.name,
@@ -132,13 +135,13 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             cpu=int(service.cpu_cores * 1024),
             memory=service.memory_mb
         )
-        
+
         # Step 3: Success
         deployment.status = Deployment.Status.ACTIVE
         deployment.finished_at = timezone.now()
         deployment.container_id = resource.resource_id
         deployment.save()
-        
+
         logger.info(f"Deployment {deployment_id} successful on {provider.name}")
         
         # Cleanup temporary build directory on success
@@ -159,6 +162,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         
         raise self.retry(exc=e, countdown=30)
 
+# ==============================================================================
+# LEGACY: Addon Provisioning (Restored)
+# ==============================================================================
 
 @shared_task(bind=True, max_retries=3)
 def provision_addon_task(self, addon_id: str):
