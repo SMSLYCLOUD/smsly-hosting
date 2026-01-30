@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import axios from "axios";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ const TEMPLATE_CONFIGS: Record<string, { image: string; port: number; name: stri
   'nocodb': { image: 'nocodb/nocodb:latest', port: 8080, name: 'NocoDB' },
 };
 
-export default function NewServicePage() {
+function NewServiceContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -225,7 +225,7 @@ export default function NewServicePage() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Don't see your provider? <a href="/settings" className="underline">Add one in Settings</a>.
+                  Don&apos;t see your provider? <a href="/settings" className="underline">Add one in Settings</a>.
                 </p>
               </div>
             </div>
@@ -241,5 +241,14 @@ export default function NewServicePage() {
         </Card>
       </Tabs>
     </div>
+  );
+}
+
+// Wrap in Suspense for useSearchParams (Next.js 15 requirement)
+export default function NewServicePage() {
+  return (
+    <Suspense fallback={<div className="container mx-auto max-w-4xl py-10"><p>Loading...</p></div>}>
+      <NewServiceContent />
+    </Suspense>
   );
 }

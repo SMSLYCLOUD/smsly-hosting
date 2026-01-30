@@ -8,11 +8,11 @@ const api = axios.create({
 
 // Interceptor to add auth token
 api.interceptors.request.use((config) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    if (token) {
-        config.headers.Authorization = `Token ${token}`;
-    }
-    return config;
+  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  if (token) {
+    config.headers.Authorization = `Token ${token}`;
+  }
+  return config;
 });
 
 export interface Service {
@@ -27,10 +27,12 @@ export interface Service {
   memory_mb?: number;
   deploy_type?: 'GIT' | 'DOCKER' | 'UPLOAD' | 'TEMPLATE';
   docker_image?: string;
+  start_command?: string;
   template_id?: string;
   latest_deployment?: {
     id: string;
     status: string;
+    commit_hash?: string;
     created_at: string;
   };
 }
@@ -58,10 +60,10 @@ export const servicesApi = {
   create: async (data: any): Promise<Service> => {
     // If it's a file upload, use FormData
     if (data instanceof FormData) {
-        const response = await api.post('/services/', data, {
-            headers: { 'Content-Type': 'multipart/form-data' }
-        });
-        return response.data;
+      const response = await api.post('/services/', data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      return response.data;
     }
     const response = await api.post('/services/', data);
     return response.data;
@@ -79,8 +81,8 @@ export const servicesApi = {
     return response.data;
   },
   updateEnv: async (id: string, envVars: EnvVar[]): Promise<any> => {
-     const response = await api.post(`/services/${id}/env-vars/`, envVars);
-     return response.data;
+    const response = await api.post(`/services/${id}/env-vars/`, envVars);
+    return response.data;
   }
 };
 

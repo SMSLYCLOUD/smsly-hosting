@@ -40,8 +40,8 @@ export default function ServiceDetailPage() {
 
     if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
-    // Simple cost estimation logic
-    const hourlyRate = (service.cpu_cores * 0.04) + ((service.memory_mb / 1024) * 0.02);
+    // Simple cost estimation logic (use defaults if not set)
+    const hourlyRate = ((service.cpu_cores ?? 1) * 0.04) + (((service.memory_mb ?? 512) / 1024) * 0.02);
     const monthlyEstimate = hourlyRate * 730;
 
     return (
@@ -78,7 +78,7 @@ export default function ServiceDetailPage() {
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Resources</span>
-                                <span className="text-foreground">{service.cpu_cores} vCPU / {service.memory_mb} MB</span>
+                                <span className="text-foreground">{service.cpu_cores ?? 1} vCPU / {service.memory_mb ?? 512} MB</span>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Internal DNS</span>

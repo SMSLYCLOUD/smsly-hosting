@@ -56,23 +56,23 @@ export default function DashboardPage() {
             <CardTitle>Recent Activity</CardTitle>
           </CardHeader>
           <CardContent>
-             <div className="space-y-8">
-                {/* Mock Activity List */}
-                <div className="flex items-center">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium leading-none">Deployed 'api-gateway' to AWS</p>
-                    <p className="text-sm text-muted-foreground">2 minutes ago</p>
-                  </div>
-                  <div className="ml-auto font-medium text-emerald-500">Success</div>
+            <div className="space-y-8">
+              {/* Mock Activity List */}
+              <div className="flex items-center">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium leading-none">Deployed &apos;api-gateway&apos; to AWS</p>
+                  <p className="text-sm text-muted-foreground">2 minutes ago</p>
                 </div>
-                <div className="flex items-center">
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium leading-none">Provisioned Redis Cluster on Local</p>
-                    <p className="text-sm text-muted-foreground">1 hour ago</p>
-                  </div>
-                  <div className="ml-auto font-medium text-emerald-500">Active</div>
+                <div className="ml-auto font-medium text-emerald-500">Success</div>
+              </div>
+              <div className="flex items-center">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium leading-none">Provisioned Redis Cluster on Local</p>
+                  <p className="text-sm text-muted-foreground">1 hour ago</p>
                 </div>
-             </div>
+                <div className="ml-auto font-medium text-emerald-500">Active</div>
+              </div>
+            </div>
           </CardContent>
         </Card>
         <Card className="col-span-3">
@@ -80,11 +80,11 @@ export default function DashboardPage() {
             <CardTitle>AI Insights</CardTitle>
           </CardHeader>
           <CardContent>
-             <div className="text-sm text-muted-foreground">
-               No critical issues detected.
-               <br/><br/>
-               <span className="font-semibold text-indigo-500">Tip:</span> Your 'worker-node' is underutilized (10% CPU). Consider switching to a smaller instance type to save $15/mo.
-             </div>
+            <div className="text-sm text-muted-foreground">
+              No critical issues detected.
+              <br /><br />
+              <span className="font-semibold text-indigo-500">Tip:</span> Your &apos;worker-node&apos; is underutilized (10% CPU). Consider switching to a smaller instance type to save $15/mo.
+            </div>
           </CardContent>
         </Card>
       </div>
