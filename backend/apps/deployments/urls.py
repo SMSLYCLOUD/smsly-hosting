@@ -9,6 +9,7 @@ from .views_cron import CronJobViewSet
 from .views_topology import TopologyViewSet
 from .views_blueprints import BlueprintViewSet
 from .views_webhooks import GitHubWebhookView
+from .views_setup import SetupStatusView, SetupInitView
 
 router = DefaultRouter()
 
@@ -27,4 +28,6 @@ router.register(r'blueprints', BlueprintViewSet, basename='blueprints')
 
 urlpatterns = router.urls + [
     path('integrations/github/', GitHubWebhookView.as_view(), name='github-webhook'),
+    path('setup/status/', SetupStatusView.as_view(), name='setup-status'),
+    path('setup/init/', SetupInitView.as_view(), name='setup-init'),
 ]

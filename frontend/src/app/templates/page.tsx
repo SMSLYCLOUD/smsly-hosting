@@ -38,13 +38,13 @@ export default function TemplatesPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-6xl">
         {templates.map(t => (
-            <div key={t.id} className="bg-white dark:bg-zinc-800 rounded-xl shadow p-6 hover:ring-2 ring-blue-500 transition-all cursor-pointer" onClick={() => handleUse(t)}>
+            <div key={t.id} className="bg-card text-card-foreground border border-border rounded-xl shadow-sm p-6 hover:ring-2 ring-primary transition-all cursor-pointer" onClick={() => handleUse(t)}>
                 <div className="flex items-center gap-4 mb-4">
                     {t.icon_url && <img src={t.icon_url} className="w-12 h-12" alt={t.name} />}
                     <h3 className="font-bold text-xl">{t.name}</h3>
                 </div>
-                <p className="text-gray-500 mb-6">{t.description}</p>
-                <button className="w-full bg-gray-100 dark:bg-zinc-700 text-blue-600 font-bold py-2 rounded hover:bg-gray-200 dark:hover:bg-zinc-600">
+                <p className="text-muted-foreground mb-6">{t.description}</p>
+                <button className="w-full bg-primary/10 text-primary font-bold py-2 rounded hover:bg-primary/20 transition-colors">
                     Use Template →
                 </button>
             </div>

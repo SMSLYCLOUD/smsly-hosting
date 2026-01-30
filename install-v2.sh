@@ -26,29 +26,48 @@ if [ -z "$EMAIL" ]; then
 fi
 
 echo "Installing dependencies..."
-apt-get update && apt-get install -y curl git python3-pip
+apt-get update && apt-get install -y curl git python3-pip openssl
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sh
 fi
 
-# Clone/Pull Repo
-if [ ! -d "smsly-hosting" ]; then
-    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
-    cd smsly-hosting
+# Clone/Pull Repo Logic
+if [ -f "docker-compose.prod.yml" ]; then
+    echo "Running from repository root."
+    git pull origin main || echo "Git pull failed, continuing..."
 else
-    cd smsly-hosting
-    git pull origin main
+    if [ ! -d "smsly-hosting" ]; then
+        git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
+        cd smsly-hosting
+    else
+        cd smsly-hosting
+        git pull origin main
+    fi
 fi
 
 # Setup Environment
 if [ ! -f .env ]; then
     cp .env.example .env
     sed -i "s/example.com/$DOMAIN/g" .env
+
     # Generate Secrets
-    SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
+    echo "Generating secure keys..."
+
+    # SECRET_KEY (Django)
+    SECRET=$(openssl rand -base64 40 | tr -dc 'a-zA-Z0-9' | head -c 50)
     sed -i "s/SECRET_KEY=.*/SECRET_KEY=$SECRET/" .env
+
+    # FIELD_ENCRYPTION_KEY (Fernet, 32 bytes url-safe base64)
+    # Note: openssl rand -base64 32 returns 44 chars. We need to make it url-safe (+ -> -, / -> _)
+    ENCRYPT_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+
+    if grep -q "FIELD_ENCRYPTION_KEY=" .env; then
+        sed -i "s|FIELD_ENCRYPTION_KEY=.*|FIELD_ENCRYPTION_KEY=$ENCRYPT_KEY|" .env
+    else
+        echo "FIELD_ENCRYPTION_KEY=$ENCRYPT_KEY" >> .env
+    fi
 fi
 
 # Build & Start

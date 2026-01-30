@@ -13,31 +13,15 @@ export default function TopologyPage() {
     const graphRef = useRef<any>(null);
 
     useEffect(() => {
-        // In a real app, use the API. For now, we mock if no backend.
         const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-        if (API_URL) {
-            axios.get(API_URL + '/topology/')
-                .then(res => setGraphData(res.data))
-                .catch(console.error)
-                .finally(() => setLoading(false));
-        } else {
-            // Mock data for UI preview
-            setGraphData({
-                nodes: [
-                    { id: '1', name: 'frontend-svc', type: 'SERVICE' },
-                    { id: '2', name: 'api-svc', type: 'SERVICE' },
-                    { id: '3', name: 'db-primary', type: 'POSTGRES' },
-                    { id: '4', name: 'cache', type: 'REDIS' }
-                ],
-                links: [
-                    { source: '1', target: '2' },
-                    { source: '2', target: '3' },
-                    { source: '2', target: '4' }
-                ]
-            });
-            setLoading(false);
-        }
-
+        axios.get(API_URL + '/topology/')
+            .then(res => setGraphData(res.data))
+            .catch(err => {
+                console.error("Failed to fetch topology:", err);
+                // On error, show empty state or handle gracefully in UI, do NOT show fake data.
+                setGraphData({ nodes: [], links: [] });
+            })
+            .finally(() => setLoading(false));
     }, []);
 
     const drawNode = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -85,8 +69,8 @@ export default function TopologyPage() {
                 <div className="absolute top-4 left-4 z-10 pointer-events-none">
                     <h1 className="text-2xl font-bold text-white mb-2 drop-shadow-md">Infrastructure Topology</h1>
                     <div className="flex gap-4 text-sm text-gray-300 drop-shadow-sm">
-                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"></span> Service</div>
-                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"></span> Database</div>
+                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-primary"></span> Service</div>
+                        <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-destructive"></span> Database</div>
                         <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-green-500"></span> Redis</div>
                     </div>
                 </div>

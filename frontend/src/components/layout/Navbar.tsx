@@ -56,6 +56,8 @@ export function Navbar() {
     { href: '/services', label: 'Canvas', icon: Layout },
     { href: '/store', label: 'Store', icon: Box },
     { href: '/topology', label: 'Topology', icon: Globe },
+    { href: '/analytics', label: 'Analytics', icon: Box },
+    { href: '/deployments', label: 'Deployments', icon: Layout },
   ];
 
   return (
