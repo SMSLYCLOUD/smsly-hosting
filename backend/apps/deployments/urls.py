@@ -16,12 +16,13 @@ from django.conf import settings
 router = DefaultRouter()
 router.register(r'services', ServiceViewSet, basename='services')
 router.register(r'deployments', DeploymentViewSet, basename='deployments')
-router.register(r'addons', AddonViewSet)
+router.register(r'addons', AddonViewSet, basename='addons')
 router.register(r'metrics', MetricsViewSet, basename='metrics')
-router.register(r'templates', TemplateViewSet)
+router.register(r'templates', TemplateViewSet, basename='templates')
 router.register(r'cronjobs', CronJobViewSet, basename='cronjobs')
 router.register(r'volumes', VolumeViewSet, basename='volumes')
 router.register(r'topology', TopologyViewSet, basename='topology')
+
 
 
 # =============================================================================
