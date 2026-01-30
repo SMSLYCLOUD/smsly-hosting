@@ -17,11 +17,9 @@ from datetime import timedelta
 import uuid
 import re
 
-
-# In-memory storage (replace with Redis/DB in production)
-_tunnels = {}
-_reserved_subdomains = {}
-_request_logs = {}
+# Redis-backed storage (with in-memory fallback)
+from .storage import tunnel_storage
+from .rate_limit import rate_limit
 
 
 class TunnelTier:
