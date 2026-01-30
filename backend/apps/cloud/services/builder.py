@@ -1,6 +1,7 @@
 import subprocess
 import os
 import logging
+import docker
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -34,34 +35,39 @@ class NixpacksBuilder:
         logger.info(f"Starting Nixpacks build for {image_name}...")
 
         try:
-            # Run the build process with timeout
+            # Run the build process
             process = subprocess.run(
                 command,
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                timeout=600  # 10 minute timeout
+                text=True
             )
-            logger.info(f"Build successful for {image_name}")
-            logger.debug(f"Build output: {process.stdout}")
+            logger.info(f"Build successful: {process.stdout}")
             return image_name
 
-        except subprocess.TimeoutExpired:
-            error_msg = f"Build timed out after 10 minutes for {image_name}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
         except subprocess.CalledProcessError as e:
-            error_msg = f"Nixpacks build failed: {e.stderr}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            logger.error(f"Build failed: {e.stderr}")
+            raise RuntimeError(f"Nixpacks build failed: {e.stderr}")
 
     @staticmethod
-    def generate_plan(source_dir: str) -> str:
+    def push_image(image_name: str, registry_url: str) -> str:
         """
-        Generates a build plan (JSON) without building.
-        Useful for inspecting what Nixpacks detected.
+        Tags and pushes the image to the internal or external registry.
         """
-        command = ["nixpacks", "plan", source_dir, "--json"]
-        result = subprocess.run(command, capture_output=True, text=True)
-        return result.stdout
+        client = docker.from_env()
+
+        # Tag format: registry:5000/image_name
+        full_tag = f"{registry_url}/{image_name}"
+
+        try:
+            image = client.images.get(image_name)
+            image.tag(full_tag)
+
+            logger.info(f"Pushing image to {full_tag}...")
+            client.images.push(full_tag)
+
+            return full_tag
+        except Exception as e:
+            logger.error(f"Failed to push image: {e}")
+            raise

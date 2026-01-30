@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/components/auth-provider";
+import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
   title: "SMSly Hosting",
@@ -23,8 +25,11 @@ export default function RootLayout({
             enableSystem
             disableTransitionOnChange
           >
-            {children}
-            <FloatingAI />
+            <AuthProvider>
+                {children}
+                <FloatingAI />
+                <Toaster />
+            </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

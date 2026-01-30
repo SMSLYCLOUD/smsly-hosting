@@ -21,15 +21,9 @@ class SMSLYClient:
 
     def __init__(self):
         # Internal SMSLY Platform API endpoints
-        self.sms_api_url = config(
-            'SMSLY_SMS_API_URL',
-            default='http://smsly-sms:8000/api/v1')
-        self.voice_api_url = config(
-            'SMSLY_VOICE_API_URL',
-            default='http://smsly-voice:8000/api/v1')
-        self.platform_api_url = config(
-            'SMSLY_PLATFORM_API_URL',
-            default='http://smsly-platform-api:8000/api/v1')
+        self.sms_api_url = config('SMSLY_SMS_API_URL', default='http://smsly-sms:8000/api/v1')
+        self.voice_api_url = config('SMSLY_VOICE_API_URL', default='http://smsly-voice:8000/api/v1')
+        self.platform_api_url = config('SMSLY_PLATFORM_API_URL', default='http://smsly-platform-api:8000/api/v1')
 
         # Internal service-to-service API key
         self.internal_api_key = config('SMSLY_INTERNAL_API_KEY', default='')
@@ -71,8 +65,7 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(
-                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
+                logger.info(f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send SMS: {str(e)}")
@@ -110,8 +103,7 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(
-                    f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
+                logger.info(f"Voice alert initiated to {to_phone[:6]}***: {result.get('call_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send voice alert: {str(e)}")
@@ -192,8 +184,7 @@ class SMSLYClient:
                 )
                 response.raise_for_status()
                 result = response.json()
-                logger.info(
-                    f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
+                logger.info(f"SMS sent to {to_phone[:6]}***: {result.get('message_id')}")
                 return result
         except Exception as e:
             logger.error(f"Failed to send SMS: {str(e)}")

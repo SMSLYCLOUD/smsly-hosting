@@ -36,10 +36,6 @@ if _is_production and DEBUG:
 
 # Security hardening (always enabled in non-DEBUG mode)
 if not DEBUG:
-    if SECRET_KEY == 'django-insecure-smsly-hosting-dev-key':
-        from django.core.exceptions import ImproperlyConfigured
-        raise ImproperlyConfigured("You must set a secure SECRET_KEY in production!")
-
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True

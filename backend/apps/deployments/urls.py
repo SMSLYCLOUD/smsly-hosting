@@ -6,10 +6,11 @@ from .views_templates import TemplateViewSet
 from .views_storage import VolumeViewSet
 from .views_cron import CronJobViewSet
 from .views_topology import TopologyViewSet
+from .views_blueprints import BlueprintViewSet
 
 router = DefaultRouter()
 
-# Legacy Endpoints (Restored)
+# Legacy Endpoints
 router.register(r'services', ServiceViewSet, basename='services')
 router.register(r'addons', AddonViewSet, basename='addons')
 router.register(r'metrics', MetricsViewSet, basename='metrics')
@@ -20,5 +21,6 @@ router.register(r'topology', TopologyViewSet, basename='topology')
 
 # New Endpoints
 router.register(r'deployments', DeploymentViewSet, basename='deployments')
+router.register(r'blueprints', BlueprintViewSet, basename='blueprints')
 
 urlpatterns = router.urls

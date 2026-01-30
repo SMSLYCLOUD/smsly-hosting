@@ -23,7 +23,6 @@ class LocalAdapter(BaseCloudAdapter):
             logger.warning(f"Docker client not available: {e}")
 
         try:
-            # Try loading in-cluster config first, then kubeconfig
             try:
                 config.load_incluster_config()
             except:
@@ -34,13 +33,9 @@ class LocalAdapter(BaseCloudAdapter):
             logger.warning(f"Kubernetes client not available: {e}")
 
     def authenticate(self) -> bool:
-        # If we have either Docker or K8s, we are good
         return self.docker_client is not None or self.k8s_client is not None
 
     def deploy_container(self, service_name: str, image: str, env_vars: Dict[str, str], cpu: int, memory: int) -> str:
-        """
-        Deploys to K3s if available, else Docker.
-        """
         if self.k8s_client:
             return self._deploy_k8s(service_name, image, env_vars, cpu, memory)
         elif self.docker_client:
@@ -49,7 +44,14 @@ class LocalAdapter(BaseCloudAdapter):
             raise RuntimeError("No local orchestrator available")
 
     def _deploy_docker(self, name: str, image: str, env: Dict[str, str]) -> str:
-        # Check if running
+        # Ensure shared network exists
+        network_name = 'smsly-net'
+        try:
+            self.docker_client.networks.get(network_name)
+        except docker.errors.NotFound:
+            self.docker_client.networks.create(network_name, driver="bridge")
+
+        # Cleanup existing
         try:
             container = self.docker_client.containers.get(name)
             container.remove(force=True)
@@ -61,7 +63,7 @@ class LocalAdapter(BaseCloudAdapter):
             name=name,
             environment=env,
             detach=True,
-            network='smsly-hosting_default', # Assume shared network
+            network=network_name, # Critical for service discovery
             labels={'managed_by': 'smsly-hosting'}
         )
         return container.id
@@ -69,7 +71,7 @@ class LocalAdapter(BaseCloudAdapter):
     def _deploy_k8s(self, name: str, image: str, env: Dict[str, str], cpu: int, memory: int) -> str:
         namespace = 'default'
 
-        # Define Deployment
+        # 1. Deployment
         deployment = client.V1Deployment(
             metadata=client.V1ObjectMeta(name=name),
             spec=client.V1DeploymentSpec(
@@ -97,31 +99,51 @@ class LocalAdapter(BaseCloudAdapter):
         try:
             self.k8s_apps.create_namespaced_deployment(namespace=namespace, body=deployment)
         except client.exceptions.ApiException as e:
-            if e.status == 409: # Already exists
+            if e.status == 409:
                 self.k8s_apps.patch_namespaced_deployment(name=name, namespace=namespace, body=deployment)
             else:
                 raise
 
+        # 2. Service (ClusterIP) for Discovery
+        svc = client.V1Service(
+            metadata=client.V1ObjectMeta(name=name),
+            spec=client.V1ServiceSpec(
+                selector={"app": name},
+                ports=[client.V1ServicePort(port=80, target_port=int(env.get('PORT', 8000)))],
+                type="ClusterIP"
+            )
+        )
+
+        try:
+            self.k8s_client.create_namespaced_service(namespace=namespace, body=svc)
+        except client.exceptions.ApiException as e:
+            if e.status != 409:
+                logger.warning(f"Failed to create service for {name}: {e}")
+
         return f"k8s://{namespace}/{name}"
 
-    # --- Other Methods (Stubs for Local) ---
-
+    # --- Other Methods ---
     def deploy_function(self, function_name: str, code_zip: str, handler: str, runtime: str) -> str:
-        raise NotImplementedError("Local Functions not yet supported (use OpenFaaS adapter later)")
+        raise NotImplementedError("Local Functions not yet supported")
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
-        # Simulate S3 via MinIO or local directory
         return f"local://{bucket_name}"
 
     def provision_database(self, db_name: str, engine: str, version: str) -> str:
-        # Could spin up a Docker container for Postgres
         if self.docker_client:
+             network_name = 'smsly-net'
+             # Ensure network exists (duplicate check for safety)
+             try:
+                self.docker_client.networks.get(network_name)
+             except docker.errors.NotFound:
+                self.docker_client.networks.create(network_name, driver="bridge")
+
              container = self.docker_client.containers.run(
                 f"{engine}:{version}-alpine",
                 name=f"db-{db_name}",
-                environment={"POSTGRES_PASSWORD": "password"}, # Insecure dev default
+                environment={"POSTGRES_PASSWORD": "password"},
                 detach=True,
-                network='smsly-hosting_default'
+                network=network_name
             )
              return container.id
         return "local-db-provisioned"
@@ -139,9 +161,7 @@ class LocalAdapter(BaseCloudAdapter):
         return "local-role"
 
     def store_secret(self, secret_name: str, secret_value: str) -> str:
-        # Write to .env or encrypted file
         return f"local-secret://{secret_name}"
 
     def get_metrics(self, resource_id: str, metric_name: str, start_time: str, end_time: str) -> List[Dict]:
-        # Could fetch from local Prometheus
         return []

@@ -62,14 +62,11 @@ def generate_traefik_labels(
 
     # Middlewares chain
     middlewares = [f"{router_name}-ratelimit", f"{router_name}-headers"]
-    labels[f"traefik.http.routers.{router_name}.middlewares"] = ",".join(
-        middlewares)
+    labels[f"traefik.http.routers.{router_name}.middlewares"] = ",".join(middlewares)
 
     # Rate limiting middleware
-    labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.average"] = str(
-        rate_limit_avg)
-    labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.burst"] = str(
-        rate_limit_burst)
+    labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.average"] = str(rate_limit_avg)
+    labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.burst"] = str(rate_limit_burst)
     labels[f"traefik.http.middlewares.{router_name}-ratelimit.ratelimit.period"] = "1s"
 
     # Security headers middleware
