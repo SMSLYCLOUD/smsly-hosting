@@ -99,7 +99,7 @@ export default function DashboardPage() {
       <motion.div variants={fadeInUp} className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-          <p className="text-muted-foreground">Welcome back! Here's your infrastructure overview.</p>
+          <p className="text-muted-foreground">Welcome back! Here&apos;s your infrastructure overview.</p>
         </div>
         <Link href="/new">
           <motion.button
