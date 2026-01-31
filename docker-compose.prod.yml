@@ -111,7 +111,7 @@ services:
     # Force Next.js to listen on all interfaces so nginx can connect
     command: ["sh", "-lc", "npm run start -- -H 0.0.0.0 -p 3000"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f 0.0.0.0:3000/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
