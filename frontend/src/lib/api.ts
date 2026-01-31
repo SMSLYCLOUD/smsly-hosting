@@ -55,11 +55,7 @@ export interface EnvVar {
 export const servicesApi = {
   list: async (): Promise<Service[]> => {
     const response = await api.get('/services/');
-    // Handle DRF pagination
-    if (response.data && Array.isArray(response.data.results)) {
-      return response.data.results;
-    }
-    return Array.isArray(response.data) ? response.data : [];
+    return response.data;
   },
   create: async (data: any): Promise<Service> => {
     // If it's a file upload, use FormData

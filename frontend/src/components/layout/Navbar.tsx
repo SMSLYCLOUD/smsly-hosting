@@ -56,8 +56,6 @@ export function Navbar() {
     { href: '/services', label: 'Canvas', icon: Layout },
     { href: '/store', label: 'Store', icon: Box },
     { href: '/topology', label: 'Topology', icon: Globe },
-    { href: '/analytics', label: 'Analytics', icon: Box },
-    { href: '/deployments', label: 'Deployments', icon: Layout },
   ];
 
   return (
@@ -83,7 +81,7 @@ export function Navbar() {
 
             {/* Desktop Nav */}
             <nav className="hidden md:flex items-center space-x-1">
-                {navLinks?.map((link) => {
+                {navLinks.map((link) => {
                     const Icon = link.icon;
                     const isActive = pathname === link.href;
                     return (
@@ -196,7 +194,7 @@ export function Navbar() {
             >
                 <div className="p-4 space-y-4">
                     <nav className="flex flex-col space-y-2">
-                        {navLinks?.map((link) => (
+                        {navLinks.map((link) => (
                              <Link
                                 key={link.href}
                                 href={link.href}
