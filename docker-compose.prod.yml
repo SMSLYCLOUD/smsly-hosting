@@ -7,7 +7,8 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepassword}
+      # SECURITY: No default password - must be set in .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -48,7 +49,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: ["sh", "-c", "python manage.py migrate --no-input && python manage.py collectstatic --no-input --clear && python -c \"import os; from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', os.environ.get('ADMIN_EMAIL', 'admin@smsly.io'), os.environ.get('ADMIN_PASSWORD', 'admin123'))\" && echo 'Init complete!'"]
+    # SECURITY: Require ADMIN_PASSWORD to be set explicitly in .env
+    command: [
+      "sh", "-c",
+      "python manage.py migrate --no-input && python manage.py collectstatic --no-input --clear && python -c \"import os; from django.contrib.auth import get_user_model; User = get_user_model(); admin_pass = os.environ.get('ADMIN_PASSWORD'); admin_email = os.environ.get('ADMIN_EMAIL', 'admin@smsly.io'); assert admin_pass and len(admin_pass) >= 8, 'ADMIN_PASSWORD must be set (min 8 chars)'; User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', admin_email, admin_pass)\" && echo 'Init complete!'"
+    ]
     env_file: .env
     depends_on:
       db:
