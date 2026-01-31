@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Redirect output to log file and console
+LOG_FILE="install.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 # SMSLY Hosting v2 - One-Command Installer
 # Supported OS: Ubuntu 22.04+
 # Installs Docker, Caddy/Traefik, Postgres, Redis, and the SMSLY Platform.
@@ -8,6 +12,7 @@ set -e
 echo "=================================================="
 echo "      SMSLY HOSTING v2 - The Hyperscale PaaS      "
 echo "=================================================="
+echo "Log file: $LOG_FILE"
 
 if [ "$EUID" -ne 0 ]; then
   echo "Please run as root (sudo bash install-v2.sh)"
@@ -131,8 +136,28 @@ else
     echo "Services started successfully."
 fi
 
+# Create Default Admin User
+echo "Creating default admin user..."
+ADMIN_EMAIL="admin@smsly.cloud"
+ADMIN_USER="admin"
+# Generate a random password if not provided
+ADMIN_PASS=$(openssl rand -base64 12)
+
+# Try to create superuser. This might fail if it already exists, so we catch the error but don't exit script.
+set +e
+docker compose -f docker-compose.prod.yml exec -e DJANGO_SUPERUSER_PASSWORD="$ADMIN_PASS" -e DJANGO_SUPERUSER_EMAIL="$ADMIN_EMAIL" -e DJANGO_SUPERUSER_USERNAME="$ADMIN_USER" backend python manage.py createsuperuser --noinput > /dev/null 2>&1
+CREATION_STATUS=$?
+set -e
+
 echo "=================================================="
 echo "Installation Complete!"
 echo "Dashboard: https://$DOMAIN"
-echo "Admin User: Created on first launch"
+if [ $CREATION_STATUS -eq 0 ]; then
+    echo "Admin User: $ADMIN_EMAIL (or username: $ADMIN_USER)"
+    echo "Password: $ADMIN_PASS"
+    echo "PLEASE SAVE THIS PASSWORD NOW."
+else
+    echo "Admin User: admin / admin@smsly.cloud"
+    echo "Password: (Hidden - User already exists or creation failed)"
+fi
 echo "=================================================="

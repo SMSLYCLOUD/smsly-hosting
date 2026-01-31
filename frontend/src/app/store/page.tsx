@@ -58,7 +58,13 @@ export default function AppStorePage() {
             try {
                 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
                 const res = await axios.get(`${API_URL}/templates/`);
-                setApps(res.data);
+                if (res.data && Array.isArray(res.data.results)) {
+                    setApps(res.data.results);
+                } else if (Array.isArray(res.data)) {
+                    setApps(res.data);
+                } else {
+                    setApps([]);
+                }
             } catch (e) {
                 console.error("Failed to load templates", e);
             } finally {

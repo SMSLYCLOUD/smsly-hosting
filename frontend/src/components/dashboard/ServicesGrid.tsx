@@ -25,7 +25,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6">
-      {services.map((service) => (
+      {services?.map((service) => (
         <Card
           key={service.id}
           className="group hover:border-emerald-500/50 transition-all duration-300 bg-card/50 backdrop-blur-sm"

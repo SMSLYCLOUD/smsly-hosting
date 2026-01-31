@@ -9,7 +9,8 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY package.json package-lock.json* ./
 RUN npm install
 COPY . .
-RUN npm run build
+# Enforce linting during build. If lint fails, build fails.
+RUN npm run lint && npm run build
 
 # Stage 2: Runner
 FROM node:18-alpine AS runner

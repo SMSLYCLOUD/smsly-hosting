@@ -107,7 +107,7 @@ export function TunnelDashboard() {
             </div>
 
             {/* Tunnels List */}
-            {tunnels.length === 0 ? (
+            {tunnels?.length === 0 ? (
                 <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-8 text-center">
                     <div className="text-4xl mb-4">🔗</div>
                     <h3 className="text-lg font-medium text-white mb-2">No Active Tunnels</h3>
@@ -118,7 +118,7 @@ export function TunnelDashboard() {
                 </div>
             ) : (
                 <div className="grid gap-4">
-                    {tunnels.map((tunnel) => (
+                    {tunnels?.map((tunnel) => (
                         <div
                             key={tunnel.tunnelId}
                             className={`bg-gray-900/50 border rounded-xl p-4 cursor-pointer transition-all hover:border-blue-500/50 ${selectedTunnel === tunnel.tunnelId ? 'border-blue-500' : 'border-gray-800'
