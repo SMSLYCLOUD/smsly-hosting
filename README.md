@@ -15,7 +15,7 @@ SMSLY Hosting v2 is a complete rewrite of the hosting platform, designed to be t
 Run this single command on Ubuntu 22.04+ to install Docker, Build Services, and the Platform:
 
 ```bash
-curl -fsSL https://get.smsly.cloud/v2/install | sudo bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install-v2.sh | sudo bash
 ```
 
 Or manually:
@@ -46,7 +46,9 @@ Once installed, the services are available at:
 ## ✨ Key Features (v2)
 
 ### 🌍 Multi-Cloud Orchestration (Universal Adapter)
+
 Manage resources across all major providers from one UI:
+
 - **AWS:** ECS Fargate, Lambda, RDS, S3, IAM, WAF.
 - **Azure:** Container Apps, Functions, SQL, Blob Storage, Entra ID.
 - **GCP:** Cloud Run, Functions, Cloud SQL, BigQuery.
@@ -54,17 +56,20 @@ Manage resources across all major providers from one UI:
 - **Local:** Self-hosted Docker/K3s clusters.
 
 ### 🧠 Intelligence Engine
+
 - **Predictive Failure Analysis:** AI detects OOM kills and crash loops before they escalate.
 - **Auto-Remediation:** "One-click fix" suggestions (e.g., "Scale memory to 1GB").
 - **Cost Advisor:** Real-time comparison of AWS vs GCP vs Railway pricing.
 
 ### 🛡️ Enterprise Security (Zero Trust)
+
 - **Device Binding:** Access restricted by `X-Device-Fingerprint`.
 - **Audit Trail:** Merkle-tree backed immutable logs.
 - **Secrets Management:** Fernet/KMS encryption for environment variables.
 - **WAF & DDoS Shield:** Integrated protection rules.
 
 ### 🚀 Developer Experience
+
 - **Project Canvas:** Visual graph view of your architecture.
 - **Web Terminal:** SSH into any container directly from the browser.
 - **Real-time Logs:** WebSocket-based live streaming.
