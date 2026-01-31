@@ -6,12 +6,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepassword}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d smsly_hosting"]
+      test: ["CMD-SHELL", "pg_isready -U smsly_admin -d smsly_hosting"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -114,7 +114,7 @@ services:
       - smsly-net
 
   nginx:
-    image: nginx:alpine
+    image: nginx:1.25-alpine
     restart: unless-stopped
     ports:
       - "80:80"

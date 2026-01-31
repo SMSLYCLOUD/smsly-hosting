@@ -23,6 +23,14 @@ interface ServicesGridProps {
 export function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
 
+  if (!services || services.length === 0) {
+      return (
+          <div className="p-6 text-center text-muted-foreground">
+              <p>No services found. Create one to get started!</p>
+          </div>
+      );
+  }
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-6">
       {services.map((service) => (

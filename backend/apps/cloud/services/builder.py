@@ -10,30 +10,54 @@ logger = logging.getLogger(__name__)
 class NixpacksBuilder:
     """
     Wrapper around Nixpacks CLI to build container images from source.
+    Supports build caching for faster subsequent builds.
     """
+    
+    # Default cache directory for Nixpacks builds
+    CACHE_DIR = "/var/smsly/build-cache"
 
     @staticmethod
-    def build_image(source_dir: str, image_name: str, env_vars: Optional[dict] = None) -> str:
+    def build_image(
+        source_dir: str, 
+        image_name: str, 
+        env_vars: Optional[dict] = None,
+        cache_dir: Optional[str] = None
+    ) -> str:
         """
         Builds a Docker image using Nixpacks.
+        
+        Args:
+            source_dir: Path to source code
+            image_name: Docker image tag
+            env_vars: Environment variables for build
+            cache_dir: Optional cache directory (defaults to CACHE_DIR)
+            
         Returns the image tag upon success.
         """
         if not os.path.exists(source_dir):
             raise FileNotFoundError(f"Source directory {source_dir} not found")
+
+        # Ensure cache directory exists
+        effective_cache_dir = cache_dir or NixpacksBuilder.CACHE_DIR
+        os.makedirs(effective_cache_dir, exist_ok=True)
 
         command = [
             "nixpacks",
             "build",
             source_dir,
             "--name", image_name,
-            "--verbose"
+            "--verbose",
+            "--cache-key", image_name.split(":")[0],  # Use base name as cache key
         ]
+        
+        # Add inline cache for Docker layer caching
+        command.extend(["--inline-cache"])
 
         if env_vars:
             for k, v in env_vars.items():
                 command.extend(["--env", f"{k}={v}"])
 
-        logger.info(f"Starting Nixpacks build for {image_name}...")
+        logger.info(f"Starting Nixpacks build for {image_name} (cache: {effective_cache_dir})...")
 
         try:
             # Run the build process
@@ -42,7 +66,8 @@ class NixpacksBuilder:
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
             )
             logger.info(f"Build successful: {process.stdout}")
             return image_name

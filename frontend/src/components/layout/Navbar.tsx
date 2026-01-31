@@ -53,9 +53,11 @@ export function Navbar() {
 
   const navLinks = [
     { href: '/', label: 'Dashboard', icon: Home },
-    { href: '/services', label: 'Canvas', icon: Layout },
-    { href: '/store', label: 'Store', icon: Box },
+    { href: '/services', label: 'Services', icon: Layout },
+    { href: '/store', label: 'Marketplace', icon: Box },
+    { href: '/deployments', label: 'Deployments', icon: Rocket },
     { href: '/topology', label: 'Topology', icon: Globe },
+    { href: '/settings', label: 'Settings', icon: Settings },
   ];
 
   return (
@@ -129,6 +131,10 @@ export function Navbar() {
                     variant="ghost"
                     className="relative h-9 w-9 rounded-full overflow-hidden border border-border"
                     onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                    aria-label="User menu"
+                    aria-haspopup="true"
+                    aria-expanded={isUserMenuOpen}
+                    aria-controls="user-menu"
                 >
                     <div className="w-full h-full bg-muted flex items-center justify-center text-muted-foreground font-semibold">
                         {user.email?.[0].toUpperCase()}
@@ -138,6 +144,7 @@ export function Navbar() {
                 <AnimatePresence>
                 {isUserMenuOpen && (
                     <motion.div
+                        id="user-menu"
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
@@ -177,6 +184,9 @@ export function Navbar() {
             <button
                 className="text-foreground focus:outline-none p-2 rounded-md hover:bg-muted"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
+                aria-label={isMenuOpen ? "Close menu" : "Open menu"}
+                aria-expanded={isMenuOpen}
+                aria-controls="mobile-menu"
             >
                 {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
             </button>
@@ -187,6 +197,7 @@ export function Navbar() {
       <AnimatePresence>
         {isMenuOpen && (
             <motion.div
+                id="mobile-menu"
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}

@@ -1,5 +1,6 @@
 import docker
 import logging
+import secrets
 from typing import Dict, Any, List
 from kubernetes import client, config
 from .base import BaseCloudAdapter
@@ -150,14 +151,24 @@ class LocalAdapter(BaseCloudAdapter):
             except docker.errors.NotFound:
                 self.docker_client.networks.create(network_name, driver="bridge")
 
+            # Generate secure random password
+            db_password = secrets.token_urlsafe(24)
+            db_user = "smsly_user"
+            
             container = self.docker_client.containers.run(
                 f"{engine}:{version}-alpine",
                 name=f"db-{db_name}",
-                environment={"POSTGRES_PASSWORD": "password"},
+                environment={
+                    "POSTGRES_PASSWORD": db_password,
+                    "POSTGRES_USER": db_user,
+                    "POSTGRES_DB": db_name
+                },
                 detach=True,
                 network=network_name
             )
-            return container.id
+            # Return connection URL with generated credentials
+            logger.info(f"Database provisioned: db-{db_name} with secure credentials")
+            return f"postgresql://{db_user}:{db_password}@db-{db_name}:5432/{db_name}"
         return "local-db-provisioned"
 
     def create_vpc(self, cidr_block: str) -> str:

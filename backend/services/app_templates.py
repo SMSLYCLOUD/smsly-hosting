@@ -33,6 +33,57 @@ class AppTemplate:
 
 APP_TEMPLATES: Dict[str, AppTemplate] = {
     
+    # ===== SMSLY ECOSYSTEM =====
+    'smsly-platform-api': AppTemplate(
+        id='smsly-platform-api',
+        name='SMSLY Platform API',
+        description='Core orchestration engine for the SMSLY ecosystem.',
+        category='smsly-ecosystem',
+        docker_image='smslycloud/platform-api:latest',
+        default_port=8080,
+        env_vars={
+            'ENVIRONMENT': 'production',
+            'SECRET_KEY': '${RANDOM_PASSWORD}',
+            'DATABASE_URL': 'postgresql://...',
+            'REDIS_URL': 'redis://...',
+            'GATEWAY_SECRET': '${RANDOM_PASSWORD}'
+        },
+        health_check='curl -f http://localhost:8080/health || exit 1',
+        required_addons=['POSTGRES', 'REDIS'],
+    ),
+    'smsly-sms': AppTemplate(
+        id='smsly-sms',
+        name='SMSLY SMS Gateway',
+        description='High-performance SMS gateway with SMPP support.',
+        category='smsly-ecosystem',
+        docker_image='smslycloud/sms:latest',
+        default_port=8000,
+        env_vars={'ENVIRONMENT': 'production', 'PYTHONUNBUFFERED': '1'},
+        health_check='curl -f http://localhost:8000/health/live || exit 1',
+        required_addons=['POSTGRES', 'REDIS'],
+    ),
+    'smsly-voice': AppTemplate(
+        id='smsly-voice',
+        name='SMSLY Voice Engine',
+        description='Real-time programmable voice and IVR platform.',
+        category='smsly-ecosystem',
+        docker_image='smslycloud/voice:latest',
+        default_port=3000,
+        env_vars={'RUST_LOG': 'info'},
+        health_check='curl -f http://localhost:3000/health || exit 1',
+    ),
+    'smsly-marketing': AppTemplate(
+        id='smsly-marketing',
+        name='SMSLY Marketing Automation',
+        description='Campaign management and customer engagement platform.',
+        category='smsly-ecosystem',
+        docker_image='smslycloud/marketing:latest',
+        default_port=8030,
+        env_vars={'DATABASE_URL': 'postgresql://...'},
+        health_check='curl -f http://localhost:8030/health || exit 1',
+        required_addons=['POSTGRES'],
+    ),
+
     # ===== DATABASES =====
     'postgres': AppTemplate(
         id='postgres',

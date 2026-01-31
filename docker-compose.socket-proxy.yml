@@ -1,0 +1,55 @@
+# Docker Socket Proxy for SMSLY Hosting
+# Restricts container access to Docker socket for improved security
+#
+# This service acts as a filter between containers and the Docker socket,
+# only allowing specific, safe API calls.
+
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: smsly-socket-proxy
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Read-only operations
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      INFO: 1
+      VERSION: 1
+      
+      # Write operations (needed for deployment)
+      BUILD: 1
+      POST: 1
+      
+      # Disabled for security
+      AUTH: 0
+      SECRETS: 0
+      SWARM: 0
+      EXEC: 0  # Disable exec for security
+      PLUGINS: 0
+    networks:
+      - smsly-net
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+
+networks:
+  smsly-net:
+    external: true
+
+# Usage in docker-compose.prod.yml:
+# Replace:
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock
+# With:
+#   environment:
+#     DOCKER_HOST: tcp://socket-proxy:2375
+#   depends_on:
+#     - socket-proxy

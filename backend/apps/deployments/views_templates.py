@@ -1,34 +1,57 @@
-from rest_framework import serializers, viewsets
+from rest_framework import viewsets, status
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models_templates import Template
+from services.app_templates import list_templates, get_template
 
-class TemplateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Template
-        fields = '__all__'
+class TemplateViewSet(viewsets.ViewSet):
+    """
+    ViewSet for listing available App Templates from the registry.
+    """
+    permission_classes = [IsAuthenticated]
 
-class TemplateViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Template.objects.all()
-    serializer_class = TemplateSerializer
-    permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
+    def list(self, request):
+        """
+        List all available templates.
+        """
+        category = request.query_params.get('category')
+        templates = list_templates(category)
 
-    def get_queryset(self):
-        # Allow pre-populating dummy data for MVP if table is empty
-        if not Template.objects.exists():
-            Template.objects.create(
-                name="Django Starter",
-                slug="django-starter",
-                description="Production-ready Django template with Postgres.",
-                repository_url="https://github.com/smsly/django-starter",
-                default_port=8000,
-                icon_url="https://static.djangoproject.com/img/logos/django-logo-negative.png"
-            )
-            Template.objects.create(
-                name="Node.js Express",
-                slug="node-starter",
-                description="Simple Express.js server.",
-                repository_url="https://github.com/smsly/node-starter",
-                default_port=3000,
-                icon_url="https://nodejs.org/static/images/logo.svg"
-            )
-        return super().get_queryset()
+        # Serialize dataclasses to dicts
+        data = [
+            {
+                'id': t.id,
+                'name': t.name,
+                'description': t.description,
+                'category': t.category,
+                'docker_image': t.docker_image,
+                'default_port': t.default_port,
+                'env_vars': t.env_vars,
+                'volumes': t.volumes,
+                'docs_url': t.docs_url,
+                'health_check': t.health_check
+            }
+            for t in templates
+        ]
+        return Response(data)
+
+    def retrieve(self, request, pk=None):
+        """
+        Get a specific template by ID.
+        """
+        template = get_template(pk)
+        if not template:
+            return Response({'error': 'Template not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = {
+            'id': template.id,
+            'name': template.name,
+            'description': template.description,
+            'category': template.category,
+            'docker_image': template.docker_image,
+            'default_port': template.default_port,
+            'env_vars': template.env_vars,
+            'volumes': template.volumes,
+            'docs_url': template.docs_url,
+            'health_check': template.health_check
+        }
+        return Response(data)

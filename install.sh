@@ -260,8 +260,9 @@ docker run --rm \
     smsly-hosting-backend:latest \
     python manage.py migrate
 
-# Create superuser (non-interactive)
-echo "Creating superuser..."
+# Generate random admin password
+ADMIN_PASSWORD=$(openssl rand -hex 12)
+
 docker run --rm \
     --network host \
     --env-file .env \
@@ -270,8 +271,8 @@ docker run --rm \
 from django.contrib.auth import get_user_model;
 User = get_user_model();
 if not User.objects.filter(username='admin').exists():
-    User.objects.create_superuser('admin', 'admin@smsly.com', 'admin123');
-    print('Superuser created: admin / admin123');
+    User.objects.create_superuser('admin', 'admin@smsly.com', '${ADMIN_PASSWORD}');
+    print('Superuser created: admin / ${ADMIN_PASSWORD}');
 else:
     print('Superuser already exists');
 "
@@ -540,8 +541,8 @@ echo -e "Admin Panel: https://${DOMAIN}/admin/"
 echo -e "API: https://${DOMAIN}/api/v1/"
 echo -e ""
 echo -e "Superuser: admin"
-echo -e "Password: admin123"
-echo -e "${RED}⚠️  CHANGE THIS PASSWORD IMMEDIATELY!${NC}"
+echo -e "Password: ${ADMIN_PASSWORD}"
+echo -e "${YELLOW}⚠️  Store this password securely!${NC}"
 
 echo -e "\n${BLUE}🔐 Generated Credentials (SAVE THESE!):${NC}"
 echo -e "Database Password: ${DB_PASSWORD}"
@@ -580,7 +581,7 @@ Generated: $(date)
 Domain: ${DOMAIN}
 Admin URL: https://${DOMAIN}/admin/
 Admin User: admin
-Admin Password: admin123 (CHANGE THIS!)
+Admin Password: ${ADMIN_PASSWORD}
 
 Database Password: ${DB_PASSWORD}
 Redis Password: ${REDIS_PASSWORD}

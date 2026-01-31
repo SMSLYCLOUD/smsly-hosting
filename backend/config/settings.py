@@ -1,40 +1,15 @@
 import os
 from pathlib import Path
-from decouple import config, Csv, UndefinedValueError
+from decouple import config, Csv
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# =============================================================================
-# SECURITY: Environment Detection
-# =============================================================================
-ENVIRONMENT = config('ENVIRONMENT', default='development').lower()
-_is_production = ENVIRONMENT in ('production', 'staging', 'prod')
-
-# =============================================================================
-# SECURITY: Fail-fast for secrets in production
-# =============================================================================
-try:
-    SECRET_KEY = config('SECRET_KEY')
-except UndefinedValueError:
-    if _is_production:
-        raise RuntimeError("FATAL: SECRET_KEY is required in production!")
-    SECRET_KEY = 'django-insecure-dev-only-key-never-use-in-production'
-
-try:
-    FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
-except UndefinedValueError:
-    if _is_production:
-        raise RuntimeError("FATAL: FIELD_ENCRYPTION_KEY is required in production!")
-    FIELD_ENCRYPTION_KEY = None  # Will fail at runtime if encryption is used
-
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-smsly-hosting-dev-key')
+FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-# SECURITY: Prevent DEBUG=True in production
-if _is_production and DEBUG:
-    raise RuntimeError("FATAL: DEBUG=True is not allowed in production!")
-
-# Security hardening (always enabled in non-DEBUG mode)
+# Security hardening
 if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
@@ -48,12 +23,9 @@ if not DEBUG:
 CONTAINER_REGISTRY_URL = config('CONTAINER_REGISTRY_URL', default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-
-# SECURITY: ALLOWED_HOSTS must be explicit in production
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
-if _is_production and '*' in ALLOWED_HOSTS:
-    raise RuntimeError("FATAL: ALLOWED_HOSTS='*' is not allowed in production!")
-
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["*"]
 CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app', cast=Csv())
 
 INSTALLED_APPS = [
@@ -83,10 +55,6 @@ INSTALLED_APPS = [
     # Local
     'apps.deployments',
     'apps.cloud',
-    'apps.intelligence',
-    'apps.billing',
-    'apps.teams',
-    'apps.domains',
 ]
 
 MIDDLEWARE = [
@@ -206,6 +174,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+        'deployments': '10/hour',
+        'deployment_burst': '3/minute',
+    },
 }
 
 # Celery

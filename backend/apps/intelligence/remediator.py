@@ -77,9 +77,42 @@ class RemediationEngine:
                 return True
 
             elif fix['action'] == 'ROLLBACK':
-                # Logic to find previous green build
-                # Stub for now
-                pass
+                # Find previous successful deployment
+                last_good_deploy = service.deployments.filter(
+                    status='ACTIVE'
+                ).exclude(
+                    id=service.deployments.latest('created_at').id if service.deployments.exists() else None
+                ).order_by('-finished_at').first()
+
+                if last_good_deploy:
+                    # Create audit record
+                    AuditLog.objects.create(
+                        actor="AI_REMEDIATOR",
+                        action="ROLLBACK",
+                        target=service.name,
+                        metadata={
+                            "from_commit": service.deployments.latest('created_at').commit_hash if service.deployments.exists() else "unknown",
+                            "to_commit": last_good_deploy.commit_hash,
+                            "reason": "CRASH_LOOP detected"
+                        }
+                    )
+
+                    # Trigger redeploy with last good commit
+                    new_deploy = Deployment.objects.create(
+                        service=service,
+                        status=Deployment.Status.QUEUED,
+                        commit_hash=last_good_deploy.commit_hash,
+                        commit_message=f"Auto-Rollback: Reverted to {last_good_deploy.commit_hash[:7]}"
+                    )
+                    
+                    provider_id = str(service.provider.id) if service.provider else None
+                    if provider_id:
+                        smart_deploy_task.delay(str(new_deploy.id), provider_id)
+                        logger.info(f"Rollback triggered for {service.name} to commit {last_good_deploy.commit_hash[:7]}")
+                        return True
+                else:
+                    logger.warning(f"No previous good deployment found for {service.name}")
+                    return False
 
             return False
 

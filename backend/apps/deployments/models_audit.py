@@ -12,9 +12,9 @@ class AuditLog(models.Model):
     id = models.BigAutoField(primary_key=True)
     timestamp = models.DateTimeField(default=timezone.now, editable=False)
     
-    actor = models.CharField(max_length=255, default="system")  # User or System
-    action = models.CharField(max_length=255, default="unknown")  # e.g. "DEPLOY_TRIGGER", "SCALE_UP"
-    target = models.CharField(max_length=255, default="unknown")  # e.g. "Service: my-app"
+    actor = models.CharField(max_length=255) # User or System
+    action = models.CharField(max_length=255) # e.g. "DEPLOY_TRIGGER", "SCALE_UP"
+    target = models.CharField(max_length=255) # e.g. "Service: my-app"
     metadata = models.JSONField(default=dict)
     
     # Cryptographic Links

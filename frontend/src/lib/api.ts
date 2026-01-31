@@ -86,4 +86,16 @@ export const servicesApi = {
   }
 };
 
+export const templatesApi = {
+  list: async (): Promise<any[]> => {
+    const response = await api.get('/templates/');
+    // Handle pagination if present, or raw list
+    return Array.isArray(response.data) ? response.data : response.data.results || [];
+  },
+  get: async (id: string): Promise<any> => {
+    const response = await api.get(`/templates/${id}/`);
+    return response.data;
+  }
+};
+
 export default api;
