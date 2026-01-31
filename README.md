@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black.svg)](frontend/)
 [![Django 5](https://img.shields.io/badge/Django-5.0-green.svg)](backend/)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/SMSLYCLOUD/smsly-hosting)
 
 **The Universal PaaS for Hyperscale Infrastructure.**
 
@@ -10,70 +11,97 @@ SMSLY Hosting v2 is a complete rewrite of the hosting platform, designed to be t
 
 ---
 
-## ⚡ Quick Install (Local)
+## ⚡ Quick Start
 
-Run this single command on Ubuntu 22.04+ to install Docker, Build Services, and the Platform:
+### Option 1: GitHub Codespaces (Recommended)
+
+Click the button above or:
+
+```bash
+# Opens in browser with everything pre-configured
+gh codespace create -r SMSLYCLOUD/smsly-hosting
+```
+
+### Option 2: Local Development
+
+```bash
+git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
+cd smsly-hosting
+bash quick-start.sh
+```
+
+### Option 3: Production Install (Ubuntu 22.04+)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install-v2.sh | sudo bash
 ```
 
-Or manually:
+---
+
+## 🚀 Running the Platform
+
+After setup, start the services in separate terminals:
 
 ```bash
-git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
-cd smsly-hosting
-sudo ./install-v2.sh
+# Terminal 1: Backend API
+cd backend
+gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4
+
+# Terminal 2: Frontend
+cd frontend
+npm run dev
+
+# Terminal 3: Celery Worker (optional)
+cd backend
+celery -A config worker -l INFO
 ```
 
 ---
 
-## 🌐 Accessing Your Platform
-
-Once installed, the services are available at:
+## 🌐 Access Points
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| **Dashboard** | `http://localhost:3000` | The main UI for managing deployments. |
-| **API** | `http://localhost:8000` | The backend REST API. |
-| **Traefik** | `http://localhost:8080` | Edge Router Dashboard. |
-| **Deployed Apps** | `http://<app-name>.localhost` | Your deployed services (auto-routed). |
+| **Frontend** | `http://localhost:3000` | Main dashboard |
+| **API** | `http://localhost:8000/api/` | REST API |
+| **Swagger** | `http://localhost:8000/api/schema/swagger/` | API documentation |
+| **Admin** | `http://localhost:8000/admin/` | Django admin panel |
 
-> **Note:** If deploying to a remote server, replace `localhost` with your server's IP or Domain.
+> **Codespaces:** Use the Ports tab to access forwarded URLs.
+
+**Default Credentials:** `admin` / `admin123`
 
 ---
 
-## ✨ Key Features (v2)
+## ✨ Key Features
 
-### 🌍 Multi-Cloud Orchestration (Universal Adapter)
+### 🌍 Multi-Cloud Orchestration
 
-Manage resources across all major providers from one UI:
+- **AWS:** ECS Fargate, Lambda, RDS, S3
+- **Azure:** Container Apps, Functions, SQL
+- **GCP:** Cloud Run, Cloud SQL, BigQuery
+- **Railway/Vercel:** Zero-config deploys
+- **Local:** Docker/K3s clusters
 
-- **AWS:** ECS Fargate, Lambda, RDS, S3, IAM, WAF.
-- **Azure:** Container Apps, Functions, SQL, Blob Storage, Entra ID.
-- **GCP:** Cloud Run, Functions, Cloud SQL, BigQuery.
-- **Railway/Vercel:** Direct API integration for zero-config deploys.
-- **Local:** Self-hosted Docker/K3s clusters.
+### 🧠 AI Intelligence Engine
 
-### 🧠 Intelligence Engine
+- Predictive failure analysis
+- Auto-remediation suggestions
+- Cost optimization advisor
 
-- **Predictive Failure Analysis:** AI detects OOM kills and crash loops before they escalate.
-- **Auto-Remediation:** "One-click fix" suggestions (e.g., "Scale memory to 1GB").
-- **Cost Advisor:** Real-time comparison of AWS vs GCP vs Railway pricing.
+### 🛡️ Enterprise Security
 
-### 🛡️ Enterprise Security (Zero Trust)
-
-- **Device Binding:** Access restricted by `X-Device-Fingerprint`.
-- **Audit Trail:** Merkle-tree backed immutable logs.
-- **Secrets Management:** Fernet/KMS encryption for environment variables.
-- **WAF & DDoS Shield:** Integrated protection rules.
+- Zero-trust architecture
+- Fernet field encryption
+- Merkle-tree audit logs
+- HMAC-signed inter-service auth
 
 ### 🚀 Developer Experience
 
-- **Project Canvas:** Visual graph view of your architecture.
-- **Web Terminal:** SSH into any container directly from the browser.
-- **Real-time Logs:** WebSocket-based live streaming.
-- **Marketplace:** One-click deploy for the full SMSLY Ecosystem (30+ services).
+- Visual project canvas
+- Web terminal (SSH in browser)
+- Real-time log streaming
+- One-click marketplace deploys
 
 ---
 
@@ -81,46 +109,56 @@ Manage resources across all major providers from one UI:
 
 ```mermaid
 graph TD
-    User[Developer] -->|Next.js 15 Dashboard| UI[Frontend]
-    UI -->|API / WebSocket| API[Django 5 Backend]
+    User[Developer] -->|Next.js 15| UI[Frontend]
+    UI -->|REST/WebSocket| API[Django 5 Backend]
 
-    subgraph "Control Plane"
-        API -->|Task Queue| Celery[Celery Workers]
-        API -->|Cache/Broker| Redis
+    subgraph Control Plane
+        API -->|Tasks| Celery[Celery Workers]
+        API -->|Cache| Redis
         API -->|State| PG[PostgreSQL]
-        API -->|Registry| Reg[Docker Registry :5000]
     end
 
-    subgraph "Compute Fabric"
-        Celery -->|Build & Push| Reg
-        Celery -->|Deploy| AWS[AWS ECS/Lambda]
+    subgraph Compute Fabric
+        Celery -->|Deploy| AWS[AWS ECS]
         Celery -->|Deploy| Azure[Azure Apps]
-        Celery -->|Deploy| Local[Docker / K3s]
+        Celery -->|Deploy| Local[Docker/K3s]
     end
-
-    Local -->|Route| Traefik[Traefik Ingress]
 ```
 
 ---
 
-## 📦 Stack
+## 📦 Tech Stack
 
-- **Frontend:** Next.js 15 (App Router), React 19, Tailwind CSS, Shadcn UI.
-- **Backend:** Django 5.0 (Async), Django Channels, Celery, Redis.
-- **Database:** PostgreSQL 16.
-- **Infrastructure:** Docker Compose (Local), K3s (Production).
+| Layer | Technology |
+|-------|------------|
+| Frontend | Next.js 15, React 19, Tailwind, Shadcn UI |
+| Backend | Django 5.0, Channels, Celery |
+| Database | PostgreSQL 16 |
+| Cache | Redis |
+| Infra | Docker Compose, K3s |
+
+---
+
+## 🔧 Environment Variables
+
+Key environment variables (auto-generated by `setup.sh`):
+
+| Variable | Description |
+|----------|-------------|
+| `SECRET_KEY` | Django secret key |
+| `FIELD_ENCRYPTION_KEY` | Fernet key for field encryption |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `ALLOWED_HOSTS` | Comma-separated hostnames |
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions! Please read `CONTRIBUTING.md` for details.
-
-1. Fork the repo.
-2. Create your feature branch (`git checkout -b feature/amazing-feature`).
-3. Commit your changes.
-4. Push to the branch.
-5. Open a Pull Request.
+1. Fork the repo
+2. Create feature branch (`git checkout -b feature/amazing`)
+3. Commit changes
+4. Push and open PR
 
 ---
 

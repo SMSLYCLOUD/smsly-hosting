@@ -10,11 +10,16 @@ import {
   ExternalLink,
   MoreVertical,
   Play,
-  Square
+  Square,
+  Rocket,
+  GitBranch,
+  Cloud
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Service } from '@/lib/api';
+import { motion } from 'framer-motion';
+import Link from 'next/link';
 
 interface ServicesGridProps {
   services: Service[];
@@ -24,11 +29,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
 
   if (!services || services.length === 0) {
-      return (
-          <div className="p-6 text-center text-muted-foreground">
-              <p>No services found. Create one to get started!</p>
-          </div>
-      );
+    return <EmptyServicesState />;
   }
 
   return (
@@ -62,7 +63,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
 
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' :
-                  service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500'
+                service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500'
                 }`} />
               <Button variant="ghost" size="icon" className="h-6 w-6">
                 <MoreVertical size={14} />
@@ -124,6 +125,97 @@ export function ServicesGrid({ services }: ServicesGridProps) {
           </div>
         </Card>
       ))}
+    </div>
+  );
+}
+
+function EmptyServicesState() {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 px-6">
+      {/* Animated Illustration */}
+      <div className="relative mb-8">
+        <motion.div
+          animate={{ y: [0, -8, 0] }}
+          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute -left-12 -top-4"
+        >
+          <div className="p-3 rounded-xl bg-primary/10 border border-primary/20">
+            <GitBranch className="w-6 h-6 text-primary" />
+          </div>
+        </motion.div>
+
+        <motion.div
+          animate={{ y: [0, 10, 0] }}
+          transition={{ duration: 4, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
+          className="absolute -right-12 -top-2"
+        >
+          <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
+            <Cloud className="w-6 h-6 text-cyan-500" />
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="w-24 h-24 rounded-2xl bg-gradient-to-br from-muted to-muted/50 border border-border flex items-center justify-center"
+        >
+          <Rocket className="w-10 h-10 text-muted-foreground" />
+        </motion.div>
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="text-center space-y-3"
+      >
+        <h3 className="text-2xl font-bold">No services deployed yet</h3>
+        <p className="text-muted-foreground max-w-md">
+          Deploy your first application in seconds. Connect a Git repository or use one of our templates.
+        </p>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="flex flex-col sm:flex-row gap-3 mt-8"
+      >
+        <Link href="/new">
+          <Button size="lg" className="bg-gradient-to-r from-primary to-cyan-500 text-white shadow-lg shadow-primary/30 hover:opacity-90">
+            <Rocket className="mr-2 h-4 w-4" />
+            Deploy from GitHub
+          </Button>
+        </Link>
+        <Link href="/templates">
+          <Button variant="outline" size="lg">
+            Browse Templates
+          </Button>
+        </Link>
+      </motion.div>
+
+      {/* Quick Start Tips */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.6 }}
+        className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4 text-center max-w-2xl"
+      >
+        {[
+          { step: "1", label: "Connect Repo", desc: "Link your GitHub account" },
+          { step: "2", label: "Auto-Detect", desc: "We detect your framework" },
+          { step: "3", label: "Deploy!", desc: "Go live in seconds" }
+        ].map((item, i) => (
+          <div key={i} className="p-4 rounded-xl bg-muted/30 border border-border/50">
+            <div className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center mx-auto mb-2">
+              {item.step}
+            </div>
+            <p className="font-medium text-sm">{item.label}</p>
+            <p className="text-xs text-muted-foreground">{item.desc}</p>
+          </div>
+        ))}
+      </motion.div>
     </div>
   );
 }

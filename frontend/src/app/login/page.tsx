@@ -1,13 +1,54 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Github, Chrome } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [formData, setFormData] = useState({ email: "", password: "" });
+
   // Use backend base URL (without /api/v1) for OAuth endpoints
   const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
+
+  const handleEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/v1/auth/login/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(formData),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Store token if returned
+        if (data.key || data.token) {
+          localStorage.setItem("auth_token", data.key || data.token);
+        }
+        router.push("/dashboard");
+      } else {
+        const errorData = await response.json();
+        setError(errorData.non_field_errors?.[0] || errorData.detail || "Invalid email or password");
+      }
+    } catch {
+      setError("Unable to connect to server. Please try again.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
@@ -16,42 +57,126 @@ export default function LoginPage() {
           <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mb-4">
             <span className="text-white font-bold text-xl">S</span>
           </div>
-          <CardTitle className="text-2xl font-bold tracking-tight">Welcome back</CardTitle>
+          <CardTitle className="text-2xl font-bold tracking-tight">
+            {showEmailForm ? "Sign in with Email" : "Welcome back"}
+          </CardTitle>
           <CardDescription>
-            Sign in to SMSLY Hosting to manage your infrastructure.
+            {showEmailForm
+              ? "Enter your email and password to continue"
+              : "Sign in to SMSLY Hosting to manage your infrastructure."}
           </CardDescription>
         </CardHeader>
+
         <CardContent className="space-y-4">
-          <Button variant="outline" className="w-full h-11 relative" asChild>
-            <a href={`${BACKEND_URL}/accounts/github/login/`}>
-              <Github className="mr-2 h-4 w-4" />
-              Sign in with GitHub
-            </a>
-          </Button>
-          <Button variant="outline" className="w-full h-11 relative" asChild>
-            <a href={`${BACKEND_URL}/accounts/google/login/`}>
-              <Chrome className="mr-2 h-4 w-4" />
-              Sign in with Google
-            </a>
-          </Button>
+          {!showEmailForm ? (
+            <>
+              {/* Social Login Buttons */}
+              <Button variant="outline" className="w-full h-11 relative" asChild>
+                <a href={`${BACKEND_URL}/accounts/github/login/`}>
+                  <Github className="mr-2 h-4 w-4" />
+                  Sign in with GitHub
+                </a>
+              </Button>
+              <Button variant="outline" className="w-full h-11 relative" asChild>
+                <a href={`${BACKEND_URL}/accounts/google/login/`}>
+                  <Chrome className="mr-2 h-4 w-4" />
+                  Sign in with Google
+                </a>
+              </Button>
 
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-background px-2 text-muted-foreground">
-                Or continue with email
-              </span>
-            </div>
-          </div>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">
+                    Or continue with email
+                  </span>
+                </div>
+              </div>
 
-          {/* Email/Pass form could go here, focusing on Social for now per request */}
-          <Button className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white">
-            Sign in with Email
-          </Button>
+              <Button
+                className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white"
+                onClick={() => setShowEmailForm(true)}
+              >
+                <Mail className="mr-2 h-4 w-4" />
+                Sign in with Email
+              </Button>
+            </>
+          ) : (
+            <>
+              {/* Email Login Form */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mb-2 -ml-2"
+                onClick={() => {
+                  setShowEmailForm(false);
+                  setError("");
+                }}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to options
+              </Button>
 
+              <form onSubmit={handleEmailLogin} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    required
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    disabled={isLoading}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="password">Password</Label>
+                    <Link
+                      href="/forgot-password"
+                      className="text-xs text-muted-foreground hover:text-primary underline"
+                    >
+                      Forgot password?
+                    </Link>
+                  </div>
+                  <Input
+                    id="password"
+                    type="password"
+                    required
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    disabled={isLoading}
+                  />
+                </div>
+
+                {error && (
+                  <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/50 p-3 rounded-md">
+                    {error}
+                  </div>
+                )}
+
+                <Button
+                  type="submit"
+                  className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Signing in...
+                    </>
+                  ) : (
+                    "Sign in"
+                  )}
+                </Button>
+              </form>
+            </>
+          )}
         </CardContent>
+
         <CardFooter className="flex justify-center text-sm text-muted-foreground">
           Don&apos;t have an account?&nbsp;
           <Link href="/register" className="underline hover:text-primary">
