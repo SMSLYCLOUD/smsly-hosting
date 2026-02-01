@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
-import axios from "axios";
+import api from "@/lib/api";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -101,7 +101,7 @@ function NewServiceContent() {
   useEffect(() => {
     const fetchProviders = async () => {
       try {
-        const res = await axios.get("/api/v1/cloud/providers/");
+        const res = await api.get("/cloud/providers/");
         setProviders(res.data.results || res.data); // Handle pagination or list
       } catch (error) {
         console.error("Failed to fetch providers", error);
@@ -120,7 +120,7 @@ function NewServiceContent() {
     setLoading(true);
     try {
       // 1. Create Service Record
-      const serviceRes = await axios.post("/api/v1/services/", {
+      const serviceRes = await api.post("/services/", {
         name: serviceName,
         deploy_type: deployType,
         repository_url: deployType === 'GIT' ? repoUrl : null,
@@ -131,7 +131,7 @@ function NewServiceContent() {
       const serviceId = serviceRes.data.id;
 
       // 2. Trigger Deployment
-      await axios.post("/api/v1/deployments/trigger/", {
+      await api.post("/deployments/trigger/", {
         service_id: serviceId,
         provider_id: providerId
       });

@@ -1,9 +1,16 @@
 import axios from 'axios';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+// Use dynamic origin detection - works in browser and during SSR
+const getApiUrl = () => {
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}/api/v1`;
+  }
+  return process.env.NEXT_PUBLIC_API_URL || '/api/v1';
+};
 
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: getApiUrl(),
+  withCredentials: true,
 });
 
 // Interceptor to add auth token

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
-import axios from "axios";
+import api from "@/lib/api";
 
 interface User {
   pk: number;
@@ -24,11 +24,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const fetchUser = async () => {
+      // Only fetch user if there's a token - avoids 403 on public pages
+      const token = localStorage.getItem('auth_token');
+      if (!token) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
       try {
-        const res = await axios.get("/api/v1/auth/user/");
+        const res = await api.get("/auth/user/");
         setUser(res.data);
       } catch (error) {
-        // Not logged in or error
+        // Token invalid or expired
+        localStorage.removeItem('auth_token');
         setUser(null);
       } finally {
         setLoading(false);
