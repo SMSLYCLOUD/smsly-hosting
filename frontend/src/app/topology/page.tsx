@@ -1,81 +1,73 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import axios from 'axios';
 import dynamic from 'next/dynamic';
 import { Navbar } from '@/components/layout/Navbar';
+import { servicesApi, Service } from '@/lib/api';
 
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
+interface GraphNode {
+    id: string;
+    name: string;
+    type: string;
+}
+
+interface GraphLink {
+    source: string;
+    target: string;
+}
+
 export default function TopologyPage() {
-    const [graphData, setGraphData] = useState<any>({ nodes: [], links: [] });
+    const [graphData, setGraphData] = useState<{ nodes: GraphNode[], links: GraphLink[] }>({ nodes: [], links: [] });
     const [loading, setLoading] = useState(true);
     const graphRef = useRef<any>(null);
 
     useEffect(() => {
-        // In a real app, use the API. For now, we mock if no backend.
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-        if (API_URL) {
-            axios.get(API_URL + '/topology/')
-                .then(res => setGraphData(res.data))
-                .catch(console.error)
-                .finally(() => setLoading(false));
-        } else {
-            // Mock data for UI preview
-            setGraphData({
-                nodes: [
-                    { id: '1', name: 'frontend-svc', type: 'SERVICE' },
-                    { id: '2', name: 'api-svc', type: 'SERVICE' },
-                    { id: '3', name: 'db-primary', type: 'POSTGRES' },
-                    { id: '4', name: 'cache', type: 'REDIS' }
-                ],
-                links: [
-                    { source: '1', target: '2' },
-                    { source: '2', target: '3' },
-                    { source: '2', target: '4' }
-                ]
-            });
-            setLoading(false);
+        async function loadTopology() {
+            try {
+                const services = await servicesApi.list();
+
+                if (!services || services.length === 0) {
+                    // Show empty state
+                    setGraphData({
+                        nodes: [{ id: 'empty', name: 'No services deployed', type: 'INFO' }],
+                        links: []
+                    });
+                    return;
+                }
+
+                // Convert services to graph nodes
+                const nodes: GraphNode[] = services.map((service: Service) => ({
+                    id: service.id.toString(),
+                    name: service.name,
+                    type: service.name.toLowerCase().includes('postgres') || service.name.toLowerCase().includes('db') ? 'POSTGRES' :
+                        service.name.toLowerCase().includes('redis') || service.name.toLowerCase().includes('cache') ? 'REDIS' :
+                            'SERVICE'
+                }));
+
+                // Create links between services (simplified: connect each to next)
+                const links: GraphLink[] = [];
+                for (let i = 0; i < nodes.length - 1; i++) {
+                    links.push({
+                        source: nodes[i].id,
+                        target: nodes[i + 1].id
+                    });
+                }
+
+                setGraphData({ nodes, links });
+            } catch (error) {
+                console.error('Failed to load topology:', error);
+                setGraphData({
+                    nodes: [{ id: 'error', name: 'Failed to load', type: 'ERROR' }],
+                    links: []
+                });
+            } finally {
+                setLoading(false);
+            }
         }
-
+        loadTopology();
     }, []);
-
-    const drawNode = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-        const label = node.name;
-        const fontSize = 12 / globalScale;
-        const radius = 10; // Node size
-
-        // Draw Hexagon or Circle based on type
-        ctx.beginPath();
-
-        // Fill style (Weave-like dark circles)
-        const colors: { [key: string]: string } = {
-            'SERVICE': '#3b82f6', // blue
-            'POSTGRES': '#ef4444', // red
-            'REDIS': '#22c55e', // green
-        };
-        const color = colors[node.type as string] || '#ffffff';
-
-        ctx.fillStyle = '#1e1e1e';
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-
-        ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
-        ctx.fill();
-        ctx.stroke();
-
-        // Draw Label below
-        ctx.font = `${fontSize}px Sans-Serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, node.x, node.y + radius + fontSize + 2);
-
-        // Draw Icon (Simplified as a letter for Canvas perf)
-        ctx.fillStyle = color;
-        ctx.font = `bold ${fontSize + 4}px Sans-Serif`;
-        ctx.fillText((node.type as string)[0], node.x, node.y + 2);
-    };
 
     return (
         <main className="flex min-h-screen flex-col bg-background">
@@ -93,22 +85,29 @@ export default function TopologyPage() {
 
                 {loading ? (
                     <div className="text-white p-24 flex items-center justify-center h-full">Loading topology...</div>
+                ) : graphData.nodes.length === 0 || graphData.nodes[0].id === 'empty' ? (
+                    <div className="text-white p-24 flex flex-col items-center justify-center h-full">
+                        <p className="text-xl mb-4">No services deployed yet</p>
+                        <p className="text-gray-400">Deploy your first service to see the topology visualization.</p>
+                    </div>
                 ) : (
                     <div className="w-full h-full min-h-[500px]">
                         <ForceGraph3D
+                            ref={graphRef}
                             graphData={graphData}
                             nodeLabel="name"
                             nodeColor={(node: any) => {
                                 if (node.type === 'SERVICE') return '#3b82f6'; // blue
                                 if (node.type === 'POSTGRES') return '#ef4444'; // red
                                 if (node.type === 'REDIS') return '#22c55e'; // green
+                                if (node.type === 'ERROR') return '#f97316'; // orange
                                 return '#ffffff';
                             }}
                             nodeRelSize={6}
                             linkColor={() => '#ffffff'}
                             linkWidth={2}
                             linkDirectionalParticles={4}
-                            linkDirectionalParticleSpeed={(d: any) => 0.005}
+                            linkDirectionalParticleSpeed={() => 0.005}
                             backgroundColor="#000000"
                         />
                     </div>

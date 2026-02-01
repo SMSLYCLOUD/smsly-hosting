@@ -49,6 +49,16 @@ export default function DashboardPage() {
     return <SkeletonDashboard />;
   }
 
+  // Calculate stats from real data
+  const databaseServices = services.filter(s =>
+    s.name?.toLowerCase().includes('postgres') ||
+    s.name?.toLowerCase().includes('redis') ||
+    s.name?.toLowerCase().includes('mysql') ||
+    s.name?.toLowerCase().includes('mongo')
+  ).length;
+
+  const uniqueProviders = [...new Set(services.map(s => s.provider).filter(Boolean))];
+
   const stats = [
     {
       title: "Total Services",
@@ -57,36 +67,37 @@ export default function DashboardPage() {
       icon: Server,
       color: "text-blue-500",
       bg: "bg-blue-500/10",
-      trend: "+2 this week"
+      trend: totalServices > 0 ? "Active" : "None yet"
     },
     {
       title: "Active Deployments",
       value: activeDeployments,
-      subtitle: "Running smoothly",
+      subtitle: failedServices > 0 ? `${failedServices} failed` : "Running smoothly",
       icon: Activity,
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
-      trend: "100% uptime"
+      trend: activeDeployments === totalServices ? "100% uptime" : `${Math.round((activeDeployments / Math.max(totalServices, 1)) * 100)}% success`
     },
     {
       title: "Databases",
-      value: 3,
-      subtitle: "1 Postgres, 2 Redis",
+      value: databaseServices,
+      subtitle: databaseServices > 0 ? "Managed instances" : "None provisioned",
       icon: Database,
       color: "text-purple-500",
       bg: "bg-purple-500/10",
-      trend: "All healthy"
+      trend: databaseServices > 0 ? "Healthy" : "Add from marketplace"
     },
     {
       title: "Cloud Providers",
-      value: 4,
-      subtitle: "AWS, Azure, GCP, Local",
+      value: uniqueProviders.length || 0,
+      subtitle: uniqueProviders.length > 0 ? uniqueProviders.slice(0, 2).join(", ") : "None configured",
       icon: Globe,
       color: "text-cyan-500",
       bg: "bg-cyan-500/10",
-      trend: "Multi-cloud"
+      trend: uniqueProviders.length > 1 ? "Multi-cloud" : uniqueProviders.length === 1 ? "Single provider" : "Connect in settings"
     }
   ];
+
 
   return (
     <motion.div
