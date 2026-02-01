@@ -57,8 +57,6 @@ export default function DashboardPage() {
     s.name?.toLowerCase().includes('mongo')
   ).length;
 
-  const uniqueProviders = [...new Set(services.map(s => s.provider).filter(Boolean))];
-
   const stats = [
     {
       title: "Total Services",
@@ -76,7 +74,7 @@ export default function DashboardPage() {
       icon: Activity,
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
-      trend: activeDeployments === totalServices ? "100% uptime" : `${Math.round((activeDeployments / Math.max(totalServices, 1)) * 100)}% success`
+      trend: totalServices > 0 ? `${Math.round((activeDeployments / Math.max(totalServices, 1)) * 100)}% success` : "Deploy first service"
     },
     {
       title: "Databases",
@@ -88,13 +86,13 @@ export default function DashboardPage() {
       trend: databaseServices > 0 ? "Healthy" : "Add from marketplace"
     },
     {
-      title: "Cloud Providers",
-      value: uniqueProviders.length || 0,
-      subtitle: uniqueProviders.length > 0 ? uniqueProviders.slice(0, 2).join(", ") : "None configured",
+      title: "Services Health",
+      value: failedServices === 0 ? "✓" : failedServices,
+      subtitle: failedServices === 0 ? "All systems operational" : `${failedServices} need attention`,
       icon: Globe,
-      color: "text-cyan-500",
-      bg: "bg-cyan-500/10",
-      trend: uniqueProviders.length > 1 ? "Multi-cloud" : uniqueProviders.length === 1 ? "Single provider" : "Connect in settings"
+      color: failedServices === 0 ? "text-cyan-500" : "text-red-500",
+      bg: failedServices === 0 ? "bg-cyan-500/10" : "bg-red-500/10",
+      trend: failedServices === 0 ? "Healthy" : "Check logs"
     }
   ];
 
