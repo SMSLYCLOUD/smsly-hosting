@@ -52,7 +52,7 @@ export function Navbar() {
   };
 
   const navLinks = [
-    { href: '/', label: 'Dashboard', icon: Home },
+    { href: '/dashboard', label: 'Dashboard', icon: Home },
     { href: '/services', label: 'Services', icon: Layout },
     { href: '/store', label: 'Marketplace', icon: Box },
     { href: '/deployments', label: 'Deployments', icon: Rocket },
