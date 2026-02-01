@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Github, Box, Loader2, CheckCircle } from "lucide-react";
+import { PageHeader } from "@/components/ui/page-header";
+import { Github, Box, Loader2, CheckCircle, Rocket } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 interface CloudProvider {
@@ -153,10 +154,13 @@ function NewServiceContent() {
 
   return (
     <div className="container mx-auto max-w-4xl py-10">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold">Deploy New Service</h1>
-        <p className="text-muted-foreground">Get your code running in minutes.</p>
-      </div>
+      <PageHeader
+        title="Deploy New Service"
+        description="Get your code running in minutes."
+        icon={<Rocket className="h-8 w-8 text-primary" />}
+        breadcrumbs={[{ label: "Services", href: "/services" }, { label: "New" }]}
+        backHref="/dashboard"
+      />
 
       <Tabs defaultValue={templateConfig ? "docker" : "git"} className="w-full">
         <TabsList className="grid w-full grid-cols-2 mb-8">
