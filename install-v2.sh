@@ -80,8 +80,9 @@ if [ ! -f .env ]; then
 # Django
 DEBUG=False
 SECRET_KEY=${SECRET_KEY}
-ALLOWED_HOSTS=localhost,127.0.0.1,${SMSLY_DOMAIN:-hosting.example.com}
-CSRF_TRUSTED_ORIGINS=https://${SMSLY_DOMAIN:-hosting.example.com}
+# Include wildcard for flexibility, plus specific domain
+ALLOWED_HOSTS=*,localhost,127.0.0.1,${SMSLY_DOMAIN:-hosting.smsly.cloud}
+CSRF_TRUSTED_ORIGINS=https://${SMSLY_DOMAIN:-hosting.smsly.cloud},https://localhost
 
 # Encryption
 FIELD_ENCRYPTION_KEY=${FERNET_KEY}
@@ -126,8 +127,12 @@ fi
 log "Building Docker images (this may take 5-10 minutes)..."
 docker compose -f docker-compose.prod.yml build --no-cache
 
-log "Starting services..."
-docker compose -f docker-compose.prod.yml up -d
+log "Starting core services (bypassing backend-init to avoid blocking)..."
+# Start db, redis, frontend first
+docker compose -f docker-compose.prod.yml up -d db redis frontend registry
+sleep 10
+# Start backend services WITHOUT waiting for backend-init (we'll run migrations manually)
+docker compose -f docker-compose.prod.yml up -d backend celery celery-beat nginx --no-deps
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Wait for database
