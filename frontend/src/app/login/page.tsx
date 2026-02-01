@@ -16,8 +16,10 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [formData, setFormData] = useState({ email: "", password: "" });
 
-  // Use backend base URL (without /api/v1) for OAuth endpoints
-  const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
+  // Use absolute URL for production - NEXT_PUBLIC vars are baked at build time
+  const BACKEND_URL = typeof window !== 'undefined'
+    ? window.location.origin
+    : process.env.NEXT_PUBLIC_API_URL || "https://hosting.smsly.cloud";
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,11 +27,12 @@ export default function LoginPage() {
     setError("");
 
     try {
+      // dj_rest_auth expects username, not email
       const response = await fetch(`${BACKEND_URL}/api/v1/auth/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ username: formData.email, password: formData.password }),
       });
 
       if (response.ok) {
