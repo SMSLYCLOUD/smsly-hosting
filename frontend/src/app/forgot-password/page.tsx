@@ -80,7 +80,7 @@ export default function ForgotPasswordPage() {
             <div className="text-center py-4">
               <p className="text-emerald-600 font-medium mb-4">✓ Email sent successfully</p>
               <p className="text-sm text-muted-foreground">
-                Didn't receive it? Check your spam folder or try again.
+                Didn&apos;t receive it? Check your spam folder or try again.
               </p>
             </div>
           )}
