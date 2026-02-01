@@ -44,24 +44,8 @@ services:
     networks:
       - smsly-net
 
-  # Init container - runs migrations before backend starts
-  backend-init:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    # SECURITY: Require ADMIN_PASSWORD to be set explicitly in .env
-    command: [
-      "sh", "-c",
-      "python manage.py migrate --no-input && python manage.py collectstatic --no-input --clear && python -c \"import os; from django.contrib.auth import get_user_model; User = get_user_model(); admin_pass = os.environ.get('ADMIN_PASSWORD'); admin_email = os.environ.get('ADMIN_EMAIL', 'admin@smsly.io'); assert admin_pass and len(admin_pass) >= 8, 'ADMIN_PASSWORD must be set (min 8 chars)'; User.objects.filter(username='admin').exists() or User.objects.create_superuser('admin', admin_email, admin_pass)\" && echo 'Init complete!'"
-    ]
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - smsly-net
+  # NOTE: backend-init removed - migrations run by install script
+  # This avoids blocking issues with containers that don't exit properly
 
   backend:
     build:
@@ -73,8 +57,6 @@ services:
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
     depends_on:
-      backend-init:
-        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
