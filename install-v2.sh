@@ -46,9 +46,13 @@ INSTALL_DIR="${SMSLY_INSTALL_DIR:-/opt/smsly-hosting}"
 if [ -d "$INSTALL_DIR/.git" ]; then
     log "Updating existing installation..."
     cd "$INSTALL_DIR"
-    git pull origin main
+    # Force reset to handle any local changes
+    git fetch origin
+    git reset --hard origin/main
+    git clean -fd
 else
     log "Cloning SMSLY Hosting..."
+    rm -rf "$INSTALL_DIR"  # Remove any partial installs
     git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
     cd "$INSTALL_DIR"
 fi
