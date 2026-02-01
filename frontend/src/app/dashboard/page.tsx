@@ -57,6 +57,10 @@ export default function DashboardPage() {
     s.name?.toLowerCase().includes('mongo')
   ).length;
 
+  const uniqueProviders: string[] = Array.from(
+    new Set(services.map(s => s.provider).filter((p): p is string => Boolean(p)))
+  );
+
   const stats = [
     {
       title: "Total Services",
@@ -86,13 +90,13 @@ export default function DashboardPage() {
       trend: databaseServices > 0 ? "Healthy" : "Add from marketplace"
     },
     {
-      title: "Services Health",
-      value: failedServices === 0 ? "✓" : failedServices,
-      subtitle: failedServices === 0 ? "All systems operational" : `${failedServices} need attention`,
+      title: "Cloud Providers",
+      value: uniqueProviders.length || totalServices > 0 ? 1 : 0,
+      subtitle: uniqueProviders.length > 0 ? uniqueProviders.slice(0, 2).join(", ") : totalServices > 0 ? "Local" : "None configured",
       icon: Globe,
-      color: failedServices === 0 ? "text-cyan-500" : "text-red-500",
-      bg: failedServices === 0 ? "bg-cyan-500/10" : "bg-red-500/10",
-      trend: failedServices === 0 ? "Healthy" : "Check logs"
+      color: "text-cyan-500",
+      bg: "bg-cyan-500/10",
+      trend: uniqueProviders.length > 1 ? "Multi-cloud" : "Single provider"
     }
   ];
 

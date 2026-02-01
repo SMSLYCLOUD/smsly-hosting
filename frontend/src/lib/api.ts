@@ -29,6 +29,8 @@ export interface Service {
   docker_image?: string;
   start_command?: string;
   template_id?: string;
+  provider?: string;  // Cloud provider: 'local', 'aws', 'gcp', 'azure', 'digitalocean', etc.
+  region?: string;    // Deployment region
   latest_deployment?: {
     id: string;
     status: string;
