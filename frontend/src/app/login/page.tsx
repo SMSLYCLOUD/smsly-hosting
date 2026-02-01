@@ -14,7 +14,7 @@ export default function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [formData, setFormData] = useState({ email: "", password: "" });
+  const [formData, setFormData] = useState({ username: "", password: "" });
 
   // Use absolute URL for production - NEXT_PUBLIC vars are baked at build time
   const BACKEND_URL = typeof window !== 'undefined'
@@ -32,7 +32,7 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username: formData.email, password: formData.password }),
+        body: JSON.stringify({ username: formData.username, password: formData.password }),
       });
 
       if (response.ok) {
@@ -124,14 +124,14 @@ export default function LoginPage() {
 
               <form onSubmit={handleEmailLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="username">Username</Label>
                   <Input
-                    id="email"
-                    type="email"
-                    placeholder="you@example.com"
+                    id="username"
+                    type="text"
+                    placeholder="admin"
                     required
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    value={formData.username}
+                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                     disabled={isLoading}
                   />
                 </div>
