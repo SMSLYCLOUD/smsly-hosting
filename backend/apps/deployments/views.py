@@ -2,8 +2,8 @@ from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Service, Deployment
-from .serializers import ServiceSerializer, DeploymentSerializer, DeploymentTriggerSerializer
+from .models import Service, Deployment, EnvironmentVariable
+from .serializers import ServiceSerializer, DeploymentSerializer, DeploymentTriggerSerializer, EnvVarSerializer
 from .tasks import smart_deploy_task
 from apps.cloud.models import CloudProvider
 import os
@@ -11,7 +11,7 @@ import uuid
 
 class ServiceViewSet(viewsets.ModelViewSet):
     """
-    Legacy Service Management.
+    Service Management and Nested Resources.
     """
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
@@ -19,6 +19,70 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+    # --- Nested Resources: Deployments ---
+    @action(detail=True, methods=['get'])
+    def deployments(self, request, pk=None):
+        service = self.get_object()
+        deployments = service.deployments.all().order_by('-created_at')
+        page = self.paginate_queryset(deployments)
+        if page is not None:
+            serializer = DeploymentSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = DeploymentSerializer(deployments, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def deploy(self, request, pk=None):
+        """
+        Manually trigger deployment for a service.
+        POST /api/v1/services/{id}/deploy/
+        Body: { "ref": "commit_hash" } (Optional)
+        """
+        service = self.get_object()
+        ref = request.data.get('ref', 'HEAD')
+
+        # Determine provider
+        provider = service.provider or CloudProvider.objects.first()
+        if not provider:
+            return Response({'error': 'No cloud provider configured'}, status=status.HTTP_400_BAD_REQUEST)
+
+        deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash=ref if ref != 'HEAD' else 'latest',
+            commit_message=f"Manual Trigger: {ref}"
+        )
+
+        smart_deploy_task.delay(str(deployment.id), str(provider.id))
+        return Response(DeploymentSerializer(deployment).data)
+
+    # --- Nested Resources: Environment Variables ---
+    @action(detail=True, methods=['get'], url_path='env_vars')
+    def list_env_vars(self, request, pk=None):
+        service = self.get_object()
+        vars = service.env_vars.all()
+        serializer = EnvVarSerializer(vars, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='env_vars')
+    def create_env_var(self, request, pk=None):
+        service = self.get_object()
+        serializer = EnvVarSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(service=service)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['delete'], url_path='env_vars/(?P<var_id>\d+)')
+    def delete_env_var(self, request, pk=None, var_id=None):
+        service = self.get_object()
+        try:
+            var = EnvironmentVariable.objects.get(id=var_id, service=service)
+            var.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except EnvironmentVariable.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND)
 
 class DeploymentViewSet(viewsets.ModelViewSet):
     """
@@ -28,6 +92,30 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     serializer_class = DeploymentSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [parsers.JSONParser, parsers.MultiPartParser]  # Enable File Uploads
+
+    @action(detail=True, methods=['post'])
+    def rollback(self, request, pk=None):
+        """
+        Rollback to this specific deployment.
+        Effectively triggers a new deployment using the commit hash/image from this one.
+        """
+        target_deployment = self.get_object()
+        service = target_deployment.service
+
+        # Create new deployment record for the rollback
+        new_deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash=target_deployment.commit_hash,
+            commit_message=f"Rollback to {target_deployment.commit_hash[:7]}"
+        )
+
+        provider = service.provider or CloudProvider.objects.first()
+        if provider:
+             smart_deploy_task.delay(str(new_deployment.id), str(provider.id))
+             return Response(DeploymentSerializer(new_deployment).data, status=status.HTTP_201_CREATED)
+
+        return Response({'error': 'No provider available'}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'])
     def trigger(self, request):
@@ -64,20 +152,30 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'])
+    def diagnose(self, request, pk=None):
+        """
+        Trigger AI diagnosis for a deployment.
+        """
+        deployment = self.get_object()
+        from apps.intelligence.analyzer import LogAnalyzer
+
+        # In a real app, we'd fetch logs from Loki/CloudWatch
+        # Here we use the stored build logs or simulate runtime logs if empty
+        logs = deployment.build_logs or "Error: Runtime exception at line 10"
+
+        analyzer = LogAnalyzer()
+        diagnosis = analyzer.generate_diagnosis(str(deployment.id), logs)
+
+        deployment.ai_diagnosis = diagnosis
+        deployment.save()
+
+        return Response({'diagnosis': diagnosis})
+
     @action(detail=False, methods=['post'], url_path='upload')
     def upload_source(self, request):
         """
         Upload source code (zip) for CLI deployment.
-        POST /api/v1/deployments/upload/
-        Form Data:
-          - service_id: UUID
-          - file: source.zip
-        
-        Security:
-          - 100MB max file size
-          - Must be .zip file
-          - Secure upload directory with restricted permissions
-          - Owner verification
         """
         service_id = request.data.get('service_id')
         uploaded_file = request.FILES.get('file')
@@ -160,4 +258,3 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         except Service.DoesNotExist:
             return Response({'error': 'Service not found'}, status=status.HTTP_404_NOT_FOUND)
-

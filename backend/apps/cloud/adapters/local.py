@@ -44,13 +44,37 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             raise RuntimeError("No local orchestrator available")
 
-    def _deploy_docker(self, name: str, image: str, env: Dict[str, str]) -> str:
+    def _deploy_docker(self, name: str, image: str, env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
         # Ensure shared network exists
         network_name = 'smsly-net'
         try:
             self.docker_client.networks.get(network_name)
         except docker.errors.NotFound:
             self.docker_client.networks.create(network_name, driver="bridge")
+
+        # Mesh / Service Discovery
+        # We rely on Docker's internal DNS. Containers on the same network can resolve each other by name.
+        # e.g. 'redis' resolves to the redis container IP.
+        networking_config = self.docker_client.api.create_networking_config({
+            network_name: self.docker_client.api.create_endpoint_config(
+                aliases=[name, f"{name}.{project_id}.internal"]
+            )
+        })
+
+        # Prepare Volumes
+        # Input format: [{'name': 'vol_name', 'mount_path': '/data'}]
+        # Docker format: {'vol_name': {'bind': '/data', 'mode': 'rw'}}
+        docker_volumes = {}
+        if volumes:
+            for vol in volumes:
+                vol_name = vol['name']
+                # Create volume if it doesn't exist
+                try:
+                    self.docker_client.volumes.get(vol_name)
+                except docker.errors.NotFound:
+                    self.docker_client.volumes.create(name=vol_name)
+
+                docker_volumes[vol_name] = {'bind': vol['mount_path'], 'mode': 'rw'}
 
         # Cleanup existing
         try:
@@ -78,7 +102,9 @@ class LocalAdapter(BaseCloudAdapter):
             environment=env,
             detach=True,
             network=network_name,
-            labels=labels
+            labels=labels,
+            volumes=docker_volumes if docker_volumes else None,
+            networking_config=networking_config
         )
         return container.id
 

@@ -1,27 +1,35 @@
-from rest_framework import serializers, viewsets, mixins
-from rest_framework.permissions import IsAuthenticated
-from .models_metrics import ServiceMetric
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from .models import Service
+from .metrics import metrics_adapter
 
-class ServiceMetricSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ServiceMetric
-        fields = ['cpu_usage', 'memory_usage', 'timestamp']
+class MetricsViewSet(viewsets.ViewSet):
+    """
+    ReadOnly ViewSet for Service Metrics.
+    """
+    permission_classes = [permissions.IsAuthenticated]
 
-class MetricsViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
-    serializer_class = ServiceMetricSerializer
-    permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
-
-    # ==========================================================================
-    # SECURITY: Zero Trust - Only return metrics for user's own services
-    # ==========================================================================
-    def get_queryset(self):
-        service_id = self.request.query_params.get('service_id')
-        if not service_id:
-            return ServiceMetric.objects.none()
+    def list(self, request, service_pk=None):
+        if not service_pk:
+            return Response({'error': 'Service ID required'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # SECURITY: Verify user owns the service before returning metrics
-        if not Service.objects.filter(id=service_id, owner=self.request.user).exists():
-            return ServiceMetric.objects.none()
-        
-        return ServiceMetric.objects.filter(service_id=service_id).order_by('timestamp')[:50]
+        try:
+            service = Service.objects.get(pk=service_pk)
+            # Check permission
+            if service.owner != request.user:
+                return Response(status=status.HTTP_403_FORBIDDEN)
+
+            duration = request.query_params.get('duration', '1h')
+
+            cpu = metrics_adapter.get_cpu_history(str(service.id), duration)
+            memory = metrics_adapter.get_memory_history(str(service.id), duration)
+            network = metrics_adapter.get_network_history(str(service.id), duration)
+
+            return Response({
+                'cpu': cpu,
+                'memory': memory,
+                'network': network
+            })
+        except Service.DoesNotExist:
+            return Response(status=status.HTTP_404_NOT_FOUND)

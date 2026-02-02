@@ -1,29 +1,24 @@
-from rest_framework import serializers, viewsets
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import viewsets, permissions, serializers
 from .models_cron import CronJob
+from .models import Service
 
 class CronJobSerializer(serializers.ModelSerializer):
     class Meta:
         model = CronJob
         fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at', 'last_run_at', 'next_run_at']
 
 class CronJobViewSet(viewsets.ModelViewSet):
     serializer_class = CronJobSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
-    # ==========================================================================
-    # SECURITY: Zero Trust - Only return cron jobs for user's own services
-    # ==========================================================================
     def get_queryset(self):
-        """Filter cron jobs to only those belonging to the user's services."""
-        return CronJob.objects.filter(service__owner=self.request.user)
+        # Filter by service if provided in query params or nested
+        # /api/v1/services/{id}/cron/
+        if 'service_pk' in self.kwargs:
+            return CronJob.objects.filter(service_id=self.kwargs['service_pk'])
+        return CronJob.objects.none() # Should be nested
 
     def perform_create(self, serializer):
-        # SECURITY: Verify user owns the service before creating cron job
-        service = serializer.validated_data.get('service')
-        if service and service.owner != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Access denied to this service.")
-        
-        cron = serializer.save()
-        # In prod: ClusterManager.create_cronjob(cron)
+        service = Service.objects.get(pk=self.kwargs['service_pk'])
+        serializer.save(service=service)

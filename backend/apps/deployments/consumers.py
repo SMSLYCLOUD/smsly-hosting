@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class TerminalConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for terminal access to deployments.
-    
+
     SECURITY: Requires authentication and ownership verification.
     """
     
@@ -48,7 +48,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.warning(f"WebSocket connection rejected: User {self.user.id} doesn't own deployment {self.deployment_id}")
             await self.close(code=4003)
             return
-        
+
         logger.info(f"WebSocket connected: User {self.user.id} to deployment {self.deployment_id}")
         await self.accept()
         await self.send(text_data=json.dumps({
@@ -64,7 +64,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not self.user:
             await self.close(code=4001)
             return
-        
+
         command = text_data
 
         if command == '\r':
@@ -80,7 +80,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 response = f'\r\n{self.user.username}\r\n$ '
 
         await self.send(text_data=json.dumps({'message': response}))
-    
+
     @database_sync_to_async
     def _authenticate_token(self, token_key):
         """Validate token and return user."""

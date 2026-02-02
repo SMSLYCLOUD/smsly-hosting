@@ -1,14 +1,24 @@
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable
 
-class EnvironmentVariableSerializer(serializers.ModelSerializer):
+class EnvVarSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Environment Variables.
+    Renamed from EnvironmentVariableSerializer to match view import.
+    """
     class Meta:
         model = EnvironmentVariable
         fields = ['id', 'key', 'value', 'is_secret']
-        extra_kwargs = {'value': {'write_only': True}}
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Mask secret values
+        if instance.is_secret:
+            ret['value'] = '********'
+        return ret
 
 class ServiceSerializer(serializers.ModelSerializer):
-    env_vars = EnvironmentVariableSerializer(many=True, required=False)
+    env_vars = EnvVarSerializer(many=True, required=False)
 
     class Meta:
         model = Service

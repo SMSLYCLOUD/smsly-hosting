@@ -6,6 +6,8 @@ from apps.cloud.models import CloudProvider
 
 # Import AuditLog explicitly to register it with the app
 from .models_audit import AuditLog
+from .models_cron import CronJob
+from .models_storage import Volume # Add this
 
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)

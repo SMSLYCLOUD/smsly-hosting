@@ -4,11 +4,17 @@ import { useEffect, useState, useRef } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
 import { useParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe } from 'lucide-react';
 import Editor from "@monaco-editor/react";
 import dynamic from 'next/dynamic';
 import { LogsTab } from '@/components/logs/LogsTab';
 import { AdvancedTab } from '@/components/settings/AdvancedTab';
+import { EnvVarsTab } from '@/components/settings/EnvVarsTab';
+import { DomainsTab } from '@/components/settings/DomainsTab';
+import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
+import { MetricsTab } from '@/components/metrics/MetricsTab';
+import { CronTab } from '@/components/cron/CronTab';
+import { StorageTab } from '@/components/storage/StorageTab';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 
@@ -84,6 +90,18 @@ export default function ServiceDetailPage() {
                                 <span className="text-muted-foreground font-medium">Internal DNS</span>
                                 <span className="font-mono text-primary bg-primary/10 px-2 py-1 rounded">{service.name}.default.svc</span>
                             </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Public Domain</span>
+                                <a
+                                    href={`https://${service.public_domain || `${service.name}.localhost`}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-mono text-primary hover:underline flex items-center gap-1"
+                                >
+                                    <Globe className="w-3 h-3" />
+                                    {service.public_domain || `${service.name}.localhost`}
+                                </a>
+                            </div>
                         </div>
                     </div>
 
@@ -113,13 +131,17 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'logs' && <LogsTab deployment={deployment} />}
 
-            {activeTab === 'metrics' && (
-                <div className="p-8 md:p-16 text-center border-2 border-dashed border-border rounded-xl bg-muted/20">
-                    <Activity size={48} className="mx-auto mb-4 text-muted-foreground" />
-                    <h3 className="text-lg font-bold text-foreground">Metrics Visualization</h3>
-                    <p className="text-muted-foreground max-w-sm mx-auto mt-2">Historical CPU and Memory data will be visualized here.</p>
-                </div>
-            )}
+            {activeTab === 'env' && <EnvVarsTab serviceId={service.id} />}
+
+            {activeTab === 'domains' && <DomainsTab service={service} />}
+
+            {activeTab === 'deployments' && <DeploymentsTab serviceId={service.id} />}
+
+            {activeTab === 'metrics' && <MetricsTab serviceId={service.id} />}
+
+            {activeTab === 'cron' && <CronTab serviceId={service.id} />}
+
+            {activeTab === 'storage' && <StorageTab serviceId={service.id} />}
 
             {activeTab === 'settings' && (
                 <div className="space-y-6">
@@ -149,38 +171,6 @@ export default function ServiceDetailPage() {
                                     Save
                                 </button>
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-                        <h3 className="font-bold mb-4 text-xl">Advanced Container Configuration</h3>
-                        <p className="text-muted-foreground text-sm mb-6">
-                            Directly override the Kubernetes Pod Spec. Use with caution.
-                        </p>
-                        <div className="h-96 border border-border rounded-lg overflow-hidden">
-                            <Editor
-                                height="100%"
-                                defaultLanguage="json"
-                                defaultValue={`{
-  "securityContext": {
-    "runAsUser": 1000,
-    "allowPrivilegeEscalation": false
-  },
-  "resources": {
-    "limits": {
-      "cpu": "${service.cpu_cores}",
-      "memory": "${service.memory_mb}Mi"
-    }
-  }
-}`}
-                                theme="vs-dark"
-                                options={{ minimap: { enabled: false }, fontSize: 14 }}
-                            />
-                        </div>
-                        <div className="flex justify-end mt-4">
-                            <button className="bg-primary text-primary-foreground px-4 py-2 rounded-md font-bold hover:opacity-90 transition-opacity">
-                                Apply Overrides
-                            </button>
                         </div>
                     </div>
                 </div>

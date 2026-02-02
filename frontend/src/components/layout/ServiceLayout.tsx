@@ -1,133 +1,94 @@
-'use client';
-
-import React, { useState } from 'react';
+import { ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, Clock, Globe, Database, List, Timer, HardDrive } from 'lucide-react';
 import Link from 'next/link';
-import {
-  Activity,
-  Terminal,
-  Settings,
-  Database,
-  Layers,
-  Shield,
-  Clock,
-  ArrowLeft,
-  Menu,
-  X
-} from 'lucide-react';
-import clsx from 'clsx';
+import { Navbar } from '@/components/layout/Navbar';
+import { Service } from '@/lib/api';
 
-const SidebarItem = ({ icon: Icon, label, id, activeTab, onClick }: any) => (
-  <button
-    onClick={() => onClick(id)}
-    className={clsx(
-      "flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium transition-all rounded-lg my-0.5",
-      activeTab === id
-        ? "bg-emerald-50 text-emerald-700 shadow-sm border border-emerald-100"
-        : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
-    )}
-  >
-    <Icon size={18} className={clsx(activeTab === id ? "text-emerald-600" : "text-zinc-400")} />
-    {label}
-  </button>
-);
+interface ServiceLayoutProps {
+    service: Service;
+    activeTab: string;
+    setActiveTab: (tab: string) => void;
+    children: React.ReactNode;
+}
 
-export const ServiceLayout = ({ service, activeTab, setActiveTab, children }: any) => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+export function ServiceLayout({ service, activeTab, setActiveTab, children }: ServiceLayoutProps) {
+    const tabs = [
+        { id: 'overview', label: 'Overview', icon: Activity },
+        { id: 'deployments', label: 'Deployments', icon: Clock },
+        { id: 'logs', label: 'Logs', icon: List },
+        { id: 'console', label: 'Console', icon: Terminal },
+        { id: 'storage', label: 'Storage', icon: HardDrive },
+        { id: 'env', label: 'Variables', icon: Database },
+        { id: 'domains', label: 'Domains', icon: Globe },
+        { id: 'metrics', label: 'Metrics', icon: Activity },
+        { id: 'cron', label: 'Cron Jobs', icon: Timer },
+        { id: 'settings', label: 'Settings', icon: Settings },
+        { id: 'advanced', label: 'Advanced', icon: Shield },
+    ];
 
-  return (
-    <div className="flex h-screen bg-white text-zinc-900 font-sans overflow-hidden">
-      {/* Mobile Header */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-16 bg-white border-b border-zinc-200 z-40 flex items-center justify-between px-4">
-          <div className="flex items-center gap-3">
-              <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-zinc-600">
-                  <Menu size={24} />
-              </button>
-              <h1 className="font-bold text-lg tracking-tight truncate max-w-[200px]">{service.name}</h1>
-          </div>
-          <span className={`w-2.5 h-2.5 rounded-full ${service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500' : 'bg-gray-300'}`} />
-      </div>
+    return (
+        <main className="min-h-screen flex flex-col bg-background text-foreground">
+            <Navbar />
 
-      {/* Sidebar Overlay */}
-      {isSidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm"
-            onClick={() => setIsSidebarOpen(false)}
-          />
-      )}
-
-      {/* Sidebar */}
-      <div className={clsx(
-          "w-64 border-r border-zinc-200 flex flex-col bg-zinc-50/50",
-          "fixed inset-y-0 left-0 z-[60] transition-transform duration-300 md:relative md:translate-x-0 bg-white",
-          isSidebarOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full"
-      )}>
-        <div className="p-6 border-b border-zinc-200 flex justify-between items-start">
-            <div>
-                <Link href="/services" className="flex items-center gap-2 text-zinc-500 hover:text-zinc-900 text-xs uppercase tracking-widest mb-6 transition-colors font-semibold">
-                    <ArrowLeft size={12} /> Back to Canvas
-                </Link>
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-white border border-zinc-200 shadow-sm flex items-center justify-center text-xl">
-                        🚀
+            <div className="border-b border-border bg-card">
+                <div className="container mx-auto py-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <Link href="/dashboard" className="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
+                            <ArrowLeft size={20} />
+                        </Link>
+                        <div>
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-2xl font-bold tracking-tight">{service.name}</h1>
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                    service.latest_deployment?.status === 'ACTIVE'
+                                        ? 'bg-emerald-500/10 text-emerald-500'
+                                        : 'bg-yellow-500/10 text-yellow-500'
+                                }`}>
+                                    {service.latest_deployment?.status || 'PENDING'}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+                                <span className="flex items-center gap-1.5">
+                                    <Globe size={12} />
+                                    {service.public_domain || `${service.name}.smsly.cloud`}
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <GitCommit size={12} />
+                                    {service.branch || 'main'}
+                                </span>
+                            </div>
+                        </div>
                     </div>
-                    <div className="overflow-hidden">
-                        <h1 className="font-bold text-lg tracking-tight truncate leading-tight" title={service.name}>{service.name}</h1>
-                        <p className="text-xs text-zinc-500 font-mono mt-0.5 truncate">{service.branch}</p>
+
+                    <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-hide">
+                        {tabs.map((tab) => {
+                            const Icon = tab.icon;
+                            const isActive = activeTab === tab.id;
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`
+                                        flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap
+                                        ${isActive
+                                            ? 'bg-primary text-primary-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                        }
+                                    `}
+                                >
+                                    <Icon size={16} />
+                                    {tab.label}
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
-            <button className="md:hidden text-zinc-400" onClick={() => setIsSidebarOpen(false)}>
-                <X size={20} />
-            </button>
-        </div>
 
-        <nav className="flex-1 p-4 overflow-y-auto" onClick={() => setIsSidebarOpen(false)}>
-          <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-4 mb-2 mt-2">Observe</div>
-          <SidebarItem icon={Activity} label="Overview" id="overview" activeTab={activeTab} onClick={setActiveTab} />
-          <SidebarItem icon={Layers} label="Metrics" id="metrics" activeTab={activeTab} onClick={setActiveTab} />
-          <SidebarItem icon={Terminal} label="Logs" id="logs" activeTab={activeTab} onClick={setActiveTab} />
-
-          <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-4 mb-2 mt-6">Manage</div>
-          <SidebarItem icon={Database} label="Variables" id="env" activeTab={activeTab} onClick={setActiveTab} />
-          <SidebarItem icon={Clock} label="Deployments" id="deployments" activeTab={activeTab} onClick={setActiveTab} />
-          <SidebarItem icon={Settings} label="Settings" id="settings" activeTab={activeTab} onClick={setActiveTab} />
-
-          <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-4 mb-2 mt-6">Add-ons</div>
-          <SidebarItem icon={Shield} label="Security" id="security" activeTab={activeTab} onClick={setActiveTab} />
-        </nav>
-
-        <div className="p-4 border-t border-zinc-200 text-xs text-zinc-500 flex justify-between items-center bg-white">
-            <span>Status</span>
-            <span className="flex items-center gap-1.5 text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> Active
-            </span>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden bg-white pt-16 md:pt-0">
-        {/* Header */}
-        <header className="h-16 border-b border-zinc-100 hidden md:flex items-center justify-between px-8 bg-white z-10">
-            <div className="flex items-center gap-4">
-                <h2 className="font-bold text-xl text-zinc-800 tracking-tight">{activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
-            </div>
-            <div className="flex gap-3">
-                <button className="text-zinc-500 hover:text-zinc-900 px-3 py-2 text-sm font-medium transition-colors">
-                    Documentation
-                </button>
-                <button className="bg-zinc-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-zinc-800 transition-colors shadow-sm">
-                    Visit App ↗
-                </button>
-            </div>
-        </header>
-
-        {/* Scrollable Area */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-8 bg-gray-50/50">
-            <div className="max-w-6xl mx-auto">
-                {children}
+            <div className="flex-1 bg-background/50">
+                <div className="container mx-auto py-8">
+                    {children}
+                </div>
             </div>
         </main>
-      </div>
-    </div>
-  );
-};
+    );
+}

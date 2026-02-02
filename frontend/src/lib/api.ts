@@ -50,15 +50,34 @@ export interface Deployment {
   id: string;
   service: string;
   commit_hash: string;
+  commit_message?: string;
   status: string;
   build_logs?: string;
   ai_diagnosis?: string;
   created_at: string;
+  finished_at?: string;
 }
 
 export interface EnvVar {
+  id: number;
   key: string;
   value: string;
+  is_secret: boolean;
+}
+
+export interface CronJob {
+    id: number;
+    name: string;
+    schedule: string;
+    command: string;
+    last_run_at?: string;
+}
+
+export interface Volume {
+    id: number;
+    name: string;
+    mount_path: string;
+    size_gb: number;
 }
 
 export const servicesApi = {
@@ -86,13 +105,68 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/deploy/`, { ref });
     return response.data;
   },
+
+  // Deployment Management
+  getDeployments: async (serviceId: string): Promise<Deployment[]> => {
+    const response = await api.get(`/services/${serviceId}/deployments/`);
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
   getDeployment: async (id: string): Promise<Deployment> => {
     const response = await api.get(`/deployments/${id}/`);
     return response.data;
   },
-  updateEnv: async (id: string, envVars: EnvVar[]): Promise<any> => {
-    const response = await api.post(`/services/${id}/env-vars/`, envVars);
+  rollback: async (deploymentId: string): Promise<any> => {
+    const response = await api.post(`/deployments/${deploymentId}/rollback/`);
     return response.data;
+  },
+
+  // Env Vars Management
+  getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
+    const response = await api.get(`/services/${serviceId}/env_vars/`);
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  createEnvVar: async (serviceId: string, data: Partial<EnvVar>): Promise<EnvVar> => {
+    const response = await api.post(`/services/${serviceId}/env_vars/`, data);
+    return response.data;
+  },
+  deleteEnvVar: async (serviceId: string, envVarId: number): Promise<void> => {
+    await api.delete(`/services/${serviceId}/env_vars/${envVarId}/`);
+  },
+
+  // Metrics
+  getMetrics: async (serviceId: string, duration: string = '1h'): Promise<any> => {
+    const response = await api.get(`/services/${serviceId}/metrics/`, { params: { duration } });
+    return response.data;
+  },
+
+  // Cron Jobs
+  getCronJobs: async (serviceId: string): Promise<CronJob[]> => {
+    const response = await api.get(`/services/${serviceId}/cron/`);
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  createCronJob: async (serviceId: string, data: Partial<CronJob>): Promise<CronJob> => {
+    const response = await api.post(`/services/${serviceId}/cron/`, data);
+    return response.data;
+  },
+  deleteCronJob: async (serviceId: string, jobId: number): Promise<void> => {
+    await api.delete(`/services/${serviceId}/cron/${jobId}/`);
+  },
+
+  // Storage
+  getVolumes: async (serviceId: string): Promise<Volume[]> => {
+      const response = await api.get(`/services/${serviceId}/volumes/`);
+      return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  createVolume: async (serviceId: string, data: Partial<Volume>): Promise<Volume> => {
+      const response = await api.post(`/services/${serviceId}/volumes/`, data);
+      return response.data;
+  },
+  deleteVolume: async (serviceId: string, volId: number): Promise<void> => {
+      await api.delete(`/services/${serviceId}/volumes/${volId}/`);
+  },
+  browseVolume: async (serviceId: string, volId: number, path: string): Promise<any> => {
+      const response = await api.get(`/services/${serviceId}/volumes/${volId}/browse/`, { params: { path } });
+      return response.data;
   }
 };
 

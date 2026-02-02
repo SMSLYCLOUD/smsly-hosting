@@ -1,0 +1,1 @@
+from .adapter import metrics_adapter

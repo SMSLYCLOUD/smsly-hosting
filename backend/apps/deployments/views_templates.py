@@ -1,57 +1,46 @@
+import json
+import os
+from django.conf import settings
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from services.app_templates import list_templates, get_template
+from rest_framework.permissions import AllowAny
 
 class TemplateViewSet(viewsets.ViewSet):
     """
-    ViewSet for listing available App Templates from the registry.
+    Returns a list of predefined application templates.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def list(self, request):
-        """
-        List all available templates.
-        """
-        category = request.query_params.get('category')
-        templates = list_templates(category)
+        # Load from fixtures
+        try:
+            path = os.path.join(settings.BASE_DIR, 'apps/deployments/fixtures/templates.json')
+            with open(path, 'r') as f:
+                data = json.load(f)
 
-        # Serialize dataclasses to dicts
-        data = [
-            {
-                'id': t.id,
-                'name': t.name,
-                'description': t.description,
-                'category': t.category,
-                'docker_image': t.docker_image,
-                'default_port': t.default_port,
-                'env_vars': t.env_vars,
-                'volumes': t.volumes,
-                'docs_url': t.docs_url,
-                'health_check': t.health_check
-            }
-            for t in templates
-        ]
-        return Response(data)
+            category = request.query_params.get('category')
+            search = request.query_params.get('search')
+
+            if category:
+                data = [t for t in data if t.get('category') == category]
+
+            if search:
+                search = search.lower()
+                data = [t for t in data if search in t.get('name', '').lower() or search in t.get('description', '').lower()]
+
+            return Response(data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def retrieve(self, request, pk=None):
-        """
-        Get a specific template by ID.
-        """
-        template = get_template(pk)
-        if not template:
-            return Response({'error': 'Template not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            path = os.path.join(settings.BASE_DIR, 'apps/deployments/fixtures/templates.json')
+            with open(path, 'r') as f:
+                data = json.load(f)
 
-        data = {
-            'id': template.id,
-            'name': template.name,
-            'description': template.description,
-            'category': template.category,
-            'docker_image': template.docker_image,
-            'default_port': template.default_port,
-            'env_vars': template.env_vars,
-            'volumes': template.volumes,
-            'docs_url': template.docs_url,
-            'health_check': template.health_check
-        }
-        return Response(data)
+            template = next((t for t in data if t['id'] == pk), None)
+            if template:
+                return Response(template)
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
