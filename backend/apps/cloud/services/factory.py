@@ -39,5 +39,4 @@ def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:
         return LocalAdapter()
 
     raise NotImplementedError(
-        f"Provider type {
-            provider.provider_type} is not supported.")
+        f"Provider type {provider.provider_type} is not supported.")

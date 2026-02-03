@@ -35,15 +35,13 @@ class AIChatView(APIView):
 
             # SECURITY: Log AI interactions for audit
             logger.info(
-                f"AI repo analysis requested by user {
-                    request.user.id}: {repo_url}")
+                f"AI repo analysis requested by user {request.user.id}: {repo_url}")
 
             analysis = agent.analyze_repo(
                 repo_url, ["Dockerfile", "package.json"])
             return Response({
                 "text": f"I've analyzed {repo_url}. It looks like a **{analysis.stack_type}** project. "
-                f"I recommend deploying on port **{
-                    analysis.recommended_port}**. "
+                f"I recommend deploying on port **{analysis.recommended_port}**. "
                 f"Estimated cost: **{analysis.cost_estimate}**."
             })
 

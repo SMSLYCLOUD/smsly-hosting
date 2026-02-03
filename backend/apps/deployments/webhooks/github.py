@@ -60,8 +60,7 @@ class GitHubWebhookHandler:
         triggered_count = 0
         for service in services:
             logger.info(
-                f"Triggering deployment for service {
-                    service.name} from GitHub Push")
+                f"Triggering deployment for service {service.name} from GitHub Push")
 
             deployment = Deployment.objects.create(
                 service=service,
@@ -79,7 +78,6 @@ class GitHubWebhookHandler:
                 triggered_count += 1
             else:
                 logger.warning(
-                    f"Service {
-                        service.name} has no provider assigned, skipping webhook deploy")
+                    f"Service {service.name} has no provider assigned, skipping webhook deploy")
 
         return triggered_count > 0

@@ -54,10 +54,7 @@ def trigger_cron_job(job_id):
             exit_code, output = container.exec_run(job.command, detach=False)
 
             logger.info(
-                f"Cron {
-                    job.name} finished with exit code {exit_code}. Output: {
-                    output.decode('utf-8')[
-                        :100]}...")
+                f"Cron {job.name} finished with exit code {exit_code}. Output: {output.decode('utf-8')[:100]}...")
 
             job.last_run_at = timezone.now()
             job.save()

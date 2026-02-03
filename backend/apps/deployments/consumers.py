@@ -33,8 +33,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         if not token_key:
             logger.warning(
-                f"WebSocket connection rejected: No token provided for deployment {
-                    self.deployment_id}")
+                f"WebSocket connection rejected: No token provided for deployment {self.deployment_id}")
             await self.close(code=4001)
             return
 
@@ -42,8 +41,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.user = await self._authenticate_token(token_key)
         if not self.user:
             logger.warning(
-                f"WebSocket connection rejected: Invalid token for deployment {
-                    self.deployment_id}")
+                f"WebSocket connection rejected: Invalid token for deployment {self.deployment_id}")
             await self.close(code=4002)
             return
 
@@ -52,16 +50,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # ==========================================================================
         if not await self._verify_ownership():
             logger.warning(
-                f"WebSocket connection rejected: User {
-                    self.user.id} doesn't own deployment {
-                    self.deployment_id}")
+                f"WebSocket connection rejected: User {self.user.id} doesn't own deployment {self.deployment_id}")
             await self.close(code=4003)
             return
 
         logger.info(
-            f"WebSocket connected: User {
-                self.user.id} to deployment {
-                self.deployment_id}")
+            f"WebSocket connected: User {self.user.id} to deployment {self.deployment_id}")
         await self.accept()
         await self.send(text_data=json.dumps({
             'message': f'Connected to terminal for deployment {self.deployment_id}...\r\n$ '
@@ -70,9 +64,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, close_code):
         if self.user:
             logger.info(
-                f"WebSocket disconnected: User {
-                    self.user.id} from deployment {
-                    self.deployment_id}")
+                f"WebSocket disconnected: User {self.user.id} from deployment {self.deployment_id}")
 
     async def receive(self, text_data):
         # SECURITY: Re-check authentication on each message

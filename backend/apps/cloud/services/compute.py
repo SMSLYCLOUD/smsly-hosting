@@ -36,8 +36,7 @@ class ComputeService:
             )
         else:
             raise NotImplementedError(
-                f"Provider {
-                    self.provider.provider_type} not supported yet")
+                f"Provider {self.provider.provider_type} not supported yet")
 
     def deploy_container(self, name: str, image: str,
                          env_vars: Dict[str, str], cpu: int = 256, memory: int = 512) -> CloudResource:

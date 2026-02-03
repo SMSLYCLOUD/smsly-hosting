@@ -32,9 +32,7 @@ class BuildManager:
         registry = settings.CONTAINER_REGISTRY_URL
         image_tag = f"{registry}/{self.service.name}:{self.deployment.commit_hash[:7]}"
         logger.info(
-            f"Starting build for {
-                self.service.name} commit {
-                self.deployment.commit_hash}")
+            f"Starting build for {self.service.name} commit {self.deployment.commit_hash}")
 
         try:
             # 0. Login (if configured)
@@ -72,8 +70,7 @@ class BuildManager:
 
             if self.service.build_command:
                 self._log(
-                    f"NOTE: build_command '{
-                        self.service.build_command}' is ignored in Dockerfile mode. Only applicable for Buildpacks.")
+                    f"NOTE: build_command '{self.service.build_command}' is ignored in Dockerfile mode. Only applicable for Buildpacks.")
 
             self._run_command(
                 ["docker", "build", "-t", image_tag, "."],
@@ -164,16 +161,11 @@ class BuildManager:
 
                     # Log summary
                     self._log(
-                        f"Scan complete: {
-                            vulns['critical']} critical, {
-                            vulns['high']} high, {
-                            vulns['medium']} medium, {
-                            vulns['low']} low")
+                        f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
 
                     if vulns['critical'] > 0:
                         self._log(
-                            f"WARNING: Found {
-                                vulns['critical']} CRITICAL vulnerabilities!")
+                            f"WARNING: Found {vulns['critical']} CRITICAL vulnerabilities!")
                     else:
                         self._log("Security scan passed (no critical issues).")
 
