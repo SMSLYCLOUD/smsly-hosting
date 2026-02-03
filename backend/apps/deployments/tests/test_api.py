@@ -1,7 +1,9 @@
+"""Test Api module."""
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from apps.deployments.models import Service, Deployment
+
 
 class ServiceTests(APITestCase):
     def test_create_service(self):

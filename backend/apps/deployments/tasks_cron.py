@@ -1,3 +1,4 @@
+"""Tasks Cron module."""
 import logging
 from celery import shared_task
 from django.utils import timezone
@@ -5,6 +6,7 @@ from .models_cron import CronJob
 from apps.cloud.adapters.local import LocalAdapter
 
 logger = logging.getLogger(__name__)
+
 
 @shared_task
 def check_cron_jobs():
@@ -24,6 +26,7 @@ def check_cron_jobs():
         # Real logic: if croniter(job.schedule).is_due(now): ...
 
         trigger_cron_job.delay(str(job.id))
+
 
 @shared_task
 def trigger_cron_job(job_id):
@@ -46,13 +49,18 @@ def trigger_cron_job(job_id):
         # Let's use docker client directly for one-off exec if needed,
         # or enhance adapter.
         if adapter.docker_client:
-             container = adapter.docker_client.containers.get(latest_deploy.container_id)
-             exit_code, output = container.exec_run(job.command, detach=False)
+            container = adapter.docker_client.containers.get(
+                latest_deploy.container_id)
+            exit_code, output = container.exec_run(job.command, detach=False)
 
-             logger.info(f"Cron {job.name} finished with exit code {exit_code}. Output: {output.decode('utf-8')[:100]}...")
+            logger.info(
+                f"Cron {
+                    job.name} finished with exit code {exit_code}. Output: {
+                    output.decode('utf-8')[
+                        :100]}...")
 
-             job.last_run_at = timezone.now()
-             job.save()
+            job.last_run_at = timezone.now()
+            job.save()
 
     except Exception as e:
         logger.error(f"Failed to run cron job {job_id}: {e}")

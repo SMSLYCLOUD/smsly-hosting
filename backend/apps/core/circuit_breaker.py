@@ -21,16 +21,16 @@ class CircuitState(Enum):
 class CircuitBreaker:
     """
     Circuit Breaker implementation for protecting against cascade failures.
-    
+
     Usage:
         breaker = CircuitBreaker(name="database", failure_threshold=5)
-        
+
         @breaker
         def database_call():
             # risky operation
             pass
     """
-    
+
     def __init__(
         self,
         name: str,
@@ -42,12 +42,12 @@ class CircuitBreaker:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.expected_exception = expected_exception
-        
+
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._last_failure_time: Optional[float] = None
         self._lock = threading.Lock()
-    
+
     @property
     def state(self) -> CircuitState:
         with self._lock:
@@ -57,7 +57,7 @@ class CircuitBreaker:
                     self._state = CircuitState.HALF_OPEN
                     logger.info(f"Circuit {self.name}: OPEN -> HALF_OPEN")
             return self._state
-    
+
     def _handle_success(self):
         """Reset circuit on success."""
         with self._lock:
@@ -65,28 +65,31 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._state = CircuitState.CLOSED
                 logger.info(f"Circuit {self.name}: HALF_OPEN -> CLOSED")
-    
+
     def _handle_failure(self, exception: Exception):
         """Track failure and potentially open circuit."""
         with self._lock:
             self._failure_count += 1
             self._last_failure_time = time.time()
-            
+
             if self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
                 logger.warning(
-                    f"Circuit {self.name}: OPENED after {self._failure_count} failures. "
+                    f"Circuit {
+                        self.name}: OPENED after {
+                        self._failure_count} failures. "
                     f"Last error: {exception}"
                 )
-    
+
     def __call__(self, func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> Any:
             if self.state == CircuitState.OPEN:
                 raise CircuitBreakerOpen(
-                    f"Circuit {self.name} is OPEN. Failing fast to prevent cascade failure."
+                    f"Circuit {
+                        self.name} is OPEN. Failing fast to prevent cascade failure."
                 )
-            
+
             try:
                 result = func(*args, **kwargs)
                 self._handle_success()
@@ -94,9 +97,9 @@ class CircuitBreaker:
             except self.expected_exception as e:
                 self._handle_failure(e)
                 raise
-        
+
         return wrapper
-    
+
     def reset(self):
         """Manually reset the circuit breaker."""
         with self._lock:

@@ -1,4 +1,6 @@
-# pylint: disable=line-too-long,too-few-public-methods,too-many-locals,no-member,too-many-return-statements,too-many-branches,unused-argument
+# pylint:
+"""Api module."""
+# disable=line-too-long,too-few-public-methods,too-many-locals,no-member,too-many-return-statements,too-many-branches,unused-argument
 """
 SMSLY Tunnel API Routes
 
@@ -87,7 +89,8 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
     POST: Create a new tunnel (called by CLI)
     """
     if request.method == 'GET':
-        user_id = str(request.user.id) if request.user.is_authenticated else 'anonymous'
+        user_id = str(
+            request.user.id) if request.user.is_authenticated else 'anonymous'
         user_tunnels = tunnel_storage.list_tunnels(user_id=user_id)
 
         return Response({
@@ -103,7 +106,8 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         local_port = request.data.get('local_port', 3000)
         tunnel_type = request.data.get('type', 'http')  # http or tcp
 
-        user_id = str(request.user.id) if request.user.is_authenticated else 'anonymous'
+        user_id = str(
+            request.user.id) if request.user.is_authenticated else 'anonymous'
         tier = get_user_tier(request.user)
         limits = TunnelTier.LIMITS[tier]
 
@@ -111,7 +115,9 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         user_tunnels = tunnel_storage.list_tunnels(user_id=user_id)
         if limits['tunnels'] != -1 and len(user_tunnels) >= limits['tunnels']:
             return Response(
-                {'error': f"Tunnel limit reached ({limits['tunnels']} for {tier} tier)"},
+                {
+                    'error': f"Tunnel limit reached ({
+                        limits['tunnels']} for {tier} tier)"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -126,7 +132,8 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         if subdomain:
             valid, error = validate_subdomain(subdomain)
             if not valid:
-                return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': error},
+                                status=status.HTTP_400_BAD_REQUEST)
 
             # Check if reserved by user
             reserved_info = tunnel_storage.get_subdomain(subdomain)
@@ -154,7 +161,10 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         # Calculate expiry
         expires_at = None
         if limits['timeout_hours']:
-            expires_at = (timezone.now() + timedelta(hours=limits['timeout_hours'])).isoformat()
+            expires_at = (
+                timezone.now() +
+                timedelta(
+                    hours=limits['timeout_hours'])).isoformat()
 
         # Create tunnel
         tunnel_id = str(uuid.uuid4())
@@ -175,7 +185,8 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         # Check rate limit
         allowed, msg = rate_limit.check_rate_limit(user_id)
         if not allowed:
-            return Response({'error': msg}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+            return Response(
+                {'error': msg}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         tunnel_storage.set_tunnel(subdomain, tunnel)
         # No need to init empty log list for Redis, list created on push
@@ -191,11 +202,14 @@ def tunnel_detail(request, tunnel_id):
     tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
 
     if not tunnel:
-        return Response({'error': 'Tunnel not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Tunnel not found'},
+                        status=status.HTTP_404_NOT_FOUND)
 
-    user_id = str(request.user.id) if request.user.is_authenticated else 'anonymous'
+    user_id = str(
+        request.user.id) if request.user.is_authenticated else 'anonymous'
     if tunnel['user_id'] != user_id:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Not authorized'},
+                        status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'GET':
         return Response(tunnel)
@@ -230,7 +244,8 @@ def replay_request(request, tunnel_id, request_id):
     log_entry = next((l for l in logs if l['request_id'] == request_id), None)
 
     if not log_entry:
-        return Response({'error': 'Request not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Request not found'},
+                        status=status.HTTP_404_NOT_FOUND)
 
     # Mark as replayed (actual replay happens via WebSocket)
     return Response({
@@ -266,13 +281,17 @@ def subdomain_list(request):
         # Validate
         valid, error = validate_subdomain(subdomain)
         if not valid:
-            return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': error},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         # Check limit
         user_subdomains = tunnel_storage.list_subdomains(user_id=user_id)
-        if limits['custom_subdomains'] != -1 and len(user_subdomains) >= limits['custom_subdomains']:
+        if limits['custom_subdomains'] != - \
+                1 and len(user_subdomains) >= limits['custom_subdomains']:
             return Response(
-                {'error': f"Subdomain limit reached ({limits['custom_subdomains']} for {tier} tier)"},
+                {
+                    'error': f"Subdomain limit reached ({
+                        limits['custom_subdomains']} for {tier} tier)"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -303,10 +322,12 @@ def subdomain_delete(request, subdomain):
 
     reserved_info = tunnel_storage.get_subdomain(subdomain)
     if not reserved_info:
-        return Response({'error': 'Subdomain not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Subdomain not found'},
+                        status=status.HTTP_404_NOT_FOUND)
 
     if reserved_info['user_id'] != user_id:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Not authorized'},
+                        status=status.HTTP_403_FORBIDDEN)
 
     tunnel_storage.delete_subdomain(subdomain)
     return Response(status=status.HTTP_204_NO_CONTENT)
@@ -321,11 +342,13 @@ def share_tunnel(request, tunnel_id):
     tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
 
     if not tunnel:
-        return Response({'error': 'Tunnel not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Tunnel not found'},
+                        status=status.HTTP_404_NOT_FOUND)
 
     user_id = str(request.user.id)
     if tunnel['user_id'] != user_id:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'error': 'Not authorized'},
+                        status=status.HTTP_403_FORBIDDEN)
 
     # Check tier
     tier = get_user_tier(request.user)
@@ -337,7 +360,8 @@ def share_tunnel(request, tunnel_id):
 
     email = request.data.get('email')
     if not email:
-        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Email is required'},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     # Add to shared list
     if 'shared_with' not in tunnel:
@@ -364,9 +388,19 @@ def get_urlpatterns():
     return [
         path('tunnels/', tunnel_list, name='tunnel-list'),
         path('tunnels/<str:tunnel_id>/', tunnel_detail, name='tunnel-detail'),
-        path('tunnels/<str:tunnel_id>/requests/', tunnel_requests, name='tunnel-requests'),
-        path('tunnels/<str:tunnel_id>/replay/<str:request_id>/', replay_request, name='replay-request'),
-        path('tunnels/<str:tunnel_id>/share/', share_tunnel, name='share-tunnel'),
+        path(
+            'tunnels/<str:tunnel_id>/requests/',
+            tunnel_requests,
+            name='tunnel-requests'),
+        path('tunnels/<str:tunnel_id>/replay/<str:request_id>/',
+             replay_request, name='replay-request'),
+        path(
+            'tunnels/<str:tunnel_id>/share/',
+            share_tunnel,
+            name='share-tunnel'),
         path('subdomains/', subdomain_list, name='subdomain-list'),
-        path('subdomains/<str:subdomain>/', subdomain_delete, name='subdomain-delete'),
+        path(
+            'subdomains/<str:subdomain>/',
+            subdomain_delete,
+            name='subdomain-delete'),
     ]

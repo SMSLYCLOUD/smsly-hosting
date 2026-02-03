@@ -1,4 +1,5 @@
 # pylint: disable=broad-exception-caught
+"""Client module."""
 # pylint: disable=too-many-branches
 #!/usr/bin/env python3
 """
@@ -70,13 +71,15 @@ class TunnelClient:
         self.public_url = data.get('public_url')
 
         if RICH_AVAILABLE:
-            CONSOLE.print( "[green]✓[/green] Tunnel established")
+            CONSOLE.print("[green]✓[/green] Tunnel established")
             CONSOLE.print(f"[bold]→[/bold] {self.public_url}")
-            CONSOLE.print(f"[dim]  Forwarding to localhost:{self.local_port}[/dim]")
+            CONSOLE.print(
+                f"[dim]  Forwarding to localhost:{
+                    self.local_port}[/dim]")
             CONSOLE.print()
             CONSOLE.print("[dim]Press Ctrl+C to stop[/dim]")
         else:
-            print( "✓ Tunnel established")
+            print("✓ Tunnel established")
             print(f"→ {self.public_url}")
             print(f"  Forwarding to localhost:{self.local_port}")
             print()
@@ -97,7 +100,8 @@ class TunnelClient:
         else:
             print(f"{method} {path}")
 
-    async def forward_request(self, session: aiohttp.ClientSession, data: dict) -> dict:
+    async def forward_request(
+            self, session: aiohttp.ClientSession, data: dict) -> dict:
         """Forward request to local server and return response."""
         method = data.get('method', 'GET')
         path = data.get('path', '/')
@@ -171,21 +175,22 @@ class TunnelClient:
 
                             elif data.get('error'):
                                 if RICH_AVAILABLE:
-                                    CONSOLE.print(f"[red]Error:[/red] {data.get('error')}")
+                                    CONSOLE.print(
+                                        f"[red]Error:[/red] {data.get('error')}")
                                 else:
                                     print(f"Error: {data.get('error')}")
                                 break
 
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             if RICH_AVAILABLE:
-                                CONSOLE.print( "[red]Connection error[/red]")
+                                CONSOLE.print("[red]Connection error[/red]")
                             else:
                                 print("Connection error")
                             break
 
             except aiohttp.ClientConnectorError:
                 if RICH_AVAILABLE:
-                    CONSOLE.print( "[red]Cannot connect to tunnel server[/red]")
+                    CONSOLE.print("[red]Cannot connect to tunnel server[/red]")
                 else:
                     print("Cannot connect to tunnel server")
             except KeyboardInterrupt:

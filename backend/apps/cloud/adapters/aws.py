@@ -1,11 +1,14 @@
+"""Aws module."""
 import boto3
 import json
 from botocore.exceptions import ClientError, NoCredentialsError
 from .base import BaseCloudAdapter
 from typing import Dict, Any, List
 
+
 class AWSAdapter(BaseCloudAdapter):
-    def __init__(self, access_key: str, secret_key: str, region: str = 'us-east-1'):
+    def __init__(self, access_key: str, secret_key: str,
+                 region: str = 'us-east-1'):
         self.access_key = access_key
         self.secret_key = secret_key
         self.region = region
@@ -23,7 +26,8 @@ class AWSAdapter(BaseCloudAdapter):
         except (ClientError, NoCredentialsError):
             return False
 
-    def deploy_container(self, service_name: str, image: str, env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+    def deploy_container(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
         """
         Deploys a container to ECS Fargate.
         Steps:
@@ -73,7 +77,8 @@ class AWSAdapter(BaseCloudAdapter):
 
         # --- Network Discovery ---
         # 1. Try to find Default VPC
-        vpcs = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}])['Vpcs']
+        vpcs = ec2.describe_vpcs(
+            Filters=[{'Name': 'isDefault', 'Values': ['true']}])['Vpcs']
         vpc_id = vpcs[0]['VpcId'] if vpcs else None
 
         if not vpc_id:
@@ -82,17 +87,20 @@ class AWSAdapter(BaseCloudAdapter):
             if vpcs:
                 vpc_id = vpcs[0]['VpcId']
             else:
-                raise RuntimeError("No VPC found in this region. Please create one.")
+                raise RuntimeError(
+                    "No VPC found in this region. Please create one.")
 
         # 2. Get Subnets for this VPC
-        subnets = ec2.describe_subnets(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])['Subnets']
+        subnets = ec2.describe_subnets(
+            Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}])['Subnets']
         subnet_ids = [s['SubnetId'] for s in subnets]
 
         if not subnet_ids:
             raise RuntimeError(f"No subnets found in VPC {vpc_id}")
 
         # 3. Get Security Group (or create default)
-        sgs = ec2.describe_security_groups(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}, {'Name': 'group-name', 'Values': ['default']}])['SecurityGroups']
+        sgs = ec2.describe_security_groups(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}, {
+                                           'Name': 'group-name', 'Values': ['default']}])['SecurityGroups']
         sg_ids = [sgs[0]['GroupId']] if sgs else []
 
         # Create Service
@@ -112,7 +120,8 @@ class AWSAdapter(BaseCloudAdapter):
                 }
             )
         except ClientError as e:
-            if 'Creation of service was not idempotent' in str(e) or 'already exists' in str(e):
+            if 'Creation of service was not idempotent' in str(
+                    e) or 'already exists' in str(e):
                 ecs.update_service(
                     cluster='default',
                     service=service_name,
@@ -123,7 +132,8 @@ class AWSAdapter(BaseCloudAdapter):
 
         return task_def_arn
 
-    def deploy_function(self, function_name: str, code_zip: bytes, handler: str, runtime: str) -> str:
+    def deploy_function(self, function_name: str,
+                        code_zip: bytes, handler: str, runtime: str) -> str:
         """
         Deploys a Lambda function.
         """
@@ -142,17 +152,20 @@ class AWSAdapter(BaseCloudAdapter):
             )
             return response['FunctionArn']
         except ClientError as e:
-             if 'ResourceConflictException' in str(e):
+            if 'ResourceConflictException' in str(e):
                 response = lambda_client.update_function_code(
                     FunctionName=function_name,
                     ZipFile=code_zip
                 )
                 return response['FunctionArn']
-             raise e
+            raise e
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
         s3 = self.session.client('s3')
-        s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={'LocationConstraint': self.region})
+        s3.create_bucket(
+            Bucket=bucket_name,
+            CreateBucketConfiguration={
+                'LocationConstraint': self.region})
         if not public:
             s3.put_public_access_block(
                 Bucket=bucket_name,
@@ -165,14 +178,16 @@ class AWSAdapter(BaseCloudAdapter):
             )
         return f"arn:aws:s3:::{bucket_name}"
 
-    def provision_database(self, db_name: str, engine: str, version: str) -> str:
+    def provision_database(self, db_name: str, engine: str,
+                           version: str) -> str:
         rds = self.session.client('rds')
         response = rds.create_db_instance(
             DBInstanceIdentifier=db_name,
-            Engine=engine, # e.g. 'postgres'
+            Engine=engine,  # e.g. 'postgres'
             DBInstanceClass='db.t3.micro',
             MasterUsername='admin',
-            MasterUserPassword='SecurePassword123!', # In prod: generate and store in Secrets Manager
+            MasterUserPassword='SecurePassword123!',
+            # In prod: generate and store in Secrets Manager
             AllocatedStorage=20
         )
         return response['DBInstance']['DBInstanceArn']
@@ -181,7 +196,8 @@ class AWSAdapter(BaseCloudAdapter):
         ec2 = self.session.client('ec2')
         response = ec2.create_vpc(CidrBlock=cidr_block)
         vpc_id = response['Vpc']['VpcId']
-        ec2.create_tags(Resources=[vpc_id], Tags=[{'Key': 'Name', 'Value': 'SMSLY-VPC'}])
+        ec2.create_tags(Resources=[vpc_id], Tags=[
+                        {'Key': 'Name', 'Value': 'SMSLY-VPC'}])
         return vpc_id
 
     def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
@@ -233,7 +249,8 @@ class AWSAdapter(BaseCloudAdapter):
                 return secrets.describe_secret(SecretId=secret_name)['ARN']
             raise
 
-    def get_metrics(self, resource_id: str, metric_name: str, start_time: str, end_time: str) -> List[Dict]:
+    def get_metrics(self, resource_id: str, metric_name: str,
+                    start_time: str, end_time: str) -> List[Dict]:
         cw = self.session.client('cloudwatch')
         # Simplified: Fetch CPUUtilization for an ECS Service
         response = cw.get_metric_statistics(
@@ -250,7 +267,8 @@ class AWSAdapter(BaseCloudAdapter):
     # --- New Methods ---
 
     def create_waf_policy(self, name: str, scope: str = 'REGIONAL') -> str:
-        waf = self.session.client('wafv2', region_name=self.region if scope == 'REGIONAL' else 'us-east-1')
+        waf = self.session.client(
+            'wafv2', region_name=self.region if scope == 'REGIONAL' else 'us-east-1')
         try:
             response = waf.create_web_acl(
                 Name=name,
@@ -308,7 +326,7 @@ class AWSAdapter(BaseCloudAdapter):
         account_id = self._get_account_id()
         role_name = f"smsly-lambda-{name}"
         policy = {
-             "Version": "2012-10-17",
-             "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]
+            "Version": "2012-10-17",
+            "Statement": [{"Effect": "Allow", "Action": "*", "Resource": "*"}]
         }
         return self.create_iam_role(role_name, policy)

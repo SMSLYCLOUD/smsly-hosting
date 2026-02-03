@@ -1,5 +1,7 @@
+"""Serializers module."""
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable
+
 
 class EnvVarSerializer(serializers.ModelSerializer):
     """
@@ -17,13 +19,19 @@ class EnvVarSerializer(serializers.ModelSerializer):
             ret['value'] = '********'
         return ret
 
+
 class ServiceSerializer(serializers.ModelSerializer):
     env_vars = EnvVarSerializer(many=True, required=False)
 
     class Meta:
         model = Service
         fields = '__all__'
-        read_only_fields = ['id', 'created_at', 'updated_at', 'owner', 'verification_token']
+        read_only_fields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'owner',
+            'verification_token']
 
     def create(self, validated_data):
         env_vars_data = validated_data.pop('env_vars', [])
@@ -32,10 +40,12 @@ class ServiceSerializer(serializers.ModelSerializer):
             EnvironmentVariable.objects.create(service=service, **env)
         return service
 
+
 class DeploymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Deployment
         fields = '__all__'
+
 
 class DeploymentTriggerSerializer(serializers.Serializer):
     service_id = serializers.UUIDField()
@@ -43,5 +53,6 @@ class DeploymentTriggerSerializer(serializers.Serializer):
     commit_hash = serializers.CharField(required=False, allow_blank=True)
 
     # Optional overrides
-    cpu_cores = serializers.DecimalField(max_digits=4, decimal_places=2, required=False)
+    cpu_cores = serializers.DecimalField(
+        max_digits=4, decimal_places=2, required=False)
     memory_mb = serializers.IntegerField(required=False)

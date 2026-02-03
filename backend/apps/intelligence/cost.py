@@ -1,5 +1,7 @@
+"""Cost module."""
 from typing import Dict, List, Any
 from decimal import Decimal
+
 
 class CostAdvisor:
     """
@@ -16,11 +18,13 @@ class CostAdvisor:
     PRICING = {
         'AWS': {'cpu': 0.04048, 'ram': 0.004445},
         'GCP': {'cpu': 0.02400, 'ram': 0.002500},
-        'AZURE': {'cpu': 0.04500, 'ram': 0.005000}, # Azure Container Apps approx
-        'RAILWAY': {'cpu': 0.02000, 'ram': 0.002000}, # Placeholder
+        # Azure Container Apps approx
+        'AZURE': {'cpu': 0.04500, 'ram': 0.005000},
+        'RAILWAY': {'cpu': 0.02000, 'ram': 0.002000},  # Placeholder
     }
 
-    def estimate_monthly_cost(self, cpu_count: float, memory_gb: float) -> Dict[str, Decimal]:
+    def estimate_monthly_cost(self, cpu_count: float,
+                              memory_gb: float) -> Dict[str, Decimal]:
         """
         Calculates estimated monthly cost (730 hours) for a given resource configuration.
         """
@@ -28,8 +32,10 @@ class CostAdvisor:
         estimates = {}
 
         for provider, rates in self.PRICING.items():
-            cpu_cost = Decimal(str(rates['cpu'])) * Decimal(str(cpu_count)) * hours
-            ram_cost = Decimal(str(rates['ram'])) * Decimal(str(memory_gb)) * hours
+            cpu_cost = Decimal(str(rates['cpu'])) * \
+                Decimal(str(cpu_count)) * hours
+            ram_cost = Decimal(str(rates['ram'])) * \
+                Decimal(str(memory_gb)) * hours
             total = (cpu_cost + ram_cost).quantize(Decimal("0.01"))
             estimates[provider] = total
 

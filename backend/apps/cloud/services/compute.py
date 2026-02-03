@@ -1,8 +1,10 @@
+"""Compute module."""
 from ..models import CloudProvider, CloudResource
 from ..adapters.aws import AWSAdapter
 from ..adapters.azure import AzureAdapter
 from ..adapters.gcp import GCPAdapter
 from typing import Dict, Optional
+
 
 class ComputeService:
     def __init__(self, provider: CloudProvider):
@@ -33,13 +35,17 @@ class ComputeService:
                 region=self.provider.region
             )
         else:
-            raise NotImplementedError(f"Provider {self.provider.provider_type} not supported yet")
+            raise NotImplementedError(
+                f"Provider {
+                    self.provider.provider_type} not supported yet")
 
-    def deploy_container(self, name: str, image: str, env_vars: Dict[str, str], cpu: int = 256, memory: int = 512) -> CloudResource:
+    def deploy_container(self, name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int = 256, memory: int = 512) -> CloudResource:
         """
         Deploy a container service (ECS/Cloud Run/Azure Container Apps).
         """
-        resource_id = self.adapter.deploy_container(name, image, env_vars, cpu, memory)
+        resource_id = self.adapter.deploy_container(
+            name, image, env_vars, cpu, memory)
 
         resource, created = CloudResource.objects.update_or_create(
             provider=self.provider,
@@ -53,11 +59,13 @@ class ComputeService:
         )
         return resource
 
-    def deploy_function(self, name: str, code_zip: bytes, handler: str, runtime: str) -> CloudResource:
+    def deploy_function(self, name: str, code_zip: bytes,
+                        handler: str, runtime: str) -> CloudResource:
         """
         Deploy a serverless function (Lambda/Cloud Functions/Azure Functions).
         """
-        resource_id = self.adapter.deploy_function(name, code_zip, handler, runtime)
+        resource_id = self.adapter.deploy_function(
+            name, code_zip, handler, runtime)
 
         resource, created = CloudResource.objects.update_or_create(
             provider=self.provider,
@@ -71,11 +79,13 @@ class ComputeService:
         )
         return resource
 
-    def deploy_batch_job(self, name: str, command: str, image: str) -> CloudResource:
+    def deploy_batch_job(self, name: str, command: str,
+                         image: str) -> CloudResource:
         """
         Submit a batch job (AWS Batch / Azure Batch).
         """
         # Adapters don't have batch methods yet, simulating or extending
         # For now, treat as a one-off container task
         # implementation placeholder
-        return CloudResource(name=name, resource_type='BATCH_JOB', status='SUBMITTED')
+        return CloudResource(
+            name=name, resource_type='BATCH_JOB', status='SUBMITTED')

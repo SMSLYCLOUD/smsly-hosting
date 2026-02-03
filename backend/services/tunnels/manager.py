@@ -40,7 +40,10 @@ class TunnelSession(models.Model):
 
     # Configuration
     local_port = models.IntegerField()
-    tier = models.CharField(max_length=10, choices=TIER_CHOICES, default='free')
+    tier = models.CharField(
+        max_length=10,
+        choices=TIER_CHOICES,
+        default='free')
     is_custom_subdomain = models.BooleanField(default=False)
 
     # Status
@@ -54,7 +57,10 @@ class TunnelSession(models.Model):
 
     def public_url(self) -> str:
         """Return public URL."""
-        base_domain = getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.smsly.cloud')
+        base_domain = getattr(
+            settings,
+            'TUNNEL_BASE_DOMAIN',
+            'tunnel.smsly.cloud')
         return f"https://{self.subdomain}.{base_domain}"
 
     def __str__(self):

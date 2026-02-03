@@ -1,4 +1,5 @@
 # pylint: disable=logging-fstring-interpolation
+"""Server module."""
 """
 SMSLY Tunnels - WebSocket Tunnel Server
 
@@ -65,16 +66,23 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         """Setup HTTP routes."""
         self.app.router.add_get('/ws/tunnel', self.handle_tunnel_connect)
         self.app.router.add_get('/api/tunnels', self.list_tunnels)
-        self.app.router.add_get('/api/tunnels/{tunnel_id}/requests', self.get_request_logs)
-        self.app.router.add_post('/api/tunnels/{tunnel_id}/replay/{request_id}', self.replay_request)  # pylint: disable=line-too-long
-        # Catch-all for tunneled requests (subdomain routing handled by reverse proxy)
-        self.app.router.add_route('*', '/{path:.*}', self.handle_tunneled_request)
+        self.app.router.add_get(
+            '/api/tunnels/{tunnel_id}/requests',
+            self.get_request_logs)
+        self.app.router.add_post(
+            '/api/tunnels/{tunnel_id}/replay/{request_id}',
+            self.replay_request)  # pylint: disable=line-too-long
+        # Catch-all for tunneled requests (subdomain routing handled by reverse
+        # proxy)
+        self.app.router.add_route(
+            '*', '/{path:.*}', self.handle_tunneled_request)
 
     def generate_subdomain(self) -> str:
         """Generate a unique subdomain."""
         return uuid.uuid4().hex[:8]
 
-    async def handle_tunnel_connect(self, request: web.Request) -> web.WebSocketResponse:
+    async def handle_tunnel_connect(
+            self, request: web.Request) -> web.WebSocketResponse:
         """
         Handle new tunnel WebSocket connection from CLI client.
 
@@ -136,7 +144,8 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
 
         return ws
 
-    async def handle_tunneled_request(self, request: web.Request) -> web.Response:
+    async def handle_tunneled_request(
+            self, request: web.Request) -> web.Response:
         """
         Handle HTTP request destined for a tunnel.
 
@@ -196,7 +205,8 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             return web.Response(status=504, text="Tunnel timeout")
 
         # Calculate response time
-        response_time_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        response_time_ms = int(
+            (asyncio.get_event_loop().time() - start_time) * 1000)
         log_entry.response_status = response_data.get('status', 502)
         log_entry.response_time_ms = response_time_ms
 
@@ -206,12 +216,14 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             body=response_data.get('body', b''),
         )
 
-    async def _wait_for_response(self, ws: web.WebSocketResponse, request_id: str) -> Dict:
+    async def _wait_for_response(
+            self, ws: web.WebSocketResponse, request_id: str) -> Dict:
         """Wait for response message matching request_id."""
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 data = json.loads(msg.data)
-                if data.get('type') == 'response' and data.get('request_id') == request_id:
+                if data.get('type') == 'response' and data.get(
+                        'request_id') == request_id:
                     return data
         return {'status': 502, 'body': b'Connection closed'}
 
@@ -260,7 +272,8 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             return web.Response(status=404, text="Request not found")
 
         # Find active tunnel
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values()
+                      if t.tunnel_id == tunnel_id), None)
 
         if not tunnel:
             return web.Response(status=404, text="Tunnel not connected")
@@ -277,7 +290,8 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             'is_replay': True,
         })
 
-        return web.json_response({'status': 'replayed', 'request_id': new_request_id})
+        return web.json_response(
+            {'status': 'replayed', 'request_id': new_request_id})
 
     def run(self, host: str = '0.0.0.0', port: int = 8080):
         """Start the tunnel server."""

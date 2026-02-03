@@ -1,3 +1,4 @@
+"""Factory module."""
 import json
 from ..models import CloudProvider
 from ..adapters.aws import AWSAdapter
@@ -5,6 +6,7 @@ from ..adapters.azure import AzureAdapter
 from ..adapters.gcp import GCPAdapter
 from ..adapters.local import LocalAdapter
 from ..adapters.base import BaseCloudAdapter
+
 
 def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:
     """
@@ -36,4 +38,6 @@ def get_cloud_adapter(provider: CloudProvider) -> BaseCloudAdapter:
     elif provider.provider_type == CloudProvider.ProviderType.LOCAL:
         return LocalAdapter()
 
-    raise NotImplementedError(f"Provider type {provider.provider_type} is not supported.")
+    raise NotImplementedError(
+        f"Provider type {
+            provider.provider_type} is not supported.")

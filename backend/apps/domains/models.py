@@ -1,9 +1,14 @@
+"""Models module."""
 from django.db import models
 from apps.deployments.models import Service
 
+
 class Domain(models.Model):
     domain_name = models.CharField(max_length=255, unique=True)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='custom_domains')
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name='custom_domains')
     verified = models.BooleanField(default=False)
     ssl_active = models.BooleanField(default=False)
 

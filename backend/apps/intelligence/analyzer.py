@@ -1,8 +1,10 @@
+"""Analyzer module."""
 import re
 import logging
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
 
 class LogAnalyzer:
     """
@@ -55,11 +57,14 @@ class LogAnalyzer:
             descriptions = []
             for issue in issues:
                 if issue['type'] == 'OOM_KILLED':
-                    descriptions.append("The application ran out of memory. Consider upgrading the plan.")
+                    descriptions.append(
+                        "The application ran out of memory. Consider upgrading the plan.")
                 elif issue['type'] == 'DB_CONNECTION_TIMEOUT':
-                    descriptions.append("Database connection failed. Check your credentials or pool size.")
+                    descriptions.append(
+                        "Database connection failed. Check your credentials or pool size.")
                 elif issue['type'] == 'CRASH_LOOP':
-                    descriptions.append("The application is crashing repeatedly on startup.")
+                    descriptions.append(
+                        "The application is crashing repeatedly on startup.")
             return " ".join(descriptions)
 
         # LLM Simulation for complex cases

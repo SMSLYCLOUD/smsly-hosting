@@ -1,4 +1,5 @@
 # pylint: disable=too-few-public-methods,wrong-import-order
+"""Orchestrator module."""
 # pylint: disable=no-member
 """Orchestration service."""
 from django.utils import timezone
@@ -8,10 +9,12 @@ from apps.deployments.models import Deployment
 from apps.deployments.tasks_alerts import alert_user_task
 from apps.deployments.tasks_ai import analyze_failure_task
 
+
 class Orchestrator:
     """
     Main entry point for deployment operations.
     """
+
     def __init__(self, deployment_id):
         self.deployment = Deployment.objects.get(id=deployment_id)
         self.build_manager = BuildManager(self.deployment)

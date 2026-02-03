@@ -25,21 +25,21 @@ FRAMEWORK_PATTERNS = {
     'nestjs': {'files': ['nest-cli.json'], 'deps': ['@nestjs/core'], 'port': 3000},
     'hono': {'files': [], 'deps': ['hono'], 'port': 3000},
     'svelte': {'files': ['svelte.config.js'], 'deps': ['svelte'], 'port': 5173},
-    
+
     # Python frameworks
     'django': {'files': ['manage.py', 'settings.py'], 'deps': ['django', 'Django'], 'port': 8000},
     'fastapi': {'files': [], 'deps': ['fastapi'], 'port': 8000},
     'flask': {'files': [], 'deps': ['flask', 'Flask'], 'port': 5000},
-    
+
     # Go
     'go': {'files': ['go.mod', 'main.go'], 'deps': [], 'port': 8080},
-    
+
     # Rust
     'rust': {'files': ['Cargo.toml'], 'deps': [], 'port': 8080},
-    
+
     # Ruby
     'rails': {'files': ['Gemfile', 'config.ru'], 'deps': ['rails'], 'port': 3000},
-    
+
     # PHP
     'laravel': {'files': ['artisan', 'composer.json'], 'deps': ['laravel/framework'], 'port': 8000},
     'wordpress': {'files': ['wp-config.php', 'wp-content'], 'deps': [], 'port': 80},
@@ -72,84 +72,95 @@ ENV_VAR_TEMPLATES = {
 class RepoAnalysisView(APIView):
     """
     AI-powered repository analysis endpoint.
-    
+
     POST /api/v1/analyze-repo/
     {
         "repo_url": "https://github.com/user/repo"
     }
-    
+
     Returns detected framework, port, build commands, and suggestions.
     """
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request):
         repo_url = request.data.get('repo_url')
         if not repo_url:
-            return Response({"detail": "repo_url required"}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response({"detail": "repo_url required"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         # SECURITY: Validate repo URL format to prevent SSRF
-        if not re.match(r'^https?://(github\.com|gitlab\.com|bitbucket\.org)/', repo_url):
+        if not re.match(
+                r'^https?://(github\.com|gitlab\.com|bitbucket\.org)/', repo_url):
             return Response(
                 {"detail": "Only GitHub, GitLab, and Bitbucket repositories are supported."},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             # Extract owner/repo from URL
-            match = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', repo_url)
+            match = re.match(
+                r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$',
+                repo_url)
             if match:
                 owner, repo = match.groups()
                 analysis = self._analyze_github_repo(owner, repo)
             else:
                 # Fallback for non-GitHub or complex URLs
                 analysis = self._fallback_analysis(repo_url)
-            
-            logger.info(f"Repo analysis for {repo_url}: {analysis.get('detected_framework')}")
+
+            logger.info(
+                f"Repo analysis for {repo_url}: {
+                    analysis.get('detected_framework')}")
             return Response(analysis)
-            
+
         except Exception as e:
             logger.error(f"Repo analysis error: {e}")
             return Response(
                 {"detail": "Failed to analyze repository. Please try again."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+
     def _analyze_github_repo(self, owner: str, repo: str) -> dict:
         """Analyze a GitHub repository using the API."""
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
-        
+
         try:
             # Fetch root directory
             response = requests.get(api_url, timeout=10, headers={
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'SMSLY-Hosting-Analyzer'
             })
-            
+
             if response.status_code == 404:
-                return self._build_response('unknown', confidence=0.3, error="Repository not found or private")
-            
+                return self._build_response(
+                    'unknown', confidence=0.3, error="Repository not found or private")
+
             if response.status_code != 200:
-                return self._fallback_analysis(f"https://github.com/{owner}/{repo}")
-            
+                return self._fallback_analysis(
+                    f"https://github.com/{owner}/{repo}")
+
             files = response.json()
             file_names = [f['name'] for f in files if isinstance(f, dict)]
-            
+
             # Detect framework from files
-            framework, confidence = self._detect_framework(file_names, owner, repo)
-            
+            framework, confidence = self._detect_framework(
+                file_names, owner, repo)
+
             return self._build_response(framework, confidence, file_names)
-            
+
         except requests.Timeout:
-            return self._fallback_analysis(f"https://github.com/{owner}/{repo}")
+            return self._fallback_analysis(
+                f"https://github.com/{owner}/{repo}")
         except Exception as e:
             logger.error(f"GitHub API error: {e}")
-            return self._fallback_analysis(f"https://github.com/{owner}/{repo}")
-    
+            return self._fallback_analysis(
+                f"https://github.com/{owner}/{repo}")
+
     def _detect_framework(self, files: list, owner: str, repo: str) -> tuple:
         """Detect framework from file list and package.json."""
         detected = 'unknown'
         confidence = 0.3
-        
+
         # Check for known files
         for framework, patterns in FRAMEWORK_PATTERNS.items():
             for pattern_file in patterns['files']:
@@ -159,7 +170,7 @@ class RepoAnalysisView(APIView):
                     break
             if confidence > 0.7:
                 break
-        
+
         # If still unknown, check package.json/requirements.txt
         if detected == 'unknown' or confidence < 0.8:
             if 'package.json' in files:
@@ -170,9 +181,9 @@ class RepoAnalysisView(APIView):
                 detected, confidence = 'go', 0.95
             elif 'Cargo.toml' in files:
                 detected, confidence = 'rust', 0.95
-        
+
         return detected, confidence
-    
+
     def _check_package_json(self, owner: str, repo: str) -> tuple:
         """Check package.json for framework dependencies."""
         try:
@@ -182,25 +193,26 @@ class RepoAnalysisView(APIView):
                 # Try master branch
                 url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/package.json"
                 response = requests.get(url, timeout=5)
-            
+
             if response.status_code == 200:
                 pkg = response.json()
-                all_deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
-                
+                all_deps = {**pkg.get('dependencies', {}),
+                            **pkg.get('devDependencies', {})}
+
                 # Check for frameworks by dependency
                 for framework, patterns in FRAMEWORK_PATTERNS.items():
                     for dep in patterns.get('deps', []):
                         if dep in all_deps:
                             return framework, 0.95
-                
+
                 # Default to generic node
                 return 'express', 0.6
-                
+
         except Exception as e:
             logger.debug(f"Could not parse package.json: {e}")
-        
+
         return 'node', 0.5
-    
+
     def _check_requirements(self, owner: str, repo: str) -> tuple:
         """Check requirements.txt for Python framework."""
         try:
@@ -209,7 +221,7 @@ class RepoAnalysisView(APIView):
             if response.status_code != 200:
                 url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/requirements.txt"
                 response = requests.get(url, timeout=5)
-            
+
             if response.status_code == 200:
                 content = response.text.lower()
                 if 'django' in content:
@@ -218,31 +230,38 @@ class RepoAnalysisView(APIView):
                     return 'fastapi', 0.95
                 elif 'flask' in content:
                     return 'flask', 0.95
-                
+
         except Exception as e:
             logger.debug(f"Could not parse requirements.txt: {e}")
-        
+
         return 'python', 0.5
-    
-    def _build_response(self, framework: str, confidence: float, files: list = None, error: str = None) -> dict:
+
+    def _build_response(self, framework: str, confidence: float,
+                        files: list = None, error: str = None) -> dict:
         """Build the analysis response."""
         port = FRAMEWORK_PATTERNS.get(framework, {}).get('port', 8080)
         commands = BUILD_COMMANDS.get(framework, {'build': '', 'start': ''})
         env_vars = ENV_VAR_TEMPLATES.get(framework, [])
-        
+
         # Detect if Dockerfile exists
         has_dockerfile = files and 'Dockerfile' in files if files else False
-        
+
         # Resource recommendations based on framework
         if framework in ['nextjs', 'nuxt', 'react', 'vue']:
-            resources = {'cpu': '0.5', 'memory': '512Mi', 'recommendation': 'Good for static/SSR sites'}
+            resources = {'cpu': '0.5', 'memory': '512Mi',
+                         'recommendation': 'Good for static/SSR sites'}
         elif framework in ['django', 'rails', 'laravel']:
-            resources = {'cpu': '1', 'memory': '1Gi', 'recommendation': 'Full-stack framework needs more resources'}
+            resources = {
+                'cpu': '1',
+                'memory': '1Gi',
+                'recommendation': 'Full-stack framework needs more resources'}
         elif framework in ['fastapi', 'express', 'hono']:
-            resources = {'cpu': '0.25', 'memory': '256Mi', 'recommendation': 'Lightweight API framework'}
+            resources = {'cpu': '0.25', 'memory': '256Mi',
+                         'recommendation': 'Lightweight API framework'}
         else:
-            resources = {'cpu': '0.5', 'memory': '512Mi', 'recommendation': 'Standard allocation'}
-        
+            resources = {'cpu': '0.5', 'memory': '512Mi',
+                         'recommendation': 'Standard allocation'}
+
         response = {
             'detected_framework': framework,
             'confidence': confidence,
@@ -254,16 +273,16 @@ class RepoAnalysisView(APIView):
             'resource_recommendation': resources,
             'detected_files': files[:10] if files else [],
         }
-        
+
         if error:
             response['warning'] = error
-        
+
         return response
-    
+
     def _fallback_analysis(self, repo_url: str) -> dict:
         """Fallback heuristic analysis based on URL."""
         url_lower = repo_url.lower()
-        
+
         if 'django' in url_lower:
             return self._build_response('django', 0.6)
         elif 'next' in url_lower or 'react' in url_lower:
@@ -276,5 +295,5 @@ class RepoAnalysisView(APIView):
             return self._build_response('express', 0.5)
         elif 'go' in url_lower or 'golang' in url_lower:
             return self._build_response('go', 0.5)
-        
+
         return self._build_response('unknown', 0.3)

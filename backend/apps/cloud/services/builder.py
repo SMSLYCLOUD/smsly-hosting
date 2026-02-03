@@ -1,3 +1,4 @@
+"""Builder module."""
 import subprocess
 import os
 import logging
@@ -7,31 +8,32 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+
 class NixpacksBuilder:
     """
     Wrapper around Nixpacks CLI to build container images from source.
     Supports build caching for faster subsequent builds.
     """
-    
+
     # Default cache directory for Nixpacks builds
     CACHE_DIR = "/var/smsly/build-cache"
 
     @staticmethod
     def build_image(
-        source_dir: str, 
-        image_name: str, 
+        source_dir: str,
+        image_name: str,
         env_vars: Optional[dict] = None,
         cache_dir: Optional[str] = None
     ) -> str:
         """
         Builds a Docker image using Nixpacks.
-        
+
         Args:
             source_dir: Path to source code
             image_name: Docker image tag
             env_vars: Environment variables for build
             cache_dir: Optional cache directory (defaults to CACHE_DIR)
-            
+
         Returns the image tag upon success.
         """
         if not os.path.exists(source_dir):
@@ -47,9 +49,10 @@ class NixpacksBuilder:
             source_dir,
             "--name", image_name,
             "--verbose",
-            "--cache-key", image_name.split(":")[0],  # Use base name as cache key
+            # Use base name as cache key
+            "--cache-key", image_name.split(":")[0],
         ]
-        
+
         # Add inline cache for Docker layer caching
         command.extend(["--inline-cache"])
 
@@ -57,7 +60,8 @@ class NixpacksBuilder:
             for k, v in env_vars.items():
                 command.extend(["--env", f"{k}={v}"])
 
-        logger.info(f"Starting Nixpacks build for {image_name} (cache: {effective_cache_dir})...")
+        logger.info(
+            f"Starting Nixpacks build for {image_name} (cache: {effective_cache_dir})...")
 
         try:
             # Run the build process
@@ -120,7 +124,9 @@ class NixpacksBuilder:
         try:
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode != 0:
-                logger.warning(f"Trivy scan failed (binary missing?): {result.stderr}")
+                logger.warning(
+                    f"Trivy scan failed (binary missing?): {
+                        result.stderr}")
                 return {"error": "Scan skipped (tool missing)"}
 
             report = json.loads(result.stdout)

@@ -1,4 +1,5 @@
 # pylint: disable=logging-fstring-interpolation,broad-exception-caught,subprocess-run-check,import-outside-toplevel
+"""Addon Provisioner module."""
 # pylint: disable=bare-except
 # pylint: disable=unused-argument
 """
@@ -52,7 +53,9 @@ class AddonProvisioner:
     }
 
     def __init__(self):
-        self.network_name = config('DOCKER_NETWORK', default='smsly-hosting-network')
+        self.network_name = config(
+            'DOCKER_NETWORK',
+            default='smsly-hosting-network')
         self._ensure_network()
 
     def _ensure_network(self):
@@ -95,7 +98,8 @@ class AddonProvisioner:
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
 
-        logger.info(f"Provisioning {addon_type} addon for service {service_name}")
+        logger.info(
+            f"Provisioning {addon_type} addon for service {service_name}")
 
         # Build Docker run command based on addon type
         if addon_type == 'POSTGRES':
@@ -120,7 +124,8 @@ class AddonProvisioner:
         logger.info(f"Addon {addon_type} provisioned: {container_name}")
         return container_id, connection_url
 
-    def _provision_postgres(self, container_name: str, password: str, port: int) -> Tuple[str, str]:
+    def _provision_postgres(self, container_name: str,
+                            password: str, port: int) -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -137,7 +142,11 @@ class AddonProvisioner:
             self.ADDON_IMAGES['POSTGRES']
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
         container_id = result.stdout.strip()[:12]
 
         # Internal Docker network URL (service-to-service)
@@ -146,7 +155,8 @@ class AddonProvisioner:
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
-    def _provision_redis(self, container_name: str, password: str, port: int) -> Tuple[str, str]:
+    def _provision_redis(self, container_name: str,
+                         password: str, port: int) -> Tuple[str, str]:
         """Provision a Redis container with authentication."""
         cmd = [
             'docker', 'run', '-d',
@@ -158,7 +168,11 @@ class AddonProvisioner:
             'redis-server', '--requirepass', password, '--appendonly', 'yes'
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"redis://:{password}@{container_name}:{port}/0"
@@ -166,7 +180,8 @@ class AddonProvisioner:
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
-    def _provision_mysql(self, container_name: str, password: str, port: int) -> Tuple[str, str]:
+    def _provision_mysql(self, container_name: str,
+                         password: str, port: int) -> Tuple[str, str]:
         """Provision a MySQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -184,15 +199,23 @@ class AddonProvisioner:
             self.ADDON_IMAGES['MYSQL']
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"mysql://{db_user}:{password}@{container_name}:{port}/{db_name}"
 
-        self._wait_for_health(container_name, port, timeout=60)  # MySQL takes longer
+        self._wait_for_health(
+            container_name,
+            port,
+            timeout=60)  # MySQL takes longer
         return container_id, connection_url
 
-    def _provision_mongodb(self, container_name: str, password: str, port: int) -> Tuple[str, str]:
+    def _provision_mongodb(self, container_name: str,
+                           password: str, port: int) -> Tuple[str, str]:
         """Provision a MongoDB container."""
         db_user = "app_user"
         db_name = "app_db"
@@ -208,7 +231,11 @@ class AddonProvisioner:
             self.ADDON_IMAGES['MONGODB']
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"mongodb://{db_user}:{password}@{container_name}:{port}/{db_name}?authSource=admin"  # pylint: disable=line-too-long
@@ -216,7 +243,8 @@ class AddonProvisioner:
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
-    def _wait_for_health(self, container_name: str, port: int, timeout: int = 30):
+    def _wait_for_health(self, container_name: str,
+                         port: int, timeout: int = 30):
         """Wait for the container to be healthy and accepting connections."""
         logger.info(f"Waiting for {container_name} to be ready...")
         start_time = time.time()
@@ -225,7 +253,8 @@ class AddonProvisioner:
             try:
                 # Check if container is running
                 result = subprocess.run(
-                    ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
+                    ['docker', 'inspect', '-f',
+                        '{{.State.Running}}', container_name],
                     capture_output=True,
                     text=True
                 )
@@ -234,13 +263,15 @@ class AddonProvisioner:
                     time.sleep(2)
                     logger.info(f"{container_name} is ready")
                     return
-            except:
+            except BaseException:
                 pass
             time.sleep(1)
 
-        logger.warning(f"{container_name} health check timed out after {timeout}s")
+        logger.warning(
+            f"{container_name} health check timed out after {timeout}s")
 
-    def deprovision(self, container_id: str, container_name: Optional[str] = None) -> bool:
+    def deprovision(self, container_id: str,
+                    container_name: Optional[str] = None) -> bool:
         """
         Remove an addon container and its volumes.
 
@@ -250,7 +281,8 @@ class AddonProvisioner:
         """
         try:
             # Stop and remove container
-            subprocess.run(['docker', 'stop', container_id], capture_output=True)
+            subprocess.run(['docker', 'stop', container_id],
+                           capture_output=True)
             subprocess.run(['docker', 'rm', container_id], capture_output=True)
 
             # Remove associated volume if container_name provided
@@ -263,7 +295,8 @@ class AddonProvisioner:
             logger.info(f"Deprovisioned addon container: {container_id}")
             return True
         except Exception as e:
-            logger.error(f"Failed to deprovision container {container_id}: {e}")
+            logger.error(
+                f"Failed to deprovision container {container_id}: {e}")
             return False
 
     def get_status(self, container_id: str) -> Dict:

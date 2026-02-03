@@ -1,4 +1,5 @@
 # pylint: disable=line-too-long,logging-fstring-interpolation,subprocess-run-check,broad-exception-caught,too-many-nested-blocks,consider-using-with,too-few-public-methods,import-outside-toplevel
+"""Builders module."""
 # pylint: disable=no-member
 """Build manager service."""
 import time
@@ -11,23 +12,29 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
+
 class BuildManager:
     """
     Manages the build process (Code -> Docker Image).
     """
+
     def __init__(self, deployment):
         self.deployment = deployment
         self.service = deployment.service
         self.work_dir = Path(f"/tmp/builds/{self.deployment.id}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(3),
+           wait=wait_exponential(multiplier=1, min=4, max=10))
     def build_image(self):
         """
         Builds a Docker image from the repo with real-time log streaming.
         """
         registry = settings.CONTAINER_REGISTRY_URL
         image_tag = f"{registry}/{self.service.name}:{self.deployment.commit_hash[:7]}"
-        logger.info(f"Starting build for {self.service.name} commit {self.deployment.commit_hash}")
+        logger.info(
+            f"Starting build for {
+                self.service.name} commit {
+                self.deployment.commit_hash}")
 
         try:
             # 0. Login (if configured)
@@ -35,13 +42,16 @@ class BuildManager:
                 self._log(f"Logging in to {registry}...")
                 # Pipe password via stdin for security
                 login_proc = subprocess.Popen(
-                    ["docker", "login", registry, "-u", settings.REGISTRY_USER, "--password-stdin"],
+                    ["docker", "login", registry, "-u",
+                        settings.REGISTRY_USER, "--password-stdin"],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                 )
-                _, stderr = login_proc.communicate(input=settings.REGISTRY_PASSWORD)
+                _, stderr = login_proc.communicate(
+                    input=settings.REGISTRY_PASSWORD)
                 if login_proc.returncode != 0:
                     self._log(f"Login failed: {stderr}")
-                    # Don't raise, try pushing anyway (might be using credential helper)
+                    # Don't raise, try pushing anyway (might be using
+                    # credential helper)
                 else:
                     self._log("Login successful.")
 
@@ -51,15 +61,19 @@ class BuildManager:
                 shutil.rmtree(self.work_dir)
 
             self._run_command(
-                ["git", "clone", "--branch", self.service.branch, self.service.repository_url, str(self.work_dir)]
+                ["git", "clone", "--branch", self.service.branch,
+                    self.service.repository_url, str(self.work_dir)]
             )
 
             # 2. Build
-            dockerfile_path = self.work_dir / self.service.root_directory.strip("/")
+            dockerfile_path = self.work_dir / \
+                self.service.root_directory.strip("/")
             self._log(f"Building Docker image from {dockerfile_path}...")
 
             if self.service.build_command:
-                self._log(f"NOTE: build_command '{self.service.build_command}' is ignored in Dockerfile mode. Only applicable for Buildpacks.")
+                self._log(
+                    f"NOTE: build_command '{
+                        self.service.build_command}' is ignored in Dockerfile mode. Only applicable for Buildpacks.")
 
             self._run_command(
                 ["docker", "build", "-t", image_tag, "."],
@@ -68,7 +82,8 @@ class BuildManager:
 
             # 3. Push
             self._log(f"Pushing image to {image_tag}...")
-            # Note: Requires docker login to be handled in the base image or host environment
+            # Note: Requires docker login to be handled in the base image or
+            # host environment
             self._run_command(["docker", "push", image_tag])
 
             # 4. Security Scan (Simulated Trivy)
@@ -144,20 +159,30 @@ class BuildManager:
                         "scan_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "image": image_tag
                     }
-                    self.deployment.save(update_fields=['vulnerability_report'])
+                    self.deployment.save(
+                        update_fields=['vulnerability_report'])
 
                     # Log summary
-                    self._log(f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
+                    self._log(
+                        f"Scan complete: {
+                            vulns['critical']} critical, {
+                            vulns['high']} high, {
+                            vulns['medium']} medium, {
+                            vulns['low']} low")
 
                     if vulns['critical'] > 0:
-                        self._log(f"WARNING: Found {vulns['critical']} CRITICAL vulnerabilities!")
+                        self._log(
+                            f"WARNING: Found {
+                                vulns['critical']} CRITICAL vulnerabilities!")
                     else:
                         self._log("Security scan passed (no critical issues).")
 
                 except json.JSONDecodeError:
                     self._log("Failed to parse Trivy output. Raw output saved.")
-                    self.deployment.vulnerability_report = {"error": "Parse failed", "raw": result.stdout[:1000]}
-                    self.deployment.save(update_fields=['vulnerability_report'])
+                    self.deployment.vulnerability_report = {
+                        "error": "Parse failed", "raw": result.stdout[:1000]}
+                    self.deployment.save(
+                        update_fields=['vulnerability_report'])
             else:
                 self._log(f"Trivy scan failed: {result.stderr[:500]}")
 
@@ -171,10 +196,10 @@ class BuildManager:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, # Merge stderr into stdout
+            stderr=subprocess.STDOUT,  # Merge stderr into stdout
             cwd=cwd,
             universal_newlines=True,
-            bufsize=1 # Line buffered
+            bufsize=1  # Line buffered
         )
 
         for line in process.stdout:

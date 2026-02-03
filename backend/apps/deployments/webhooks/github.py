@@ -1,3 +1,4 @@
+"""Github module."""
 import hashlib
 import hmac
 import logging
@@ -6,6 +7,7 @@ from apps.deployments.models import Service, Deployment
 from apps.deployments.tasks import smart_deploy_task
 
 logger = logging.getLogger(__name__)
+
 
 class GitHubWebhookHandler:
     def verify_signature(self, request) -> bool:
@@ -22,7 +24,8 @@ class GitHubWebhookHandler:
             return False
 
         body = request.body
-        expected = 'sha256=' + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        expected = 'sha256=' + \
+            hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
         return hmac.compare_digest(signature, expected)
 
@@ -33,8 +36,9 @@ class GitHubWebhookHandler:
         return False
 
     def _handle_push(self, payload: dict):
-        repo_url = payload.get('repository', {}).get('html_url') # e.g. https://github.com/user/repo
-        ref = payload.get('ref') # refs/heads/main
+        repo_url = payload.get('repository', {}).get(
+            'html_url')  # e.g. https://github.com/user/repo
+        ref = payload.get('ref')  # refs/heads/main
 
         if not repo_url or not ref:
             return False
@@ -55,7 +59,9 @@ class GitHubWebhookHandler:
 
         triggered_count = 0
         for service in services:
-            logger.info(f"Triggering deployment for service {service.name} from GitHub Push")
+            logger.info(
+                f"Triggering deployment for service {
+                    service.name} from GitHub Push")
 
             deployment = Deployment.objects.create(
                 service=service,
@@ -65,12 +71,15 @@ class GitHubWebhookHandler:
             )
 
             # Use the service's assigned provider
-            provider_id = str(service.provider.id) if service.provider else None
+            provider_id = str(
+                service.provider.id) if service.provider else None
 
             if provider_id:
                 smart_deploy_task.delay(str(deployment.id), provider_id)
                 triggered_count += 1
             else:
-                logger.warning(f"Service {service.name} has no provider assigned, skipping webhook deploy")
+                logger.warning(
+                    f"Service {
+                        service.name} has no provider assigned, skipping webhook deploy")
 
         return triggered_count > 0

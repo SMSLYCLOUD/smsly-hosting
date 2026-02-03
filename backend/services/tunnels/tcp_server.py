@@ -1,4 +1,5 @@
 # pylint: disable=logging-fstring-interpolation
+"""Tcp Server module."""
 # pylint: disable=broad-exception-caught
 """
 SMSLY TCP Tunnel Server
@@ -39,12 +40,15 @@ class TCPTunnelServer:
     to the tunnel client, which forwards to local_port.
     """
 
-    def __init__(self, host: str = '0.0.0.0', port_range: tuple = (10000, 10999)):
+    def __init__(self, host: str = '0.0.0.0',
+                 port_range: tuple = (10000, 10999)):
         self.host = host
         self.port_range = port_range
         self.tunnels: Dict[int, TCPTunnel] = {}  # remote_port -> tunnel
-        self.available_ports: set = set(range(port_range[0], port_range[1] + 1))
-        self.tunnel_writers: Dict[str, asyncio.StreamWriter] = {}  # tunnel_id -> writer
+        self.available_ports: set = set(
+            range(port_range[0], port_range[1] + 1))
+        # tunnel_id -> writer
+        self.tunnel_writers: Dict[str, asyncio.StreamWriter] = {}
 
     def allocate_port(self) -> Optional[int]:
         """Allocate an available port."""
@@ -58,7 +62,8 @@ class TCPTunnelServer:
         if self.port_range[0] <= port <= self.port_range[1]:
             self.available_ports.add(port)
 
-    async def create_tunnel(self, user_id: str, local_port: int) -> Optional[TCPTunnel]:
+    async def create_tunnel(self, user_id: str,
+                            local_port: int) -> Optional[TCPTunnel]:
         """Create a new TCP tunnel."""
         remote_port = self.allocate_port()
         if not remote_port:
@@ -77,11 +82,12 @@ class TCPTunnelServer:
         # Start listening on the remote port
         asyncio.create_task(self._start_listener(tunnel))
 
-        logger.info(f"TCP tunnel created: port {remote_port} -> client -> localhost:{local_port}")
+        logger.info(
+            f"TCP tunnel created: port {remote_port} -> client -> localhost:{local_port}")
         return tunnel
 
     async def _start_listener(self, tunnel: TCPTunnel,
-    ):  # pylint: disable=unused-argument  # pylint: disable=unused-argument):
+                              ):  # pylint: disable=unused-argument  # pylint: disable=unused-argument):
         """Start listening for connections on the remote port."""
         try:
             server = await asyncio.start_server(
@@ -109,20 +115,25 @@ class TCPTunnelServer:
         tunnel.connections += 1
         connection_id = str(uuid.uuid4())[:8]
 
-        logger.info(f"TCP connection {connection_id} on port {tunnel.remote_port}")
+        logger.info(
+            f"TCP connection {connection_id} on port {
+                tunnel.remote_port}")
 
         try:
             # Get the tunnel client writer
             tunnel_writer = self.tunnel_writers.get(tunnel.tunnel_id)
             if not tunnel_writer:
-                logger.warning(f"No tunnel client connected for {tunnel.tunnel_id}")
+                logger.warning(
+                    f"No tunnel client connected for {
+                        tunnel.tunnel_id}")
                 client_writer.close()
                 return
 
             # Bidirectional forwarding
             await asyncio.gather(
                 self._forward(client_reader, tunnel_writer, tunnel, 'in'),
-                self._forward_from_tunnel(tunnel.tunnel_id, client_writer, tunnel),
+                self._forward_from_tunnel(
+                    tunnel.tunnel_id, client_writer, tunnel),
             )
 
         except Exception as e:
@@ -178,7 +189,8 @@ class TCPTunnelServer:
 
     async def close_tunnel(self, tunnel_id: str):
         """Close a TCP tunnel."""
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values()
+                      if t.tunnel_id == tunnel_id), None)
         if tunnel:
             tunnel.is_active = False
             self.release_port(tunnel.remote_port)
@@ -192,7 +204,8 @@ class TCPTunnelServer:
 
     def get_tunnel_info(self, tunnel_id: str) -> Optional[dict]:
         """Get tunnel information."""
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values()
+                      if t.tunnel_id == tunnel_id), None)
         if not tunnel:
             return None
 

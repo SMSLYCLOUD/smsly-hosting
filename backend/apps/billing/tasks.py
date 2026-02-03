@@ -1,3 +1,4 @@
+"""Tasks module."""
 from celery import shared_task
 from django.utils import timezone
 from .models import UsageRecord
@@ -7,6 +8,7 @@ from decimal import Decimal
 # Pricing: $0.01 per vCPU/hour, $0.005 per GB-RAM/hour
 PRICE_CPU_HOUR = Decimal("0.01")
 PRICE_RAM_GB_HOUR = Decimal("0.005")
+
 
 @shared_task
 def collect_usage_task():

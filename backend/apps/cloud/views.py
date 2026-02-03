@@ -1,3 +1,4 @@
+"""Views module."""
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -6,6 +7,7 @@ from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer,
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.remediator import RemediationEngine
 from apps.intelligence.cost import CostAdvisor
+
 
 class CloudProviderViewSet(viewsets.ModelViewSet):
     queryset = CloudProvider.objects.all()
@@ -20,10 +22,12 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
         # In a real app, validate credentials here before saving
         serializer.save()
 
+
 class CloudResourceViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = CloudResource.objects.all()
     serializer_class = CloudResourceSerializer
     permission_classes = [permissions.IsAuthenticated]
+
 
 class IntelligenceViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -52,7 +56,8 @@ class IntelligenceViewSet(viewsets.ViewSet):
         suggestion = engine.suggest_fix(issue_type)
         if suggestion:
             return Response(suggestion)
-        return Response({'message': 'No suggestion found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'message': 'No suggestion found'},
+                        status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=False, methods=['post'])
     def estimate_cost(self, request):

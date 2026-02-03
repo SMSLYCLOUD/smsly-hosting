@@ -1,9 +1,11 @@
+"""Remediator module."""
 from typing import Dict, List, Optional
 import logging
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import AuditLog
 
 logger = logging.getLogger(__name__)
+
 
 class RemediationEngine:
     """
@@ -55,13 +57,17 @@ class RemediationEngine:
                     actor="AI_REMEDIATOR",
                     action="SCALE_UP",
                     target=service.name,
-                    metadata={"old_mb": old_mem, "new_mb": service.memory_mb, "reason": "OOM"}
+                    metadata={
+                        "old_mb": old_mem,
+                        "new_mb": service.memory_mb,
+                        "reason": "OOM"}
                 )
 
                 # Trigger Redeploy
                 from apps.deployments.tasks import smart_deploy_task
                 # Find latest active deployment to redeploy
-                last_deploy = service.deployments.filter(status='ACTIVE').first()
+                last_deploy = service.deployments.filter(
+                    status='ACTIVE').first()
                 if last_deploy:
                     new_deploy = Deployment.objects.create(
                         service=service,
@@ -70,9 +76,11 @@ class RemediationEngine:
                         commit_message=f"Auto-Remediation: {fix['message']}"
                     )
                     # Using local provider/existing one
-                    provider_id = str(service.provider.id) if service.provider else None
+                    provider_id = str(
+                        service.provider.id) if service.provider else None
                     if provider_id:
-                        smart_deploy_task.delay(str(new_deploy.id), provider_id)
+                        smart_deploy_task.delay(
+                            str(new_deploy.id), provider_id)
 
                 return True
 
@@ -81,7 +89,8 @@ class RemediationEngine:
                 last_good_deploy = service.deployments.filter(
                     status='ACTIVE'
                 ).exclude(
-                    id=service.deployments.latest('created_at').id if service.deployments.exists() else None
+                    id=service.deployments.latest(
+                        'created_at').id if service.deployments.exists() else None
                 ).order_by('-finished_at').first()
 
                 if last_good_deploy:
@@ -104,14 +113,19 @@ class RemediationEngine:
                         commit_hash=last_good_deploy.commit_hash,
                         commit_message=f"Auto-Rollback: Reverted to {last_good_deploy.commit_hash[:7]}"
                     )
-                    
-                    provider_id = str(service.provider.id) if service.provider else None
+
+                    provider_id = str(
+                        service.provider.id) if service.provider else None
                     if provider_id:
-                        smart_deploy_task.delay(str(new_deploy.id), provider_id)
-                        logger.info(f"Rollback triggered for {service.name} to commit {last_good_deploy.commit_hash[:7]}")
+                        smart_deploy_task.delay(
+                            str(new_deploy.id), provider_id)
+                        logger.info(
+                            f"Rollback triggered for {service.name} to commit {last_good_deploy.commit_hash[:7]}")
                         return True
                 else:
-                    logger.warning(f"No previous good deployment found for {service.name}")
+                    logger.warning(
+                        f"No previous good deployment found for {
+                            service.name}")
                     return False
 
             return False

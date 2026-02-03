@@ -1,3 +1,4 @@
+"""Models module."""
 import uuid
 from django.db import models
 from encrypted_model_fields.fields import EncryptedCharField
@@ -7,7 +8,8 @@ from apps.cloud.models import CloudProvider
 # Import AuditLog explicitly to register it with the app
 from .models_audit import AuditLog
 from .models_cron import CronJob
-from .models_storage import Volume # Add this
+from .models_storage import Volume  # Add this
+
 
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
@@ -15,6 +17,7 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
+
 
 class Service(TimeStampedModel):
     """
@@ -24,10 +27,16 @@ class Service(TimeStampedModel):
     name = models.CharField(max_length=255, unique=True)
 
     # Provider Integration
-    provider = models.ForeignKey(CloudProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
+    provider = models.ForeignKey(
+        CloudProvider,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='services')
 
     # Source Config
-    repository_url = models.URLField(help_text="Git repository URL", blank=True, null=True)
+    repository_url = models.URLField(
+        help_text="Git repository URL", blank=True, null=True)
     branch = models.CharField(max_length=255, default='main')
 
     # Deployment Config
@@ -37,10 +46,18 @@ class Service(TimeStampedModel):
         ('UPLOAD', 'File Upload'),
         ('TEMPLATE', 'Predefined Template'),
     ]
-    deploy_type = models.CharField(max_length=20, choices=DEPLOY_TYPE_CHOICES, default='GIT')
+    deploy_type = models.CharField(
+        max_length=20,
+        choices=DEPLOY_TYPE_CHOICES,
+        default='GIT')
     docker_image = models.CharField(max_length=255, blank=True, null=True)
 
-    owner = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='services')
+    owner = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='services')
 
     # Build & Run Config
     build_command = models.CharField(max_length=255, blank=True, null=True)
@@ -49,29 +66,38 @@ class Service(TimeStampedModel):
 
     # Network
     internal_port = models.IntegerField(default=8000)
-    public_domain = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    public_domain = models.CharField(
+        max_length=255, blank=True, null=True, unique=True)
     domain_verified = models.BooleanField(default=False)
     verification_token = models.CharField(max_length=64, blank=True)
 
     # Resource Limits (Simulated for now)
-    cpu_cores = models.DecimalField(max_digits=4, decimal_places=2, default=0.5)
+    cpu_cores = models.DecimalField(
+        max_digits=4, decimal_places=2, default=0.5)
     memory_mb = models.IntegerField(default=512)
 
     # Auto-Scaling
     min_replicas = models.IntegerField(default=1)
     max_replicas = models.IntegerField(default=1)
-    autoscale_cpu_target = models.IntegerField(default=80, help_text="Target CPU utilization percentage")
+    autoscale_cpu_target = models.IntegerField(
+        default=80, help_text="Target CPU utilization percentage")
 
     # Strategy
-    use_blue_green = models.BooleanField(default=False, help_text="Use Blue/Green deployment strategy")
+    use_blue_green = models.BooleanField(
+        default=False, help_text="Use Blue/Green deployment strategy")
 
     # Preview Environments
     is_preview = models.BooleanField(default=False)
-    parent_service = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='previews')
+    parent_service = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='previews')
     pr_number = models.IntegerField(null=True, blank=True)
 
     # Coolify Integration
-    coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True, 
+    coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True,
                                     help_text="UUID of the application in Coolify")
 
     def __str__(self):
@@ -82,11 +108,15 @@ class Service(TimeStampedModel):
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
         super().save(*args, **kwargs)
 
+
 class ComplianceProfile(models.Model):
     """
     Enterprise compliance settings for a service.
     """
-    service = models.OneToOneField(Service, on_delete=models.CASCADE, related_name='compliance')
+    service = models.OneToOneField(
+        Service,
+        on_delete=models.CASCADE,
+        related_name='compliance')
     hipaa_compliant = models.BooleanField(default=False)
     gdpr_compliant = models.BooleanField(default=False)
     soc2_compliant = models.BooleanField(default=False)
@@ -95,8 +125,12 @@ class ComplianceProfile(models.Model):
     def __str__(self):
         return f"Compliance for {self.service.name}"
 
+
 class EnvironmentVariable(TimeStampedModel):
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='env_vars')
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name='env_vars')
     key = models.CharField(max_length=255)
     value = EncryptedCharField(max_length=255)
     is_secret = models.BooleanField(default=False)
@@ -106,6 +140,7 @@ class EnvironmentVariable(TimeStampedModel):
 
     def __str__(self):
         return f"{self.key} ({self.service.name})"
+
 
 class Deployment(TimeStampedModel):
     class Status(models.TextChoices):
@@ -118,7 +153,10 @@ class Deployment(TimeStampedModel):
         CANCELLED = 'CANCELLED', _('Cancelled')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='deployments')
+    service = models.ForeignKey(
+        Service,
+        on_delete=models.CASCADE,
+        related_name='deployments')
     commit_hash = models.CharField(max_length=40)
     commit_message = models.TextField(blank=True)
 
@@ -131,10 +169,12 @@ class Deployment(TimeStampedModel):
     build_logs = models.TextField(blank=True)
     runtime_logs_url = models.URLField(blank=True, null=True)
 
-    ai_diagnosis = models.TextField(blank=True, help_text="AI suggested fix for failure")
+    ai_diagnosis = models.TextField(
+        blank=True, help_text="AI suggested fix for failure")
 
     # Security
-    vulnerability_report = models.JSONField(default=dict, blank=True, help_text="Trivy scan results")
+    vulnerability_report = models.JSONField(
+        default=dict, blank=True, help_text="Trivy scan results")
 
     container_id = models.CharField(max_length=255, blank=True, null=True)
 

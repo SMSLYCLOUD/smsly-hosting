@@ -1,4 +1,5 @@
 # pylint: disable=logging-fstring-interpolation
+"""Rate Limit module."""
 # pylint: disable=broad-exception-caught
 """
 Rate limiting utilities for SMSLY API endpoints.

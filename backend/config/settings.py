@@ -1,3 +1,4 @@
+"""Settings module."""
 import os
 from pathlib import Path
 from decouple import config, Csv
@@ -5,7 +6,9 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-smsly-hosting-dev-key')
+SECRET_KEY = config(
+    'SECRET_KEY',
+    default='django-insecure-smsly-hosting-dev-key')
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
 
@@ -20,13 +23,18 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Container Registry
-CONTAINER_REGISTRY_URL = config('CONTAINER_REGISTRY_URL', default='registry.smsly.cloud')
+CONTAINER_REGISTRY_URL = config(
+    'CONTAINER_REGISTRY_URL',
+    default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
 if not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["*"]
-CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app', cast=Csv())
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://*.railway.app',
+    cast=Csv())
 
 INSTALLED_APPS = [
     'daphne',
@@ -127,7 +135,9 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=config('DATABASE_URL', default='postgres://postgres:postgres@localhost:5432/smsly_hosting'),
+        default=config(
+            'DATABASE_URL',
+            default='postgres://postgres:postgres@localhost:5432/smsly_hosting'),
         conn_max_age=600
     )
 }
@@ -192,15 +202,21 @@ CELERY_RESULT_BACKEND = 'django-db'
 CELERY_BEAT_SCHEDULE = {
     'collect-metrics-every-5-minutes': {
         'task': 'apps.deployments.tasks_metrics.collect_metrics_task',
-        'schedule': 300.0, # 5 minutes
+        'schedule': 300.0,  # 5 minutes
     },
 }
 
 # CORS - Use allowlist in production
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL', default=False, cast=bool)
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
-CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='https://*.railway.app,https://smsly-hosting.com,http://209.159.155.100', cast=Csv())
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:3000,https://smsly-hosting.com,http://209.159.155.100',
+    cast=Csv())
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://*.railway.app,https://smsly-hosting.com,http://209.159.155.100',
+    cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',

@@ -1,3 +1,4 @@
+"""Views module."""
 from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +9,7 @@ from .tasks import smart_deploy_task
 from apps.cloud.models import CloudProvider
 import os
 import uuid
+
 
 class ServiceViewSet(viewsets.ModelViewSet):
     """
@@ -45,7 +47,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Determine provider
         provider = service.provider or CloudProvider.objects.first()
         if not provider:
-            return Response({'error': 'No cloud provider configured'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No cloud provider configured'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         deployment = Deployment.objects.create(
             service=service,
@@ -74,7 +77,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['delete'], url_path='env_vars/(?P<var_id>\d+)')
+    @action(detail=True, methods=['delete'],
+            url_path='env_vars/(?P<var_id>\\d+)')
     def delete_env_var(self, request, pk=None, var_id=None):
         service = self.get_object()
         try:
@@ -84,6 +88,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except EnvironmentVariable.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
+
 class DeploymentViewSet(viewsets.ModelViewSet):
     """
     API endpoint for managing Deployments.
@@ -91,7 +96,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     queryset = Deployment.objects.all()
     serializer_class = DeploymentSerializer
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [parsers.JSONParser, parsers.MultiPartParser]  # Enable File Uploads
+    parser_classes = [
+        parsers.JSONParser,
+        parsers.MultiPartParser]  # Enable File Uploads
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -112,10 +119,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         provider = service.provider or CloudProvider.objects.first()
         if provider:
-             smart_deploy_task.delay(str(new_deployment.id), str(provider.id))
-             return Response(DeploymentSerializer(new_deployment).data, status=status.HTTP_201_CREATED)
+            smart_deploy_task.delay(str(new_deployment.id), str(provider.id))
+            return Response(DeploymentSerializer(
+                new_deployment).data, status=status.HTTP_201_CREATED)
 
-        return Response({'error': 'No provider available'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'No provider available'},
+                        status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'])
     def trigger(self, request):
@@ -136,7 +145,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 deployment = Deployment.objects.create(
                     service=service,
                     status=Deployment.Status.QUEUED,
-                    commit_hash=serializer.validated_data.get('commit_hash', 'latest')
+                    commit_hash=serializer.validated_data.get(
+                        'commit_hash', 'latest')
                 )
 
                 smart_deploy_task.delay(str(deployment.id), str(provider.id))
@@ -148,8 +158,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 }, status=status.HTTP_201_CREATED)
 
             except (Service.DoesNotExist, CloudProvider.DoesNotExist):
-                return Response({'error': 'Resource not found'}, status=status.HTTP_404_NOT_FOUND)
-        
+                return Response({'error': 'Resource not found'},
+                                status=status.HTTP_404_NOT_FOUND)
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
@@ -179,15 +190,20 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         """
         service_id = request.data.get('service_id')
         uploaded_file = request.FILES.get('file')
-        
+
         if not service_id or not uploaded_file:
-            return Response({'error': 'Missing service_id or file'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Missing service_id or file'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         # Security: File size limit (100MB)
         MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
         if uploaded_file.size > MAX_UPLOAD_SIZE:
             return Response(
-                {'error': f'File too large. Maximum size is 100MB, got {uploaded_file.size / 1024 / 1024:.1f}MB'},
+                {
+                    'error': f'File too large. Maximum size is 100MB, got {
+                        uploaded_file.size /
+                        1024 /
+                        1024:.1f}MB'},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             )
 
@@ -200,7 +216,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         try:
             service = Service.objects.get(id=service_id)
-            
+
             # Security: Verify ownership
             if hasattr(service, 'owner') and service.owner != request.user:
                 return Response(
@@ -212,7 +228,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             import secrets
             upload_dir = "/var/smsly/uploads"  # More secure than /tmp
             os.makedirs(upload_dir, mode=0o700, exist_ok=True)
-            
+
             # Generate unpredictable filename
             secure_name = f"{service_id}_{secrets.token_hex(16)}.zip"
             file_path = os.path.join(upload_dir, secure_name)
@@ -220,7 +236,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             with open(file_path, 'wb+') as destination:
                 for chunk in uploaded_file.chunks():
                     destination.write(chunk)
-            
+
             # Set restrictive file permissions
             os.chmod(file_path, 0o600)
 
@@ -237,7 +253,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
 
             # If no provider set on service, find default
-            provider_id = str(service.provider.id) if service.provider else None
+            provider_id = str(
+                service.provider.id) if service.provider else None
             if not provider_id:
                 default_provider = CloudProvider.objects.first()
                 if default_provider:
@@ -257,4 +274,5 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_201_CREATED)
 
         except Service.DoesNotExist:
-            return Response({'error': 'Service not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Service not found'},
+                            status=status.HTTP_404_NOT_FOUND)

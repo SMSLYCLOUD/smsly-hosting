@@ -1,6 +1,8 @@
+"""Topology module."""
 import re
 from ..models import Service, EnvironmentVariable
 from ..models_addons import Addon
+
 
 class TopologyService:
     def build_graph(self):
@@ -14,7 +16,7 @@ class TopologyService:
                 "id": f"svc-{svc.id}",
                 "name": svc.name,
                 "type": "SERVICE",
-                "status": "ACTIVE" # Should fetch from deployment
+                "status": "ACTIVE"  # Should fetch from deployment
             })
 
         # 2. Addons as Nodes
@@ -51,14 +53,16 @@ class TopologyService:
                     continue
 
                 # B. Heuristic: Internal Service Calls
-                # Look for "http://other-service" or "other-service.default.svc"
+                # Look for "http://other-service" or
+                # "other-service.default.svc"
                 for target_svc in services:
                     if target_svc.id == svc.id:
                         continue
 
                     # Regex to find service name in URL
                     # Matches http://my-api or my-api.default
-                    if re.search(f"https?://{target_svc.name}", value) or f"{target_svc.name}.default" in value:
+                    if re.search(
+                            f"https?://{target_svc.name}", value) or f"{target_svc.name}.default" in value:
                         links.append({
                             "source": svc_node_id,
                             "target": f"svc-{target_svc.id}",
