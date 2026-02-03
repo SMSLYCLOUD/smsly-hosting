@@ -53,7 +53,7 @@ class RateLimiter:  # pylint: disable=too-few-public-methods
             return self.rpm
         return self.rpm_anon
 
-    def is_allowed(self, request) -> tuple[bool, dict]:
+    def is_allowed(self, request) -> tuple:
         """
         Check if request is allowed under rate limit.
 
@@ -93,8 +93,8 @@ class RateLimiter:  # pylint: disable=too-few-public-methods
                 'retry_after': 60 - int(now - window_start) if not allowed else 0
             }
 
-        except Exception as e:
-            logger.warning(f"Rate limit check failed: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.warning("Rate limit check failed: %s", e)
             # Fail open on cache errors to avoid blocking requests
             return True, {'limit': limit, 'remaining': limit, 'reset': 0}
 

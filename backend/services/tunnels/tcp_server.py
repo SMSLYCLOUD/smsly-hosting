@@ -25,6 +25,7 @@ class TCPTunnel:  # pylint: disable=too-many-instance-attributes
     local_port: int
     remote_port: int
     user_id: str
+    # pylint: disable=too-many-instance-attributes
     created_at: datetime = field(default_factory=datetime.utcnow)
     bytes_in: int = 0
     bytes_out: int = 0
@@ -40,15 +41,12 @@ class TCPTunnelServer:
     to the tunnel client, which forwards to local_port.
     """
 
-    def __init__(self, host: str = '0.0.0.0',
-                 port_range: tuple = (10000, 10999)):
+    def __init__(self, host: str = '0.0.0.0', port_range: tuple = (10000, 10999)):
         self.host = host
         self.port_range = port_range
         self.tunnels: Dict[int, TCPTunnel] = {}  # remote_port -> tunnel
-        self.available_ports: set = set(
-            range(port_range[0], port_range[1] + 1))
-        # tunnel_id -> writer
-        self.tunnel_writers: Dict[str, asyncio.StreamWriter] = {}
+        self.available_ports: set = set(range(port_range[0], port_range[1] + 1))
+        self.tunnel_writers: Dict[str, asyncio.StreamWriter] = {}  # tunnel_id -> writer
 
     def allocate_port(self) -> Optional[int]:
         """Allocate an available port."""
@@ -62,8 +60,7 @@ class TCPTunnelServer:
         if self.port_range[0] <= port <= self.port_range[1]:
             self.available_ports.add(port)
 
-    async def create_tunnel(self, user_id: str,
-                            local_port: int) -> Optional[TCPTunnel]:
+    async def create_tunnel(self, user_id: str, local_port: int) -> Optional[TCPTunnel]:
         """Create a new TCP tunnel."""
         remote_port = self.allocate_port()
         if not remote_port:
@@ -82,12 +79,10 @@ class TCPTunnelServer:
         # Start listening on the remote port
         asyncio.create_task(self._start_listener(tunnel))
 
-        logger.info(
-            f"TCP tunnel created: port {remote_port} -> client -> localhost:{local_port}")
+        logger.info("TCP tunnel created: port %s -> client -> localhost:%s", remote_port, local_port)
         return tunnel
 
-    async def _start_listener(self, tunnel: TCPTunnel,
-                              ):  # pylint: disable=unused-argument  # pylint: disable=unused-argument):
+    async def _start_listener(self, tunnel: TCPTunnel):
         """Start listening for connections on the remote port."""
         try:
             server = await asyncio.start_server(
@@ -100,8 +95,8 @@ class TCPTunnelServer:
                 while tunnel.is_active:
                     await asyncio.sleep(1)
 
-        except Exception as e:
-            logger.error(f"TCP listener error: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.error("TCP listener error: %s", e)
         finally:
             self.release_port(tunnel.remote_port)
 
@@ -115,17 +110,13 @@ class TCPTunnelServer:
         tunnel.connections += 1
         connection_id = str(uuid.uuid4())[:8]
 
-        logger.info(
-            f"TCP connection {connection_id} on port {
-                tunnel.remote_port}")
+        logger.info("TCP connection %s on port %s", connection_id, tunnel.remote_port)
 
         try:
             # Get the tunnel client writer
             tunnel_writer = self.tunnel_writers.get(tunnel.tunnel_id)
             if not tunnel_writer:
-                logger.warning(
-                    f"No tunnel client connected for {
-                        tunnel.tunnel_id}")
+                logger.warning("No tunnel client connected for %s", tunnel.tunnel_id)
                 client_writer.close()
                 return
 
@@ -136,8 +127,8 @@ class TCPTunnelServer:
                     tunnel.tunnel_id, client_writer, tunnel),
             )
 
-        except Exception as e:
-            logger.error(f"TCP connection error: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.error("TCP connection error: %s", e)
         finally:
             client_writer.close()
             tunnel.connections -= 1
@@ -164,15 +155,15 @@ class TCPTunnelServer:
                 else:
                     tunnel.bytes_out += len(data)
 
-        except Exception as e:
-            logger.debug(f"Forward ended: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.debug("Forward ended: %s", e)
 
     async def _forward_from_tunnel(
         self,
-        tunnel_id: str,
-        client_writer: asyncio.StreamWriter,
-        tunnel: TCPTunnel,
-    ):  # pylint: disable=unused-argument
+        tunnel_id: str, # pylint: disable=unused-argument
+        client_writer: asyncio.StreamWriter, # pylint: disable=unused-argument
+        tunnel: TCPTunnel # pylint: disable=unused-argument
+    ):
         """Forward data from tunnel client to external client."""
         # This would be implemented with actual tunnel client communication
         # For now, placeholder
@@ -185,7 +176,7 @@ class TCPTunnelServer:
     ):  # pylint: disable=unused-argument
         """Register a tunnel client connection."""
         self.tunnel_writers[tunnel_id] = writer
-        logger.info(f"Tunnel client registered: {tunnel_id}")
+        logger.info("Tunnel client registered: %s", tunnel_id)
 
     async def close_tunnel(self, tunnel_id: str):
         """Close a TCP tunnel."""
@@ -200,7 +191,7 @@ class TCPTunnelServer:
                 self.tunnel_writers[tunnel_id].close()
                 del self.tunnel_writers[tunnel_id]
 
-            logger.info(f"TCP tunnel closed: {tunnel_id}")
+            logger.info("TCP tunnel closed: %s", tunnel_id)
 
     def get_tunnel_info(self, tunnel_id: str) -> Optional[dict]:
         """Get tunnel information."""

@@ -12,6 +12,8 @@ Falls back to in-memory storage if Redis is unavailable.
 import json
 import logging
 from typing import Dict, List, Optional
+# pylint: disable=unused-import
+from django.conf import settings
 from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
@@ -46,9 +48,8 @@ class TunnelStorage:
             if result:
                 logger.info("TunnelStorage: Using Redis cache")
             return result
-        except Exception as e:
-            logger.warning(
-                f"TunnelStorage: Redis unavailable, using in-memory fallback: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.warning("TunnelStorage: Redis unavailable, using in-memory fallback: %s", e)
             return False
 
     # ==================== TUNNEL OPERATIONS ====================
@@ -89,6 +90,7 @@ class TunnelStorage:
         if self._use_redis:
             # Get all tunnel keys (requires django-redis with pattern support)
             try:
+                # pylint: disable=import-outside-toplevel
                 from django_redis import get_redis_connection
                 conn = get_redis_connection("default")
                 keys = conn.keys(f"{self.TUNNEL_PREFIX}*")
@@ -103,8 +105,8 @@ class TunnelStorage:
                         if user_id is None or tunnel.get('user_id') == user_id:
                             tunnels.append(tunnel)
                 return tunnels
-            except Exception as e:
-                logger.warning(f"Redis scan failed, using values: {e}")
+            except Exception as e: # pylint: disable=broad-exception-caught
+                logger.warning("Redis scan failed, using values: %s", e)
                 # Fallback to iterating stored tunnels
                 return [t for t in self._fallback_tunnels.values()
                         if user_id is None or t.get('user_id') == user_id]
@@ -140,6 +142,7 @@ class TunnelStorage:
         """List reserved subdomains."""
         if self._use_redis:
             try:
+                # pylint: disable=import-outside-toplevel
                 from django_redis import get_redis_connection
                 conn = get_redis_connection("default")
                 keys = conn.keys(f"{self.SUBDOMAIN_PREFIX}*")
@@ -154,7 +157,7 @@ class TunnelStorage:
                         if user_id is None or sub.get('user_id') == user_id:
                             subdomains.append(sub)
                 return subdomains
-            except Exception:
+            except Exception: # pylint: disable=broad-exception-caught
                 return [s for s in self._fallback_subdomains.values()
                         if user_id is None or s.get('user_id') == user_id]
 
@@ -168,12 +171,13 @@ class TunnelStorage:
         key = f"{self.LOG_PREFIX}{tunnel_id}"
         if self._use_redis:
             try:
+                # pylint: disable=import-outside-toplevel
                 from django_redis import get_redis_connection
                 conn = get_redis_connection("default")
                 conn.lpush(key, json.dumps(log_entry))
                 conn.ltrim(key, 0, 99)  # Keep last 100
                 conn.expire(key, 86400)  # 24 hour TTL
-            except Exception:
+            except Exception: # pylint: disable=broad-exception-caught
                 logs = self._fallback_logs.setdefault(tunnel_id, [])
                 logs.insert(0, log_entry)
                 self._fallback_logs[tunnel_id] = logs[:100]
@@ -187,11 +191,12 @@ class TunnelStorage:
         key = f"{self.LOG_PREFIX}{tunnel_id}"
         if self._use_redis:
             try:
+                # pylint: disable=import-outside-toplevel
                 from django_redis import get_redis_connection
                 conn = get_redis_connection("default")
                 logs = conn.lrange(key, 0, limit - 1)
                 return [json.loads(l) for l in logs]
-            except Exception:
+            except Exception: # pylint: disable=broad-exception-caught
                 return self._fallback_logs.get(tunnel_id, [])[:limit]
         return self._fallback_logs.get(tunnel_id, [])[:limit]
 

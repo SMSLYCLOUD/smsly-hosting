@@ -31,6 +31,8 @@ class TunnelConnection:  # pylint: disable=too-many-instance-attributes
 
     def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:  # pylint: disable=too-many-instance-attributes
         """Return public URL."""
+    def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:
+        """Get public URL."""
         return f"https://{self.subdomain}.{base_domain}"
 
 
@@ -66,23 +68,16 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         """Setup HTTP routes."""
         self.app.router.add_get('/ws/tunnel', self.handle_tunnel_connect)
         self.app.router.add_get('/api/tunnels', self.list_tunnels)
-        self.app.router.add_get(
-            '/api/tunnels/{tunnel_id}/requests',
-            self.get_request_logs)
-        self.app.router.add_post(
-            '/api/tunnels/{tunnel_id}/replay/{request_id}',
-            self.replay_request)  # pylint: disable=line-too-long
-        # Catch-all for tunneled requests (subdomain routing handled by reverse
-        # proxy)
-        self.app.router.add_route(
-            '*', '/{path:.*}', self.handle_tunneled_request)
+        self.app.router.add_get('/api/tunnels/{tunnel_id}/requests', self.get_request_logs)
+        self.app.router.add_post('/api/tunnels/{tunnel_id}/replay/{request_id}', self.replay_request)
+        # Catch-all for tunneled requests (subdomain routing handled by reverse proxy)
+        self.app.router.add_route('*', '/{path:.*}', self.handle_tunneled_request)
 
     def generate_subdomain(self) -> str:
         """Generate a unique subdomain."""
         return uuid.uuid4().hex[:8]
 
-    async def handle_tunnel_connect(
-            self, request: web.Request) -> web.WebSocketResponse:
+    async def handle_tunnel_connect(self, request: web.Request) -> web.WebSocketResponse:
         """
         Handle new tunnel WebSocket connection from CLI client.
 
@@ -116,7 +111,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         self.tunnels[subdomain] = tunnel
         self.request_logs[tunnel_id] = []
 
-        logger.info(f"Tunnel connected: {subdomain} (id: {tunnel_id})")
+        logger.info("Tunnel connected: %s (id: %s)", subdomain, tunnel_id)
 
         # Send connection confirmation
         await ws.send_json({
@@ -135,17 +130,16 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
                         # Response from local server, handled separately
                         pass
                 elif msg.type == WSMsgType.ERROR:
-                    logger.error(f"Tunnel error: {ws.exception()}")
+                    logger.error("Tunnel error: %s", ws.exception())
         finally:
             # Cleanup on disconnect
             if subdomain in self.tunnels:
                 del self.tunnels[subdomain]
-            logger.info(f"Tunnel disconnected: {subdomain}")
+            logger.info("Tunnel disconnected: %s", subdomain)
 
         return ws
 
-    async def handle_tunneled_request(
-            self, request: web.Request) -> web.Response:
+    async def handle_tunneled_request(self, request: web.Request) -> web.Response:
         """
         Handle HTTP request destined for a tunnel.
 
@@ -216,8 +210,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             body=response_data.get('body', b''),
         )
 
-    async def _wait_for_response(
-            self, ws: web.WebSocketResponse, request_id: str) -> Dict:
+    async def _wait_for_response(self, ws: web.WebSocketResponse, request_id: str) -> Dict:
         """Wait for response message matching request_id."""
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -227,7 +220,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
                     return data
         return {'status': 502, 'body': b'Connection closed'}
 
-    async def list_tunnels(self, request: web.Request) -> web.Response:  # pylint: disable=unused-argument
+    async def list_tunnels(self, request: web.Request) -> web.Response: # pylint: disable=unused-argument
         """List all active tunnels (for dashboard)."""
         tunnels = [
             {
@@ -272,8 +265,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             return web.Response(status=404, text="Request not found")
 
         # Find active tunnel
-        tunnel = next((t for t in self.tunnels.values()
-                      if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
 
         if not tunnel:
             return web.Response(status=404, text="Tunnel not connected")
@@ -290,12 +282,11 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
             'is_replay': True,
         })
 
-        return web.json_response(
-            {'status': 'replayed', 'request_id': new_request_id})
+        return web.json_response({'status': 'replayed', 'request_id': new_request_id})
 
     def run(self, host: str = '0.0.0.0', port: int = 8080):
         """Start the tunnel server."""
-        logger.info(f"Starting tunnel server on {host}:{port}")
+        logger.info("Starting tunnel server on %s:%s", host, port)
         web.run_app(self.app, host=host, port=port)
 
 

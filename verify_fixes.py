@@ -1,6 +1,7 @@
-# pylint: disable=broad-exception-caught
-# pylint: disable=duplicate-code
-"""Module for verifying fixes."""
+"""
+Verify specific fixes on the frontend.
+"""
+
 from playwright.sync_api import sync_playwright
 
 def run():
@@ -23,23 +24,27 @@ def run():
                 print("FAIL: Heading NOT found on /new.")
 
             # Take screenshot of /new
-            page.screenshot(path="/tmp/verification_new_ui_mobile_v2.png", full_page=True)
+            page.screenshot(
+                path="/tmp/verification_new_ui_mobile_v2.png",
+                full_page=True
+            )
             print("Screenshot saved to /tmp/verification_new_ui_mobile_v2.png")
 
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             print(f"Error on /new: {e}")
 
         # Test 2: / should redirect to /login (no cookie)
         print("\nNavigating to / (no cookie)...")
         try:
-            _ = page.goto("http://localhost:3000/")
+            # pylint: disable=unused-variable
+            response = page.goto("http://localhost:3000/")
             page.wait_for_load_state("networkidle")
 
             if "/login" in page.url:
                 print("PASS: Redirected to /login.")
             else:
                 print(f"FAIL: Did not redirect to /login. URL: {page.url}")
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             print(f"Error on /: {e}")
 
         # Test 3: / with cookie should stay on /
@@ -51,16 +56,17 @@ def run():
                 "domain": "localhost",
                 "path": "/"
             }])
-            _ = page.goto("http://localhost:3000/")
+            # pylint: disable=unused-variable
+            response = page.goto("http://localhost:3000/")
             page.wait_for_load_state("networkidle")
 
-            # It might still redirect if the page itself does auth check, but middleware should pass.  # noqa  # pylint: disable=line-too-long
-            # The page.tsx for / assumes dashboard content.
+            # It might still redirect if the page itself does auth check,
+            # but middleware should pass. The page.tsx for / assumes dashboard content.
             if page.url.rstrip('/') == "http://localhost:3000":
                 print("PASS: Stayed on /.")
             else:
                 print(f"FAIL: Redirected from /. URL: {page.url}")
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             print(f"Error on / with cookie: {e}")
 
         browser.close()

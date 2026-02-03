@@ -1,37 +1,39 @@
-# pylint: disable=broad-exception-caught
-"""Module for verifying all pages."""
+"""
+Verify all frontend pages are accessible.
+"""
+
 from playwright.sync_api import sync_playwright
 
 def run():
     """Run verification."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        # Mobile Viewport
-        context = browser.new_context(viewport={"width": 375, "height": 812})
-        context.add_cookies([{
-            "name": "auth_token",
-            "value": "dummy",
-            "domain": "localhost",
-            "path": "/"
-        }])
-        page = context.new_page()
+        page = browser.new_page()
 
-        pages_to_test = [
-            {"path": "/", "name": "dashboard"},
-            {"path": "/admin-dashboard", "name": "admin"},
-            {"path": "/store", "name": "store"},
-            {"path": "/topology", "name": "topology"}
+        # Define pages to check
+        pages = [
+            "/login",
+            "/services",
+            "/topology",
+            "/store",
+            "/new",
+            # Add more pages as needed
         ]
 
-        for item in pages_to_test:
-            print(f"Testing {item['path']}...")
+        base_url = "http://localhost:3000"
+
+        print("Verifying pages...")
+        for path in pages:
+            url = f"{base_url}{path}"
+            print(f"Checking {url}...", end=" ")
             try:
-                page.goto(f"http://localhost:3000{item['path']}")
-                page.wait_for_load_state("networkidle")
-                page.screenshot(path=f"/tmp/verify_{item['name']}.png", full_page=True)
-                print(f"Saved /tmp/verify_{item['name']}.png")
-            except Exception as e:
-                print(f"Error on {item['path']}: {e}")
+                response = page.goto(url)
+                if response.status == 200:
+                    print("OK")
+                else:
+                    print(f"FAIL ({response.status})")
+            except Exception as e: # pylint: disable=broad-exception-caught
+                print(f"ERROR: {e}")
 
         browser.close()
 

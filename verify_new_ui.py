@@ -1,6 +1,9 @@
-# pylint: disable=broad-exception-caught
+"""
+Verify new UI components.
+"""
+
 # pylint: disable=duplicate-code
-"""Module for verifying new UI."""
+
 from playwright.sync_api import sync_playwright
 
 def run():
@@ -34,7 +37,7 @@ def run():
             page.screenshot(path="/tmp/verification_new_ui_mobile.png", full_page=True)
             print("Screenshot saved to /tmp/verification_new_ui_mobile.png")
 
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             print(f"Error: {e}")
         finally:
             browser.close()

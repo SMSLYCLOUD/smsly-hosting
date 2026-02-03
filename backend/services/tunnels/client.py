@@ -21,12 +21,17 @@ import logging
 import argparse
 import json
 import signal
+import sys
+import logging
 from typing import Optional
 import aiohttp
 
 # Rich console for pretty output (fallback to basic if not installed)
 try:
     from rich.console import Console
+    # pylint: disable=unused-import
+    from rich.table import Table
+    from rich.live import Live
     CONSOLE = Console()
     RICH_AVAILABLE = True
 except ImportError:
@@ -71,11 +76,9 @@ class TunnelClient:
         self.public_url = data.get('public_url')
 
         if RICH_AVAILABLE:
-            CONSOLE.print("[green]✓[/green] Tunnel established")
+            CONSOLE.print(f"[green]✓[/green] Tunnel established")
             CONSOLE.print(f"[bold]→[/bold] {self.public_url}")
-            CONSOLE.print(
-                f"[dim]  Forwarding to localhost:{
-                    self.local_port}[/dim]")
+            CONSOLE.print(f"[dim]  Forwarding to localhost:{self.local_port}[/dim]")
             CONSOLE.print()
             CONSOLE.print("[dim]Press Ctrl+C to stop[/dim]")
         else:
@@ -100,8 +103,7 @@ class TunnelClient:
         else:
             print(f"{method} {path}")
 
-    async def forward_request(
-            self, session: aiohttp.ClientSession, data: dict) -> dict:
+    async def forward_request(self, session: aiohttp.ClientSession, data: dict) -> dict:
         """Forward request to local server and return response."""
         method = data.get('method', 'GET')
         path = data.get('path', '/')
@@ -137,7 +139,7 @@ class TunnelClient:
                 'status': 502,
                 'body': f'Cannot connect to localhost:{self.local_port}',
             }
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             return {
                 'type': 'response',
                 'request_id': data.get('request_id'),
@@ -175,8 +177,7 @@ class TunnelClient:
 
                             elif data.get('error'):
                                 if RICH_AVAILABLE:
-                                    CONSOLE.print(
-                                        f"[red]Error:[/red] {data.get('error')}")
+                                    CONSOLE.print(f"[red]Error:[/red] {data.get('error')}")
                                 else:
                                     print(f"Error: {data.get('error')}")
                                 break
@@ -208,7 +209,7 @@ class TunnelClient:
 
 
 def main():
-    """Run the tunnel client."""
+    """Entry point for CLI."""
     parser = argparse.ArgumentParser(
         description="Expose local server to public URL via SMSLY Tunnel"
     )
@@ -253,7 +254,7 @@ def main():
     )
 
     # Handle Ctrl+C gracefully
-    def signal_handler(sig, frame):  # pylint: disable=unused-argument
+    def signal_handler(sig, frame): # pylint: disable=unused-argument
         client.stop()
 
     signal.signal(signal.SIGINT, signal_handler)

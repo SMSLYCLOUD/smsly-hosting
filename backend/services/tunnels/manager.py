@@ -5,6 +5,7 @@ Tunnel Manager - Django Integration
 Provides Django models and views for tunnel management via the dashboard.
 """
 
+from typing import Optional
 from django.db import models
 from django.conf import settings
 from apps.deployments.models import Service
@@ -56,15 +57,12 @@ class TunnelSession(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
 
     def public_url(self) -> str:
-        """Return public URL."""
-        base_domain = getattr(
-            settings,
-            'TUNNEL_BASE_DOMAIN',
-            'tunnel.smsly.cloud')
+        """Get the full public URL."""
+        base_domain = getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.smsly.cloud')
         return f"https://{self.subdomain}.{base_domain}"
 
     def __str__(self):
-        return f"{self.subdomain} → localhost:{self.local_port}"
+        return f"{self.subdomain} -> localhost:{self.local_port}"
 
 
 class TunnelRequest(models.Model):
@@ -96,7 +94,7 @@ class TunnelRequest(models.Model):
     is_replay = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.method} {self.path} → {self.response_status}"
+        return f"{self.method} {self.path} -> {self.response_status}"
 
 
 class ReservedSubdomain(models.Model):
