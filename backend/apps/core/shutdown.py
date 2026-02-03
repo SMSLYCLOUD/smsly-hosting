@@ -58,14 +58,12 @@ class GracefulShutdown:
 
         while self.active_requests > 0 and (time.time() - start) < timeout:
             logger.info(
-                f"Waiting for {
-                    self.active_requests} active requests...")
+                f"Waiting for {self.active_requests} active requests...")
             time.sleep(1)
 
         if self.active_requests > 0:
             logger.warning(
-                f"Forcefully shutting down with {
-                    self.active_requests} active requests")
+                f"Forcefully shutting down with {self.active_requests} active requests")
 
         self._cleanup()
         sys.exit(0)

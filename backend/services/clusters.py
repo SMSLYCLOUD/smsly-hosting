@@ -147,8 +147,7 @@ class ClusterManager:
                 self._ensure_ingress(name, namespace)
             elif self.service.public_domain and not self.service.domain_verified:
                 self._log(
-                    f"Skipping Ingress creation: Domain {
-                        self.service.public_domain} not verified.")
+                    f"Skipping Ingress creation: Domain {self.service.public_domain} not verified.")
 
             # Ensure HPA
             if self.service.max_replicas > 1:
@@ -363,8 +362,7 @@ class ClusterManager:
                 self.net_v1.create_namespaced_ingress(
                     namespace, ingress_manifest)
                 self._log(
-                    f"Created new Ingress for {
-                        self.service.public_domain}.")
+                    f"Created new Ingress for {self.service.public_domain}.")
             else:
                 raise e
 

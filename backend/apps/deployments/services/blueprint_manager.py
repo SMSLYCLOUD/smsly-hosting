@@ -39,8 +39,7 @@ class BlueprintManager:
             # In a real scenario, we'd wait for this or chain it.
             # For now, we simulate the URL immediately for env var resolution
             if addon.addon_type == 'POSTGRES':
-                context['DATABASE_URL'] = f"postgres://user:pass@db-{
-                    addon.id}:5432/db"
+                context['DATABASE_URL'] = f"postgres://user:pass@db-{addon.id}:5432/db"
             elif addon.addon_type == 'REDIS':
                 context['REDIS_URL'] = f"redis://redis-{addon.id}:6379/0"
 

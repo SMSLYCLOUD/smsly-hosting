@@ -75,9 +75,7 @@ class CircuitBreaker:
             if self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
                 logger.warning(
-                    f"Circuit {
-                        self.name}: OPENED after {
-                        self._failure_count} failures. "
+                    f"Circuit {self.name}: OPENED after {self._failure_count} failures. "
                     f"Last error: {exception}"
                 )
 
@@ -86,8 +84,7 @@ class CircuitBreaker:
         def wrapper(*args, **kwargs) -> Any:
             if self.state == CircuitState.OPEN:
                 raise CircuitBreakerOpen(
-                    f"Circuit {
-                        self.name} is OPEN. Failing fast to prevent cascade failure."
+                    f"Circuit {self.name} is OPEN. Failing fast to prevent cascade failure."
                 )
 
             try:

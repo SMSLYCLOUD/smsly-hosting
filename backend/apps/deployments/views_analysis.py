@@ -109,8 +109,7 @@ class RepoAnalysisView(APIView):
                 analysis = self._fallback_analysis(repo_url)
 
             logger.info(
-                f"Repo analysis for {repo_url}: {
-                    analysis.get('detected_framework')}")
+                f"Repo analysis for {repo_url}: {analysis.get('detected_framework')}")
             return Response(analysis)
 
         except Exception as e:
