@@ -78,7 +78,7 @@ class NixpacksBuilder:
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Build failed: {e.stderr}")
-            raise RuntimeError(f"Nixpacks build failed: {e.stderr}")
+            raise RuntimeError(f"Nixpacks build failed: {e.stderr}") from e
 
     @staticmethod
     def push_image(image_name: str, registry_url: str) -> str:
