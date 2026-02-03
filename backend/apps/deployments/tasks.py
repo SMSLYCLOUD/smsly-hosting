@@ -51,12 +51,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 build_dir = tempfile.mkdtemp(prefix=f"build_{deployment.id}_")
 
                 # A. Clone Repository
-                logger.info(
-                    f"Cloning repository: {
-                        service.repository_url} (branch: {
-                        service.branch})")
-                deployment.build_logs = f"Cloning {
-                    service.repository_url}...\n"
+                logger.info(f"Cloning repository: {service.repository_url} (branch: {service.branch})")
+                deployment.build_logs = f"Cloning {service.repository_url}...\n"
                 deployment.save()
 
                 source_dir = GitManager.clone_repo(
@@ -153,9 +149,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.container_id = resource.resource_id
         deployment.save()
 
-        logger.info(
-            f"Deployment {deployment_id} successful on {
-                provider.name}")
+        logger.info(f"Deployment {deployment_id} successful on {provider.name}")
 
         # Cleanup temporary build directory on success
         if source_dir and os.path.exists(source_dir):
@@ -211,9 +205,7 @@ def provision_addon_task(self, addon_id: str):
 
         # Inject connection URL if attached to a service
         if addon.service:
-            env_key = ENV_KEY_MAP.get(
-                addon.addon_type, f"{
-                    addon.addon_type}_URL")
+            env_key = ENV_KEY_MAP.get(addon.addon_type, f"{addon.addon_type}_URL")
             EnvironmentVariable.objects.update_or_create(
                 service=addon.service,
                 key=env_key,
