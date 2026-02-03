@@ -198,12 +198,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         # Security: File size limit (100MB)
         MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
         if uploaded_file.size > MAX_UPLOAD_SIZE:
+            size_mb = uploaded_file.size / 1024 / 1024
             return Response(
-                {
-                    'error': f'File too large. Maximum size is 100MB, got {
-                        uploaded_file.size /
-                        1024 /
-                        1024:.1f}MB'},
+                {'error': f'File too large. Maximum size is 100MB, got {size_mb:.1f}MB'},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             )
 
