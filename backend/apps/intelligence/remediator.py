@@ -124,8 +124,7 @@ class RemediationEngine:
                         return True
                 else:
                     logger.warning(
-                        f"No previous good deployment found for {
-                            service.name}")
+                        f"No previous good deployment found for {service.name}")
                     return False
 
             return False
