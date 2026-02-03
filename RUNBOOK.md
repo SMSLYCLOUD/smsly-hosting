@@ -2,25 +2,25 @@
 
 ## Quick Reference
 
-### Service URLs
+### Service Access
+- **Dashboard**: `http://<YOUR_IP>:8090/`
+- **Admin**: `http://<YOUR_IP>:8090/admin/`
+- **API**: `http://<YOUR_IP>:8090/api/v1/`
 
-- **Dashboard**: `https://${DOMAIN}/`
-- **Admin**: `https://${DOMAIN}/admin/`
-- **API**: `https://${DOMAIN}/api/v1/`
-- **Health**: `https://${DOMAIN}/health/`
-- **Grafana**: `https://${DOMAIN}:3001/`
+### Installation Details
+- **Root Directory**: `/opt/smsly-hosting`
+- **Config File**: `/opt/smsly-hosting/.env`
+- **Compose File**: `/opt/smsly-hosting/docker-compose.prod.yml`
 
 ### Container Names
-
-| Service | Container | Port |
-|---------|-----------|------|
-| Backend | smsly-backend | 8000 |
-| Frontend | smsly-frontend | 3000 |
-| Database | smsly-postgres | 5432 |
-| Redis | smsly-redis | 6379 |
-| Nginx | smsly-nginx | 80/443 |
-| Worker | smsly-celery-worker | - |
-| Beat | smsly-celery-beat | - |
+| Service | Container Service Name |
+|---------|------------------------|
+| Backend | `backend` |
+| Frontend | `frontend` |
+| Database | `db` |
+| Redis | `redis` |
+| Nginx | `nginx` |
+| Celery | `celery` |
 
 ---
 
@@ -29,144 +29,103 @@
 ### View Logs
 
 ```bash
+cd /opt/smsly-hosting
+
 # All services
-docker-compose -f docker-compose.prod.yml logs -f
+docker compose -f docker-compose.prod.yml logs -f
 
-# Specific service
-docker logs -f smsly-backend --tail 100
-
-# Filter errors
-docker logs smsly-backend 2>&1 | grep -i error
+# Specific service (e.g., backend)
+docker compose -f docker-compose.prod.yml logs -f backend
 ```
 
 ### Restart Services
 
 ```bash
-# Single service
-docker restart smsly-backend
+cd /opt/smsly-hosting
 
-# All services
-docker-compose -f docker-compose.prod.yml restart
+# Restart all
+docker compose -f docker-compose.prod.yml restart
 
-# Full rebuild
-docker-compose -f docker-compose.prod.yml up -d --build
+# Restart specific service
+docker compose -f docker-compose.prod.yml restart backend
 ```
 
-### Database Operations
+### Apply Updates
+
+To update the platform to the latest version:
 
 ```bash
-# Access PostgreSQL
-docker exec -it smsly-postgres psql -U smsly_admin -d smsly_hosting
+cd /opt/smsly-hosting
+git pull origin main
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
+```
 
-# Run migrations
-docker exec -it smsly-backend python manage.py migrate
+### Database Backup
 
-# Create backup
-/opt/smsly-hosting/scripts/backup.sh
+```bash
+# Run the backup script
+bash /opt/smsly-hosting/scripts/backup.sh
+```
 
-# Restore backup
+Backups are stored in `/opt/smsly-hosting/backups`.
+
+### Restore Database
+
+```bash
+# Decompress and pipe to psql
 gunzip -c /opt/smsly-hosting/backups/smsly_hosting_YYYYMMDD.sql.gz | \
-  docker exec -i smsly-postgres psql -U smsly_admin -d smsly_hosting
-```
-
-### Django Shell
-
-```bash
-docker exec -it smsly-backend python manage.py shell
+  docker compose -f docker-compose.prod.yml exec -T db psql -U smsly_admin -d smsly_hosting
 ```
 
 ---
 
 ## Troubleshooting
 
-### Service Won't Start
+### Dashboard Not Accessible on Port 8090
 
-1. Check logs: `docker logs smsly-backend`
-2. Verify .env file exists
-3. Check disk space: `df -h`
-4. Check memory: `free -m`
+1.  **Check Containers**:
+    ```bash
+    docker compose -f docker-compose.prod.yml ps
+    ```
+    Ensure `nginx` is Up and mapped `0.0.0.0:8090->80/tcp`.
 
-### Database Connection Failed
+2.  **Check Firewall**:
+    Ensure port 8090 is allowed on your VPS firewall (Security Group).
+    ```bash
+    ufw status
+    # If active, allow 8090
+    ufw allow 8090/tcp
+    ```
 
-1. Verify PostgreSQL is running: `docker ps | grep postgres`
-2. Check connectivity: `docker exec smsly-backend pg_isready -h smsly-postgres`
-3. Review DATABASE_URL in .env
+3.  **Check Logs**:
+    ```bash
+    docker compose -f docker-compose.prod.yml logs nginx
+    ```
 
-### High Memory Usage
+### Database Connection Error
 
-1. Check container stats: `docker stats`
-2. Restart memory-heavy containers
-3. Review Celery worker concurrency
+1.  **Check Backend Logs**:
+    ```bash
+    docker compose -f docker-compose.prod.yml logs backend
+    ```
+    Look for "connection refused" or "password authentication failed".
 
-### SSL Certificate Expired
+2.  **Verify .env**:
+    Ensure `DATABASE_URL` matches the `POSTGRES_PASSWORD` in `.env`.
 
-```bash
-certbot renew --nginx
-docker restart smsly-nginx
-```
+### Reset Admin Password
 
-### Build Failures
-
-1. Check Nixpacks logs in deployment detail
-2. Verify source code access
-3. Check registry availability
-4. Review Trivy scan results
-
----
-
-## Monitoring Alerts
-
-### Critical (Immediate Action)
-
-- Database disconnected
-- Redis unavailable
-- Health check failing
-- SSL cert < 7 days
-
-### Warning (Investigate)
-
-- Memory > 80%
-- Disk > 85%
-- Error rate > 1%
-- Response time > 2s
-
-### Info (Monitor)
-
-- Deployment completed
-- User created
-- Service scaled
-
----
-
-## Emergency Procedures
-
-### Full System Restore
+If you lose access to the `admin` account:
 
 ```bash
 cd /opt/smsly-hosting
-docker-compose -f docker-compose.prod.yml down
-# Restore latest backup
-gunzip -c /opt/smsly-hosting/backups/latest.sql.gz | \
-  docker exec -i smsly-postgres psql -U smsly_admin -d smsly_hosting
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-### Rollback Deployment
-
-The AI remediator handles this automatically for crash loops.
-Manual rollback:
-
-```bash
-docker exec -it smsly-backend python manage.py shell <<EOF
-from apps.deployments.models import Deployment
-d = Deployment.objects.filter(service__name='SERVICE_NAME', status='ACTIVE').first()
-# Trigger redeploy with last good commit
-EOF
+docker compose -f docker-compose.prod.yml exec backend python manage.py shell -c "from django.contrib.auth import get_user_model; User = get_user_model(); u = User.objects.get(username='admin'); u.set_password('new_password_here'); u.save()"
 ```
 
 ---
 
-## Contact
+## Monitoring
 
-- **Status Page**: status.smsly.cloud
-- **Incident Response**: <ops@smsly.cloud>
+- **Disk Space**: Monitor `df -h` to ensure Docker volumes have space.
+- **Memory**: Monitor `docker stats` for high usage by `backend` or `celery`.

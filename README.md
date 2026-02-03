@@ -3,105 +3,47 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-black.svg)](frontend/)
 [![Django 5](https://img.shields.io/badge/Django-5.0-green.svg)](backend/)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/SMSLYCLOUD/smsly-hosting)
 
 **The Universal PaaS for Hyperscale Infrastructure.**
 
-SMSLY Hosting v2 is a complete rewrite of the hosting platform, designed to be the "Control Plane for the Internet". It unifies AWS, Azure, GCP, Railway, and Local/K3s deployments into a single, beautiful dashboard with AI-driven observability.
+SMSLY Hosting v2 is designed to be the "Control Plane for the Internet". It unifies AWS, Azure, GCP, Railway, and Local deployments into a single, beautiful dashboard with AI-driven observability.
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start (Production)
 
-### Option 1: GitHub Codespaces (Recommended)
+**WARNING:** The installation script is aggressive. It is designed for a **FRESH VPS** (Ubuntu 22.04+ recommended). It will remove existing Docker, Nginx, and Apache installations to ensure a clean slate.
 
-Click the button above or:
-
-```bash
-# Opens in browser with everything pre-configured
-gh codespace create -r SMSLYCLOUD/smsly-hosting
-```
-
-### Option 2: Local Development
+### One-Line Install
 
 ```bash
-git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
-cd smsly-hosting
-bash quick-start.sh
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh | sudo bash
 ```
 
-### Option 3: Production Install (Ubuntu 22.04+)
+**What this does:**
+1.  Cleans up conflicting services (Apache, Nginx, old Docker).
+2.  Installs Docker Engine & Compose.
+3.  Generates secure credentials (`.env`).
+4.  Deploys the full stack on port **8090**.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install-v2.sh | sudo bash
-```
-
----
-
-## 🚀 Running the Platform
-
-After setup, start the services in separate terminals:
-
-```bash
-# Terminal 1: Backend API
-cd backend
-gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4
-
-# Terminal 2: Frontend
-cd frontend
-npm run dev
-
-# Terminal 3: Celery Worker (optional)
-cd backend
-celery -A config worker -l INFO
-```
+### Requirements
+*   **RAM:** 2GB+ (4GB recommended)
+*   **CPU:** 2 vCPU+
+*   **OS:** Ubuntu 22.04 / 24.04 (Fresh Install)
 
 ---
 
 ## 🌐 Access Points
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Frontend** | `http://localhost:3000` | Main dashboard |
-| **API** | `http://localhost:8000/api/` | REST API |
-| **Swagger** | `http://localhost:8000/api/schema/swagger/` | API documentation |
-| **Admin** | `http://localhost:8000/admin/` | Django admin panel |
+After installation, access your dashboard:
 
-> **Codespaces:** Use the Ports tab to access forwarded URLs.
+| Service | URL | Default Credentials |
+|---------|-----|---------------------|
+| **Dashboard** | `http://<YOUR_IP>:8090` | `admin` / `admin` |
+| **Admin Panel** | `http://<YOUR_IP>:8090/admin` | `admin` / `admin` |
+| **API** | `http://<YOUR_IP>:8090/api/v1/` | - |
 
-**Default Credentials:** `admin` / `admin123`
-
----
-
-## ✨ Key Features
-
-### 🌍 Multi-Cloud Orchestration
-
-- **AWS:** ECS Fargate, Lambda, RDS, S3
-- **Azure:** Container Apps, Functions, SQL
-- **GCP:** Cloud Run, Cloud SQL, BigQuery
-- **Railway/Vercel:** Zero-config deploys
-- **Local:** Docker/K3s clusters
-
-### 🧠 AI Intelligence Engine
-
-- Predictive failure analysis
-- Auto-remediation suggestions
-- Cost optimization advisor
-
-### 🛡️ Enterprise Security
-
-- Zero-trust architecture
-- Fernet field encryption
-- Merkle-tree audit logs
-- HMAC-signed inter-service auth
-
-### 🚀 Developer Experience
-
-- Visual project canvas
-- Web terminal (SSH in browser)
-- Real-time log streaming
-- One-click marketplace deploys
+> **Note:** The default installation does not configure SSL/HTTPS. It is recommended to put this server behind a secure proxy (like Cloudflare) or configure Nginx/Traefik manually for SSL if exposing to the public internet.
 
 ---
 
@@ -109,19 +51,16 @@ celery -A config worker -l INFO
 
 ```mermaid
 graph TD
-    User[Developer] -->|Next.js 15| UI[Frontend]
-    UI -->|REST/WebSocket| API[Django 5 Backend]
+    User[Developer] -->|HTTP:8090| Nginx[Nginx Container]
+    Nginx -->|Proxy| UI[Frontend Next.js]
+    Nginx -->|Proxy| API[Backend Django]
 
-    subgraph Control Plane
+    subgraph "Docker Compose Network"
+        UI
         API -->|Tasks| Celery[Celery Workers]
         API -->|Cache| Redis
         API -->|State| PG[PostgreSQL]
-    end
-
-    subgraph Compute Fabric
-        Celery -->|Deploy| AWS[AWS ECS]
-        Celery -->|Deploy| Azure[Azure Apps]
-        Celery -->|Deploy| Local[Docker/K3s]
+        Celery -->|Deploy| Infra[Cloud / Local]
     end
 ```
 
@@ -134,22 +73,20 @@ graph TD
 | Frontend | Next.js 15, React 19, Tailwind, Shadcn UI |
 | Backend | Django 5.0, Channels, Celery |
 | Database | PostgreSQL 16 |
-| Cache | Redis |
-| Infra | Docker Compose, K3s |
+| Cache | Redis 7 |
+| Infra | Docker Compose |
 
 ---
 
 ## 🔧 Environment Variables
 
-Key environment variables (auto-generated by `setup.sh`):
+The installer automatically generates a `.env` file at `/opt/smsly-hosting/.env`.
 
-| Variable | Description |
-|----------|-------------|
-| `SECRET_KEY` | Django secret key |
-| `FIELD_ENCRYPTION_KEY` | Fernet key for field encryption |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string |
-| `ALLOWED_HOSTS` | Comma-separated hostnames |
+Key variables:
+- `SECRET_KEY`: Django secret.
+- `FIELD_ENCRYPTION_KEY`: For encrypting sensitive user data (API keys).
+- `DATABASE_URL`: Connection to internal Postgres.
+- `ALLOWED_HOSTS`: Comma-separated list of allowed domains/IPs.
 
 ---
 

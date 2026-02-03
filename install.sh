@@ -1,595 +1,124 @@
 #!/bin/bash
+
+# =============================================================================
+# SMSLY Hosting - Aggressive One-Click Installer
+# =============================================================================
+# WARNING: THIS SCRIPT WILL TAKE OVER THE SYSTEM.
+# IT REMOVES CONFLICTING PACKAGES AND RESETS DOCKER.
+# USE ONLY ON A FRESH VPS.
+# =============================================================================
+
 set -e
 
-echo "🚀 SMSLY Hosting V2 - Complete Installation & Data Wipe Script"
-echo "=============================================================="
-echo "⚠️  WARNING: This will DELETE all existing data and containers!"
-echo ""
-read -p "Are you sure you want to continue? (yes/no): " confirm
-if [ "$confirm" != "yes" ]; then
-    echo "Installation cancelled."
-    exit 1
-fi
-
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Configuration
-DOMAIN="${DOMAIN:-smsly-hosting.com}"
-EMAIL="${EMAIL:-admin@smsly.com}"
-# Use alphanumeric passwords to avoid URL encoding issues
-DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 24)}"
-REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 24)}"
-SECRET_KEY="$(openssl rand -hex 48)"
-INSTALL_DIR="/opt/smsly-hosting"
-
-# Generate encryption key (requires Python)
-if command -v python3 &> /dev/null; then
-    ENCRYPTION_KEY=$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null || echo "")
-fi
-if [ -z "$ENCRYPTION_KEY" ]; then
-    ENCRYPTION_KEY=$(openssl rand -base64 32)
-fi
-
-echo -e "${GREEN}✓ Configuration loaded${NC}"
-
-# ============================================================
-# OAUTH CONFIGURATION (Optional)
-# ============================================================
-echo -e "\n${BLUE}OAuth Configuration (for social login)${NC}"
-echo "Press Enter to skip any field if you don't have the credentials yet."
-echo ""
-
-# GitHub OAuth
-read -p "GitHub OAuth Client ID (optional): " GITHUB_CLIENT_ID
-read -p "GitHub OAuth Client Secret (optional): " GITHUB_CLIENT_SECRET
-
-# Google OAuth
-read -p "Google OAuth Client ID (optional): " GOOGLE_CLIENT_ID
-read -p "Google OAuth Client Secret (optional): " GOOGLE_CLIENT_SECRET
-
-echo -e "${GREEN}✓ OAuth configuration collected${NC}"
-
-# ============================================================
-# STEP 1: COMPLETE DATA WIPE
-# ============================================================
-echo -e "\n${RED}[1/12] Wiping existing data...${NC}"
-
-# Stop and remove all SMSLY containers
-echo "Stopping containers..."
-docker stop smsly-backend smsly-celery-worker smsly-celery-beat smsly-postgres smsly-redis smsly-nginx 2>/dev/null || true
-docker rm smsly-backend smsly-celery-worker smsly-celery-beat smsly-postgres smsly-redis smsly-nginx 2>/dev/null || true
-
-# Remove volumes
-echo "Removing volumes..."
-docker volume rm postgres_data redis_data 2>/dev/null || true
-
-# Remove old installation
-if [ -d "$INSTALL_DIR" ]; then
-    echo "Removing old installation..."
-    rm -rf "$INSTALL_DIR"
-fi
-
-# Clean Docker system
-echo "Cleaning Docker system..."
-docker system prune -af --volumes
-
-echo -e "${GREEN}✓ Data wiped${NC}"
-
-# ============================================================
-# STEP 2: INSTALL SYSTEM DEPENDENCIES
-# ============================================================
-echo -e "\n${YELLOW}[2/12] Installing system dependencies...${NC}"
-
-apt-get update -qq
-apt-get install -y -qq \
-    curl \
-    wget \
-    git \
-    build-essential \
-    python3-pip \
-    python3-venv \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
-    jq \
-    htop
-
-echo -e "${GREEN}✓ System dependencies installed${NC}"
-
-# ============================================================
-# STEP 3: INSTALL DOCKER
-# ============================================================
-echo -e "\n${YELLOW}[3/12] Installing/Updating Docker...${NC}"
-
-if ! command -v docker &> /dev/null; then
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sh get-docker.sh
-    rm get-docker.sh
-fi
-
-if ! command -v docker-compose &> /dev/null; then
-    curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-fi
-
-systemctl enable docker
-systemctl start docker
-
-echo -e "${GREEN}✓ Docker ready${NC}"
-
-# ============================================================
-# STEP 4: INSTALL NIXPACKS
-# ============================================================
-echo -e "\n${YELLOW}[4/12] Installing Nixpacks...${NC}"
-
-if ! command -v nixpacks &> /dev/null; then
-    curl -sSL https://nixpacks.com/install.sh | bash
-fi
-
-echo -e "${GREEN}✓ Nixpacks installed${NC}"
-
-# ============================================================
-# STEP 5: CONFIGURE FIREWALL
-# ============================================================
-echo -e "\n${YELLOW}[5/12] Configuring firewall...${NC}"
-
-if command -v ufw &> /dev/null; then
-    ufw --force enable
-    ufw allow 22/tcp
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw reload
-fi
-
-echo -e "${GREEN}✓ Firewall configured${NC}"
-
-# ============================================================
-# STEP 6: DEPLOY POSTGRESQL
-# ============================================================
-echo -e "\n${YELLOW}[6/12] Deploying PostgreSQL...${NC}"
-
-docker run -d \
-    --name smsly-postgres \
-    --restart unless-stopped \
-    -e POSTGRES_DB=smsly_hosting \
-    -e POSTGRES_USER=smsly \
-    -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
-    -v postgres_data:/var/lib/postgresql/data \
-    -p 127.0.0.1:5432:5432 \
-    postgres:15-alpine
-
-# Wait for PostgreSQL
-echo "Waiting for PostgreSQL to be ready..."
-sleep 10
-until docker exec smsly-postgres pg_isready -U smsly > /dev/null 2>&1; do
-    echo "Waiting..."
-    sleep 2
-done
-
-echo -e "${GREEN}✓ PostgreSQL deployed${NC}"
-
-# ============================================================
-# STEP 7: DEPLOY REDIS
-# ============================================================
-echo -e "\n${YELLOW}[7/12] Deploying Redis...${NC}"
-
-docker run -d \
-    --name smsly-redis \
-    --restart unless-stopped \
-    -p 127.0.0.1:6379:6379 \
-    -v redis_data:/data \
-    redis:7-alpine redis-server --requirepass "${REDIS_PASSWORD}"
-
-sleep 3
-
-echo -e "${GREEN}✓ Redis deployed${NC}"
-
-# ============================================================
-# STEP 8: CLONE REPOSITORY
-# ============================================================
-echo -e "\n${YELLOW}[8/12] Cloning repository...${NC}"
-
-mkdir -p /opt
-cd /opt
-git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
-cd smsly-hosting
-
-echo -e "${GREEN}✓ Repository cloned${NC}"
-
-# ============================================================
-# STEP 9: CONFIGURE BACKEND
-# ============================================================
-echo -e "\n${YELLOW}[9/12] Configuring backend...${NC}"
-
-cd backend
-
-cat > .env << EOF
-# Django Settings
-SECRET_KEY=${SECRET_KEY}
-FIELD_ENCRYPTION_KEY=${ENCRYPTION_KEY}
-DEBUG=False
-ENVIRONMENT=production
-ALLOWED_HOSTS=${DOMAIN},www.${DOMAIN},localhost,127.0.0.1
-
-# Database
-DATABASE_URL=postgresql://smsly:${DB_PASSWORD}@127.0.0.1:5432/smsly_hosting
-
-# Redis
-REDIS_URL=redis://:${REDIS_PASSWORD}@127.0.0.1:6379/0
-
-# CORS
-CORS_ALLOWED_ORIGINS=https://${DOMAIN},https://www.${DOMAIN},http://localhost:3000
-CSRF_TRUSTED_ORIGINS=https://${DOMAIN},https://www.${DOMAIN}
-
-# Container Registry (optional - leave empty for local builds)
-CONTAINER_REGISTRY_URL=
-
-# AI Features (optional)
-# GEMINI_API_KEY=
-
-# OAuth - GitHub
-GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-
-# OAuth - Google
-GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-EOF
-
-echo -e "${GREEN}✓ Backend configured${NC}"
-
-# ============================================================
-# STEP 10: BUILD & DEPLOY BACKEND
-# ============================================================
-echo -e "\n${YELLOW}[10/12] Building and deploying backend...${NC}"
-
-# Build Docker image
-echo "Building Docker image..."
-docker build -t smsly-hosting-backend:latest .
-
-# Run migrations
-echo "Running database migrations..."
-docker run --rm \
-    --network host \
-    --env-file .env \
-    smsly-hosting-backend:latest \
-    python manage.py migrate
-
-# Generate random admin password
-ADMIN_PASSWORD=$(openssl rand -hex 12)
-
-docker run --rm \
-    --network host \
-    --env-file .env \
-    smsly-hosting-backend:latest \
-    python manage.py shell -c "
-from django.contrib.auth import get_user_model;
-User = get_user_model();
-if not User.objects.filter(username='admin').exists():
-    User.objects.create_superuser('admin', 'admin@smsly.com', '${ADMIN_PASSWORD}');
-    print('Superuser created: admin / ${ADMIN_PASSWORD}');
-else:
-    print('Superuser already exists');
-"
-
-# Configure social auth if OAuth credentials provided
-if [ -n "$GITHUB_CLIENT_ID" ] || [ -n "$GOOGLE_CLIENT_ID" ]; then
-    echo "Configuring social authentication..."
-    docker run --rm \
-        --network host \
-        --env-file .env \
-        smsly-hosting-backend:latest \
-        python manage.py shell -c "
-from django.contrib.sites.models import Site
-from allauth.socialaccount.models import SocialApp
-
-# Update site domain
-site, _ = Site.objects.get_or_create(id=1)
-site.domain = '${DOMAIN}'
-site.name = 'SMSLY Hosting'
-site.save()
-print('Site configured: ${DOMAIN}')
-
-# Configure GitHub OAuth
-github_client_id = '${GITHUB_CLIENT_ID}'
-github_client_secret = '${GITHUB_CLIENT_SECRET}'
-if github_client_id:
-    SocialApp.objects.filter(provider='github').delete()
-    github = SocialApp.objects.create(
-        provider='github',
-        name='GitHub',
-        client_id=github_client_id,
-        secret=github_client_secret
-    )
-    github.sites.add(site)
-    print('GitHub OAuth configured')
-
-# Configure Google OAuth
-google_client_id = '${GOOGLE_CLIENT_ID}'
-google_client_secret = '${GOOGLE_CLIENT_SECRET}'
-if google_client_id:
-    SocialApp.objects.filter(provider='google').delete()
-    google = SocialApp.objects.create(
-        provider='google',
-        name='Google',
-        client_id=google_client_id,
-        secret=google_client_secret
-    )
-    google.sites.add(site)
-    print('Google OAuth configured')
-"
-    echo -e "${GREEN}✓ Social authentication configured${NC}"
-fi
-
-# Collect static files
-echo "Collecting static files..."
-mkdir -p /opt/smsly-hosting/staticfiles
-docker run --rm \
-    --network host \
-    --env-file .env \
-    -v /opt/smsly-hosting/staticfiles:/app/staticfiles \
-    smsly-hosting-backend:latest \
-    python manage.py collectstatic --noinput
-
-# Start backend
-echo "Starting backend..."
-docker run -d \
-    --name smsly-backend \
-    --restart unless-stopped \
-    --network host \
-    --env-file .env \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /opt/smsly-hosting/staticfiles:/app/staticfiles \
-    -v /tmp:/tmp \
-    smsly-hosting-backend:latest \
-    gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
-
-# Start Celery worker
-echo "Starting Celery worker..."
-docker run -d \
-    --name smsly-celery-worker \
-    --restart unless-stopped \
-    --network host \
-    --env-file .env \
-    -v /var/run/docker.sock:/var/run/docker.sock \
-    -v /tmp:/tmp \
-    smsly-hosting-backend:latest \
-    celery -A config worker -l info
-
-# Start Celery beat
-echo "Starting Celery beat..."
-docker run -d \
-    --name smsly-celery-beat \
-    --restart unless-stopped \
-    --network host \
-    --env-file .env \
-    smsly-hosting-backend:latest \
-    celery -A config beat -l info
-
+echo -e "${RED}WARNING: This script is designed for a FRESH VPS.${NC}"
+echo -e "${RED}It will aggressively remove Docker, Nginx, Apache, and other services.${NC}"
+echo -e "${YELLOW}Starting installation in 5 seconds... (Ctrl+C to cancel)${NC}"
 sleep 5
 
-echo -e "${GREEN}✓ Backend deployed${NC}"
+# 1. Aggressive Cleanup
+echo -e "\n${YELLOW}[1/6] Cleaning up system...${NC}"
+# Stop conflicting services
+systemctl stop nginx apache2 docker || true
+systemctl disable nginx apache2 || true
 
-# ============================================================
-# STEP 11: BUILD & DEPLOY FRONTEND
-# ============================================================
-echo -e "\n${YELLOW}[11/13] Building and deploying frontend...${NC}"
+# Remove old docker
+apt-get remove -y docker docker-engine docker.io containerd runc || true
+apt-get purge -y docker-ce docker-ce-cli containerd.io || true
+rm -rf /var/lib/docker
+rm -rf /var/lib/containerd
 
-cd /opt/smsly-hosting/frontend
+# Kill ports 80, 443, 8090
+fuser -k 80/tcp || true
+fuser -k 443/tcp || true
+fuser -k 8090/tcp || true
 
-# Build frontend Docker image with production API URL
-docker build \
-    --build-arg NEXT_PUBLIC_API_URL=https://${DOMAIN}/api/v1 \
-    -t smsly-hosting-frontend:latest .
+# 2. System Updates & Dependencies
+echo -e "\n${YELLOW}[2/6] Installing dependencies...${NC}"
+apt-get update
+apt-get install -y ca-certificates curl gnupg lsb-release git python3 python3-pip python3-venv
 
-# Start frontend
-docker run -d \
-    --name smsly-frontend \
-    --restart unless-stopped \
-    -p 3000:3000 \
-    -e NEXT_PUBLIC_API_URL=https://${DOMAIN}/api/v1 \
-    smsly-hosting-frontend:latest
+# 3. Install Docker (Official Script)
+echo -e "\n${YELLOW}[3/6] Installing Docker...${NC}"
+mkdir -m 0755 -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-sleep 3
+# 4. Clone & Configure (One-Click Defaults)
+echo -e "\n${YELLOW}[4/6] Configuring SMSLY Hosting...${NC}"
+INSTALL_DIR="/opt/smsly-hosting"
 
-echo -e "${GREEN}✓ Frontend deployed${NC}"
-
-# ============================================================
-# STEP 12: CONFIGURE NGINX
-# ============================================================
-echo -e "\n${YELLOW}[12/13] Configuring Nginx...${NC}"
-
-# Remove default site
-rm -f /etc/nginx/sites-enabled/default
-
-# Create SMSLY Hosting config
-cat > /etc/nginx/sites-available/smsly-hosting << EOF
-server {
-    listen 80;
-    server_name ${DOMAIN} www.${DOMAIN};
-
-    client_max_body_size 100M;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name ${DOMAIN} www.${DOMAIN};
-
-    client_max_body_size 100M;
-
-    # SSL Configuration (will be added by certbot)
-    # ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-
-    # API Backend
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 300s;
-        proxy_connect_timeout 75s;
-    }
-
-    # Admin Panel
-    location /admin/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    # Static Files
-    location /static/ {
-        alias /opt/smsly-hosting/staticfiles/;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-
-    # WebSocket Support
-    location /ws/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    # Health Check
-    location /health {
-        proxy_pass http://127.0.0.1:8000;
-        access_log off;
-    }
-
-    # OAuth / Social Auth (django-allauth)
-    location /accounts/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-    # Frontend (Next.js) - catch all
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-
-# Enable site
-ln -sf /etc/nginx/sites-available/smsly-hosting /etc/nginx/sites-enabled/
-
-# Test Nginx configuration
-nginx -t
-
-# Reload Nginx
-systemctl reload nginx
-
-echo -e "${GREEN}✓ Nginx configured${NC}"
-
-# ============================================================
-# STEP 13: SSL CERTIFICATE
-# ============================================================
-echo -e "\n${YELLOW}[13/13] Setting up SSL certificate...${NC}"
-
-mkdir -p /var/www/certbot
-
-if [ "$DOMAIN" != "smsly-hosting.com" ] && [ "$DOMAIN" != "localhost" ]; then
-    echo "Attempting to obtain SSL certificate..."
-    certbot --nginx -d ${DOMAIN} -d www.${DOMAIN} \
-        --non-interactive \
-        --agree-tos \
-        --email ${EMAIL} \
-        --redirect || echo "SSL setup skipped (manual configuration may be needed)"
+if [ -d "$INSTALL_DIR" ]; then
+    echo "Directory exists, pulling latest..."
+    cd $INSTALL_DIR
+    git pull origin main || echo "Git pull failed, continuing..."
 else
-    echo "Skipping SSL for default/localhost domain"
+    # Assuming we are running this script FROM the repo or curl
+    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git $INSTALL_DIR || true
+    cd $INSTALL_DIR
 fi
 
-echo -e "${GREEN}✓ SSL configured${NC}"
+# Generate Secrets
+FIELD_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=")
+SECRET_KEY=$(openssl rand -hex 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+PUBLIC_IP=$(curl -s ifconfig.me || echo "localhost")
 
-# ============================================================
-# INSTALLATION COMPLETE
-# ============================================================
-echo -e "\n${GREEN}============================================${NC}"
-echo -e "${GREEN}✓ INSTALLATION COMPLETE!${NC}"
-echo -e "${GREEN}============================================${NC}"
+# Write .env aggressively
+cat <<EOF > .env
+ENVIRONMENT=production
+DEBUG=False
+SECRET_KEY=$SECRET_KEY
+FIELD_ENCRYPTION_KEY=$FIELD_KEY
+DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/0
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_USER=smsly_admin
+POSTGRES_DB=smsly_hosting
+DOMAIN=$PUBLIC_IP
+ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090
 
-echo -e "\n${BLUE}📝 Access Information:${NC}"
-echo -e "Domain: https://${DOMAIN}"
-echo -e "Admin Panel: https://${DOMAIN}/admin/"
-echo -e "API: https://${DOMAIN}/api/v1/"
-echo -e ""
-echo -e "Superuser: admin"
-echo -e "Password: ${ADMIN_PASSWORD}"
-echo -e "${YELLOW}⚠️  Store this password securely!${NC}"
-
-echo -e "\n${BLUE}🔐 Generated Credentials (SAVE THESE!):${NC}"
-echo -e "Database Password: ${DB_PASSWORD}"
-echo -e "Redis Password: ${REDIS_PASSWORD}"
-echo -e "Django Secret Key: ${SECRET_KEY}"
-echo -e "Encryption Key: ${ENCRYPTION_KEY}"
-
-echo -e "\n${BLUE}📊 Service Status:${NC}"
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-echo -e "\n${BLUE}🔍 Useful Commands:${NC}"
-echo -e "View backend logs: docker logs -f smsly-backend"
-echo -e "View worker logs: docker logs -f smsly-celery-worker"
-echo -e "Restart services: docker restart smsly-backend smsly-celery-worker"
-echo -e "Access Django shell: docker exec -it smsly-backend python manage.py shell"
-
-echo -e "\n${BLUE}🚀 Next Steps:${NC}"
-echo -e "1. Change admin password at https://${DOMAIN}/admin/"
-echo -e "2. Configure cloud providers (AWS/Azure/GCP) in admin"
-echo -e "3. Test deployment: Create a service and deploy"
-echo -e "4. Set up monitoring and backups"
-
-if [ -n "$GITHUB_CLIENT_ID" ] || [ -n "$GOOGLE_CLIENT_ID" ]; then
-    echo -e "\n${BLUE}🔗 OAuth Callback URLs (configure in provider dashboards):${NC}"
-    echo -e "GitHub: https://${DOMAIN}/accounts/github/login/callback/"
-    echo -e "Google: https://${DOMAIN}/accounts/google/login/callback/"
-fi
-
-echo -e "\n${GREEN}✓ Ready to deploy applications!${NC}"
-
-# Save credentials to file
-cat > /root/smsly-credentials.txt << EOF
-SMSLY Hosting V2 - Installation Credentials
-Generated: $(date)
-
-Domain: ${DOMAIN}
-Admin URL: https://${DOMAIN}/admin/
-Admin User: admin
-Admin Password: ${ADMIN_PASSWORD}
-
-Database Password: ${DB_PASSWORD}
-Redis Password: ${REDIS_PASSWORD}
-Django Secret Key: ${SECRET_KEY}
-Encryption Key: ${ENCRYPTION_KEY}
-
-Environment File: /opt/smsly-hosting/backend/.env
+# Admin Defaults
+ADMIN_USER=admin
+ADMIN_EMAIL=admin@$PUBLIC_IP
+ADMIN_PASSWORD=admin
 EOF
 
-chmod 600 /root/smsly-credentials.txt
-echo -e "\n${YELLOW}📄 Credentials saved to: /root/smsly-credentials.txt${NC}"
+# 5. Deploy Stack
+echo -e "\n${YELLOW}[5/6] Deploying Containers (Port 8090)...${NC}"
+# Ensure we use the production compose file
+COMPOSE_FILE="docker-compose.prod.yml"
+
+docker compose -f $COMPOSE_FILE up -d --build
+
+# 6. Post-Install Setup
+echo -e "\n${YELLOW}[6/6] Finalizing Setup...${NC}"
+echo "Waiting for database (15s)..."
+sleep 15
+
+# Create Admin User
+# We use 'backend' service name as defined in docker-compose.prod.yml
+docker compose -f $COMPOSE_FILE exec -T backend python manage.py createsuperuser --noinput --username admin --email admin@example.com || true
+
+# Set password manually
+docker compose -f $COMPOSE_FILE exec -T backend python manage.py shell -c "from django.contrib.auth import get_user_model; User = get_user_model(); u = User.objects.filter(username='admin').first(); u.set_password('admin'); u.save()" 2>/dev/null || true
+
+echo -e "\n${GREEN}==============================================${NC}"
+echo -e "${GREEN}   INSTALLATION COMPLETE${NC}"
+echo -e "${GREEN}==============================================${NC}"
+echo -e "Dashboard: http://$PUBLIC_IP:8090"
+echo -e "Admin Panel: http://$PUBLIC_IP:8090/admin"
+echo -e "Username: admin"
+echo -e "Password: admin"
+echo -e "----------------------------------------------"
