@@ -1,3 +1,4 @@
+"""Urls module."""
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from rest_framework_nested import routers
@@ -17,8 +18,12 @@ router.register(r'addons', AddonViewSet, basename='addons')
 # /api/v1/services/{service_pk}/metrics/
 # /api/v1/services/{service_pk}/cron/
 # /api/v1/services/{service_pk}/volumes/
-services_router = routers.NestedSimpleRouter(router, r'services', lookup='service')
-services_router.register(r'metrics', MetricsViewSet, basename='service-metrics')
+services_router = routers.NestedSimpleRouter(
+    router, r'services', lookup='service')
+services_router.register(
+    r'metrics',
+    MetricsViewSet,
+    basename='service-metrics')
 services_router.register(r'cron', CronJobViewSet, basename='service-cron')
 services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 

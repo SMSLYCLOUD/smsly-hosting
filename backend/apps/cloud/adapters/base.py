@@ -1,5 +1,7 @@
+"""Base module."""
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List
+
 
 class BaseCloudAdapter(ABC):
     """
@@ -14,7 +16,8 @@ class BaseCloudAdapter(ABC):
 
     # --- Compute ---
     @abstractmethod
-    def deploy_container(self, service_name: str, image: str, env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+    def deploy_container(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
         """
         Deploy a containerized application.
         Returns the resource ID (ARN, etc).
@@ -22,7 +25,8 @@ class BaseCloudAdapter(ABC):
         pass
 
     @abstractmethod
-    def deploy_function(self, function_name: str, code_zip: str, handler: str, runtime: str) -> str:
+    def deploy_function(self, function_name: str,
+                        code_zip: str, handler: str, runtime: str) -> str:
         """
         Deploy a serverless function.
         """
@@ -35,7 +39,8 @@ class BaseCloudAdapter(ABC):
         pass
 
     @abstractmethod
-    def provision_database(self, db_name: str, engine: str, version: str) -> str:
+    def provision_database(self, db_name: str, engine: str,
+                           version: str) -> str:
         """Provision a managed database (RDS/CloudSQL)."""
         pass
 
@@ -68,6 +73,7 @@ class BaseCloudAdapter(ABC):
 
     # --- Observability ---
     @abstractmethod
-    def get_metrics(self, resource_id: str, metric_name: str, start_time: str, end_time: str) -> List[Dict]:
+    def get_metrics(self, resource_id: str, metric_name: str,
+                    start_time: str, end_time: str) -> List[Dict]:
         """Fetch metrics for a resource."""
         pass

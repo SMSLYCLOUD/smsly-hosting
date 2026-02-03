@@ -1,3 +1,7 @@
+# pylint: disable=line-too-long,too-many-instance-attributes,bare-except,logging-fstring-interpolation,import-outside-toplevel,too-few-public-methods
+"""Clusters module."""
+# pylint: disable=no-member
+"""Cluster manager service."""
 import time
 import logging
 import re
@@ -6,21 +10,24 @@ from kubernetes import client, config
 
 logger = logging.getLogger(__name__)
 
+
 class ClusterManager:
     """
     Manages the deployment to the cluster (Image -> Container/Pod).
     """
+
     def __init__(self, deployment):
         self.deployment = deployment
         self.service = deployment.service
         # Load in-cluster config or local config
         try:
             config.load_incluster_config()
-        except:
+        except BaseException:
             try:
                 config.load_kube_config()
-            except:
-                logger.warning("No Kubernetes config found. Running in simulation mode.")
+            except BaseException:
+                logger.warning(
+                    "No Kubernetes config found. Running in simulation mode.")
                 self.k8s_available = False
             else:
                 self.k8s_available = True
@@ -34,7 +41,8 @@ class ClusterManager:
             self.autoscaling_v2 = client.AutoscalingV2Api()
             self.batch_v1 = client.BatchV1Api()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(stop=stop_after_attempt(3),
+           wait=wait_exponential(multiplier=1, min=4, max=10))
     def deploy_service(self, image_tag):
         """
         Deploys the image to Kubernetes.
@@ -58,7 +66,8 @@ class ClusterManager:
 
         # Define Deployment
         # If blue/green, append suffix (simple implementation)
-        # Real world would manage 'active' and 'idle' services and switch traffic
+        # Real world would manage 'active' and 'idle' services and switch
+        # traffic
         deployment_name = name
         if self.service.use_blue_green:
             deployment_name = f"{name}-{self.deployment.commit_hash[:7]}"
@@ -69,7 +78,8 @@ class ClusterManager:
             "metadata": {"name": deployment_name},
             "spec": {
                 "replicas": 1,
-                "selector": {"matchLabels": {"app": deployment_name}}, # Unique selector per version
+                # Unique selector per version
+                "selector": {"matchLabels": {"app": deployment_name}},
                 "template": {
                     "metadata": {"labels": {"app": deployment_name}},
                     "spec": {
@@ -115,24 +125,30 @@ class ClusterManager:
             self._log(f"Applying Deployment {deployment_name}...")
             # Check if exists
             try:
-                self.apps_v1.read_namespaced_deployment(deployment_name, namespace)
-                self.apps_v1.patch_namespaced_deployment(deployment_name, namespace, deployment_manifest)
+                self.apps_v1.read_namespaced_deployment(
+                    deployment_name, namespace)
+                self.apps_v1.patch_namespaced_deployment(
+                    deployment_name, namespace, deployment_manifest)
                 self._log("Updated existing deployment.")
             except client.exceptions.ApiException as e:
                 if e.status == 404:
-                    self.apps_v1.create_namespaced_deployment(namespace, deployment_manifest)
+                    self.apps_v1.create_namespaced_deployment(
+                        namespace, deployment_manifest)
                     self._log("Created new deployment.")
                 else:
                     raise e
 
             # Ensure Service exists (and points to the new deployment)
-            self._ensure_service(name, namespace, target_app_label=deployment_name)
+            self._ensure_service(
+                name, namespace, target_app_label=deployment_name)
 
             # Ensure Ingress exists if public_domain is set
             if self.service.public_domain and self.service.domain_verified:
                 self._ensure_ingress(name, namespace)
             elif self.service.public_domain and not self.service.domain_verified:
-                self._log(f"Skipping Ingress creation: Domain {self.service.public_domain} not verified.")
+                self._log(
+                    f"Skipping Ingress creation: Domain {
+                        self.service.public_domain} not verified.")
 
             # Ensure HPA
             if self.service.max_replicas > 1:
@@ -172,11 +188,13 @@ class ClusterManager:
         }
         try:
             self.core_v1.read_namespaced_service(name, namespace)
-            self.core_v1.patch_namespaced_service(name, namespace, service_manifest)
+            self.core_v1.patch_namespaced_service(
+                name, namespace, service_manifest)
             self._log("Updated Service resource.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                self.core_v1.create_namespaced_service(namespace, service_manifest)
+                self.core_v1.create_namespaced_service(
+                    namespace, service_manifest)
                 self._log("Created new Service resource.")
             else:
                 raise e
@@ -224,12 +242,15 @@ class ClusterManager:
             }
         }
         try:
-            self.autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(name, namespace)
-            self.autoscaling_v2.patch_namespaced_horizontal_pod_autoscaler(name, namespace, hpa_manifest)
+            self.autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(
+                name, namespace)
+            self.autoscaling_v2.patch_namespaced_horizontal_pod_autoscaler(
+                name, namespace, hpa_manifest)
             self._log("Updated Auto-Scaling configuration.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                self.autoscaling_v2.create_namespaced_horizontal_pod_autoscaler(namespace, hpa_manifest)
+                self.autoscaling_v2.create_namespaced_horizontal_pod_autoscaler(
+                    namespace, hpa_manifest)
                 self._log("Created Auto-Scaling configuration.")
             else:
                 raise e
@@ -251,11 +272,13 @@ class ClusterManager:
             }
         }
         try:
-            self.core_v1.read_namespaced_persistent_volume_claim(name, namespace)
+            self.core_v1.read_namespaced_persistent_volume_claim(
+                name, namespace)
             self._log(f"PVC {name} exists.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                self.core_v1.create_namespaced_persistent_volume_claim(namespace, manifest)
+                self.core_v1.create_namespaced_persistent_volume_claim(
+                    namespace, manifest)
                 self._log(f"Created PVC {name}.")
             else:
                 raise e
@@ -275,7 +298,7 @@ class ClusterManager:
                             "spec": {
                                 "containers": [{
                                     "name": name,
-                                    "image": "busybox", # In prod, use same image as deployment
+                                    "image": "busybox",  # In prod, use same image as deployment
                                     "command": ["/bin/sh", "-c", cron.command]
                                 }],
                                 "restartPolicy": "OnFailure"
@@ -332,12 +355,16 @@ class ClusterManager:
         }
         try:
             self.net_v1.read_namespaced_ingress(name, namespace)
-            self.net_v1.patch_namespaced_ingress(name, namespace, ingress_manifest)
+            self.net_v1.patch_namespaced_ingress(
+                name, namespace, ingress_manifest)
             self._log(f"Updated Ingress for {self.service.public_domain}.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                self.net_v1.create_namespaced_ingress(namespace, ingress_manifest)
-                self._log(f"Created new Ingress for {self.service.public_domain}.")
+                self.net_v1.create_namespaced_ingress(
+                    namespace, ingress_manifest)
+                self._log(
+                    f"Created new Ingress for {
+                        self.service.public_domain}.")
             else:
                 raise e
 
@@ -370,10 +397,10 @@ class ClusterManager:
         from django.db.models import Value
         from django.db.models.functions import Concat
         from apps.deployments.models import Deployment
-        
+
         timestamp = time.strftime("%H:%M:%S")
         log_line = f"[{timestamp}] [K8S] {message}\n"
-        
+
         # Atomic append using Concat to avoid race condition
         Deployment.objects.filter(id=self.deployment.id).update(
             build_logs=Concat('build_logs', Value(log_line))

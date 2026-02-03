@@ -1,3 +1,6 @@
+# pylint:
+"""App Templates module."""
+# disable=line-too-long,too-many-instance-attributes,import-outside-toplevel
 """
 SMSLY Marketplace App Templates Registry
 
@@ -23,7 +26,8 @@ class AppTemplate:
     volumes: List[str] = field(default_factory=list)
     health_check: Optional[str] = None
     docs_url: Optional[str] = None
-    required_addons: List[str] = field(default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
+    required_addons: List[str] = field(
+        default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
 
 
 # ============================================================================
@@ -32,7 +36,7 @@ class AppTemplate:
 # ============================================================================
 
 APP_TEMPLATES: Dict[str, AppTemplate] = {
-    
+
     # ===== SMSLY ECOSYSTEM =====
     'smsly-platform-api': AppTemplate(
         id='smsly-platform-api',
@@ -92,7 +96,10 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='postgres:16-alpine',
         default_port=5432,
-        env_vars={'POSTGRES_USER': 'app', 'POSTGRES_PASSWORD': '${RANDOM_PASSWORD}', 'POSTGRES_DB': 'app_db'},
+        env_vars={
+            'POSTGRES_USER': 'app',
+            'POSTGRES_PASSWORD': '${RANDOM_PASSWORD}',
+            'POSTGRES_DB': 'app_db'},
         volumes=['/var/lib/postgresql/data'],
         health_check='pg_isready -U app',
         docs_url='https://hub.docker.com/_/postgres',
@@ -116,7 +123,8 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='mongo:7',
         default_port=27017,
-        env_vars={'MONGO_INITDB_ROOT_USERNAME': 'app', 'MONGO_INITDB_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},
+        env_vars={'MONGO_INITDB_ROOT_USERNAME': 'app',
+                  'MONGO_INITDB_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},
         volumes=['/data/db'],
         docs_url='https://hub.docker.com/_/mongo',
     ),
@@ -127,7 +135,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='mysql:8.0',
         default_port=3306,
-        env_vars={'MYSQL_ROOT_PASSWORD': '${RANDOM_PASSWORD}', 'MYSQL_DATABASE': 'app_db'},
+        env_vars={
+            'MYSQL_ROOT_PASSWORD': '${RANDOM_PASSWORD}',
+            'MYSQL_DATABASE': 'app_db'},
         volumes=['/var/lib/mysql'],
         docs_url='https://hub.docker.com/_/mysql',
     ),
@@ -138,7 +148,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='mariadb:11',
         default_port=3306,
-        env_vars={'MARIADB_ROOT_PASSWORD': '${RANDOM_PASSWORD}', 'MARIADB_DATABASE': 'app_db'},
+        env_vars={
+            'MARIADB_ROOT_PASSWORD': '${RANDOM_PASSWORD}',
+            'MARIADB_DATABASE': 'app_db'},
         volumes=['/var/lib/mysql'],
         docs_url='https://hub.docker.com/_/mariadb',
     ),
@@ -159,7 +171,7 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='influxdb:2-alpine',
         default_port=8086,
-        env_vars={'DOCKER_INFLUXDB_INIT_MODE': 'setup', 'DOCKER_INFLUXDB_INIT_USERNAME': 'admin', 
+        env_vars={'DOCKER_INFLUXDB_INIT_MODE': 'setup', 'DOCKER_INFLUXDB_INIT_USERNAME': 'admin',
                   'DOCKER_INFLUXDB_INIT_PASSWORD': '${RANDOM_PASSWORD}', 'DOCKER_INFLUXDB_INIT_ORG': 'smsly',
                   'DOCKER_INFLUXDB_INIT_BUCKET': 'default'},
         volumes=['/var/lib/influxdb2'],
@@ -172,7 +184,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
         default_port=9200,
-        env_vars={'discovery.type': 'single-node', 'xpack.security.enabled': 'false'},
+        env_vars={
+            'discovery.type': 'single-node',
+            'xpack.security.enabled': 'false'},
         volumes=['/usr/share/elasticsearch/data'],
         docs_url='https://www.elastic.co/guide/en/elasticsearch/reference/current/docker.html',
     ),
@@ -228,7 +242,7 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='wordpress:6-apache',
         default_port=80,
-        env_vars={'WORDPRESS_DB_HOST': 'db:3306', 'WORDPRESS_DB_USER': 'wp', 
+        env_vars={'WORDPRESS_DB_HOST': 'db:3306', 'WORDPRESS_DB_USER': 'wp',
                   'WORDPRESS_DB_PASSWORD': '${RANDOM_PASSWORD}', 'WORDPRESS_DB_NAME': 'wordpress'},
         volumes=['/var/www/html'],
         required_addons=['MYSQL'],
@@ -252,7 +266,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='strapi/strapi:4',
         default_port=1337,
-        env_vars={'DATABASE_CLIENT': 'sqlite', 'DATABASE_FILENAME': '.tmp/data.db'},
+        env_vars={
+            'DATABASE_CLIENT': 'sqlite',
+            'DATABASE_FILENAME': '.tmp/data.db'},
         volumes=['/srv/app'],
         docs_url='https://hub.docker.com/r/strapi/strapi',
     ),
@@ -334,7 +350,10 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='dev-tools',
         docker_image='sonarqube:community',
         default_port=9000,
-        volumes=['/opt/sonarqube/data', '/opt/sonarqube/logs', '/opt/sonarqube/extensions'],
+        volumes=[
+            '/opt/sonarqube/data',
+            '/opt/sonarqube/logs',
+            '/opt/sonarqube/extensions'],
         docs_url='https://hub.docker.com/_/sonarqube',
     ),
     'harbor': AppTemplate(
@@ -353,7 +372,8 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='dev-tools',
         docker_image='hashicorp/vault:1.15',
         default_port=8200,
-        env_vars={'VAULT_DEV_ROOT_TOKEN_ID': '${RANDOM_PASSWORD}', 'VAULT_DEV_LISTEN_ADDRESS': '0.0.0.0:8200'},
+        env_vars={'VAULT_DEV_ROOT_TOKEN_ID': '${RANDOM_PASSWORD}',
+                  'VAULT_DEV_LISTEN_ADDRESS': '0.0.0.0:8200'},
         volumes=['/vault/data'],
         docs_url='https://hub.docker.com/r/hashicorp/vault',
     ),
@@ -364,7 +384,8 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='dev-tools',
         docker_image='minio/minio:latest',
         default_port=9000,
-        env_vars={'MINIO_ROOT_USER': 'admin', 'MINIO_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},
+        env_vars={'MINIO_ROOT_USER': 'admin',
+                  'MINIO_ROOT_PASSWORD': '${RANDOM_PASSWORD}'},
         volumes=['/data'],
         docs_url='https://hub.docker.com/r/minio/minio',
     ),
@@ -461,7 +482,8 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='analytics',
         docker_image='plausible/analytics:latest',
         default_port=8000,
-        env_vars={'BASE_URL': 'https://${DOMAIN}', 'SECRET_KEY_BASE': '${RANDOM_PASSWORD}'},
+        env_vars={'BASE_URL': 'https://${DOMAIN}',
+                  'SECRET_KEY_BASE': '${RANDOM_PASSWORD}'},
         required_addons=['POSTGRES'],
         docs_url='https://hub.docker.com/r/plausible/analytics',
     ),
@@ -495,7 +517,11 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='mattermost/mattermost-team-edition:latest',
         default_port=8065,
-        volumes=['/mattermost/config', '/mattermost/data', '/mattermost/logs', '/mattermost/plugins'],
+        volumes=[
+            '/mattermost/config',
+            '/mattermost/data',
+            '/mattermost/logs',
+            '/mattermost/plugins'],
         required_addons=['POSTGRES'],
         docs_url='https://hub.docker.com/r/mattermost/mattermost-team-edition',
     ),
@@ -506,7 +532,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='rocket.chat:latest',
         default_port=3000,
-        env_vars={'ROOT_URL': 'https://${DOMAIN}', 'MONGO_URL': 'mongodb://...'},
+        env_vars={
+            'ROOT_URL': 'https://${DOMAIN}',
+            'MONGO_URL': 'mongodb://...'},
         volumes=['/app/uploads'],
         required_addons=['MONGODB'],
         docs_url='https://hub.docker.com/_/rocket.chat',
@@ -530,7 +558,8 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='nextcloud:28-apache',
         default_port=80,
-        env_vars={'NEXTCLOUD_ADMIN_USER': 'admin', 'NEXTCLOUD_ADMIN_PASSWORD': '${RANDOM_PASSWORD}'},
+        env_vars={'NEXTCLOUD_ADMIN_USER': 'admin',
+                  'NEXTCLOUD_ADMIN_PASSWORD': '${RANDOM_PASSWORD}'},
         volumes=['/var/www/html'],
         docs_url='https://hub.docker.com/_/nextcloud',
     ),
@@ -541,7 +570,9 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='outlinewiki/outline:latest',
         default_port=3000,
-        env_vars={'SECRET_KEY': '${RANDOM_PASSWORD}', 'UTILS_SECRET': '${RANDOM_PASSWORD}'},
+        env_vars={
+            'SECRET_KEY': '${RANDOM_PASSWORD}',
+            'UTILS_SECRET': '${RANDOM_PASSWORD}'},
         required_addons=['POSTGRES', 'REDIS'],
         docs_url='https://hub.docker.com/r/outlinewiki/outline',
     ),
@@ -552,7 +583,10 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='lscr.io/linuxserver/bookstack:latest',
         default_port=80,
-        env_vars={'APP_URL': 'https://${DOMAIN}', 'DB_HOST': 'db', 'DB_DATABASE': 'bookstack'},
+        env_vars={
+            'APP_URL': 'https://${DOMAIN}',
+            'DB_HOST': 'db',
+            'DB_DATABASE': 'bookstack'},
         volumes=['/config'],
         required_addons=['MYSQL'],
         docs_url='https://hub.docker.com/r/linuxserver/bookstack',
@@ -627,30 +661,41 @@ def list_templates(category: str = None) -> list:
     return templates
 
 
-def get_docker_run_command(template_id: str, name: str = None, domain: str = None) -> str:
+def get_docker_run_command(
+        template_id: str, name: str = None, domain: str = None) -> str:
     """Generate docker run command for a template."""
     import secrets
-    
+
     template = get_template(template_id)
     if not template:
         return None
-    
+
     name = name or f"{template_id}-{secrets.token_hex(4)}"
-    
-    cmd_parts = ['docker', 'run', '-d', '--name', name, '--restart', 'unless-stopped']
-    
+
+    cmd_parts = [
+        'docker',
+        'run',
+        '-d',
+        '--name',
+        name,
+        '--restart',
+        'unless-stopped']
+
     # Port mapping
-    cmd_parts.extend(['-p', f'{template.default_port}:{template.default_port}'])
-    
+    cmd_parts.extend(
+        ['-p', f'{template.default_port}:{template.default_port}'])
+
     # Environment variables
     for key, value in template.env_vars.items():
         # Replace placeholders
         if '${RANDOM_PASSWORD}' in value:
-            value = value.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
+            value = value.replace(
+                '${RANDOM_PASSWORD}',
+                secrets.token_urlsafe(24))
         if domain and '${DOMAIN}' in value:
             value = value.replace('${DOMAIN}', domain)
         cmd_parts.extend(['-e', f'{key}={value}'])
-    
+
     # Volumes
     for vol in template.volumes:
         if ':' in vol:  # Already has host path
@@ -658,8 +703,8 @@ def get_docker_run_command(template_id: str, name: str = None, domain: str = Non
         else:  # Container path only, create named volume
             vol_name = f"{name}-{vol.replace('/', '-').strip('-')}"
             cmd_parts.extend(['-v', f'{vol_name}:{vol}'])
-    
+
     # Image
     cmd_parts.append(template.docker_image)
-    
+
     return ' '.join(cmd_parts)

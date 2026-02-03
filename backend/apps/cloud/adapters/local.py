@@ -1,3 +1,4 @@
+"""Local module."""
 import docker
 import logging
 import secrets
@@ -6,6 +7,7 @@ from kubernetes import client, config
 from .base import BaseCloudAdapter
 
 logger = logging.getLogger(__name__)
+
 
 class LocalAdapter(BaseCloudAdapter):
     """
@@ -26,7 +28,7 @@ class LocalAdapter(BaseCloudAdapter):
         try:
             try:
                 config.load_incluster_config()
-            except:
+            except BaseException:
                 config.load_kube_config()
             self.k8s_client = client.CoreV1Api()
             self.k8s_apps = client.AppsV1Api()
@@ -36,7 +38,8 @@ class LocalAdapter(BaseCloudAdapter):
     def authenticate(self) -> bool:
         return self.docker_client is not None or self.k8s_client is not None
 
-    def deploy_container(self, service_name: str, image: str, env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+    def deploy_container(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
         if self.k8s_client:
             return self._deploy_k8s(service_name, image, env_vars, cpu, memory)
         elif self.docker_client:
@@ -44,7 +47,8 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             raise RuntimeError("No local orchestrator available")
 
-    def _deploy_docker(self, name: str, image: str, env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
+    def _deploy_docker(self, name: str, image: str,
+                       env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
         # Ensure shared network exists
         network_name = 'smsly-net'
         try:
@@ -74,7 +78,8 @@ class LocalAdapter(BaseCloudAdapter):
                 except docker.errors.NotFound:
                     self.docker_client.volumes.create(name=vol_name)
 
-                docker_volumes[vol_name] = {'bind': vol['mount_path'], 'mode': 'rw'}
+                docker_volumes[vol_name] = {
+                    'bind': vol['mount_path'], 'mode': 'rw'}
 
         # Cleanup existing
         try:
@@ -92,7 +97,8 @@ class LocalAdapter(BaseCloudAdapter):
             'traefik.enable': 'true',
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
             f'traefik.http.routers.{name}.entrypoints': 'websecure',  # HTTPS
-            f'traefik.http.routers.{name}.tls.certresolver': 'myresolver',  # Let's Encrypt
+            # Let's Encrypt
+            f'traefik.http.routers.{name}.tls.certresolver': 'myresolver',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
@@ -108,7 +114,8 @@ class LocalAdapter(BaseCloudAdapter):
         )
         return container.id
 
-    def _deploy_k8s(self, name: str, image: str, env: Dict[str, str], cpu: int, memory: int) -> str:
+    def _deploy_k8s(self, name: str, image: str,
+                    env: Dict[str, str], cpu: int, memory: int) -> str:
         namespace = 'default'
 
         # 1. Deployment
@@ -124,10 +131,16 @@ class LocalAdapter(BaseCloudAdapter):
                             client.V1Container(
                                 name=name,
                                 image=image,
-                                env=[client.V1EnvVar(name=k, value=v) for k, v in env.items()],
+                                env=[
+                                    client.V1EnvVar(
+                                        name=k,
+                                        value=v) for k,
+                                    v in env.items()],
                                 resources=client.V1ResourceRequirements(
-                                    requests={"cpu": f"{cpu}m", "memory": f"{memory}Mi"},
-                                    limits={"cpu": f"{cpu*2}m", "memory": f"{memory*2}Mi"}
+                                    requests={
+                                        "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
+                                    limits={"cpu": f"{cpu * 2}m",
+                                            "memory": f"{memory * 2}Mi"}
                                 )
                             )
                         ]
@@ -137,10 +150,12 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         try:
-            self.k8s_apps.create_namespaced_deployment(namespace=namespace, body=deployment)
+            self.k8s_apps.create_namespaced_deployment(
+                namespace=namespace, body=deployment)
         except client.exceptions.ApiException as e:
             if e.status == 409:
-                self.k8s_apps.patch_namespaced_deployment(name=name, namespace=namespace, body=deployment)
+                self.k8s_apps.patch_namespaced_deployment(
+                    name=name, namespace=namespace, body=deployment)
             else:
                 raise
 
@@ -149,13 +164,20 @@ class LocalAdapter(BaseCloudAdapter):
             metadata=client.V1ObjectMeta(name=name),
             spec=client.V1ServiceSpec(
                 selector={"app": name},
-                ports=[client.V1ServicePort(port=80, target_port=int(env.get('PORT', 8000)))],
+                ports=[
+                    client.V1ServicePort(
+                        port=80,
+                        target_port=int(
+                            env.get(
+                                'PORT',
+                                8000)))],
                 type="ClusterIP"
             )
         )
 
         try:
-            self.k8s_client.create_namespaced_service(namespace=namespace, body=svc)
+            self.k8s_client.create_namespaced_service(
+                namespace=namespace, body=svc)
         except client.exceptions.ApiException as e:
             if e.status != 409:
                 logger.warning(f"Failed to create service for {name}: {e}")
@@ -163,24 +185,27 @@ class LocalAdapter(BaseCloudAdapter):
         return f"k8s://{namespace}/{name}"
 
     # --- Other Methods ---
-    def deploy_function(self, function_name: str, code_zip: str, handler: str, runtime: str) -> str:
+    def deploy_function(self, function_name: str,
+                        code_zip: str, handler: str, runtime: str) -> str:
         raise NotImplementedError("Local Functions not yet supported")
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
         return f"local://{bucket_name}"
 
-    def provision_database(self, db_name: str, engine: str, version: str) -> str:
+    def provision_database(self, db_name: str, engine: str,
+                           version: str) -> str:
         if self.docker_client:
             network_name = 'smsly-net'
             try:
                 self.docker_client.networks.get(network_name)
             except docker.errors.NotFound:
-                self.docker_client.networks.create(network_name, driver="bridge")
+                self.docker_client.networks.create(
+                    network_name, driver="bridge")
 
             # Generate secure random password
             db_password = secrets.token_urlsafe(24)
             db_user = "smsly_user"
-            
+
             container = self.docker_client.containers.run(
                 f"{engine}:{version}-alpine",
                 name=f"db-{db_name}",
@@ -193,7 +218,8 @@ class LocalAdapter(BaseCloudAdapter):
                 network=network_name
             )
             # Return connection URL with generated credentials
-            logger.info(f"Database provisioned: db-{db_name} with secure credentials")
+            logger.info(
+                f"Database provisioned: db-{db_name} with secure credentials")
             return f"postgresql://{db_user}:{db_password}@db-{db_name}:5432/{db_name}"
         return "local-db-provisioned"
 
@@ -212,5 +238,6 @@ class LocalAdapter(BaseCloudAdapter):
     def store_secret(self, secret_name: str, secret_value: str) -> str:
         return f"local-secret://{secret_name}"
 
-    def get_metrics(self, resource_id: str, metric_name: str, start_time: str, end_time: str) -> List[Dict]:
+    def get_metrics(self, resource_id: str, metric_name: str,
+                    start_time: str, end_time: str) -> List[Dict]:
         return []

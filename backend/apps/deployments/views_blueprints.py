@@ -1,8 +1,10 @@
+"""Views Blueprints module."""
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from apps.deployments.services.blueprint_manager import BlueprintManager
 from apps.cloud.models import CloudProvider
+
 
 class BlueprintViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -34,8 +36,11 @@ class BlueprintViewSet(viewsets.ViewSet):
             provider = CloudProvider.objects.get(id=provider_id)
             manager = BlueprintManager(provider, request.user)
             manager.deploy(blueprint_id)
-            return Response({'message': 'Blueprint deployment started'}, status=status.HTTP_202_ACCEPTED)
+            return Response(
+                {'message': 'Blueprint deployment started'}, status=status.HTTP_202_ACCEPTED)
         except CloudProvider.DoesNotExist:
-            return Response({'error': 'Provider not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Provider not found'},
+                            status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': str(e)},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -1,3 +1,4 @@
+"""Views Addons module."""
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -12,7 +13,14 @@ logger = logging.getLogger(__name__)
 class AddonSerializer(serializers.ModelSerializer):
     class Meta:
         model = Addon
-        fields = ['id', 'service', 'name', 'addon_type', 'status', 'connection_url', 'created_at']
+        fields = [
+            'id',
+            'service',
+            'name',
+            'addon_type',
+            'status',
+            'connection_url',
+            'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
 
 
@@ -33,9 +41,10 @@ class AddonViewSet(viewsets.ModelViewSet):
         if service and service.owner != self.request.user:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Access denied to this service.")
-        
+
         addon = serializer.save()
-        # Trigger async provisioning via Celery (uses Docker-native provisioner)
+        # Trigger async provisioning via Celery (uses Docker-native
+        # provisioner)
         from .tasks import provision_addon_task
         provision_addon_task.delay(str(addon.id))
 
@@ -45,24 +54,25 @@ class AddonViewSet(viewsets.ModelViewSet):
         addon = self.get_object()
         from .tasks import deprovision_addon_task
         deprovision_addon_task.delay(str(addon.id))
-        return Response({'status': 'deprovisioning'}, status=status.HTTP_202_ACCEPTED)
+        return Response({'status': 'deprovisioning'},
+                        status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['get'])
     def status_check(self, request, pk=None):
         """Check current addon container status."""
         addon = self.get_object()
-        
+
         container_id = addon.coolify_uuid  # We store container_id here
-        
+
         if not container_id:
             return Response({
                 'status': addon.status,
                 'message': 'Not yet provisioned'
             })
-        
+
         # Check Docker container status
         from services.addon_provisioner import addon_provisioner
-        
+
         try:
             container_status = addon_provisioner.get_status(container_id)
             return Response({

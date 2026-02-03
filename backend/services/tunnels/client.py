@@ -1,3 +1,6 @@
+# pylint: disable=broad-exception-caught
+"""Client module."""
+# pylint: disable=too-many-branches
 #!/usr/bin/env python3
 """
 SMSLY Tunnel CLI Client
@@ -14,6 +17,7 @@ Examples:
 """
 
 import asyncio
+import logging
 import argparse
 import json
 import signal

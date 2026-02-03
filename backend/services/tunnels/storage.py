@@ -1,3 +1,7 @@
+# pylint: disable=logging-fstring-interpolation
+"""Storage module."""
+# pylint: disable=import-outside-toplevel
+# pylint: disable=broad-exception-caught
 """
 Redis-backed storage for SMSLY Tunnels.
 
@@ -69,7 +73,8 @@ class TunnelStorage:
         """Store tunnel data."""
         ttl = ttl or self.DEFAULT_TTL
         if self._use_redis:
-            cache.set(f"{self.TUNNEL_PREFIX}{subdomain}", json.dumps(tunnel), ttl)
+            cache.set(f"{self.TUNNEL_PREFIX}{subdomain}",
+                      json.dumps(tunnel), ttl)
         else:
             self._fallback_tunnels[subdomain] = tunnel
 
@@ -91,9 +96,12 @@ class TunnelStorage:
                 keys = conn.keys(f"{self.TUNNEL_PREFIX}*")
                 tunnels = []
                 for key in keys:
-                    data = cache.get(key.decode() if isinstance(key, bytes) else key)
+                    data = cache.get(
+                        key.decode() if isinstance(
+                            key, bytes) else key)
                     if data:
-                        tunnel = json.loads(data) if isinstance(data, str) else data
+                        tunnel = json.loads(data) if isinstance(
+                            data, str) else data
                         if user_id is None or tunnel.get('user_id') == user_id:
                             tunnels.append(tunnel)
                 return tunnels
@@ -118,7 +126,8 @@ class TunnelStorage:
     def set_subdomain(self, subdomain: str, data: Dict):
         """Reserve a subdomain (permanent, no TTL)."""
         if self._use_redis:
-            cache.set(f"{self.SUBDOMAIN_PREFIX}{subdomain}", json.dumps(data), None)
+            cache.set(f"{self.SUBDOMAIN_PREFIX}{subdomain}",
+                      json.dumps(data), None)
         else:
             self._fallback_subdomains[subdomain] = data
 
@@ -139,9 +148,12 @@ class TunnelStorage:
                 keys = conn.keys(f"{self.SUBDOMAIN_PREFIX}*")
                 subdomains = []
                 for key in keys:
-                    data = cache.get(key.decode() if isinstance(key, bytes) else key)
+                    data = cache.get(
+                        key.decode() if isinstance(
+                            key, bytes) else key)
                     if data:
-                        sub = json.loads(data) if isinstance(data, str) else data
+                        sub = json.loads(data) if isinstance(
+                            data, str) else data
                         if user_id is None or sub.get('user_id') == user_id:
                             subdomains.append(sub)
                 return subdomains

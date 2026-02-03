@@ -1,7 +1,9 @@
+"""Models Audit module."""
 import hashlib
 import json
 from django.db import models
 from django.utils import timezone
+
 
 class AuditLog(models.Model):
     """
@@ -11,15 +13,24 @@ class AuditLog(models.Model):
     """
     id = models.BigAutoField(primary_key=True)
     timestamp = models.DateTimeField(default=timezone.now, editable=False)
-    
-    actor = models.CharField(max_length=255, default='system') # User or System
-    action = models.CharField(max_length=255, default='unknown') # e.g. "DEPLOY_TRIGGER", "SCALE_UP"
-    target = models.CharField(max_length=255, default='none') # e.g. "Service: my-app"
+
+    actor = models.CharField(
+        max_length=255,
+        default='system')  # User or System
+    # e.g. "DEPLOY_TRIGGER", "SCALE_UP"
+    action = models.CharField(max_length=255, default='unknown')
+    target = models.CharField(max_length=255,
+                              default='none')  # e.g. "Service: my-app"
     metadata = models.JSONField(default=dict)
-    
+
     # Cryptographic Links
-    previous_hash = models.CharField(max_length=64, editable=False, default='0'*64)
-    hash = models.CharField(max_length=64, editable=False, unique=True, default='0'*64)
+    previous_hash = models.CharField(
+        max_length=64, editable=False, default='0' * 64)
+    hash = models.CharField(
+        max_length=64,
+        editable=False,
+        unique=True,
+        default='0' * 64)
 
     class Meta:
         ordering = ['-timestamp']
@@ -45,13 +56,13 @@ class AuditLog(models.Model):
         return hashlib.sha256(payload_str.encode('utf-8')).hexdigest()
 
     def save(self, *args, **kwargs):
-        if not self.pk: # Only on creation
+        if not self.pk:  # Only on creation
             # 1. Find last block
             last_log = AuditLog.objects.order_by('-id').first()
             if last_log:
                 self.previous_hash = last_log.hash
             else:
-                self.previous_hash = "0" * 64 # Genesis block
+                self.previous_hash = "0" * 64  # Genesis block
 
             # 2. Compute Hash
             self.hash = self.calculate_hash()

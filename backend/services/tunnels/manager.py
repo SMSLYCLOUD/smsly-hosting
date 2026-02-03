@@ -1,4 +1,5 @@
 """
+# pylint: disable=missing-class-docstring
 Tunnel Manager - Django Integration
 
 Provides Django models and views for tunnel management via the dashboard.
@@ -14,7 +15,7 @@ class TunnelSession(models.Model):
     """
     Tracks active and historical tunnel sessions.
     """
-    class Meta:
+    class Meta:  # pylint: disable=too-few-public-methods,missing-class-docstring
         ordering = ['-created_at']
 
     TIER_CHOICES = [
@@ -40,7 +41,10 @@ class TunnelSession(models.Model):
 
     # Configuration
     local_port = models.IntegerField()
-    tier = models.CharField(max_length=10, choices=TIER_CHOICES, default='free')
+    tier = models.CharField(
+        max_length=10,
+        choices=TIER_CHOICES,
+        default='free')
     is_custom_subdomain = models.BooleanField(default=False)
 
     # Status
@@ -65,7 +69,7 @@ class TunnelRequest(models.Model):
     """
     Logged HTTP request through a tunnel (for inspector).
     """
-    class Meta:
+    class Meta:  # pylint: disable=too-few-public-methods,missing-class-docstring
         ordering = ['-timestamp']
 
     session = models.ForeignKey(
@@ -106,4 +110,4 @@ class ReservedSubdomain(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return self.subdomain
+        return str(self.subdomain)

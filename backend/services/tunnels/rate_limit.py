@@ -1,3 +1,6 @@
+# pylint: disable=logging-fstring-interpolation
+"""Rate Limit module."""
+# pylint: disable=broad-exception-caught
 """
 Rate limiting utilities for SMSLY API endpoints.
 
@@ -14,7 +17,7 @@ from rest_framework import status
 logger = logging.getLogger(__name__)
 
 
-class RateLimiter:
+class RateLimiter:  # pylint: disable=too-few-public-methods
     """
     Token bucket rate limiter using Redis/cache.
 

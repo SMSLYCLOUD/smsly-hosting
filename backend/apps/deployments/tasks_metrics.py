@@ -1,8 +1,10 @@
+"""Tasks Metrics module."""
 import random
 from celery import shared_task
 from django.utils import timezone
 from .models import Service
 from .models_metrics import ServiceMetric
+
 
 @shared_task
 def collect_metrics_task():

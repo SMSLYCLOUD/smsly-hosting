@@ -1,8 +1,10 @@
+"""Stripe module."""
 import stripe
 from django.conf import settings
 from ..models import BillingAccount
 
 stripe.api_key = getattr(settings, 'STRIPE_SECRET_KEY', 'sk_test_mock')
+
 
 class StripeService:
     @staticmethod

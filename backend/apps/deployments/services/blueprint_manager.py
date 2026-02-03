@@ -1,3 +1,4 @@
+"""Blueprint Manager module."""
 import json
 import os
 import logging
@@ -8,6 +9,7 @@ from apps.deployments.tasks import smart_deploy_task, provision_addon_task
 from apps.cloud.models import CloudProvider
 
 logger = logging.getLogger(__name__)
+
 
 class BlueprintManager:
     def __init__(self, provider: CloudProvider, user):
@@ -23,20 +25,22 @@ class BlueprintManager:
         data = self.load_blueprint(blueprint_name)
         logger.info(f"Deploying blueprint: {data['name']}")
 
-        context = {} # Store resolved variables (e.g. DATABASE_URL)
+        context = {}  # Store resolved variables (e.g. DATABASE_URL)
 
         # 1. Provision Addons
         for addon_def in data.get('addons', []):
             addon = Addon.objects.create(
-                service=None, # Shared addons might not have a parent service initially
-                name=f"{addon_def['name']}-{self.user.username}", # Unique name
+                service=None,  # Shared addons might not have a parent service initially
+                # Unique name
+                name=f"{addon_def['name']}-{self.user.username}",
                 addon_type=addon_def['type'],
                 status=Addon.Status.PROVISIONING
             )
             # In a real scenario, we'd wait for this or chain it.
             # For now, we simulate the URL immediately for env var resolution
             if addon.addon_type == 'POSTGRES':
-                context['DATABASE_URL'] = f"postgres://user:pass@db-{addon.id}:5432/db"
+                context['DATABASE_URL'] = f"postgres://user:pass@db-{
+                    addon.id}:5432/db"
             elif addon.addon_type == 'REDIS':
                 context['REDIS_URL'] = f"redis://redis-{addon.id}:6379/0"
 

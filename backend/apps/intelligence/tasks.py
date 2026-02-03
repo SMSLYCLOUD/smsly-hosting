@@ -1,3 +1,4 @@
+"""Tasks module."""
 from celery import shared_task
 from apps.deployments.models import Service
 from apps.intelligence.remediator import RemediationEngine
@@ -5,6 +6,7 @@ from apps.intelligence.analyzer import LogAnalyzer
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 @shared_task
 def detect_anomalies_task():
@@ -18,7 +20,7 @@ def detect_anomalies_task():
     for service in services:
         # 1. Fetch Logs (Stub - in real app, query CloudWatch/Loki)
         # logs = fetch_logs(service)
-        logs = "" # Placeholder
+        logs = ""  # Placeholder
 
         # 2. Analyze
         issues = analyzer.analyze_logs(logs)

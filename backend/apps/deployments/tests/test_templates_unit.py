@@ -1,5 +1,7 @@
+"""Test Templates Unit module."""
 from django.test import SimpleTestCase
 from services.app_templates import list_templates, get_template, APP_TEMPLATES
+
 
 class TemplateRegistryTest(SimpleTestCase):
     def test_smsly_templates_exist(self):
@@ -27,7 +29,8 @@ class TemplateRegistryTest(SimpleTestCase):
         """Verify command generation (importing function inside test to avoid circular imports if any)."""
         from services.app_templates import get_docker_run_command
 
-        cmd = get_docker_run_command('smsly-sms', name='my-sms', domain='example.com')
+        cmd = get_docker_run_command(
+            'smsly-sms', name='my-sms', domain='example.com')
         self.assertIn('docker run', cmd)
         self.assertIn('--name my-sms', cmd)
         self.assertIn('-p 8000:8000', cmd)

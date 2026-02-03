@@ -1,9 +1,11 @@
+"""Kubernetes module."""
 import logging
 from typing import Dict, Any, List
 from kubernetes import client, config
 from .base import BaseCloudAdapter
 
 logger = logging.getLogger(__name__)
+
 
 class KubernetesAdapter(BaseCloudAdapter):
     """
@@ -19,7 +21,7 @@ class KubernetesAdapter(BaseCloudAdapter):
                 # Fallback to in-cluster config
                 try:
                     config.load_incluster_config()
-                except:
+                except BaseException:
                     config.load_kube_config()
 
             self.k8s_client = client.CoreV1Api()
@@ -36,36 +38,44 @@ class KubernetesAdapter(BaseCloudAdapter):
         except Exception:
             return False
 
-    def deploy_container(self, service_name: str, image: str, env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+    def deploy_container(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
         namespace = 'smsly-apps'
         self._ensure_namespace(namespace)
 
         # 1. Create/Update Deployment
-        deployment = self._build_deployment(service_name, image, env_vars, cpu, memory)
+        deployment = self._build_deployment(
+            service_name, image, env_vars, cpu, memory)
         try:
-            self.k8s_apps.create_namespaced_deployment(namespace=namespace, body=deployment)
+            self.k8s_apps.create_namespaced_deployment(
+                namespace=namespace, body=deployment)
         except client.exceptions.ApiException as e:
             if e.status == 409:
-                self.k8s_apps.patch_namespaced_deployment(name=service_name, namespace=namespace, body=deployment)
+                self.k8s_apps.patch_namespaced_deployment(
+                    name=service_name, namespace=namespace, body=deployment)
             else:
                 raise
 
         # 2. Create/Update Service
         svc = self._build_service(service_name)
         try:
-            self.k8s_client.create_namespaced_service(namespace=namespace, body=svc)
+            self.k8s_client.create_namespaced_service(
+                namespace=namespace, body=svc)
         except client.exceptions.ApiException as e:
             if e.status != 409:
                 raise
 
         # 3. Create/Update Ingress
-        ingress = self._build_ingress(service_name, env_vars.get('PUBLIC_DOMAIN'))
+        ingress = self._build_ingress(
+            service_name, env_vars.get('PUBLIC_DOMAIN'))
         if ingress:
             try:
-                self.k8s_networking.create_namespaced_ingress(namespace=namespace, body=ingress)
+                self.k8s_networking.create_namespaced_ingress(
+                    namespace=namespace, body=ingress)
             except client.exceptions.ApiException as e:
                 if e.status == 409:
-                    self.k8s_networking.patch_namespaced_ingress(name=service_name, namespace=namespace, body=ingress)
+                    self.k8s_networking.patch_namespaced_ingress(
+                        name=service_name, namespace=namespace, body=ingress)
 
         return f"k8s://{namespace}/{service_name}"
 
@@ -73,7 +83,8 @@ class KubernetesAdapter(BaseCloudAdapter):
         namespace = 'smsly-apps'
         patch = {'spec': {'replicas': replicas}}
         try:
-            self.k8s_apps.patch_namespaced_deployment_scale(name=service_name, namespace=namespace, body=patch)
+            self.k8s_apps.patch_namespaced_deployment_scale(
+                name=service_name, namespace=namespace, body=patch)
             return True
         except Exception as e:
             logger.error(f"Failed to scale {service_name}: {e}")
@@ -84,7 +95,9 @@ class KubernetesAdapter(BaseCloudAdapter):
             self.k8s_client.read_namespace(name)
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                ns = client.V1Namespace(metadata=client.V1ObjectMeta(name=name))
+                ns = client.V1Namespace(
+                    metadata=client.V1ObjectMeta(
+                        name=name))
                 self.k8s_client.create_namespace(body=ns)
 
     def _build_deployment(self, name, image, env, cpu, memory):
@@ -95,7 +108,8 @@ class KubernetesAdapter(BaseCloudAdapter):
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 strategy=client.V1DeploymentStrategy(
                     type="RollingUpdate",
-                    rolling_update=client.V1RollingUpdateDeployment(max_unavailable="25%", max_surge="25%")
+                    rolling_update=client.V1RollingUpdateDeployment(
+                        max_unavailable="25%", max_surge="25%")
                 ),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(labels={"app": name}),
@@ -104,13 +118,20 @@ class KubernetesAdapter(BaseCloudAdapter):
                             client.V1Container(
                                 name=name,
                                 image=image,
-                                env=[client.V1EnvVar(name=k, value=v) for k, v in env.items()],
+                                env=[
+                                    client.V1EnvVar(
+                                        name=k,
+                                        value=v) for k,
+                                    v in env.items()],
                                 resources=client.V1ResourceRequirements(
-                                    requests={"cpu": f"{cpu}m", "memory": f"{memory}Mi"},
-                                    limits={"cpu": f"{cpu*2}m", "memory": f"{memory*2}Mi"}
+                                    requests={
+                                        "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
+                                    limits={"cpu": f"{cpu * 2}m",
+                                            "memory": f"{memory * 2}Mi"}
                                 ),
                                 liveness_probe=client.V1Probe(
-                                    http_get=client.V1HTTPGetAction(path="/health", port=int(env.get('PORT', 8000))),
+                                    http_get=client.V1HTTPGetAction(
+                                        path="/health", port=int(env.get('PORT', 8000))),
                                     initial_delay_seconds=30,
                                     period_seconds=10
                                 )
@@ -143,7 +164,10 @@ class KubernetesAdapter(BaseCloudAdapter):
                 }
             ),
             spec=client.V1IngressSpec(
-                tls=[client.V1IngressTLS(hosts=[domain], secret_name=f"{name}-tls")],
+                tls=[
+                    client.V1IngressTLS(
+                        hosts=[domain],
+                        secret_name=f"{name}-tls")],
                 rules=[
                     client.V1IngressRule(
                         host=domain,
@@ -155,7 +179,8 @@ class KubernetesAdapter(BaseCloudAdapter):
                                     backend=client.V1IngressBackend(
                                         service=client.V1IngressServiceBackend(
                                             name=name,
-                                            port=client.V1ServiceBackendPort(number=80)
+                                            port=client.V1ServiceBackendPort(
+                                                number=80)
                                         )
                                     )
                                 )

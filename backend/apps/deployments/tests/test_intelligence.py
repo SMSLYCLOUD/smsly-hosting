@@ -1,8 +1,10 @@
+"""Test Intelligence module."""
 from rest_framework.test import APITestCase
 from rest_framework import status
 from django.urls import reverse
 from django.contrib.auth.models import User
 from apps.deployments.models import Service, Deployment
+
 
 class AIDiagnosisTests(APITestCase):
     def setUp(self):
@@ -19,7 +21,10 @@ class AIDiagnosisTests(APITestCase):
         # We need a detail route for deployment-diagnose
         # Assuming router automatically creates deployment-diagnose if using @action(detail=True)
         # Standard DRF router format: basename-action
-        url = reverse('deployments-diagnose', kwargs={'pk': self.deployment.id})
+        url = reverse(
+            'deployments-diagnose',
+            kwargs={
+                'pk': self.deployment.id})
 
         response = self.client.post(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)

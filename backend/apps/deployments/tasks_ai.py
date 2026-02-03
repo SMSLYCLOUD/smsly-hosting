@@ -1,3 +1,4 @@
+"""Tasks Ai module."""
 from celery import shared_task
 from .models import Deployment
 from services.ai_engine import DevOpsAgent

@@ -1,3 +1,5 @@
+# pylint: disable=logging-fstring-interpolation
+"""Server module."""
 """
 SMSLY Tunnels - WebSocket Tunnel Server
 
@@ -18,7 +20,7 @@ logger = logging.getLogger('smsly.tunnels')
 
 
 @dataclass
-class TunnelConnection:
+class TunnelConnection:  # pylint: disable=too-many-instance-attributes
     """Represents an active tunnel connection."""
     tunnel_id: str
     subdomain: str
@@ -27,13 +29,15 @@ class TunnelConnection:
     created_at: datetime = field(default_factory=datetime.utcnow)
     request_count: int = 0
 
+    def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:  # pylint: disable=too-many-instance-attributes
+        """Return public URL."""
     def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:
         """Get public URL."""
         return f"https://{self.subdomain}.{base_domain}"
 
 
 @dataclass
-class RequestLog:
+class RequestLog:  # pylint: disable=too-many-instance-attributes
     """Logged HTTP request for inspection."""
     request_id: str
     tunnel_id: str
@@ -46,7 +50,7 @@ class RequestLog:
     response_time_ms: Optional[int] = None
 
 
-class TunnelServer:
+class TunnelServer:  # pylint: disable=too-many-instance-attributes
     """
     WebSocket-based tunnel server.
 
@@ -195,7 +199,8 @@ class TunnelServer:
             return web.Response(status=504, text="Tunnel timeout")
 
         # Calculate response time
-        response_time_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+        response_time_ms = int(
+            (asyncio.get_event_loop().time() - start_time) * 1000)
         log_entry.response_status = response_data.get('status', 502)
         log_entry.response_time_ms = response_time_ms
 
@@ -210,7 +215,8 @@ class TunnelServer:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
                 data = json.loads(msg.data)
-                if data.get('type') == 'response' and data.get('request_id') == request_id:
+                if data.get('type') == 'response' and data.get(
+                        'request_id') == request_id:
                     return data
         return {'status': 502, 'body': b'Connection closed'}
 

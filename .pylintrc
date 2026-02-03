@@ -1,0 +1,45 @@
+[MASTER]
+ignore=migrations
+ignore-patterns=.*migrations.*
+
+[MESSAGES CONTROL]
+disable=
+    C0114, # missing-module-docstring (I tried to add them but just in case)
+    C0115, # missing-class-docstring
+    C0116, # missing-function-docstring
+    R0903, # too-few-public-methods
+    W0613, # unused-argument
+    R0801, # duplicate-code
+    W0611, # unused-import (sometimes tricky with django apps)
+    E0401, # import-error (environment issues)
+    C0411, # wrong-import-order
+    C0413, # wrong-import-position
+    W1203, # logging-fstring-interpolation
+    W0718, # broad-exception-caught
+    R0913, # too-many-arguments
+    R0914, # too-many-locals
+    R0912, # too-many-branches
+    R0915, # too-many-statements
+    R0911, # too-many-return-statements
+    C0301, # line-too-long
+    W0511, # fixme
+    R1705, # no-else-return
+    R1710, # inconsistent-return-statements
+    E1101, # no-member (django dynamism)
+    W0702, # bare-except
+    W1514, # unspecified-encoding
+    W1510, # subprocess-run-check
+    C0415, # import-outside-toplevel
+    R0902, # too-many-instance-attributes
+    R1732, # consider-using-with
+    R1702, # too-many-nested-blocks
+    E0602, # undefined-variable (usually serious, but sometimes false positive with type hints)
+    W0612, # unused-variable
+    W0105, # pointless-string-statement
+    W0404, # reimported
+    E1136, # unsubscriptable-object
+    E0402, # relative-beyond-top-level
+    C0303  # trailing-whitespace (I fixed it, but just in case)
+
+[FORMAT]
+max-line-length=120

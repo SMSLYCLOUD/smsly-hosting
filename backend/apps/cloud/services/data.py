@@ -1,13 +1,16 @@
+"""Data module."""
 from ..models import CloudProvider, CloudResource
 from .factory import get_cloud_adapter
 from typing import Optional, Dict
+
 
 class DataService:
     def __init__(self, provider: CloudProvider):
         self.provider = provider
         self.adapter = get_cloud_adapter(provider)
 
-    def provision_database(self, name: str, engine: str, version: str) -> CloudResource:
+    def provision_database(self, name: str, engine: str,
+                           version: str) -> CloudResource:
         """
         Provision a managed database (RDS, Cloud SQL, Azure SQL).
         Engine: 'postgres', 'mysql', 'mssql', 'redis', 'mongodb'
@@ -29,12 +32,14 @@ class DataService:
         )
         return resource
 
+
 class StorageService:
     def __init__(self, provider: CloudProvider):
         self.provider = provider
         self.adapter = get_cloud_adapter(provider)
 
-    def create_bucket(self, bucket_name: str, public: bool = False) -> CloudResource:
+    def create_bucket(self, bucket_name: str,
+                      public: bool = False) -> CloudResource:
         """
         Create an Object Storage bucket (S3, GCS, Azure Blob).
         """

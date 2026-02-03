@@ -1,3 +1,4 @@
+"""Consumers module."""
 import json
 import asyncio
 import logging
@@ -7,17 +8,18 @@ from asgiref.sync import sync_to_async
 
 logger = logging.getLogger(__name__)
 
+
 class TerminalConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for terminal access to deployments.
 
     SECURITY: Requires authentication and ownership verification.
     """
-    
+
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
         self.user = None
-        
+
         # ==========================================================================
         # SECURITY: Authenticate WebSocket connection via token
         # ==========================================================================
@@ -28,28 +30,38 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if param.startswith('token='):
                 token_key = param.split('=', 1)[1]
                 break
-        
+
         if not token_key:
-            logger.warning(f"WebSocket connection rejected: No token provided for deployment {self.deployment_id}")
+            logger.warning(
+                f"WebSocket connection rejected: No token provided for deployment {
+                    self.deployment_id}")
             await self.close(code=4001)
             return
-        
+
         # Validate token
         self.user = await self._authenticate_token(token_key)
         if not self.user:
-            logger.warning(f"WebSocket connection rejected: Invalid token for deployment {self.deployment_id}")
+            logger.warning(
+                f"WebSocket connection rejected: Invalid token for deployment {
+                    self.deployment_id}")
             await self.close(code=4002)
             return
-        
+
         # ==========================================================================
         # SECURITY: Verify user owns this deployment
         # ==========================================================================
         if not await self._verify_ownership():
-            logger.warning(f"WebSocket connection rejected: User {self.user.id} doesn't own deployment {self.deployment_id}")
+            logger.warning(
+                f"WebSocket connection rejected: User {
+                    self.user.id} doesn't own deployment {
+                    self.deployment_id}")
             await self.close(code=4003)
             return
 
-        logger.info(f"WebSocket connected: User {self.user.id} to deployment {self.deployment_id}")
+        logger.info(
+            f"WebSocket connected: User {
+                self.user.id} to deployment {
+                self.deployment_id}")
         await self.accept()
         await self.send(text_data=json.dumps({
             'message': f'Connected to terminal for deployment {self.deployment_id}...\r\n$ '
@@ -57,7 +69,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if self.user:
-            logger.info(f"WebSocket disconnected: User {self.user.id} from deployment {self.deployment_id}")
+            logger.info(
+                f"WebSocket disconnected: User {
+                    self.user.id} from deployment {
+                    self.deployment_id}")
 
     async def receive(self, text_data):
         # SECURITY: Re-check authentication on each message
@@ -91,7 +106,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return token.user
         except Token.DoesNotExist:
             return None
-    
+
     @database_sync_to_async
     def _verify_ownership(self):
         """Verify user owns the deployment."""

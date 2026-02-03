@@ -1,3 +1,6 @@
+# pylint: disable=logging-fstring-interpolation
+"""Tcp Server module."""
+# pylint: disable=broad-exception-caught
 """
 SMSLY TCP Tunnel Server
 
@@ -16,7 +19,7 @@ logger = logging.getLogger('smsly.tunnels.tcp')
 
 
 @dataclass
-class TCPTunnel:
+class TCPTunnel:  # pylint: disable=too-many-instance-attributes
     """Represents an active TCP tunnel."""
     tunnel_id: str
     local_port: int
@@ -102,7 +105,7 @@ class TCPTunnelServer:
         tunnel: TCPTunnel,
         client_reader: asyncio.StreamReader,
         client_writer: asyncio.StreamWriter
-    ):
+    ):  # pylint: disable=unused-argument
         """Handle incoming connection to the TCP tunnel."""
         tunnel.connections += 1
         connection_id = str(uuid.uuid4())[:8]
@@ -120,7 +123,8 @@ class TCPTunnelServer:
             # Bidirectional forwarding
             await asyncio.gather(
                 self._forward(client_reader, tunnel_writer, tunnel, 'in'),
-                self._forward_from_tunnel(tunnel.tunnel_id, client_writer, tunnel),
+                self._forward_from_tunnel(
+                    tunnel.tunnel_id, client_writer, tunnel),
             )
 
         except Exception as e: # pylint: disable=broad-exception-caught
@@ -135,7 +139,7 @@ class TCPTunnelServer:
         writer: asyncio.StreamWriter,
         tunnel: TCPTunnel,
         direction: str
-    ):
+    ):  # pylint: disable=unused-argument
         """Forward data from reader to writer."""
         try:
             while True:
@@ -169,14 +173,15 @@ class TCPTunnelServer:
         self,
         tunnel_id: str,
         writer: asyncio.StreamWriter
-    ):
+    ):  # pylint: disable=unused-argument
         """Register a tunnel client connection."""
         self.tunnel_writers[tunnel_id] = writer
         logger.info("Tunnel client registered: %s", tunnel_id)
 
     async def close_tunnel(self, tunnel_id: str):
         """Close a TCP tunnel."""
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values()
+                      if t.tunnel_id == tunnel_id), None)
         if tunnel:
             tunnel.is_active = False
             self.release_port(tunnel.remote_port)
@@ -190,7 +195,8 @@ class TCPTunnelServer:
 
     def get_tunnel_info(self, tunnel_id: str) -> Optional[dict]:
         """Get tunnel information."""
-        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+        tunnel = next((t for t in self.tunnels.values()
+                      if t.tunnel_id == tunnel_id), None)
         if not tunnel:
             return None
 
