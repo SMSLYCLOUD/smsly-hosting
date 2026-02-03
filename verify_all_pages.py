@@ -1,6 +1,9 @@
+# pylint: disable=broad-exception-caught
+"""Module for verifying all pages."""
 from playwright.sync_api import sync_playwright
 
 def run():
+    """Run verification."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         # Mobile Viewport

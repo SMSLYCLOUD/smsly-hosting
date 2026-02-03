@@ -1,3 +1,6 @@
+# pylint: disable=logging-fstring-interpolation
+# pylint: disable=import-outside-toplevel
+# pylint: disable=broad-exception-caught
 """
 Redis-backed storage for SMSLY Tunnels.
 
@@ -8,7 +11,6 @@ Falls back to in-memory storage if Redis is unavailable.
 import json
 import logging
 from typing import Dict, List, Optional
-from django.conf import settings
 from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
@@ -17,24 +19,24 @@ logger = logging.getLogger(__name__)
 class TunnelStorage:
     """
     Redis-backed tunnel storage with in-memory fallback.
-    
+
     Uses Django's cache framework which can be configured to use Redis.
     """
-    
+
     # Cache key prefixes
     TUNNEL_PREFIX = "tunnel:"
     SUBDOMAIN_PREFIX = "subdomain:"
     LOG_PREFIX = "tunnel_log:"
-    
+
     # TTL for tunnels (24 hours default, configurable per tier)
     DEFAULT_TTL = 86400  # 24 hours
-    
+
     def __init__(self):
         self._fallback_tunnels: Dict = {}
         self._fallback_subdomains: Dict = {}
         self._fallback_logs: Dict = {}
         self._use_redis = self._check_redis()
-    
+
     def _check_redis(self) -> bool:
         """Check if Redis cache is available."""
         try:
@@ -46,16 +48,16 @@ class TunnelStorage:
         except Exception as e:
             logger.warning(f"TunnelStorage: Redis unavailable, using in-memory fallback: {e}")
             return False
-    
+
     # ==================== TUNNEL OPERATIONS ====================
-    
+
     def get_tunnel(self, subdomain: str) -> Optional[Dict]:
         """Get tunnel by subdomain."""
         if self._use_redis:
             data = cache.get(f"{self.TUNNEL_PREFIX}{subdomain}")
             return json.loads(data) if data else None
         return self._fallback_tunnels.get(subdomain)
-    
+
     def get_tunnel_by_id(self, tunnel_id: str) -> Optional[Dict]:
         """Get tunnel by its ID."""
         # Scan through tunnels (less efficient but works)
@@ -63,7 +65,7 @@ class TunnelStorage:
             if tunnel.get('tunnel_id') == tunnel_id:
                 return tunnel
         return None
-    
+
     def set_tunnel(self, subdomain: str, tunnel: Dict, ttl: int = None):
         """Store tunnel data."""
         ttl = ttl or self.DEFAULT_TTL
@@ -71,14 +73,14 @@ class TunnelStorage:
             cache.set(f"{self.TUNNEL_PREFIX}{subdomain}", json.dumps(tunnel), ttl)
         else:
             self._fallback_tunnels[subdomain] = tunnel
-    
+
     def delete_tunnel(self, subdomain: str):
         """Delete tunnel."""
         if self._use_redis:
             cache.delete(f"{self.TUNNEL_PREFIX}{subdomain}")
         else:
             self._fallback_tunnels.pop(subdomain, None)
-    
+
     def list_tunnels(self, user_id: str = None) -> List[Dict]:
         """List all tunnels, optionally filtered by user."""
         if self._use_redis:
@@ -98,35 +100,35 @@ class TunnelStorage:
             except Exception as e:
                 logger.warning(f"Redis scan failed, using values: {e}")
                 # Fallback to iterating stored tunnels
-                return [t for t in self._fallback_tunnels.values() 
+                return [t for t in self._fallback_tunnels.values()
                         if user_id is None or t.get('user_id') == user_id]
-        
-        return [t for t in self._fallback_tunnels.values() 
+
+        return [t for t in self._fallback_tunnels.values()
                 if user_id is None or t.get('user_id') == user_id]
-    
+
     # ==================== SUBDOMAIN OPERATIONS ====================
-    
+
     def get_subdomain(self, subdomain: str) -> Optional[Dict]:
         """Get reserved subdomain."""
         if self._use_redis:
             data = cache.get(f"{self.SUBDOMAIN_PREFIX}{subdomain}")
             return json.loads(data) if data else None
         return self._fallback_subdomains.get(subdomain)
-    
+
     def set_subdomain(self, subdomain: str, data: Dict):
         """Reserve a subdomain (permanent, no TTL)."""
         if self._use_redis:
             cache.set(f"{self.SUBDOMAIN_PREFIX}{subdomain}", json.dumps(data), None)
         else:
             self._fallback_subdomains[subdomain] = data
-    
+
     def delete_subdomain(self, subdomain: str):
         """Release a subdomain."""
         if self._use_redis:
             cache.delete(f"{self.SUBDOMAIN_PREFIX}{subdomain}")
         else:
             self._fallback_subdomains.pop(subdomain, None)
-    
+
     def list_subdomains(self, user_id: str = None) -> List[Dict]:
         """List reserved subdomains."""
         if self._use_redis:
@@ -145,12 +147,12 @@ class TunnelStorage:
             except Exception:
                 return [s for s in self._fallback_subdomains.values()
                         if user_id is None or s.get('user_id') == user_id]
-        
+
         return [s for s in self._fallback_subdomains.values()
                 if user_id is None or s.get('user_id') == user_id]
-    
+
     # ==================== REQUEST LOG OPERATIONS ====================
-    
+
     def add_request_log(self, tunnel_id: str, log_entry: Dict):
         """Add a request log entry."""
         key = f"{self.LOG_PREFIX}{tunnel_id}"
@@ -169,7 +171,7 @@ class TunnelStorage:
             logs = self._fallback_logs.setdefault(tunnel_id, [])
             logs.insert(0, log_entry)
             self._fallback_logs[tunnel_id] = logs[:100]
-    
+
     def get_request_logs(self, tunnel_id: str, limit: int = 100) -> List[Dict]:
         """Get request logs for a tunnel."""
         key = f"{self.LOG_PREFIX}{tunnel_id}"
@@ -182,7 +184,7 @@ class TunnelStorage:
             except Exception:
                 return self._fallback_logs.get(tunnel_id, [])[:limit]
         return self._fallback_logs.get(tunnel_id, [])[:limit]
-    
+
     def delete_request_logs(self, tunnel_id: str):
         """Delete request logs for a tunnel."""
         if self._use_redis:

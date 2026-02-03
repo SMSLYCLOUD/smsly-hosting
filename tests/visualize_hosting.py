@@ -1,9 +1,12 @@
-import json
-import time
+# pylint: disable=line-too-long
+# pylint: disable=too-many-statements
+# pylint: disable=redefined-outer-name
+"""Module for visualizing hosting."""
 from playwright.sync_api import sync_playwright
 
-def run(playwright):
-    browser = playwright.chromium.launch()
+def run(p_obj):
+    """Run visualization."""
+    browser = p_obj.chromium.launch()
     context = browser.new_context(viewport={'width': 1440, 'height': 900})
     page = context.new_page()
 
@@ -11,8 +14,10 @@ def run(playwright):
     services = []
     for i in range(1, 13):
         status = "ACTIVE"
-        if i % 4 == 0: status = "DEPLOYING"
-        if i == 11: status = "FAILED"
+        if i % 4 == 0:
+            status = "DEPLOYING"
+        if i == 11:
+            status = "FAILED"
 
         services.append({
             "id": f"svc-{i}",
@@ -109,7 +114,7 @@ def run(playwright):
         ("security", "Security", "10_security"),
     ]
 
-    for tab_id, label, filename in tabs:
+    for _, label, filename in tabs:
         print(f"Snapping Service Detail ({label})...")
         page.click(f"button >> text={label}")
         page.wait_for_timeout(500)
