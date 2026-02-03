@@ -2,8 +2,10 @@
 FROM node:18-alpine AS builder
 WORKDIR /app
 
-# Accept build arguments for Next.js public env vars (baked at build time)
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+# Accept build arguments for Next.js public env vars
+# In production install_host.sh, this should be set to the relative path /api
+# This allows Traefik to proxy the requests to the backend on the same port (8090)
+ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 COPY package.json package-lock.json* ./
