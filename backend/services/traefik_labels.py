@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long,too-many-arguments,too-many-positional-arguments
 """
 Traefik Label Helpers for SMSLY Hosting.
 

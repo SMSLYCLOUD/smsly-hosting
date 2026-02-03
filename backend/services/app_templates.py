@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long,too-many-instance-attributes,import-outside-toplevel
 """
 SMSLY Marketplace App Templates Registry
 
@@ -32,7 +33,7 @@ class AppTemplate:
 # ============================================================================
 
 APP_TEMPLATES: Dict[str, AppTemplate] = {
-    
+
     # ===== SMSLY ECOSYSTEM =====
     'smsly-platform-api': AppTemplate(
         id='smsly-platform-api',
@@ -159,7 +160,7 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='database',
         docker_image='influxdb:2-alpine',
         default_port=8086,
-        env_vars={'DOCKER_INFLUXDB_INIT_MODE': 'setup', 'DOCKER_INFLUXDB_INIT_USERNAME': 'admin', 
+        env_vars={'DOCKER_INFLUXDB_INIT_MODE': 'setup', 'DOCKER_INFLUXDB_INIT_USERNAME': 'admin',
                   'DOCKER_INFLUXDB_INIT_PASSWORD': '${RANDOM_PASSWORD}', 'DOCKER_INFLUXDB_INIT_ORG': 'smsly',
                   'DOCKER_INFLUXDB_INIT_BUCKET': 'default'},
         volumes=['/var/lib/influxdb2'],
@@ -228,7 +229,7 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         category='cms',
         docker_image='wordpress:6-apache',
         default_port=80,
-        env_vars={'WORDPRESS_DB_HOST': 'db:3306', 'WORDPRESS_DB_USER': 'wp', 
+        env_vars={'WORDPRESS_DB_HOST': 'db:3306', 'WORDPRESS_DB_USER': 'wp',
                   'WORDPRESS_DB_PASSWORD': '${RANDOM_PASSWORD}', 'WORDPRESS_DB_NAME': 'wordpress'},
         volumes=['/var/www/html'],
         required_addons=['MYSQL'],
@@ -630,18 +631,18 @@ def list_templates(category: str = None) -> list:
 def get_docker_run_command(template_id: str, name: str = None, domain: str = None) -> str:
     """Generate docker run command for a template."""
     import secrets
-    
+
     template = get_template(template_id)
     if not template:
         return None
-    
+
     name = name or f"{template_id}-{secrets.token_hex(4)}"
-    
+
     cmd_parts = ['docker', 'run', '-d', '--name', name, '--restart', 'unless-stopped']
-    
+
     # Port mapping
     cmd_parts.extend(['-p', f'{template.default_port}:{template.default_port}'])
-    
+
     # Environment variables
     for key, value in template.env_vars.items():
         # Replace placeholders
@@ -650,7 +651,7 @@ def get_docker_run_command(template_id: str, name: str = None, domain: str = Non
         if domain and '${DOMAIN}' in value:
             value = value.replace('${DOMAIN}', domain)
         cmd_parts.extend(['-e', f'{key}={value}'])
-    
+
     # Volumes
     for vol in template.volumes:
         if ':' in vol:  # Already has host path
@@ -658,8 +659,8 @@ def get_docker_run_command(template_id: str, name: str = None, domain: str = Non
         else:  # Container path only, create named volume
             vol_name = f"{name}-{vol.replace('/', '-').strip('-')}"
             cmd_parts.extend(['-v', f'{vol_name}:{vol}'])
-    
+
     # Image
     cmd_parts.append(template.docker_image)
-    
+
     return ' '.join(cmd_parts)

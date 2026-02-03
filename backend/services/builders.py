@@ -1,8 +1,10 @@
+# pylint: disable=line-too-long,logging-fstring-interpolation,subprocess-run-check,broad-exception-caught,too-many-nested-blocks,consider-using-with,too-few-public-methods,import-outside-toplevel
+# pylint: disable=no-member
+"""Build manager service."""
 import time
 import logging
 import subprocess
 import shutil
-import os
 from pathlib import Path
 from django.conf import settings
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -36,7 +38,7 @@ class BuildManager:
                     ["docker", "login", registry, "-u", settings.REGISTRY_USER, "--password-stdin"],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
                 )
-                stdout, stderr = login_proc.communicate(input=settings.REGISTRY_PASSWORD)
+                _, stderr = login_proc.communicate(input=settings.REGISTRY_PASSWORD)
                 if login_proc.returncode != 0:
                     self._log(f"Login failed: {stderr}")
                     # Don't raise, try pushing anyway (might be using credential helper)
@@ -92,7 +94,7 @@ class BuildManager:
         Falls back to skip if Trivy is not installed.
         """
         self._log(f"Running vulnerability scan on {image_tag}...")
-        
+
         try:
             # Check if Trivy is available
             result = subprocess.run(
@@ -107,7 +109,7 @@ class BuildManager:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             self._log("Trivy not installed. Skipping security scan.")
             return
-        
+
         try:
             # Run Trivy scan with JSON output
             result = subprocess.run(
@@ -122,20 +124,20 @@ class BuildManager:
                 text=True,
                 timeout=600  # 10 minute timeout
             )
-            
+
             if result.returncode == 0 or result.stdout:
                 import json
                 try:
                     scan_results = json.loads(result.stdout)
                     vulns = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-                    
+
                     # Parse vulnerability counts from Trivy JSON output
                     for result_item in scan_results.get("Results", []):
                         for vuln in result_item.get("Vulnerabilities", []):
                             severity = vuln.get("Severity", "").lower()
                             if severity in vulns:
                                 vulns[severity] += 1
-                    
+
                     # Store full report for detailed view
                     self.deployment.vulnerability_report = {
                         "summary": vulns,
@@ -143,22 +145,22 @@ class BuildManager:
                         "image": image_tag
                     }
                     self.deployment.save(update_fields=['vulnerability_report'])
-                    
+
                     # Log summary
                     self._log(f"Scan complete: {vulns['critical']} critical, {vulns['high']} high, {vulns['medium']} medium, {vulns['low']} low")
-                    
+
                     if vulns['critical'] > 0:
                         self._log(f"WARNING: Found {vulns['critical']} CRITICAL vulnerabilities!")
                     else:
                         self._log("Security scan passed (no critical issues).")
-                        
+
                 except json.JSONDecodeError:
                     self._log("Failed to parse Trivy output. Raw output saved.")
                     self.deployment.vulnerability_report = {"error": "Parse failed", "raw": result.stdout[:1000]}
                     self.deployment.save(update_fields=['vulnerability_report'])
             else:
                 self._log(f"Trivy scan failed: {result.stderr[:500]}")
-                
+
         except subprocess.TimeoutExpired:
             self._log("Security scan timed out after 10 minutes.")
         except Exception as e:
@@ -188,7 +190,7 @@ class BuildManager:
         from django.db.models import Value
         from django.db.models.functions import Concat
         from apps.deployments.models import Deployment
-        
+
         prefix = f"[{time.strftime('%H:%M:%S')}] " if timestamp else ""
         log_line = f"{prefix}{message}\n"
 

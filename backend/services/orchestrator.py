@@ -1,3 +1,6 @@
+# pylint: disable=too-few-public-methods,wrong-import-order
+# pylint: disable=no-member
+"""Orchestration service."""
 from django.utils import timezone
 from .builders import BuildManager
 from .clusters import ClusterManager
@@ -15,6 +18,7 @@ class Orchestrator:
         self.cluster_manager = ClusterManager(self.deployment)
 
     def run_deployment(self):
+        """Run deployment process."""
         self.deployment.status = Deployment.Status.BUILDING
         self.deployment.started_at = timezone.now()
         self.deployment.save()

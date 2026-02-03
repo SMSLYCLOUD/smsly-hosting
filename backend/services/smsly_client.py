@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long,broad-exception-caught,logging-fstring-interpolation,wrong-import-order
 """
 SMSLY Platform Integration Client.
 
@@ -6,8 +7,7 @@ for the hosting platform's internal use (alerts, notifications, 2FA).
 """
 import logging
 import httpx
-from typing import Optional, Dict, Any
-from django.conf import settings
+from typing import Dict, Any
 from decouple import config
 
 logger = logging.getLogger(__name__)

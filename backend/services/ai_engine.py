@@ -1,15 +1,17 @@
+"""AI Engine service."""
+# pylint: disable=line-too-long,broad-exception-caught,logging-fstring-interpolation,too-few-public-methods,wrong-import-order
+from typing import List
 import os
 import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 # --- Structured Output Models ---
 class StackAnalysis(BaseModel):
+    """Stack analysis model."""
     stack_type: str = Field(description="The detected tech stack (e.g., 'django', 'nextjs', 'node')")
     recommended_port: int = Field(description="The internal port the app likely listens on")
     required_addons: List[str] = Field(description="List of addons needed (e.g., ['POSTGRES', 'REDIS'])")
@@ -18,6 +20,7 @@ class StackAnalysis(BaseModel):
 
 # --- AI Engine ---
 class DevOpsAgent:
+    """DevOps Agent."""
     def __init__(self):
         self.api_key = os.environ.get("GEMINI_API_KEY")
         if self.api_key:

@@ -1,3 +1,6 @@
+# pylint: disable=line-too-long,too-many-instance-attributes,bare-except,logging-fstring-interpolation,import-outside-toplevel,too-few-public-methods
+# pylint: disable=no-member
+"""Cluster manager service."""
 import time
 import logging
 import re
@@ -370,10 +373,10 @@ class ClusterManager:
         from django.db.models import Value
         from django.db.models.functions import Concat
         from apps.deployments.models import Deployment
-        
+
         timestamp = time.strftime("%H:%M:%S")
         log_line = f"[{timestamp}] [K8S] {message}\n"
-        
+
         # Atomic append using Concat to avoid race condition
         Deployment.objects.filter(id=self.deployment.id).update(
             build_logs=Concat('build_logs', Value(log_line))

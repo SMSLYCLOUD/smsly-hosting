@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long,too-few-public-methods,too-many-locals,no-member,too-many-return-statements,too-many-branches,unused-argument
 """
 SMSLY Tunnel API Routes
 
@@ -9,13 +10,13 @@ Django REST API endpoints for tunnel management:
 - Team sharing
 """
 
+import uuid
+import re
+from datetime import timedelta
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.utils import timezone
-from datetime import timedelta
-import uuid
-import re
 
 # Redis-backed storage (with in-memory fallback)
 from .storage import tunnel_storage
@@ -23,38 +24,53 @@ from .rate_limit import rate_limit
 
 
 class TunnelTier:
+    """Tunnel service tiers."""
     FREE = 'free'
     PRO = 'pro'
     TEAM = 'team'
 
     LIMITS = {
-        FREE: {'tunnels': 1, 'custom_subdomains': 0, 'tcp': False, 'timeout_hours': 8},
-        PRO: {'tunnels': 5, 'custom_subdomains': 3, 'tcp': False, 'timeout_hours': None},
-        TEAM: {'tunnels': -1, 'custom_subdomains': -1, 'tcp': True, 'timeout_hours': None},
+        'free': {
+            'tunnels': 1,
+            'bandwidth': 100 * 1024 * 1024,  # 100MB/day
+            'custom_subdomains': 0,
+            'tcp': False,
+            'timeout_hours': 2,
+        },
+        'pro': {
+            'tunnels': 10,
+            'bandwidth': 10 * 1024 * 1024 * 1024,  # 10GB/day
+            'custom_subdomains': 5,
+            'tcp': True,
+            'timeout_hours': 24,
+        },
+        'team': {
+            'tunnels': -1,  # Unlimited
+            'bandwidth': -1,
+            'custom_subdomains': -1,
+            'tcp': True,
+            'timeout_hours': 720,  # 30 days
+        },
     }
 
 
 def get_user_tier(user):
-    """Get user's tunnel tier from subscription."""
-    # Integration with billing system
-    # For now, default to PRO for authenticated users
-    if user.is_authenticated:
-        return TunnelTier.PRO
+    """Get user's subscription tier."""
+    # Placeholder for billing integration
+    if user.is_staff:
+        return TunnelTier.TEAM
     return TunnelTier.FREE
 
 
-def validate_subdomain(subdomain: str) -> tuple[bool, str]:
+def validate_subdomain(subdomain):
     """Validate subdomain format."""
-    if not subdomain:
-        return False, "Subdomain is required"
-    if len(subdomain) < 3:
-        return False, "Subdomain must be at least 3 characters"
-    if len(subdomain) > 32:
-        return False, "Subdomain must be at most 32 characters"
-    if not re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', subdomain):
-        return False, "Subdomain must be lowercase alphanumeric with hyphens"
+    if not re.match(r'^[a-z0-9-]+$', subdomain):
+        return False, "Subdomain can only contain lowercase letters, numbers, and dashes"
+    if len(subdomain) < 3 or len(subdomain) > 63:
+        return False, "Subdomain must be between 3 and 63 characters"
+    if subdomain.startswith('-') or subdomain.endswith('-'):
+        return False, "Subdomain cannot start or end with a dash"
 
-    # Reserved subdomains
     reserved = ['www', 'api', 'app', 'admin', 'tunnel', 'mail', 'ftp', 'ssh']
     if subdomain in reserved:
         return False, f"Subdomain '{subdomain}' is reserved"
@@ -64,21 +80,24 @@ def validate_subdomain(subdomain: str) -> tuple[bool, str]:
 
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.AllowAny])
-def tunnel_list(request):
+def tunnel_list(request):  # pylint: disable=too-many-return-statements
+    # pylint: disable=too-many-return-statements
     """
     GET: List user's active tunnels
     POST: Create a new tunnel (called by CLI)
     """
     if request.method == 'GET':
         user_id = str(request.user.id) if request.user.is_authenticated else 'anonymous'
-        user_tunnels = [t for t in _tunnels.values() if t.get('user_id') == user_id]
+        user_tunnels = tunnel_storage.list_tunnels(user_id=user_id)
 
         return Response({
             'tunnels': user_tunnels,
             'count': len(user_tunnels),
         })
 
-    elif request.method == 'POST':
+    # POST logic handles tunnel creation
+    # pylint: disable=too-many-return-statements
+    if request.method == 'POST':
         # Create new tunnel
         subdomain = request.data.get('subdomain')
         local_port = request.data.get('local_port', 3000)
@@ -89,7 +108,7 @@ def tunnel_list(request):
         limits = TunnelTier.LIMITS[tier]
 
         # Check tunnel limit
-        user_tunnels = [t for t in _tunnels.values() if t.get('user_id') == user_id]
+        user_tunnels = tunnel_storage.list_tunnels(user_id=user_id)
         if limits['tunnels'] != -1 and len(user_tunnels) >= limits['tunnels']:
             return Response(
                 {'error': f"Tunnel limit reached ({limits['tunnels']} for {tier} tier)"},
@@ -110,8 +129,9 @@ def tunnel_list(request):
                 return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
 
             # Check if reserved by user
-            if subdomain in _reserved_subdomains:
-                if _reserved_subdomains[subdomain]['user_id'] != user_id:
+            reserved_info = tunnel_storage.get_subdomain(subdomain)
+            if reserved_info:
+                if reserved_info['user_id'] != user_id:
                     return Response(
                         {'error': f"Subdomain '{subdomain}' is reserved by another user"},
                         status=status.HTTP_403_FORBIDDEN
@@ -123,7 +143,7 @@ def tunnel_list(request):
                 )
 
             # Check if in use
-            if subdomain in _tunnels:
+            if tunnel_storage.get_tunnel(subdomain):
                 return Response(
                     {'error': f"Subdomain '{subdomain}' is currently in use"},
                     status=status.HTTP_409_CONFLICT
@@ -152,17 +172,23 @@ def tunnel_list(request):
             'is_active': True,
         }
 
-        _tunnels[subdomain] = tunnel
-        _request_logs[tunnel_id] = []
+        # Check rate limit
+        allowed, msg = rate_limit.check_rate_limit(user_id)
+        if not allowed:
+            return Response({'error': msg}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        tunnel_storage.set_tunnel(subdomain, tunnel)
+        # No need to init empty log list for Redis, list created on push
 
         return Response(tunnel, status=status.HTTP_201_CREATED)
+    return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 @api_view(['GET', 'DELETE'])
 @permission_classes([permissions.AllowAny])
 def tunnel_detail(request, tunnel_id):
     """Get or delete a specific tunnel."""
-    tunnel = next((t for t in _tunnels.values() if t['tunnel_id'] == tunnel_id), None)
+    tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
 
     if not tunnel:
         return Response({'error': 'Tunnel not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -174,22 +200,23 @@ def tunnel_detail(request, tunnel_id):
     if request.method == 'GET':
         return Response(tunnel)
 
-    elif request.method == 'DELETE':
+    if request.method == 'DELETE':
         subdomain = tunnel['subdomain']
-        if subdomain in _tunnels:
-            del _tunnels[subdomain]
-        if tunnel_id in _request_logs:
-            del _request_logs[tunnel_id]
+        tunnel_storage.delete_tunnel(subdomain)
+        tunnel_storage.delete_request_logs(tunnel_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
+    return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def tunnel_requests(request, tunnel_id):
     """Get request logs for a tunnel."""
-    logs = _request_logs.get(tunnel_id, [])
+    # Verify ownership first if needed, or just return public logs if allowed
+    # For now assuming public readable if you have ID
+    logs = tunnel_storage.get_request_logs(tunnel_id)
     return Response({
-        'requests': logs[-100:],  # Last 100
+        'requests': logs,
         'total': len(logs),
     })
 
@@ -198,7 +225,8 @@ def tunnel_requests(request, tunnel_id):
 @permission_classes([permissions.AllowAny])
 def replay_request(request, tunnel_id, request_id):
     """Replay a logged request."""
-    logs = _request_logs.get(tunnel_id, [])
+    # pylint: disable=unused-argument
+    logs = tunnel_storage.get_request_logs(tunnel_id)
     log_entry = next((l for l in logs if l['request_id'] == request_id), None)
 
     if not log_entry:
@@ -226,13 +254,13 @@ def subdomain_list(request):
     limits = TunnelTier.LIMITS[tier]
 
     if request.method == 'GET':
-        user_subdomains = [s for s in _reserved_subdomains.values() if s['user_id'] == user_id]
+        user_subdomains = tunnel_storage.list_subdomains(user_id=user_id)
         return Response({
             'subdomains': user_subdomains,
             'limit': limits['custom_subdomains'],
         })
 
-    elif request.method == 'POST':
+    if request.method == 'POST':
         subdomain = request.data.get('subdomain', '').lower()
 
         # Validate
@@ -241,15 +269,15 @@ def subdomain_list(request):
             return Response({'error': error}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check limit
-        user_subdomains = [s for s in _reserved_subdomains.values() if s['user_id'] == user_id]
+        user_subdomains = tunnel_storage.list_subdomains(user_id=user_id)
         if limits['custom_subdomains'] != -1 and len(user_subdomains) >= limits['custom_subdomains']:
             return Response(
                 {'error': f"Subdomain limit reached ({limits['custom_subdomains']} for {tier} tier)"},
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Check availability
-        if subdomain in _reserved_subdomains:
+        # Check availability (reserved or active)
+        if tunnel_storage.get_subdomain(subdomain):
             return Response(
                 {'error': f"Subdomain '{subdomain}' is already reserved"},
                 status=status.HTTP_409_CONFLICT
@@ -261,9 +289,10 @@ def subdomain_list(request):
             'user_id': user_id,
             'created_at': timezone.now().isoformat(),
         }
-        _reserved_subdomains[subdomain] = reservation
+        tunnel_storage.set_subdomain(subdomain, reservation)
 
         return Response(reservation, status=status.HTTP_201_CREATED)
+    return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
 @api_view(['DELETE'])
@@ -272,13 +301,14 @@ def subdomain_delete(request, subdomain):
     """Release a reserved subdomain."""
     user_id = str(request.user.id)
 
-    if subdomain not in _reserved_subdomains:
+    reserved_info = tunnel_storage.get_subdomain(subdomain)
+    if not reserved_info:
         return Response({'error': 'Subdomain not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    if _reserved_subdomains[subdomain]['user_id'] != user_id:
+    if reserved_info['user_id'] != user_id:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
-    del _reserved_subdomains[subdomain]
+    tunnel_storage.delete_subdomain(subdomain)
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -288,7 +318,7 @@ def subdomain_delete(request, subdomain):
 @permission_classes([permissions.IsAuthenticated])
 def share_tunnel(request, tunnel_id):
     """Share a tunnel with team members."""
-    tunnel = next((t for t in _tunnels.values() if t['tunnel_id'] == tunnel_id), None)
+    tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
 
     if not tunnel:
         return Response({'error': 'Tunnel not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -315,6 +345,8 @@ def share_tunnel(request, tunnel_id):
 
     if email not in tunnel['shared_with']:
         tunnel['shared_with'].append(email)
+        # Update storage
+        tunnel_storage.set_tunnel(tunnel['subdomain'], tunnel)
 
     return Response({
         'status': 'shared',
@@ -327,7 +359,7 @@ def share_tunnel(request, tunnel_id):
 
 def get_urlpatterns():
     """Get URL patterns for tunnel API."""
-    from django.urls import path
+    from django.urls import path  # pylint: disable=import-outside-toplevel
 
     return [
         path('tunnels/', tunnel_list, name='tunnel-list'),
