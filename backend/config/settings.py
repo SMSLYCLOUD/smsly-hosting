@@ -83,6 +83,11 @@ ROOT_URLCONF = 'config.urls'
 
 SITE_ID = 1
 
+# dj-rest-auth / allauth configuration
+ACCOUNT_AUTHENTICATION_METHOD = 'username'
+ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_USERNAME_REQUIRED = True
+
 # Redirect to frontend callback after login
 LOGIN_REDIRECT_URL = '/auth/callback'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
