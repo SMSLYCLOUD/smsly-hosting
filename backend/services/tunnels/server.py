@@ -29,8 +29,6 @@ class TunnelConnection:  # pylint: disable=too-many-instance-attributes
     created_at: datetime = field(default_factory=datetime.utcnow)
     request_count: int = 0
 
-    def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:  # pylint: disable=too-many-instance-attributes
-        """Return public URL."""
     def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:
         """Get public URL."""
         return f"https://{self.subdomain}.{base_domain}"

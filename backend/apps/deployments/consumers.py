@@ -16,6 +16,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     SECURITY: Requires authentication and ownership verification.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.deployment_id = None
+        self.user = None
+
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
         self.user = None

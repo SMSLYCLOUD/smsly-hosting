@@ -76,7 +76,7 @@ class TunnelClient:
         self.public_url = data.get('public_url')
 
         if RICH_AVAILABLE:
-            CONSOLE.print(f"[green]✓[/green] Tunnel established")
+            CONSOLE.print("[green]✓[/green] Tunnel established")
             CONSOLE.print(f"[bold]→[/bold] {self.public_url}")
             CONSOLE.print(f"[dim]  Forwarding to localhost:{self.local_port}[/dim]")
             CONSOLE.print()
