@@ -87,7 +87,13 @@ POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
 DOMAIN=$PUBLIC_IP
 ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090,https://hosting.smsly.cloud
+
+# GitHub OAuth (Placeholders - User must configure)
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 
 # Admin Defaults
 ADMIN_USER=admin
