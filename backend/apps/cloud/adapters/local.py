@@ -45,7 +45,8 @@ class LocalAdapter(BaseCloudAdapter):
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int) -> str:
         if self.k8s_client:
-            return self._deploy_k8s(service_name, image, env_vars, cpu, memory)
+            return self._deploy_k8s(
+                service_name, image, env_vars, cpu, memory)
         elif self.docker_client:
             return self._deploy_docker(service_name, image, env_vars)
         else:
@@ -205,7 +206,8 @@ class LocalAdapter(BaseCloudAdapter):
         # Ensure code path exists
         if not os.path.exists(code_zip):
             # In production, we'd pull from S3/Storage. For local, we assume a path.
-            logger.warning(f"Code path {code_zip} does not exist. Using simulation mode.")
+            logger.warning(
+                f"Code path {code_zip} does not exist. Using simulation mode.")
             code_mount = None
         else:
             code_mount = code_zip
@@ -234,7 +236,7 @@ EOF
             """
             entrypoint = ["/bin/sh", "-c", cmd]
         elif 'node' in runtime:
-             cmd = f"""
+            cmd = f"""
              npm install express &&
              node -e "
              const express = require('express');
@@ -248,7 +250,7 @@ EOF
              app.listen(8080, '0.0.0.0');
              "
              """
-             entrypoint = ["/bin/sh", "-c", cmd]
+            entrypoint = ["/bin/sh", "-c", cmd]
         else:
             entrypoint = None
 
@@ -259,15 +261,17 @@ EOF
 
         volumes = []
         if code_mount:
-             # Mount code to /app
-             volumes.append({'name': f'{function_name}-code', 'mount_path': '/app'})
+            # Mount code to /app
+            volumes.append(
+                {'name': f'{function_name}-code', 'mount_path': '/app'})
 
         if self.docker_client:
-            return self._deploy_docker_function(function_name, image, env_vars, volumes, entrypoint, code_mount)
+            return self._deploy_docker_function(
+                function_name, image, env_vars, volumes, entrypoint, code_mount)
 
         # Fallback for K8s (simplified)
-        return self._deploy_k8s(function_name, image, env_vars, cpu=100, memory=128)
-
+        return self._deploy_k8s(
+            function_name, image, env_vars, cpu=100, memory=128)
 
     def _deploy_docker_function(self, name: str, image: str, env: Dict[str, str],
                                 volumes: List[Dict], entrypoint: List[str], code_path: str) -> str:

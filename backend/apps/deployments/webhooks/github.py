@@ -108,7 +108,8 @@ class GitHubWebhookHandler:
         )
 
         if not parent_services.exists():
-            logger.info(f"No parent service found for PR #{pr_number} on {repo_url} (base: {base_ref})")
+            logger.info(
+                f"No parent service found for PR #{pr_number} on {repo_url} (base: {base_ref})")
             return False
 
         triggered_count = 0
@@ -123,7 +124,8 @@ class GitHubWebhookHandler:
 
         return triggered_count > 0
 
-    def _create_or_update_preview(self, parent: Service, pr_number: int, branch: str, commit_hash: str):
+    def _create_or_update_preview(self, parent: Service, pr_number: int,
+                                  branch: str, commit_hash: str):
         """Create a new preview service or update an existing one."""
         preview_name = f"{parent.name}-pr-{pr_number}"
 
@@ -154,7 +156,8 @@ class GitHubWebhookHandler:
             preview_service.branch = branch
             preview_service.save()
 
-        logger.info(f"{'Created' if created else 'Updated'} preview service {preview_name}")
+        logger.info(
+            f"{'Created' if created else 'Updated'} preview service {preview_name}")
 
         # Trigger Deployment
         deployment = Deployment.objects.create(
@@ -164,7 +167,8 @@ class GitHubWebhookHandler:
             status=Deployment.Status.QUEUED
         )
 
-        provider_id = str(preview_service.provider.id) if preview_service.provider else None
+        provider_id = str(
+            preview_service.provider.id) if preview_service.provider else None
         if provider_id:
             smart_deploy_task.delay(str(deployment.id), provider_id)
             return 1
@@ -182,21 +186,21 @@ class GitHubWebhookHandler:
 
             # Resource Cleanup
             # Import here to avoid circular dependency
-            from apps.cloud.services.factory import get_cloud_provider
+            from apps.cloud.services.factory import get_cloud_adapter
 
             if preview_service.provider:
-                adapter = get_cloud_provider(preview_service.provider)
+                adapter = get_cloud_adapter(preview_service.provider)
                 # Attempt to delete by name (assuming standard naming convention in LocalAdapter)
                 # Ideally, we should store container_id on Service or fetch last deployment
                 # For LocalAdapter, deploy_container uses the service name as the container name
                 try:
                     if hasattr(adapter, 'docker_client') and adapter.docker_client:
-                         try:
-                             c = adapter.docker_client.containers.get(name)
-                             c.remove(force=True)
-                             logger.info(f"Removed container {name}")
-                         except:
-                             pass
+                        try:
+                            c = adapter.docker_client.containers.get(name)
+                            c.remove(force=True)
+                            logger.info(f"Removed container {name}")
+                        except BaseException:
+                            pass
                 except Exception as e:
                     logger.warning(f"Failed to cleanup container {name}: {e}")
 
@@ -204,5 +208,6 @@ class GitHubWebhookHandler:
             logger.info(f"Destroyed preview service {name}")
             return 1
         except Service.DoesNotExist:
-            logger.warning(f"Preview service for PR #{pr_number} not found during cleanup")
+            logger.warning(
+                f"Preview service for PR #{pr_number} not found during cleanup")
             return 0

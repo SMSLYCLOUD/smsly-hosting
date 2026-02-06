@@ -49,6 +49,7 @@ jobs:
         DEBUG: True
         FIELD_ENCRYPTION_KEY: 6wqMiiFNfx00cUbgSF55NClcHSdKnFpGhc8XfR7E99w=
         DATABASE_URL: postgres://smsly_admin:test_password@localhost:5432/smsly_hosting
+        DJANGO_SETTINGS_MODULE: config.settings
       run: |
         cd backend
         pytest
