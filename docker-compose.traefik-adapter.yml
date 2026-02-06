@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  nginx:
+    networks:
+      - smsly-proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.smsly-nginx.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.smsly-nginx.entrypoints=websecure"
+      - "traefik.http.routers.smsly-nginx.tls.certresolver=letsencrypt"
+      - "traefik.http.services.smsly-nginx.loadbalancer.server.port=80"
+      - "traefik.docker.network=smsly-proxy"
+
+networks:
+  smsly-proxy:
+    external: true
