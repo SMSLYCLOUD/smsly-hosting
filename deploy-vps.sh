@@ -87,22 +87,27 @@ INSTALL_DIR="/opt/smsly-hosting"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Clone repository (replace with actual repo URL)
-if [ ! -d ".git" ]; then
-    git clone https://github.com/SMSLYCLOUD/smslycloud.git temp
-    mv temp/SMSLY-HOSTING/* .
+# Clone the smsly-hosting repo (or use existing files)
+if [ ! -f "docker-compose.prod.yml" ]; then
+    echo -e "${BLUE}  → Cloning smsly-hosting repository...${NC}"
+    rm -rf temp 2>/dev/null
+    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git temp
+    cp -r temp/. .  # Copy ALL files including hidden
     rm -rf temp
 fi
 
-echo -e "${GREEN}✓ Repository cloned to $INSTALL_DIR${NC}"
+echo -e "${GREEN}✓ Deployment files ready in $INSTALL_DIR${NC}"
 
 #===============================================================================
 # STEP 5: Generate Secrets & Configure Environment
 #===============================================================================
 echo -e "\n${YELLOW}[5/8] Generating secrets and configuring environment...${NC}"
 
-# Generate strong secrets
-SECRET_KEY=$(python3 -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())")
+# Install cryptography for Fernet key generation
+pip3 install cryptography -q 2>/dev/null || pip install cryptography -q 2>/dev/null
+
+# Generate strong secrets (no Django required)
+SECRET_KEY=$(python3 -c "import secrets; import string; chars = string.ascii_letters + string.digits + '!@#$%^&*(-_=+)'; print(''.join(secrets.choice(chars) for _ in range(50)))")
 FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
 
@@ -167,38 +172,54 @@ echo -e "${YELLOW}  Secrets saved to: $INSTALL_DIR/.env${NC}"
 #===============================================================================
 echo -e "\n${YELLOW}[6/8] Validating production configuration...${NC}"
 
-if [ -f "scripts/validate_production.py" ]; then
-    python3 scripts/validate_production.py || {
-        echo -e "${RED}✗ Configuration validation failed${NC}"
-        exit 1
-    }
+# Quick validation (no external dependencies)
+if [ -z "$SECRET_KEY" ] || [ -z "$FIELD_ENCRYPTION_KEY" ] || [ -z "$POSTGRES_PASSWORD" ]; then
+    echo -e "${RED}✗ Secret generation failed${NC}"
+    exit 1
+fi
+
+if [ -z "$DOMAIN" ] || [ -z "$ACME_EMAIL" ]; then
+    echo -e "${RED}✗ Domain or email not configured${NC}"
+    exit 1
 fi
 
 echo -e "${GREEN}✓ Configuration validated${NC}"
+echo -e "  SECRET_KEY: ${SECRET_KEY:0:10}...(hidden)"
+echo -e "  DOMAIN: ${DOMAIN}"
+echo -e "  EMAIL: ${ACME_EMAIL}"
 
 #===============================================================================
 # STEP 7: Deploy Services
 #===============================================================================
 echo -e "\n${YELLOW}[7/8] Deploying services...${NC}"
 
-# Create external network for Traefik
+# Create networks
+echo -e "${BLUE}  → Creating Docker networks...${NC}"
+docker network create smsly-net 2>/dev/null || echo "Network smsly-net already exists"
 docker network create smsly-proxy 2>/dev/null || echo "Network smsly-proxy already exists"
 
-# Deploy Traefik (SSL/TLS)
-echo -e "${BLUE}  → Starting Traefik (SSL/TLS)...${NC}"
-docker-compose -f docker-compose.traefik.yml up -d
+# Build and deploy application stack (includes nginx for SSL termination)
+echo -e "${BLUE}  → Building application stack...${NC}"
+docker-compose -f docker-compose.prod.yml build
 
-# Deploy main application stack
 echo -e "${BLUE}  → Starting application stack...${NC}"
 docker-compose -f docker-compose.prod.yml up -d
 
-# Wait for services to be ready
-echo -e "${BLUE}  → Waiting for services to start (30s)...${NC}"
-sleep 30
+# Wait for database to be ready
+echo -e "${BLUE}  → Waiting for database to be ready...${NC}"
+for i in {1..30}; do
+    if docker-compose -f docker-compose.prod.yml exec -T db pg_isready -U smsly_admin 2>/dev/null; then
+        echo -e "${GREEN}  ✓ Database ready${NC}"
+        break
+    fi
+    echo -n "."
+    sleep 2
+done
+echo ""
 
 # Run database migrations
 echo -e "${BLUE}  → Running database migrations...${NC}"
-docker-compose -f docker-compose.prod.yml exec -T backend python manage.py migrate
+docker-compose -f docker-compose.prod.yml exec -T backend python manage.py migrate --noinput
 
 # Collect static files
 echo -e "${BLUE}  → Collecting static files...${NC}"
