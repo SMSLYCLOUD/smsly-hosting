@@ -25,6 +25,7 @@ class TCPTunnel:  # pylint: disable=too-many-instance-attributes
     local_port: int
     remote_port: int
     user_id: str
+    auth_token: str # Zero Trust: Token for tunnel authentication
     # pylint: disable=too-many-instance-attributes
     created_at: datetime = field(default_factory=datetime.utcnow)
     bytes_in: int = 0
@@ -60,18 +61,23 @@ class TCPTunnelServer:
         if self.port_range[0] <= port <= self.port_range[1]:
             self.available_ports.add(port)
 
-    async def create_tunnel(self, user_id: str, local_port: int) -> Optional[TCPTunnel]:
+    async def create_tunnel(self, user_id: str, local_port: int, auth_token: str = None) -> Optional[TCPTunnel]:
         """Create a new TCP tunnel."""
         remote_port = self.allocate_port()
         if not remote_port:
             logger.error("No available ports for TCP tunnel")
             return None
 
+        # Zero Trust: Generate or use provided token
+        if not auth_token:
+            auth_token = str(uuid.uuid4())
+
         tunnel = TCPTunnel(
             tunnel_id=str(uuid.uuid4()),
             local_port=local_port,
             remote_port=remote_port,
             user_id=user_id,
+            auth_token=auth_token
         )
 
         self.tunnels[remote_port] = tunnel
@@ -113,6 +119,11 @@ class TCPTunnelServer:
         logger.info("TCP connection %s on port %s", connection_id, tunnel.remote_port)
 
         try:
+            # Zero Trust: Check if the connection has authentication headers?
+            # For raw TCP, we can't easily check headers unless we wrap in TLS or a custom protocol.
+            # In a real Zero Trust implementation, the client would need to perform a handshake.
+            # Simplified for this phase: Assume the tunnel itself is the secure channel.
+
             # Get the tunnel client writer
             tunnel_writer = self.tunnel_writers.get(tunnel.tunnel_id)
             if not tunnel_writer:
@@ -172,11 +183,27 @@ class TCPTunnelServer:
     async def register_tunnel_client(
         self,
         tunnel_id: str,
-        writer: asyncio.StreamWriter
+        writer: asyncio.StreamWriter,
+        auth_token: str
     ):  # pylint: disable=unused-argument
-        """Register a tunnel client connection."""
+        """
+        Register a tunnel client connection with authentication.
+        """
+        # Find tunnel by ID
+        tunnel = next((t for t in self.tunnels.values() if t.tunnel_id == tunnel_id), None)
+
+        if not tunnel:
+            logger.warning("Tunnel %s not found", tunnel_id)
+            return False
+
+        # Verify Token
+        if tunnel.auth_token != auth_token:
+            logger.warning("Invalid auth token for tunnel %s", tunnel_id)
+            return False
+
         self.tunnel_writers[tunnel_id] = writer
-        logger.info("Tunnel client registered: %s", tunnel_id)
+        logger.info("Tunnel client registered (Authenticated): %s", tunnel_id)
+        return True
 
     async def close_tunnel(self, tunnel_id: str):
         """Close a TCP tunnel."""
