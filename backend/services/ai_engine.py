@@ -1,9 +1,10 @@
 """AI Engine service."""
 # pylint:
 # disable=line-too-long,broad-exception-caught,logging-fstring-interpolation,too-few-public-methods,wrong-import-order
-from typing import List
+from typing import List, Dict
 import os
 import logging
+import statistics
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
@@ -85,6 +86,57 @@ class DevOpsAgent:
         except Exception as e:
             logger.error(f"AI Diagnosis Failed: {e}")
             return "AI Analysis failed. Please check logs manually."
+
+    def detect_anomalies(self, metrics: List[float], metric_name: str) -> Dict[str, Any]:
+        """
+        Detects anomalies in a time-series of metrics using Statistical Z-Score.
+        This provides a 'Custom ML' baseline without needing heavy deps like scikit-learn.
+        """
+        if len(metrics) < 10:
+            return {"status": "insufficient_data", "anomalies": []}
+
+        try:
+            mean = statistics.mean(metrics)
+            stdev = statistics.stdev(metrics)
+
+            if stdev == 0:
+                return {"status": "stable", "anomalies": []}
+
+            anomalies = []
+            threshold = 3.0  # 3 Sigma rule
+
+            for i, val in enumerate(metrics):
+                z_score = (val - mean) / stdev
+                if abs(z_score) > threshold:
+                    anomalies.append({
+                        "index": i,
+                        "value": val,
+                        "z_score": round(z_score, 2),
+                        "severity": "CRITICAL" if abs(z_score) > 4 else "WARNING"
+                    })
+
+            if anomalies:
+                # If anomalies found, use LLM to explain context (if available)
+                explanation = "Statistical anomaly detected."
+                if self.llm:
+                    try:
+                        prompt = f"Metric '{metric_name}' showed values {metrics}. Anomalies found at {anomalies}. Explain potential cause in one sentence."
+                        explanation = self.llm.invoke(prompt).content
+                    except:
+                        pass
+
+                return {
+                    "status": "anomaly_detected",
+                    "count": len(anomalies),
+                    "anomalies": anomalies,
+                    "explanation": explanation
+                }
+
+            return {"status": "normal", "anomalies": []}
+
+        except Exception as e:
+            logger.error(f"Anomaly Detection Failed: {e}")
+            return {"status": "error", "message": str(e)}
 
     def _simulate_analysis(self, repo_url):
         # Fallback heuristic logic

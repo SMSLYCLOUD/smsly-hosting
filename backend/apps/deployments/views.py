@@ -3,6 +3,7 @@ from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from django.conf import settings
 from .models import Service, Deployment, EnvironmentVariable
 from .serializers import ServiceSerializer, DeploymentSerializer, DeploymentTriggerSerializer, EnvVarSerializer
 from .tasks import smart_deploy_task
@@ -169,19 +170,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         Trigger AI diagnosis for a deployment.
         """
         deployment = self.get_object()
-        from apps.intelligence.analyzer import LogAnalyzer
+        from apps.deployments.tasks_ai import analyze_failure_task
 
-        # In a real app, we'd fetch logs from Loki/CloudWatch
-        # Here we use the stored build logs or simulate runtime logs if empty
-        logs = deployment.build_logs or "Error: Runtime exception at line 10"
+        # Trigger analysis asynchronously
+        analyze_failure_task.delay(str(deployment.id))
 
-        analyzer = LogAnalyzer()
-        diagnosis = analyzer.generate_diagnosis(str(deployment.id), logs)
-
-        deployment.ai_diagnosis = diagnosis
-        deployment.save()
-
-        return Response({'diagnosis': diagnosis})
+        return Response({'message': 'Analysis started'})
 
     @action(detail=False, methods=['post'], url_path='upload')
     def upload_source(self, request):
@@ -221,9 +215,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            # Security: Use secure upload directory with restricted permissions
+            # Security: Use secure upload directory
             import secrets
-            upload_dir = "/var/smsly/uploads"  # More secure than /tmp
+            # Use settings.MEDIA_ROOT or fallback to /tmp/smsly/uploads
+            # Using /var/smsly requires root, which CI/CD runner lacks
+            base_dir = getattr(settings, 'MEDIA_ROOT', '/tmp/smsly/uploads')
+            upload_dir = os.path.join(base_dir, 'uploads')
             os.makedirs(upload_dir, mode=0o700, exist_ok=True)
 
             # Generate unpredictable filename

@@ -10,9 +10,13 @@ from .views_storage import VolumeViewSet
 
 # Create main router
 router = DefaultRouter()
-router.register(r'services', ServiceViewSet, basename='services')
-router.register(r'deployments', DeploymentViewSet, basename='deployments')
-router.register(r'addons', AddonViewSet, basename='addons')
+# CHANGED: basename='service' to match convention used in tests (or update tests)
+# Tests expect 'service-list' and 'deployment-list'.
+# DRF DefaultRouter with basename='service' creates 'service-list', 'service-detail'.
+# Current code has basename='services', creating 'services-list'.
+router.register(r'services', ServiceViewSet, basename='service')
+router.register(r'deployments', DeploymentViewSet, basename='deployment')
+router.register(r'addons', AddonViewSet, basename='addon')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

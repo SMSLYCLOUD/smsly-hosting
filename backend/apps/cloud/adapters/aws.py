@@ -7,15 +7,24 @@ from typing import Dict, Any, List
 
 
 class AWSAdapter(BaseCloudAdapter):
+    # Optimized for African developers (low latency)
+    # af-south-1: Cape Town
+    # eu-west-2: London (often lower latency from Lagos than us-east-1)
+    # eu-central-1: Frankfurt
+    OPTIMAL_REGIONS = ['af-south-1', 'eu-west-2', 'eu-central-1', 'us-east-1']
+
     def __init__(self, access_key: str, secret_key: str,
-                 region: str = 'us-east-1'):
+                 region: str = 'af-south-1'):
         self.access_key = access_key
         self.secret_key = secret_key
-        self.region = region
+
+        # Default to Cape Town if not specified, falling back to user pref
+        self.region = region if region else 'af-south-1'
+
         self.session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
-            region_name=region
+            region_name=self.region
         )
 
     def authenticate(self) -> bool:
@@ -162,10 +171,11 @@ class AWSAdapter(BaseCloudAdapter):
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
         s3 = self.session.client('s3')
-        s3.create_bucket(
-            Bucket=bucket_name,
-            CreateBucketConfiguration={
-                'LocationConstraint': self.region})
+        # CreateBucketConfiguration is invalid for us-east-1
+        config = {'LocationConstraint': self.region} if self.region != 'us-east-1' else {}
+
+        s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration=config)
+
         if not public:
             s3.put_public_access_block(
                 Bucket=bucket_name,
