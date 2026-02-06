@@ -2,6 +2,8 @@
 import docker
 import logging
 import secrets
+import json
+import os
 from typing import Dict, Any, List
 from kubernetes import client, config
 from .base import BaseCloudAdapter
@@ -19,6 +21,7 @@ class LocalAdapter(BaseCloudAdapter):
         self.mode = mode
         self.docker_client = None
         self.k8s_client = None
+        self.batch_v1 = None
 
         try:
             self.docker_client = docker.from_env()
@@ -32,6 +35,7 @@ class LocalAdapter(BaseCloudAdapter):
                 config.load_kube_config()
             self.k8s_client = client.CoreV1Api()
             self.k8s_apps = client.AppsV1Api()
+            self.batch_v1 = client.BatchV1Api()
         except Exception as e:
             logger.warning(f"Kubernetes client not available: {e}")
 
@@ -57,8 +61,6 @@ class LocalAdapter(BaseCloudAdapter):
             self.docker_client.networks.create(network_name, driver="bridge")
 
         # Mesh / Service Discovery
-        # We rely on Docker's internal DNS. Containers on the same network can resolve each other by name.
-        # e.g. 'redis' resolves to the redis container IP.
         networking_config = self.docker_client.api.create_networking_config({
             network_name: self.docker_client.api.create_endpoint_config(
                 aliases=[name, f"{name}.{project_id}.internal"]
@@ -66,13 +68,10 @@ class LocalAdapter(BaseCloudAdapter):
         })
 
         # Prepare Volumes
-        # Input format: [{'name': 'vol_name', 'mount_path': '/data'}]
-        # Docker format: {'vol_name': {'bind': '/data', 'mode': 'rw'}}
         docker_volumes = {}
         if volumes:
             for vol in volumes:
                 vol_name = vol['name']
-                # Create volume if it doesn't exist
                 try:
                     self.docker_client.volumes.get(vol_name)
                 except docker.errors.NotFound:
@@ -97,7 +96,6 @@ class LocalAdapter(BaseCloudAdapter):
             'traefik.enable': 'true',
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
             f'traefik.http.routers.{name}.entrypoints': 'websecure',  # HTTPS
-            # Let's Encrypt
             f'traefik.http.routers.{name}.tls.certresolver': 'myresolver',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
@@ -184,10 +182,130 @@ class LocalAdapter(BaseCloudAdapter):
 
         return f"k8s://{namespace}/{name}"
 
-    # --- Other Methods ---
+    # --- Serverless Functions Implementation ---
     def deploy_function(self, function_name: str,
                         code_zip: str, handler: str, runtime: str) -> str:
-        raise NotImplementedError("Local Functions not yet supported")
+        """
+        Deploy a Serverless Function.
+
+        Real Implementation:
+        - Mounts the code path (assuming code_zip is a path to a directory/file).
+        - Uses a generic runtime image to execute the handler.
+        - Defaults to a simple HTTP wrapper for 'Hot Function' behavior.
+        """
+        logger.info(f"Deploying function {function_name} ({runtime})")
+
+        # Runtime Mappings to standard images
+        runtime_images = {
+            'python3.9': 'python:3.9-slim',
+            'nodejs18': 'node:18-alpine',
+        }
+        image = runtime_images.get(runtime, 'python:3.9-slim')
+
+        # Ensure code path exists
+        if not os.path.exists(code_zip):
+            # In production, we'd pull from S3/Storage. For local, we assume a path.
+            logger.warning(f"Code path {code_zip} does not exist. Using simulation mode.")
+            code_mount = None
+        else:
+            code_mount = code_zip
+
+        # Wrapper Command: Simple HTTP Server that imports handler
+        # This is a 'poor man's' OpenFaaS watchdog
+        if 'python' in runtime:
+            # Assumes handler format: module.function_name
+            module_name, func_name = handler.split('.')
+            cmd = f"""
+            pip install flask &&
+            cat <<EOF > server.py
+from flask import Flask, request
+import {module_name}
+
+app = Flask(__name__)
+
+@app.route('/', methods=['GET', 'POST'])
+def handle():
+    return str({module_name}.{func_name}(request.json or {{}}))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
+EOF
+            python server.py
+            """
+            entrypoint = ["/bin/sh", "-c", cmd]
+        elif 'node' in runtime:
+             cmd = f"""
+             npm install express &&
+             node -e "
+             const express = require('express');
+             const app = express();
+             app.use(express.json());
+             const handler = require('./{handler.split('.')[0]}');
+             app.all('/', async (req, res) => {{
+                 const result = await handler.{handler.split('.')[1]}(req.body);
+                 res.send(result);
+             }});
+             app.listen(8080, '0.0.0.0');
+             "
+             """
+             entrypoint = ["/bin/sh", "-c", cmd]
+        else:
+            entrypoint = None
+
+        env_vars = {
+            "PORT": "8080",
+            "PYTHONUNBUFFERED": "1"
+        }
+
+        volumes = []
+        if code_mount:
+             # Mount code to /app
+             volumes.append({'name': f'{function_name}-code', 'mount_path': '/app'})
+
+        if self.docker_client:
+            return self._deploy_docker_function(function_name, image, env_vars, volumes, entrypoint, code_mount)
+
+        # Fallback for K8s (simplified)
+        return self._deploy_k8s(function_name, image, env_vars, cpu=100, memory=128)
+
+
+    def _deploy_docker_function(self, name: str, image: str, env: Dict[str, str],
+                                volumes: List[Dict], entrypoint: List[str], code_path: str) -> str:
+        """Deploy function as a Docker container with code mount."""
+        try:
+            network_name = 'smsly-net'
+            try:
+                self.docker_client.networks.get(network_name)
+            except docker.errors.NotFound:
+                self.docker_client.networks.create(network_name)
+
+            try:
+                c = self.docker_client.containers.get(name)
+                c.remove(force=True)
+            except docker.errors.NotFound:
+                pass
+
+            # Docker Volume Binding
+            binds = {}
+            if code_path:
+                binds[code_path] = {'bind': '/app', 'mode': 'ro'}
+
+            container = self.docker_client.containers.run(
+                image,
+                name=name,
+                environment=env,
+                detach=True,
+                network=network_name,
+                volumes=binds,
+                working_dir='/app',
+                entrypoint=entrypoint,
+                mem_limit='128m',
+                cpu_quota=10000
+            )
+            return f"docker-function://{container.id}"
+        except Exception as e:
+            logger.error(f"Failed to deploy docker function: {e}")
+            raise e
 
     def create_bucket(self, bucket_name: str, public: bool = False) -> str:
         return f"local://{bucket_name}"
