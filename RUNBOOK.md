@@ -125,7 +125,204 @@ docker compose -f docker-compose.prod.yml exec backend python manage.py shell -c
 
 ---
 
+---
+
 ## Monitoring
 
 - **Disk Space**: Monitor `df -h` to ensure Docker volumes have space.
 - **Memory**: Monitor `docker stats` for high usage by `backend` or `celery`.
+- **Health Check**: `curl http://localhost:8090/health` (should return 200 OK with `"status": "healthy"`).
+
+### Production Monitoring
+
+```bash
+# Enable Prometheus + Grafana
+docker-compose -f docker-compose.observability.yml up -d
+
+# View metrics
+open http://localhost:9090  # Prometheus
+open http://localhost:3001  # Grafana (admin/admin)
+
+# Prometheus targets
+# - Backend metrics: http://backend:8000/metrics
+# - Traefik metrics: http://traefik:8082/metrics
+```
+
+### Set Up Health Check Monitoring
+
+Add to crontab (`crontab -e`):
+
+```bash
+*/5 * * * * curl -f https://hosting.smsly.cloud/health || echo "SMSLY Hosting health check failed" | mail -s "Alert: Hosting Down" admin@smsly.cloud
+```
+
+---
+
+## Disaster Recovery
+
+### Automated Backups
+
+The platform includes automated database backup:
+
+```bash
+# Enable daily backups (runs at 2 AM)
+0 2 * * * /opt/smsly-hosting/scripts/backup.sh
+```
+
+Backups are stored in `/opt/smsly-hosting/backups/`.
+
+### Manual Backup
+
+```bash
+cd /opt/smsly-hosting
+
+# Database + volumes
+docker-compose -f docker-compose.prod.yml exec db pg_dump -U smsly_admin smsly_hosting | gzip > backups/manual_$(date +%Y%m%d_%H%M%S).sql.gz
+
+# Backup registry data (user Docker images)
+tar czf backups/registry_$(date +%Y%m%d).tar.gz -C /var/lib/docker/volumes smsly-hosting_registry_data
+```
+
+### Restore from Backup
+
+```bash
+# Stop dependent services
+docker-compose -f docker-compose.prod.yml stop backend celery celery-beat
+
+# Restore database
+gunzip -c backups/manual_20260206_140000.sql.gz | \
+  docker-compose -f docker-compose.prod.yml exec -T db psql -U smsly_admin -d smsly_hosting
+
+# Restart services
+docker-compose -f docker-compose.prod.yml start backend celery celery-beat
+
+# Verify
+docker-compose -f docker-compose.prod.yml logs -f backend
+```
+
+### Disaster Recovery Scenarios
+
+#### Scenario 1: Database Corruption
+
+1. Stop all services writing to DB:
+   ```bash
+   docker-compose -f docker-compose.prod.yml stop backend celery celery-beat
+   ```
+
+2. Restore from latest backup (see above)
+
+3. Verify data integrity:
+   ```bash
+   docker-compose -f docker-compose.prod.yml exec backend python manage.py check
+   ```
+
+4. Restart services:
+   ```bash
+   docker-compose -f docker-compose.prod.yml start backend celery celery-beat
+   ```
+
+#### Scenario 2: Full Server Failure
+
+1. Provision new server (same specs)
+
+2. Install Docker + Docker Compose
+
+3. Restore from backups:
+   ```bash
+   # Copy backups to new server
+   scp -r backups/ root@new-server:/opt/smsly-hosting/
+
+   # Deploy services
+   cd /opt/smsly-hosting
+   docker-compose -f docker-compose.prod.yml up -d
+   
+   # Restore database
+   gunzip -c backups/latest.sql.gz | docker-compose -f docker-compose.prod.yml exec -T db psql -U smsly_admin -d smsly_hosting
+   ```
+
+4. Update DNS to point to new server
+
+5. Verify health: `curl https://hosting.smsly.cloud/health`
+
+#### Scenario 3: Rollback After Failed Deployment
+
+```bash
+# View deployment history
+docker-compose -f docker-compose.prod.yml exec backend python manage.py showmigrations
+
+# Rollback to previous git commit
+git log --oneline -n 5
+git checkout <previous-commit-hash>
+
+# Rebuild and restart
+docker-compose -f docker-compose.prod.yml up -d --build
+
+# Rollback migrations if needed
+docker-compose -f docker-compose.prod.yml exec backend python manage.py migrate <app_name> <migration_number>
+```
+
+### Recovery Time Objectives (RTO)
+
+- **Database restore**: < 15 minutes (for databases < 10GB)
+- **Full server rebuild**: < 1 hour
+- **Service restart**: < 5 minutes
+
+### Backup Retention
+
+- **Daily backups**: Kept for 30 days
+- **Weekly backups**: Kept for 90 days
+- **Monthly backups**: Kept for 1 year
+
+---
+
+## Production Deployment Best Practices
+
+### Pre-Deployment Checklist
+
+- [ ] All tests passing (`docker-compose -f docker-compose.prod.yml exec backend python manage.py test`)
+- [ ] Database migrations reviewed
+- [ ] Environment variables validated
+- [ ] SSL certificate valid and not expiring soon
+- [ ] Disk space available (at least 20% free)
+
+### Zero-Downtime Deployment
+
+```bash
+# 1. Pull latest code
+git pull origin main
+
+# 2. Rebuild services (health checks ensure zero downtime)
+docker-compose -f docker-compose.prod.yml up -d --build
+
+# 3. Run migrations (backend remains available)
+docker-compose -f docker-compose.prod.yml exec backend python manage.py migrate
+
+# 4. Verify health
+curl https://hosting.smsly.cloud/health
+```
+
+### Rollback Procedure
+
+If deployment fails:
+
+```bash
+# Quick rollback
+git checkout <previous-working-commit>
+docker-compose -f docker-compose.prod.yml up -d --build
+```
+
+---
+
+## Security Scanning
+
+### Pre-Deployment Security Scan
+
+```bash
+# Scan Docker images for vulnerabilities
+docker-compose -f docker-compose.prod.yml build
+docker scan smsly-hosting_backend:latest
+
+# Check for known vulnerabilities in dependencies
+docker-compose -f docker-compose.prod.yml exec backend pip-audit
+```
+

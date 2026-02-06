@@ -1,11 +1,7 @@
 """Urls module."""
 from django.contrib import admin
 from django.urls import path, include
-from django.http import JsonResponse
-
-
-def health_check(request):
-    return JsonResponse({"status": "ok"})
+from .health import health
 
 
 urlpatterns = [
@@ -19,5 +15,5 @@ urlpatterns = [
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/', include('apps.deployments.urls')),
     path('api/v1/', include('apps.teams.urls')),
-    path('api/health/', health_check),
+    path('health', health, name='health'),  # Health check for load balancers
 ]

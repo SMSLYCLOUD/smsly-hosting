@@ -6,10 +6,17 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config(
-    'SECRET_KEY',
-    default='django-insecure-smsly-hosting-dev-key')
+# SECURITY: No default - service MUST crash if SECRET_KEY is missing
+# Generate with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+SECRET_KEY = config('SECRET_KEY')
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
+
+# Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
+try:
+    from cryptography.fernet import Fernet
+    Fernet(FIELD_ENCRYPTION_KEY.encode() if isinstance(FIELD_ENCRYPTION_KEY, str) else FIELD_ENCRYPTION_KEY)
+except Exception as e:
+    raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'")
 DEBUG = config('DEBUG', default=False, cast=bool)
 
 # Security hardening
@@ -28,9 +35,8 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=Csv())
-if not ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ["*"]
+# SECURITY: No wildcard default - prevents host header injection
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', cast=Csv())
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
     default='https://*.railway.app',
