@@ -1,11 +1,17 @@
 """Test Api module."""
 from django.urls import reverse
+from django.contrib.auth.models import User
 from rest_framework import status
 from rest_framework.test import APITestCase
 from apps.deployments.models import Service, Deployment
 
 
 class ServiceTests(APITestCase):
+    def setUp(self):
+        # Create a test user and authenticate
+        self.user = User.objects.create_user('testuser', 'test@example.com', 'password123')
+        self.client.force_authenticate(user=self.user)
+
     def test_create_service(self):
         url = reverse('service-list')
         data = {
@@ -21,7 +27,8 @@ class ServiceTests(APITestCase):
     def test_create_deployment(self):
         service = Service.objects.create(
             name='test-app',
-            repository_url='https://github.com/test/app'
+            repository_url='https://github.com/test/app',
+            owner=self.user  # Ensure owner matches authenticated user
         )
         url = reverse('deployment-list')
         data = {

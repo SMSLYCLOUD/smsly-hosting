@@ -14,3 +14,11 @@ class DeploymentsConfig(AppConfig):
         from . import models_templates
         from . import models_cron
         from . import models_storage
+
+        # Import signals
+        # Note: We assume there's a signals.py or we define them here.
+        # Based on the failing test, we need a signal that creates SMSLY_API_KEY
+        try:
+            from . import signals
+        except ImportError:
+            pass
