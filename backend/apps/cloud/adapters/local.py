@@ -52,7 +52,7 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             raise RuntimeError("No local orchestrator available")
 
-    # pylint: disable=too-many-positional-arguments
+    # pylint: disable=too-many-positional-arguments, R0917
     def _deploy_docker(self, name: str, image: str,
                        env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
         # Ensure shared network exists
@@ -274,7 +274,7 @@ EOF
         return self._deploy_k8s(
             function_name, image, env_vars, cpu=100, memory=128)
 
-    # pylint: disable=too-many-positional-arguments
+    # pylint: disable=too-many-positional-arguments, R0917
     def _deploy_docker_function(self, name: str, image: str, env: Dict[str, str],
                                 volumes: List[Dict], entrypoint: List[str], code_path: str) -> str:
         """Deploy function as a Docker container with code mount."""
