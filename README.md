@@ -1,104 +1,56 @@
-# SMSLY Hosting v2 - The Hyperscale PaaS
+# SMSLY Hosting (Universal PaaS)
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Next.js 15](https://img.shields.io/badge/Next.js-15-black.svg)](frontend/)
-[![Django 5](https://img.shields.io/badge/Django-5.0-green.svg)](backend/)
+[![CI/CD](https://github.com/SMSLYCLOUD/smsly-hosting/actions/workflows/test.yml/badge.svg)](https://github.com/SMSLYCLOUD/smsly-hosting/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**The Universal PaaS for Hyperscale Infrastructure.**
+**The Self-Healing, Multi-Cloud PaaS.**
 
-SMSLY Hosting v2 is designed to be the "Control Plane for the Internet". It unifies AWS, Azure, GCP, Railway, and Local deployments into a single, beautiful dashboard with AI-driven observability.
+SMSLY Hosting is an open-source alternative to Vercel/Railway/Heroku that runs on **your own infrastructure** (AWS, Azure, GCP, or bare metal). It brings the developer experience of a managed PaaS to your own cloud account.
 
----
+## 🚀 Key Features (God-Mode Enabled)
 
-## ⚡ Quick Start (Production)
+### 1. ⚡ Serverless Functions ("Hot Functions")
+Deploy code, not containers. SMSLY wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
+- **Python**: Flask-wrapped dynamic entrypoints.
+- **Node.js**: Express-wrapped dynamic entrypoints.
+- **Local/K8s**: Works on Docker Compose and Kubernetes.
 
-**WARNING:** The installation script is aggressive. It is designed for a **FRESH VPS** (Ubuntu 22.04+ recommended). It will remove existing Docker, Nginx, and Apache installations to ensure a clean slate.
+### 2. 👁️ AI-Driven Observability
+Not just logs. SMSLY uses statistical anomaly detection (Z-Score) and Generative AI (Gemini) to **diagnose failures** and **auto-suggest fixes**.
+- **Anomaly Detection**: "CPU usage spiked 3σ above mean."
+- **Root Cause Analysis**: "Build failed because `requirements.txt` is missing."
 
-### One-Line Install
+### 3. 🔄 GitHub Integration & PR Previews
+- **Auto-Deploy**: Push to `main` deploys to production.
+- **Preview Environments**: Opening a Pull Request spins up an ephemeral environment (e.g., `pr-101.smsly-hosting.cloud`). Merging/Closing destroys it.
 
+### 4. 🛡️ High Availability & Self-Healing
+- **Control Plane**: Deployable via Helm (`charts/smsly-hosting`) for K8s HA.
+- **Database**: Supports Spilo (Patroni + Etcd) for automated PostgreSQL failover.
+- **Self-Healing**: Kubernetes Liveness/Readiness probes ensure zero downtime updates.
+
+### 5. 🌍 Multi-Cloud & Hybrid
+- **AWS/Azure/GCP**: Native adapters for VMs, Storage, and Load Balancers.
+- **Local/On-Prem**: Fully functional "Simulation Mode" for air-gapped or local VPS deployments.
+- **Global Latency**: Optimized defaults for low-latency regions worldwide.
+
+## 📦 Installation
+
+### Quick Start (Local Docker)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh | sudo bash
+./install.sh
 ```
 
-**What this does:**
-1.  Cleans up conflicting services (Apache, Nginx, old Docker).
-2.  Installs Docker Engine & Compose.
-3.  Generates secure credentials (`.env`).
-4.  Deploys the full stack on port **8090**.
-
-### Requirements
-*   **RAM:** 2GB+ (4GB recommended)
-*   **CPU:** 2 vCPU+
-*   **OS:** Ubuntu 22.04 / 24.04 (Fresh Install)
-
----
-
-## 🌐 Access Points
-
-After installation, access your dashboard:
-
-| Service | URL | Default Credentials |
-|---------|-----|---------------------|
-| **Dashboard** | `http://<YOUR_IP>:8090` | `admin` / `admin` |
-| **Admin Panel** | `http://<YOUR_IP>:8090/admin` | `admin` / `admin` |
-| **API** | `http://<YOUR_IP>:8090/api/v1/` | - |
-
-> **Note:** The default installation does not configure SSL/HTTPS. It is recommended to put this server behind a secure proxy (like Cloudflare) or configure Nginx/Traefik manually for SSL if exposing to the public internet.
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-graph TD
-    User[Developer] -->|HTTP:8090| Nginx[Nginx Container]
-    Nginx -->|Proxy| UI[Frontend Next.js]
-    Nginx -->|Proxy| API[Backend Django]
-
-    subgraph "Docker Compose Network"
-        UI
-        API -->|Tasks| Celery[Celery Workers]
-        API -->|Cache| Redis
-        API -->|State| PG[PostgreSQL]
-        Celery -->|Deploy| Infra[Cloud / Local]
-    end
+### Production (Kubernetes/Helm)
+```bash
+helm install smsly-hosting ./charts/smsly-hosting --namespace smsly --create-namespace
 ```
 
----
-
-## 📦 Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 15, React 19, Tailwind, Shadcn UI |
-| Backend | Django 5.0, Channels, Celery |
-| Database | PostgreSQL 16 |
-| Cache | Redis 7 |
-| Infra | Docker Compose |
-
----
-
-## 🔧 Environment Variables
-
-The installer automatically generates a `.env` file at `/opt/smsly-hosting/.env`.
-
-Key variables:
-- `SECRET_KEY`: Django secret.
-- `FIELD_ENCRYPTION_KEY`: For encrypting sensitive user data (API keys).
-- `DATABASE_URL`: Connection to internal Postgres.
-- `ALLOWED_HOSTS`: Comma-separated list of allowed domains/IPs.
-
----
+## 🛠️ Tech Stack
+- **Backend**: Django (Python 3.12), Celery, Redis.
+- **Frontend**: Next.js 14 (TypeScript), Tailwind CSS.
+- **Orchestration**: Docker / Kubernetes.
+- **Database**: PostgreSQL 16.
 
 ## 🤝 Contributing
-
-1. Fork the repo
-2. Create feature branch (`git checkout -b feature/amazing`)
-3. Commit changes
-4. Push and open PR
-
----
-
-## 📄 License
-
-MIT License. See [LICENSE](LICENSE) for details.
+We welcome global contributors! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
