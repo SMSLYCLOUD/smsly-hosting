@@ -1,0 +1,15 @@
+apiVersion: v2
+name: smsly-hosting
+description: A Helm chart for the SMSLY Hosting Control Plane (Self-Hosted PaaS)
+type: application
+version: 0.1.0
+appVersion: "2.0.0"
+keywords:
+  - paas
+  - hosting
+  - django
+  - nextjs
+  - kubernetes
+maintainers:
+  - name: smsly-team
+    email: admin@smsly.cloud

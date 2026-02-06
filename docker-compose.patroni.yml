@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    command: etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://etcd:2379 --listen-peer-urls http://0.0.0.0:2380
+    ports:
+      - "2379:2379"
+    networks:
+      - patroni-net
+
+  patroni1:
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    hostname: patroni1
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: admin
+      PGUSER_ADMIN: smsly_admin
+      PGPASSWORD_ADMIN: smsly_secure_pass
+      PG_HMAC: sha256
+    ports:
+      - "5432:5432"
+      - "8008:8008"
+    networks:
+      - patroni-net
+    depends_on:
+      - etcd
+
+  patroni2:
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    hostname: patroni2
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: admin
+      PGUSER_ADMIN: smsly_admin
+      PGPASSWORD_ADMIN: smsly_secure_pass
+      PG_HMAC: sha256
+    ports:
+      - "5433:5432"
+      - "8009:8008"
+    networks:
+      - patroni-net
+    depends_on:
+      - etcd
+
+  patroni3:
+    image: ghcr.io/zalando/spilo-16:3.0-p1
+    hostname: patroni3
+    environment:
+      SCOPE: smsly-cluster
+      ETCD3_HOST: "etcd:2379"
+      PGUSER_SUPERUSER: postgres
+      PGPASSWORD_SUPERUSER: admin
+      PGUSER_ADMIN: smsly_admin
+      PGPASSWORD_ADMIN: smsly_secure_pass
+      PG_HMAC: sha256
+    ports:
+      - "5434:5432"
+      - "8010:8008"
+    networks:
+      - patroni-net
+    depends_on:
+      - etcd
+
+  haproxy:
+    image: haproxy:2.8
+    ports:
+      - "5000:5000" # Master
+      - "5001:5001" # Replicas
+      - "7000:7000" # Stats
+    volumes:
+      - ./postgres/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - patroni-net
+    depends_on:
+      - patroni1
+      - patroni2
+      - patroni3
+
+networks:
+  patroni-net:

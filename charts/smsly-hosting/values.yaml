@@ -1,0 +1,71 @@
+# Default values for smsly-hosting.
+
+global:
+  domain: "hosting.example.com"
+  environment: "production"
+
+backend:
+  image:
+    repository: smsly/backend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 8000
+  env:
+    debug: "False"
+    secretKey: "change-me-in-prod"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+frontend:
+  image:
+    repository: smsly/frontend
+    pullPolicy: IfNotPresent
+    tag: "latest"
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+
+postgresql:
+  enabled: true
+  auth:
+    database: smsly_hosting
+    username: smsly_admin
+    password: "change-me"
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: hosting.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          backend: frontend
+        - path: /api
+          pathType: Prefix
+          backend: backend
+        - path: /admin
+          pathType: Prefix
+          backend: backend
