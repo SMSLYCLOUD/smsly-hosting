@@ -113,8 +113,13 @@ echo -e "\n${YELLOW}[6/6] Finalizing Setup...${NC}"
 echo "Waiting for database (15s)..."
 sleep 15
 
+# Run Migrations Explicitly
+echo "Running database migrations..."
+docker compose -f $COMPOSE_FILE exec -T backend python manage.py migrate --noinput || echo "Migration failed!"
+
 # Create Admin User
 # We use 'backend' service name as defined in docker-compose.prod.yml
+echo "Creating admin user..."
 docker compose -f $COMPOSE_FILE exec -T backend python manage.py createsuperuser --noinput --username admin --email admin@example.com || true
 
 # Set password manually

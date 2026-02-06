@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# =============================================================================
+# SMSLY Hosting - Podman Installer (Experimental)
+# =============================================================================
+# This script installs Podman and configures it to emulate Docker.
+# It is designed for users who prefer Podman over Docker.
+# =============================================================================
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo -e "${YELLOW}Starting Podman installation...${NC}"
+
+# 1. Cleanup Old Docker/Podman
+echo -e "\n${YELLOW}[1/6] Cleaning up conflicting container engines...${NC}"
+systemctl stop docker podman || true
+apt-get remove -y docker docker-engine docker.io containerd runc podman || true
+rm -rf /var/lib/docker
+rm -rf /var/run/docker.sock
+
+# 2. Install Podman
+echo -e "\n${YELLOW}[2/6] Installing Podman...${NC}"
+. /etc/os-release
+echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" | tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+curl -L "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" | apt-key add -
+apt-get update
+apt-get install -y podman podman-docker podman-plugins buildah skopeo python3-pip
+
+# 3. Configure Podman Socket (Rootful for compatibility)
+echo -e "\n${YELLOW}[3/6] Configuring Podman Socket...${NC}"
+systemctl enable --now podman.socket
+if [ ! -S /var/run/docker.sock ]; then
+    ln -s /run/podman/podman.sock /var/run/docker.sock
+    echo "Symlinked /run/podman/podman.sock to /var/run/docker.sock"
+fi
+
+# 4. Install Podman Compose
+echo -e "\n${YELLOW}[4/6] Installing Podman Compose...${NC}"
+pip3 install podman-compose
+
+# 5. Configure SMSLY Hosting
+echo -e "\n${YELLOW}[5/6] Configuring SMSLY Hosting...${NC}"
+INSTALL_DIR="/opt/smsly-hosting"
+
+if [ ! -d "$INSTALL_DIR" ]; then
+    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git $INSTALL_DIR || true
+fi
+cd $INSTALL_DIR
+
+# Generate Secrets if missing
+if [ ! -f .env ]; then
+    FIELD_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=")
+    SECRET_KEY=$(openssl rand -hex 32)
+    POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    PUBLIC_IP=$(curl -s ifconfig.me || echo "localhost")
+
+    cat <<EOF > .env
+ENVIRONMENT=production
+DEBUG=False
+SECRET_KEY=$SECRET_KEY
+FIELD_ENCRYPTION_KEY=$FIELD_KEY
+DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/0
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+POSTGRES_USER=smsly_admin
+POSTGRES_DB=smsly_hosting
+DOMAIN=$PUBLIC_IP
+ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090,https://hosting.smsly.cloud
+
+# Admin Defaults
+ADMIN_USER=admin
+ADMIN_EMAIL=admin@$PUBLIC_IP
+ADMIN_PASSWORD=admin
+EOF
+fi
+
+# 6. Deploy
+echo -e "\n${YELLOW}[6/6] Deploying with Podman Compose...${NC}"
+# Use standard docker-compose.prod.yml but run with podman-compose
+podman-compose -f docker-compose.prod.yml up -d
+
+echo -e "\n${GREEN}Installation Complete (Podman Mode)${NC}"
+echo "Note: Monitor logs with 'podman logs -f smsly-hosting-backend-1'"
