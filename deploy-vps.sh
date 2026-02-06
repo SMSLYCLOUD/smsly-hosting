@@ -107,15 +107,29 @@ echo -e "\n${YELLOW}[5/8] Generating secrets and configuring environment...${NC}
 pip3 install cryptography -q 2>/dev/null || pip install cryptography -q 2>/dev/null
 
 # Generate strong secrets (no Django required)
-SECRET_KEY=$(python3 -c "import secrets; import string; chars = string.ascii_letters + string.digits + '!@#$%^&*(-_=+)'; print(''.join(secrets.choice(chars) for _ in range(50)))")
+SECRET_KEY=$(python3 -c "import secrets; import string; chars = string.ascii_letters + string.digits + '!@#\$%^&*(-_=+)'; print(''.join(secrets.choice(chars) for _ in range(50)))")
 FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 POSTGRES_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
 
-# Prompt for domain
-echo -e "\n${BLUE}Please enter your domain (e.g., hosting.example.com):${NC}"
-read -p "Domain: " DOMAIN
-echo -e "\n${BLUE}Please enter your email for SSL certificates:${NC}"
-read -p "Email: " ACME_EMAIL
+# Get server IP
+SERVER_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
+
+# Optional domain (press Enter to use IP:8090)
+echo -e "\n${BLUE}Enter domain for SSL (or press Enter to use http://${SERVER_IP}:8090):${NC}"
+read -p "Domain (optional): " DOMAIN
+
+if [ -z "$DOMAIN" ]; then
+    DOMAIN="$SERVER_IP"
+    USE_SSL=false
+    ALLOWED_HOSTS="$SERVER_IP,localhost,127.0.0.1"
+    echo -e "${GREEN}✓ Using IP-based access: http://${SERVER_IP}:8090${NC}"
+else
+    USE_SSL=true
+    ALLOWED_HOSTS="$DOMAIN"
+    echo -e "\n${BLUE}Enter email for SSL certificates:${NC}"
+    read -p "Email: " ACME_EMAIL
+    echo -e "${GREEN}✓ Using domain: https://${DOMAIN}${NC}"
+fi
 
 # Create .env file
 cat > .env << EOF
@@ -130,18 +144,18 @@ FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 
 # ============================================================================
-# DOMAIN & SSL
+# ACCESS CONFIGURATION
 # ============================================================================
 DOMAIN=${DOMAIN}
-ACME_EMAIL=${ACME_EMAIL}
+USE_SSL=${USE_SSL}
 
 # ============================================================================
 # SECURITY SETTINGS
 # ============================================================================
 DEBUG=False
-ALLOWED_HOSTS=${DOMAIN}
-CSRF_TRUSTED_ORIGINS=https://${DOMAIN}
-CORS_ALLOWED_ORIGINS=https://${DOMAIN}
+ALLOWED_HOSTS=${ALLOWED_HOSTS}
+CSRF_TRUSTED_ORIGINS=http://${DOMAIN}:8090,https://${DOMAIN}
+CORS_ALLOWED_ORIGINS=http://${DOMAIN}:8090,https://${DOMAIN}
 CORS_ALLOW_ALL=False
 
 # ============================================================================
@@ -262,14 +276,24 @@ echo -e "\n${GREEN}════════════════════�
 echo -e "${GREEN}  ✓ SMSLY Hosting Deployment Complete!${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}\n"
 
+if [ "$USE_SSL" = "true" ]; then
+    ACCESS_URL="https://${DOMAIN}"
+else
+    ACCESS_URL="http://${DOMAIN}:8090"
+fi
+
 echo -e "📍 ${BLUE}Access Points:${NC}"
-echo -e "   Dashboard: https://${DOMAIN}/"
-echo -e "   Admin:     https://${DOMAIN}/admin/"
-echo -e "   API:       https://${DOMAIN}/api/v1/"
-echo -e "   Health:    https://${DOMAIN}/health"
+echo -e "   Dashboard: ${ACCESS_URL}/"
+echo -e "   Admin:     ${ACCESS_URL}/admin/"
+echo -e "   API:       ${ACCESS_URL}/api/v1/"
+echo -e "   Health:    ${ACCESS_URL}/health"
 
 echo -e "\n🔒 ${BLUE}Security Status:${NC}"
-echo -e "   ✓ SSL/TLS enabled (Let's Encrypt)"
+if [ "$USE_SSL" = "true" ]; then
+    echo -e "   ✓ SSL/TLS enabled (Let's Encrypt)"
+else
+    echo -e "   ⚠ SSL disabled (using HTTP, add domain for HTTPS)"
+fi
 echo -e "   ✓ Docker socket secured via proxy"
 echo -e "   ✓ Fail-closed secrets (no defaults)"
 echo -e "   ✓ Health checks enabled"
@@ -279,13 +303,8 @@ echo -e "   1. Create superuser:"
 echo -e "      cd $INSTALL_DIR"
 echo -e "      docker-compose -f docker-compose.prod.yml exec backend python manage.py createsuperuser"
 echo -e ""
-echo -e "   2. Update DNS:"
-echo -e "      Add A record: ${DOMAIN} → $(curl -s ifconfig.me)"
-echo -e ""
-echo -e "   3. Wait for SSL (2-5 minutes after DNS propagation)"
-echo -e ""
-echo -e "   4. Access admin panel:"
-echo -e "      https://${DOMAIN}/admin/"
+echo -e "   2. Access admin panel:"
+echo -e "      ${ACCESS_URL}/admin/"
 
 echo -e "\n💾 ${BLUE}Backup Information:${NC}"
 echo -e "   Configuration: $INSTALL_DIR/.env"
