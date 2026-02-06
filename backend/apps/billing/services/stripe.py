@@ -1,7 +1,7 @@
 """Stripe module."""
 import stripe
 from django.conf import settings
-from ..models import BillingAccount
+from apps.billing.models import BillingAccount
 
 stripe.api_key = getattr(settings, 'STRIPE_SECRET_KEY', 'sk_test_mock')
 
@@ -13,7 +13,7 @@ class StripeService:
             email=user.email,
             name=user.username
         )
-        account, created = BillingAccount.objects.get_or_create(user=user)
+        account, _ = BillingAccount.objects.get_or_create(user=user)
         account.stripe_customer_id = customer.id
         account.save()
         return customer.id
