@@ -42,31 +42,35 @@ Works on AWS, Azure, GCP, or bare metal. Air-gapped deployments supported.
 ### One-Line Production Install (Fresh VPS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/deploy-vps.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh | sudo bash
 ```
 
-### Production Deployment (Docker Compose)
+### Production Deployment (Manual)
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/SMSLYCLOUD/smsly-hosting.git
 cd smsly-hosting
 
-# 2. Generate secrets and configure .env
+# 2. Configure .env
 cp .env.example .env
-python3 scripts/validate_production.py
+# Edit .env with your secrets and domain settings
 
-# 3. Deploy with SSL
+# 3. Deploy
+# Option A: IP Mode (http://IP:8090)
+docker compose -f docker-compose.prod.yml up -d
+
+# Option B: SSL Mode (https://domain.com)
 docker network create smsly-proxy
-docker-compose -f docker-compose.traefik.yml up -d
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.traefik.yml up -d
+docker compose -f docker-compose.prod.yml -f docker-compose.traefik-adapter.yml up -d
 
 # 4. Initialize
-docker-compose -f docker-compose.prod.yml exec backend python manage.py migrate
-docker-compose -f docker-compose.prod.yml exec backend python manage.py createsuperuser
+docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
+docker compose -f docker-compose.prod.yml exec backend python manage.py createsuperuser
 
 # 5. Verify
-curl https://your-domain.com/health
+curl http://localhost:8090/health
 ```
 
 See [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) for complete instructions.

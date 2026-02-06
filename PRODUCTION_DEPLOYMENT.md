@@ -72,7 +72,8 @@ docker network create smsly-proxy
 docker-compose -f docker-compose.traefik.yml up -d
 
 # Deploy main application
-docker-compose -f docker-compose.prod.yml up -d
+# NOTE: We use the traefik-adapter.yml to attach the nginx service to the proxy network
+docker-compose -f docker-compose.prod.yml -f docker-compose.traefik-adapter.yml up -d
 
 # Run database migrations
 docker-compose -f docker-compose.prod.yml exec backend python manage.py migrate
