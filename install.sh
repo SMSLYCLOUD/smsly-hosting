@@ -38,8 +38,12 @@ if [ -f /etc/os-release ]; then
     . /etc/os-release
     if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
         echo -e "${YELLOW}⚠ Warning: Detected $NAME. This script is optimized for Ubuntu/Debian.${NC}"
-        echo -e "${YELLOW}  Press ENTER to continue anyway, or Ctrl+C to abort.${NC}"
-        read -r
+        if [ -t 0 ]; then
+             echo -e "${YELLOW}  Press ENTER to continue anyway, or Ctrl+C to abort.${NC}"
+             read -r
+        else
+             echo -e "${YELLOW}  ⚠ Non-interactive mode: Continuing automatically...${NC}"
+        fi
     fi
 fi
 
@@ -112,8 +116,14 @@ PUBLIC_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
 echo -e "\n${BLUE}Select Deployment Mode:${NC}"
 echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
 echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
-read -p "Enter choice [1]: " MODE_CHOICE
-MODE_CHOICE=${MODE_CHOICE:-1}
+
+if [ -t 0 ]; then
+    read -p "Enter choice [1]: " MODE_CHOICE
+    MODE_CHOICE=${MODE_CHOICE:-1}
+else
+    echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
+    MODE_CHOICE=1
+fi
 
 DOMAIN=""
 ACME_EMAIL=""
@@ -159,9 +169,9 @@ def get_random_string(length=50):
     chars = string.ascii_letters + string.digits + '!@#$%^&*(-_=)'
     return ''.join(secrets.choice(chars) for _ in range(length))
 
-print(f"SECRET_KEY={get_random_string()}")
-print(f"FIELD_ENCRYPTION_KEY={Fernet.generate_key().decode()}")
-print(f"POSTGRES_PASSWORD={secrets.token_hex(16)}")
+print(f"SECRET_KEY='{get_random_string()}'")
+print(f"FIELD_ENCRYPTION_KEY='{Fernet.generate_key().decode()}'")
+print(f"POSTGRES_PASSWORD='{secrets.token_hex(16)}'")
 EOF
 
 # Install crypto lib if missing (needed for script above)
