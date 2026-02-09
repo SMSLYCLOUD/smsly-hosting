@@ -223,15 +223,11 @@ export default function Home() {
             <Navbar />
 
             {/* HERO SECTION */}
-            <section className="relative pt-32 pb-24 overflow-hidden">
-                {/* Background Effects */}
+            <section className="relative pt-32 pb-24 overflow-hidden bg-gradient-to-b from-sky-100 via-blue-50 to-white dark:from-slate-900 dark:via-slate-900 dark:to-slate-950">
+                {/* Cloud Animation */}
                 <div className="absolute inset-0 z-0">
                     <CloudHeroAnimation />
                 </div>
-                <div className="absolute inset-0 z-0 bg-gradient-to-b from-white/20 via-transparent to-white/30 dark:from-slate-950/20 dark:via-transparent dark:to-slate-950/30" />
-
-                {/* Grid Pattern */}
-                <div className="absolute inset-0 z-0 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:64px_64px] opacity-20" />
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
                     <motion.div
