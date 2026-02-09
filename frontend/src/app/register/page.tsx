@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Github, Chrome } from "lucide-react";
@@ -13,8 +14,8 @@ export default function RegisterPage() {
         <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
             <Card className="w-full max-w-md shadow-xl border-slate-200 dark:border-slate-800">
                 <CardHeader className="text-center space-y-2">
-                    <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mb-4">
-                        <span className="text-white font-bold text-xl">S</span>
+                    <div className="mx-auto mb-4">
+                        <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto mx-auto" />
                     </div>
                     <CardTitle className="text-2xl font-bold tracking-tight">Create your account</CardTitle>
                     <CardDescription>
@@ -46,7 +47,7 @@ export default function RegisterPage() {
                         </div>
                     </div>
 
-                    <Button className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white" asChild>
+                    <Button className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white" asChild>
                         <a href={`${BACKEND_URL}/accounts/signup/`}>
                             Sign up with Email
                         </a>

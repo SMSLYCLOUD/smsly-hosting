@@ -9,6 +9,7 @@ interface Cloud {
   speed: number;
   opacity: number;
   phase: number;
+  drift: number;
   blobs: { ox: number; oy: number; r: number }[];
 }
 
@@ -17,28 +18,41 @@ export function CloudHeroAnimation() {
   const animRef = useRef<number>(0);
   const mouseRef = useRef({ x: -1000, y: -1000 });
 
-  const createCloud = useCallback((w: number, h: number, large?: boolean): Cloud => {
-    const radius = large ? (100 + Math.random() * 140) : (50 + Math.random() * 80);
+  const createCloud = useCallback((w: number, h: number): Cloud => {
+    // Truly random sizes — from small wisps to giant formations
+    const sizeRoll = Math.random();
+    const radius = sizeRoll > 0.7
+      ? (140 + Math.random() * 160) // 30% chance: big cloud
+      : sizeRoll > 0.3
+        ? (70 + Math.random() * 80) // 40% chance: medium cloud  
+        : (30 + Math.random() * 50); // 30% chance: small wisp
+
+    // Random number of blobs (3-12)
+    const blobCount = 3 + Math.floor(Math.random() * 10);
     const blobs: { ox: number; oy: number; r: number }[] = [];
-    // Flat bottom, bumpy top — like real clouds
-    blobs.push({ ox: 0, oy: 0, r: radius * 0.85 });
-    blobs.push({ ox: -radius * 0.5, oy: -radius * 0.1, r: radius * 0.65 });
-    blobs.push({ ox: radius * 0.45, oy: -radius * 0.05, r: radius * 0.7 });
-    blobs.push({ ox: -radius * 0.15, oy: -radius * 0.4, r: radius * 0.6 });
-    blobs.push({ ox: radius * 0.2, oy: -radius * 0.35, r: radius * 0.55 });
-    blobs.push({ ox: -radius * 0.6, oy: radius * 0.1, r: radius * 0.5 });
-    blobs.push({ ox: radius * 0.55, oy: radius * 0.1, r: radius * 0.5 });
-    if (large) {
-      blobs.push({ ox: 0, oy: -radius * 0.55, r: radius * 0.5 });
-      blobs.push({ ox: radius * 0.35, oy: -radius * 0.5, r: radius * 0.45 });
+    
+    // Central body
+    blobs.push({ ox: 0, oy: 0, r: radius * (0.6 + Math.random() * 0.4) });
+    
+    // Random additional blobs — no two clouds look the same
+    for (let i = 1; i < blobCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * radius * 0.8;
+      blobs.push({
+        ox: Math.cos(angle) * dist,
+        oy: Math.sin(angle) * dist * 0.5 - Math.random() * radius * 0.3, // bias upward
+        r: radius * (0.25 + Math.random() * 0.55),
+      });
     }
+    
     return {
       x: Math.random() * (w + radius * 4) - radius * 2,
-      y: h * 0.2 + Math.random() * h * 0.5,
+      y: h * 0.1 + Math.random() * h * 0.7,
       radius,
-      speed: large ? (0.15 + Math.random() * 0.2) : (0.25 + Math.random() * 0.4),
-      opacity: large ? 0.85 : (0.5 + Math.random() * 0.3),
+      speed: 0.08 + Math.random() * 0.4 + (sizeRoll > 0.7 ? 0 : 0.15), // big ones slower
+      opacity: 0.5 + Math.random() * 0.45,
       phase: Math.random() * Math.PI * 2,
+      drift: (Math.random() - 0.5) * 0.15, // vertical drift
       blobs,
     };
   }, []);
@@ -64,28 +78,28 @@ export function CloudHeroAnimation() {
     const init = () => {
       resize();
       clouds.length = 0;
-      // Big fluffy background clouds
-      for (let i = 0; i < 5; i++) clouds.push(createCloud(w, h, true));
-      // Smaller foreground clouds
-      for (let i = 0; i < 6; i++) clouds.push(createCloud(w, h, false));
+      // Random count: 8-14 clouds
+      const count = 8 + Math.floor(Math.random() * 7);
+      for (let i = 0; i < count; i++) clouds.push(createCloud(w, h));
     };
 
     const drawCloud = (cloud: Cloud) => {
-      const bobY = Math.sin(t * 0.0006 + cloud.phase) * 6;
+      const bobY = Math.sin(t * 0.0004 + cloud.phase) * 8;
+      const wobbleX = Math.sin(t * 0.0003 + cloud.phase * 2) * 3;
       const isDark = document.documentElement.classList.contains('dark');
 
       for (const blob of cloud.blobs) {
-        const bx = cloud.x + blob.ox;
+        const bx = cloud.x + blob.ox + wobbleX;
         const by = cloud.y + blob.oy + bobY;
-        const gradient = ctx.createRadialGradient(bx, by, blob.r * 0.1, bx, by, blob.r);
+        const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, blob.r);
         if (isDark) {
-          gradient.addColorStop(0, `rgba(148,163,184,${cloud.opacity * 0.3})`);
-          gradient.addColorStop(0.6, `rgba(100,116,139,${cloud.opacity * 0.15})`);
+          gradient.addColorStop(0, `rgba(148,163,184,${cloud.opacity * 0.2})`);
+          gradient.addColorStop(0.7, `rgba(100,116,139,${cloud.opacity * 0.08})`);
           gradient.addColorStop(1, 'rgba(71,85,105,0)');
         } else {
           gradient.addColorStop(0, `rgba(255,255,255,${cloud.opacity})`);
-          gradient.addColorStop(0.5, `rgba(255,255,255,${cloud.opacity * 0.7})`);
-          gradient.addColorStop(0.8, `rgba(255,255,255,${cloud.opacity * 0.3})`);
+          gradient.addColorStop(0.5, `rgba(255,255,255,${cloud.opacity * 0.8})`);
+          gradient.addColorStop(0.85, `rgba(255,255,255,${cloud.opacity * 0.3})`);
           gradient.addColorStop(1, 'rgba(255,255,255,0)');
         }
         ctx.beginPath();
@@ -101,17 +115,25 @@ export function CloudHeroAnimation() {
 
       for (const cloud of clouds) {
         cloud.x += cloud.speed;
+        cloud.y += cloud.drift;
+        
+        // Wrap around
         if (cloud.x > w + cloud.radius * 3) {
           cloud.x = -cloud.radius * 3;
-          cloud.y = h * 0.2 + Math.random() * h * 0.5;
+          cloud.y = h * 0.1 + Math.random() * h * 0.7;
         }
+        // Keep within vertical bounds
+        if (cloud.y < -cloud.radius || cloud.y > h + cloud.radius) {
+          cloud.drift *= -1;
+        }
+        
         // Mouse push
         const dx = cloud.x - mouseRef.current.x;
         const dy = cloud.y - mouseRef.current.y;
         const dist = Math.hypot(dx, dy);
         if (dist < 200 && dist > 0) {
-          cloud.x += (dx / dist) * 1.2;
-          cloud.y += (dy / dist) * 0.6;
+          cloud.x += (dx / dist) * 1.5;
+          cloud.y += (dy / dist) * 0.8;
         }
         drawCloud(cloud);
       }

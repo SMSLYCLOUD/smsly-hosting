@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,8 +58,8 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
       <Card className="w-full max-w-md shadow-xl border-slate-200 dark:border-slate-800">
         <CardHeader className="text-center space-y-2">
-          <div className="mx-auto w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mb-4">
-            <span className="text-white font-bold text-xl">S</span>
+          <div className="mx-auto mb-4">
+            <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto mx-auto" />
           </div>
           <CardTitle className="text-2xl font-bold tracking-tight">
             {showEmailForm ? "Sign in with Email" : "Welcome back"}
@@ -99,7 +100,7 @@ export default function LoginPage() {
               </div>
 
               <Button
-                className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white"
+                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
                 onClick={() => setShowEmailForm(true)}
               >
                 <Mail className="mr-2 h-4 w-4" />
@@ -163,7 +164,7 @@ export default function LoginPage() {
 
                 <Button
                   type="submit"
-                  className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white"
+                  className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
                   disabled={isLoading}
                 >
                   {isLoading ? (

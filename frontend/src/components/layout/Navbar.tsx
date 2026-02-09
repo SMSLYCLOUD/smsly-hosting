@@ -52,10 +52,15 @@ export function Navbar() {
     router.push('/login');
   };
 
-  const navLinks = [
+  const publicLinks = [
+    { href: '/#features', label: 'Features' },
+    { href: '/templates', label: 'Templates' },
+    { href: '/store', label: 'Marketplace' },
+  ];
+
+  const authLinks = [
     { href: '/dashboard', label: 'Dashboard', icon: Home },
     { href: '/services', label: 'Services', icon: Layout },
-    { href: '/store', label: 'Marketplace', icon: Box },
     { href: '/deployments', label: 'Deployments', icon: Rocket },
     { href: '/topology', label: 'Topology', icon: Globe },
     { href: '/settings', label: 'Settings', icon: Settings },
@@ -63,53 +68,67 @@ export function Navbar() {
 
   return (
     <nav
-        className={`sticky top-0 z-50 w-full border-b transition-all duration-300 ${
+        className={`sticky top-0 z-50 w-full transition-all duration-300 backdrop-blur-md ${
             isScrolled
-            ? 'bg-background/80 backdrop-blur-md shadow-sm border-border'
-            : 'bg-background/0 border-transparent'
+            ? 'bg-white/30 dark:bg-slate-950/30 shadow-sm border-b border-white/20'
+            : 'bg-transparent border-b border-transparent'
         }`}
     >
-      <div className="container flex h-16 items-center justify-between max-w-7xl mx-auto px-4 sm:px-6">
+      <div className="container flex h-16 items-center max-w-7xl mx-auto px-4 sm:px-6">
 
-        {/* Logo */}
-        <div className="flex items-center">
-            <Link href="/" className="mr-8 flex items-center group">
-                <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto" priority />
-            </Link>
+        {/* Logo - Left */}
+        <Link href="/" className="flex items-center group flex-shrink-0">
+            <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto" priority />
+        </Link>
 
-            {/* Desktop Nav - Only show when authenticated */}
-            {user && (
-            <nav className="hidden md:flex items-center space-x-1">
-                {navLinks.map((link) => {
-                    const Icon = link.icon;
-                    const isActive = pathname === link.href;
-                    return (
-                        <Link
-                            key={link.href}
-                            href={link.href}
-                            className={`
-                                relative px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
-                                ${isActive
-                                    ? 'text-primary bg-primary/5'
-                                    : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
-                            `}
-                        >
-                            <Icon size={16} />
-                            {link.label}
-                            {isActive && (
-                                <motion.div
-                                    layoutId="navbar-indicator"
-                                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full"
-                                    initial={false}
-                                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                                />
-                            )}
-                        </Link>
-                    )
-                })}
-            </nav>
-            )}
-        </div>
+        {/* Public Nav Links - Center */}
+        <nav className="hidden md:flex items-center justify-center flex-1 space-x-1">
+            {publicLinks.map((link) => {
+                const isActive = pathname === link.href;
+                return (
+                    <Link
+                        key={link.href}
+                        href={link.href}
+                        className={`
+                            px-3 py-2 rounded-md text-sm font-medium transition-colors
+                            ${isActive
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400'}
+                        `}
+                    >
+                        {link.label}
+                    </Link>
+                );
+            })}
+            {/* Auth links inline when logged in */}
+            {user && authLinks.map((link) => {
+                const Icon = link.icon;
+                const isActive = pathname === link.href;
+                return (
+                    <Link
+                        key={link.href}
+                        href={link.href}
+                        className={`
+                            relative px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
+                            ${isActive
+                                ? 'text-primary bg-primary/5'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
+                        `}
+                    >
+                        <Icon size={16} />
+                        {link.label}
+                        {isActive && (
+                            <motion.div
+                                layoutId="navbar-indicator"
+                                className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full"
+                                initial={false}
+                                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                            />
+                        )}
+                    </Link>
+                );
+            })}
+        </nav>
 
         {/* Right Side Buttons (Desktop) */}
         <div className="hidden md:flex items-center space-x-3">
@@ -206,7 +225,7 @@ export function Navbar() {
                 <div className="p-4 space-y-4">
                     {user && (
                     <nav className="flex flex-col space-y-2">
-                        {navLinks.map((link) => (
+                        {authLinks.map((link) => (
                              <Link
                                 key={link.href}
                                 href={link.href}

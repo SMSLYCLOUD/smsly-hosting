@@ -66,8 +66,8 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                 {logType === 'BUILD' && (
                     <>
                         {deployment?.ai_diagnosis && (
-                            <div className="bg-indigo-500/10 border-l-2 border-indigo-500 p-4 mb-6 text-indigo-200 rounded-r-lg">
-                                <strong className="flex items-center gap-2 mb-2 text-indigo-400 font-sans uppercase tracking-wider text-[10px]">
+                            <div className="bg-emerald-500/10 border-l-2 border-emerald-500 p-4 mb-6 text-emerald-200 rounded-r-lg">
+                                <strong className="flex items-center gap-2 mb-2 text-emerald-400 font-sans uppercase tracking-wider text-[10px]">
                                     <Zap size={12} /> AI Insight
                                 </strong>
                                 {deployment.ai_diagnosis}

@@ -47,7 +47,7 @@ export function Sidebar() {
         <Link href="/dashboard" className="flex items-center pl-3 mb-14">
           <div className="relative w-8 h-8 mr-4">
             {/* Logo Placeholder */}
-            <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center font-bold">S</div>
+            <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center font-bold">S</div>
           </div>
           <h1 className="text-2xl font-bold">SMSLY</h1>
         </Link>
@@ -62,7 +62,7 @@ export function Sidebar() {
               )}
             >
               <div className="flex items-center flex-1">
-                <route.icon className={cn("h-5 w-5 mr-3", route.active ? "text-indigo-400" : "text-zinc-400")} />
+                <route.icon className={cn("h-5 w-5 mr-3", route.active ? "text-emerald-400" : "text-zinc-400")} />
                 {route.label}
               </div>
             </Link>
