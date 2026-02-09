@@ -15,5 +15,6 @@ urlpatterns = [
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/', include('apps.deployments.urls')),
     path('api/v1/', include('apps.teams.urls')),
+    path('api/v1/billing/', include('apps.billing.urls')),
     path('health', health, name='health'),  # Health check for load balancers
 ]
