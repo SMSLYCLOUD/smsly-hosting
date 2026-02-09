@@ -1,0 +1,128 @@
+[
+    {
+        "id": "redis",
+        "name": "Redis",
+        "description": "In-memory data structure store, used as a database, cache, and message broker.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/redis/redis-original.svg",
+        "category": "Database",
+        "repository_url": "https://github.com/redis/redis",
+        "docker_image": "redis:latest",
+        "default_port": 6379,
+        "env_vars": [
+            {"key": "REDIS_PASSWORD", "value": "", "is_secret": true}
+        ]
+    },
+    {
+        "id": "postgres",
+        "name": "PostgreSQL",
+        "description": "The World's Most Advanced Open Source Relational Database.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/postgresql/postgresql-original.svg",
+        "category": "Database",
+        "repository_url": "https://github.com/postgres/postgres",
+        "docker_image": "postgres:16-alpine",
+        "default_port": 5432,
+        "env_vars": [
+            {"key": "POSTGRES_PASSWORD", "value": "change_me", "is_secret": true},
+            {"key": "POSTGRES_USER", "value": "postgres", "is_secret": false},
+            {"key": "POSTGRES_DB", "value": "app", "is_secret": false}
+        ]
+    },
+    {
+        "id": "mysql",
+        "name": "MySQL",
+        "description": "The world's most popular open source database.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mysql/mysql-original.svg",
+        "category": "Database",
+        "repository_url": "https://github.com/mysql/mysql-server",
+        "docker_image": "mysql:8",
+        "default_port": 3306,
+        "env_vars": [
+            {"key": "MYSQL_ROOT_PASSWORD", "value": "change_me", "is_secret": true},
+            {"key": "MYSQL_DATABASE", "value": "app", "is_secret": false}
+        ]
+    },
+    {
+        "id": "mongodb",
+        "name": "MongoDB",
+        "description": "The most popular database for modern apps.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mongodb/mongodb-original.svg",
+        "category": "Database",
+        "repository_url": "https://github.com/mongodb/mongo",
+        "docker_image": "mongo:latest",
+        "default_port": 27017,
+        "env_vars": [
+            {"key": "MONGO_INITDB_ROOT_USERNAME", "value": "root", "is_secret": false},
+            {"key": "MONGO_INITDB_ROOT_PASSWORD", "value": "change_me", "is_secret": true}
+        ]
+    },
+    {
+        "id": "node-starter",
+        "name": "Node.js Starter",
+        "description": "A simple Express.js server ready for production.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/nodejs/nodejs-original.svg",
+        "category": "Starter",
+        "repository_url": "https://github.com/vercel/next.js",
+        "docker_image": "node:18-alpine",
+        "default_port": 3000,
+        "start_command": "npm start"
+    },
+    {
+        "id": "python-flask",
+        "name": "Python Flask",
+        "description": "A lightweight WSGI web application framework.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.svg",
+        "category": "Starter",
+        "repository_url": "https://github.com/pallets/flask",
+        "docker_image": "python:3.11-slim",
+        "default_port": 5000,
+        "start_command": "gunicorn app:app"
+    },
+    {
+        "id": "wordpress",
+        "name": "WordPress",
+        "description": "Web software you can use to create a beautiful website, blog, or app.",
+        "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/wordpress/wordpress-original.svg",
+        "category": "CMS",
+        "repository_url": "https://github.com/WordPress/WordPress",
+        "docker_image": "wordpress:latest",
+        "default_port": 80,
+        "env_vars": [
+            {"key": "WORDPRESS_DB_HOST", "value": "db-host", "is_secret": false},
+            {"key": "WORDPRESS_DB_USER", "value": "user", "is_secret": false},
+            {"key": "WORDPRESS_DB_PASSWORD", "value": "password", "is_secret": true}
+        ]
+    },
+    {
+        "id": "ghost",
+        "name": "Ghost",
+        "description": "The world's most popular modern open source publishing platform.",
+        "icon": "https://upload.wikimedia.org/wikipedia/commons/5/5c/Ghost_logo.svg",
+        "category": "CMS",
+        "repository_url": "https://github.com/TryGhost/Ghost",
+        "docker_image": "ghost:latest",
+        "default_port": 2368,
+        "env_vars": [
+            {"key": "url", "value": "https://your-blog.com", "is_secret": false}
+        ]
+    },
+    {
+        "id": "metabase",
+        "name": "Metabase",
+        "description": "The simplest, fastest way to get business intelligence and analytics.",
+        "icon": "https://www.metabase.com/images/logo.svg",
+        "category": "Analytics",
+        "repository_url": "https://github.com/metabase/metabase",
+        "docker_image": "metabase/metabase",
+        "default_port": 3000
+    },
+    {
+        "id": "plausible",
+        "name": "Plausible Analytics",
+        "description": "Simple, open-source, lightweight (< 1 KB) and privacy-friendly web analytics.",
+        "icon": "https://plausible.io/assets/img/favicon/favicon.png",
+        "category": "Analytics",
+        "repository_url": "https://github.com/plausible/analytics",
+        "docker_image": "plausible/analytics",
+        "default_port": 8000
+    }
+]

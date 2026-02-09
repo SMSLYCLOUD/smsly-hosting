@@ -1,0 +1,90 @@
+"""Compute module."""
+from ..models import CloudProvider, CloudResource
+from ..adapters.aws import AWSAdapter
+from ..adapters.azure import AzureAdapter
+from ..adapters.gcp import GCPAdapter
+from typing import Dict, Optional
+
+
+class ComputeService:
+    def __init__(self, provider: CloudProvider):
+        self.provider = provider
+        self.adapter = self._get_adapter()
+
+    def _get_adapter(self):
+        if self.provider.provider_type == CloudProvider.ProviderType.AWS:
+            return AWSAdapter(
+                access_key=self.provider.api_key,
+                secret_key=self.provider.api_secret,
+                region=self.provider.region
+            )
+        elif self.provider.provider_type == CloudProvider.ProviderType.AZURE:
+            return AzureAdapter(
+                tenant_id=self.provider.tenant_id,
+                client_id=self.provider.api_key,
+                client_secret=self.provider.api_secret,
+                subscription_id=self.provider.project_id
+            )
+        elif self.provider.provider_type == CloudProvider.ProviderType.GCP:
+            # Assuming api_key stores the service account JSON string
+            import json
+            service_account_info = json.loads(self.provider.api_key)
+            return GCPAdapter(
+                service_account_json=service_account_info,
+                project_id=self.provider.project_id,
+                region=self.provider.region
+            )
+        else:
+            raise NotImplementedError(
+                f"Provider {self.provider.provider_type} not supported yet")
+
+    def deploy_container(self, name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int = 256, memory: int = 512) -> CloudResource:
+        """
+        Deploy a container service (ECS/Cloud Run/Azure Container Apps).
+        """
+        resource_id = self.adapter.deploy_container(
+            name, image, env_vars, cpu, memory)
+
+        resource, created = CloudResource.objects.update_or_create(
+            provider=self.provider,
+            resource_id=resource_id,
+            defaults={
+                'name': name,
+                'resource_type': 'CONTAINER_SERVICE',
+                'region': self.provider.region,
+                'status': 'ACTIVE'
+            }
+        )
+        return resource
+
+    def deploy_function(self, name: str, code_zip: bytes,
+                        handler: str, runtime: str) -> CloudResource:
+        """
+        Deploy a serverless function (Lambda/Cloud Functions/Azure Functions).
+        """
+        resource_id = self.adapter.deploy_function(
+            name, code_zip, handler, runtime)
+
+        resource, created = CloudResource.objects.update_or_create(
+            provider=self.provider,
+            resource_id=resource_id,
+            defaults={
+                'name': name,
+                'resource_type': 'SERVERLESS_FUNCTION',
+                'region': self.provider.region,
+                'status': 'ACTIVE'
+            }
+        )
+        return resource
+
+    def deploy_batch_job(self, name: str, command: str,
+                         image: str) -> CloudResource:
+        """
+        Submit a batch job (AWS Batch / Azure Batch).
+        """
+        # Adapters don't have batch methods yet, simulating or extending
+        # For now, treat as a one-off container task
+        # implementation placeholder
+        return CloudResource(
+            name=name, resource_type='BATCH_JOB', status='SUBMITTED')

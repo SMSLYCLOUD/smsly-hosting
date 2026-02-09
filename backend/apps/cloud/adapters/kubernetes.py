@@ -1,0 +1,192 @@
+"""Kubernetes module."""
+import logging
+from typing import Dict, Any, List
+from kubernetes import client, config
+from .base import BaseCloudAdapter
+
+logger = logging.getLogger(__name__)
+
+
+class KubernetesAdapter(BaseCloudAdapter):
+    """
+    Production-grade Kubernetes Adapter.
+    Supports scaling, rolling updates, and ingress management.
+    """
+
+    def __init__(self, kubeconfig_path: str = None):
+        try:
+            if kubeconfig_path:
+                config.load_kube_config(config_file=kubeconfig_path)
+            else:
+                # Fallback to in-cluster config
+                try:
+                    config.load_incluster_config()
+                except BaseException:
+                    config.load_kube_config()
+
+            self.k8s_client = client.CoreV1Api()
+            self.k8s_apps = client.AppsV1Api()
+            self.k8s_networking = client.NetworkingV1Api()
+        except Exception as e:
+            logger.error(f"Failed to initialize Kubernetes client: {e}")
+            raise
+
+    def authenticate(self) -> bool:
+        try:
+            self.k8s_client.list_node(limit=1)
+            return True
+        except Exception:
+            return False
+
+    def deploy_container(self, service_name: str, image: str,
+                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+        namespace = 'smsly-apps'
+        self._ensure_namespace(namespace)
+
+        # 1. Create/Update Deployment
+        deployment = self._build_deployment(
+            service_name, image, env_vars, cpu, memory)
+        try:
+            self.k8s_apps.create_namespaced_deployment(
+                namespace=namespace, body=deployment)
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                self.k8s_apps.patch_namespaced_deployment(
+                    name=service_name, namespace=namespace, body=deployment)
+            else:
+                raise
+
+        # 2. Create/Update Service
+        svc = self._build_service(service_name)
+        try:
+            self.k8s_client.create_namespaced_service(
+                namespace=namespace, body=svc)
+        except client.exceptions.ApiException as e:
+            if e.status != 409:
+                raise
+
+        # 3. Create/Update Ingress
+        ingress = self._build_ingress(
+            service_name, env_vars.get('PUBLIC_DOMAIN'))
+        if ingress:
+            try:
+                self.k8s_networking.create_namespaced_ingress(
+                    namespace=namespace, body=ingress)
+            except client.exceptions.ApiException as e:
+                if e.status == 409:
+                    self.k8s_networking.patch_namespaced_ingress(
+                        name=service_name, namespace=namespace, body=ingress)
+
+        return f"k8s://{namespace}/{service_name}"
+
+    def scale_service(self, service_name: str, replicas: int) -> bool:
+        namespace = 'smsly-apps'
+        patch = {'spec': {'replicas': replicas}}
+        try:
+            self.k8s_apps.patch_namespaced_deployment_scale(
+                name=service_name, namespace=namespace, body=patch)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to scale {service_name}: {e}")
+            return False
+
+    def _ensure_namespace(self, name: str):
+        try:
+            self.k8s_client.read_namespace(name)
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                ns = client.V1Namespace(
+                    metadata=client.V1ObjectMeta(
+                        name=name))
+                self.k8s_client.create_namespace(body=ns)
+
+    def _build_deployment(self, name, image, env, cpu, memory):
+        return client.V1Deployment(
+            metadata=client.V1ObjectMeta(name=name),
+            spec=client.V1DeploymentSpec(
+                replicas=1,
+                selector=client.V1LabelSelector(match_labels={"app": name}),
+                strategy=client.V1DeploymentStrategy(
+                    type="RollingUpdate",
+                    rolling_update=client.V1RollingUpdateDeployment(
+                        max_unavailable="25%", max_surge="25%")
+                ),
+                template=client.V1PodTemplateSpec(
+                    metadata=client.V1ObjectMeta(labels={"app": name}),
+                    spec=client.V1PodSpec(
+                        containers=[
+                            client.V1Container(
+                                name=name,
+                                image=image,
+                                env=[
+                                    client.V1EnvVar(
+                                        name=k,
+                                        value=v) for k,
+                                    v in env.items()],
+                                resources=client.V1ResourceRequirements(
+                                    requests={
+                                        "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
+                                    limits={"cpu": f"{cpu * 2}m",
+                                            "memory": f"{memory * 2}Mi"}
+                                ),
+                                liveness_probe=client.V1Probe(
+                                    http_get=client.V1HTTPGetAction(
+                                        path="/health", port=int(env.get('PORT', 8000))),
+                                    initial_delay_seconds=30,
+                                    period_seconds=10
+                                )
+                            )
+                        ]
+                    )
+                )
+            )
+        )
+
+    def _build_service(self, name):
+        return client.V1Service(
+            metadata=client.V1ObjectMeta(name=name),
+            spec=client.V1ServiceSpec(
+                selector={"app": name},
+                ports=[client.V1ServicePort(port=80, target_port=8000)],
+                type="ClusterIP"
+            )
+        )
+
+    def _build_ingress(self, name, domain):
+        if not domain:
+            return None
+        return client.V1Ingress(
+            metadata=client.V1ObjectMeta(
+                name=name,
+                annotations={
+                    "kubernetes.io/ingress.class": "nginx",
+                    "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+                }
+            ),
+            spec=client.V1IngressSpec(
+                tls=[
+                    client.V1IngressTLS(
+                        hosts=[domain],
+                        secret_name=f"{name}-tls")],
+                rules=[
+                    client.V1IngressRule(
+                        host=domain,
+                        http=client.V1HTTPIngressRuleValue(
+                            paths=[
+                                client.V1HTTPIngressPath(
+                                    path="/",
+                                    path_type="Prefix",
+                                    backend=client.V1IngressBackend(
+                                        service=client.V1IngressServiceBackend(
+                                            name=name,
+                                            port=client.V1ServiceBackendPort(
+                                                number=80)
+                                        )
+                                    )
+                                )
+                            ]
+                        )
+                    )
+                ]
+            )
+        )
