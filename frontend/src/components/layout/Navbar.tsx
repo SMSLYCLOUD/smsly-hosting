@@ -77,8 +77,8 @@ export function Navbar() {
                     <Cloud className="w-5 h-5 text-primary" />
                 </div>
                 <span className="text-lg" style={{ letterSpacing: '-0.02em' }}>
-                    <span className="font-black text-emerald-500">SMSLY</span>
-                    <span className="font-medium text-foreground/70 ml-1">Cloud</span>
+                    <span className="font-black text-slate-900 dark:text-white">SMSLY</span>
+                    <span className="font-bold text-slate-500 dark:text-white ml-0.5">Cloud</span>
                 </span>
             </Link>
 

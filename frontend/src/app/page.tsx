@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Navbar } from '@/components/layout/Navbar';
 import { Button } from '@/components/ui/button';
+import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
     ArrowRight,
     Zap,
@@ -225,9 +226,8 @@ export default function Home() {
             <section className="relative pt-32 pb-24 overflow-hidden">
                 {/* Background Effects */}
                 <div className="absolute inset-0 -z-10">
-                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 via-white to-green-50/50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900" />
-                    <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse" />
-                    <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-green-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+                    <CloudHeroAnimation />
+                    <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/60 dark:from-slate-950/40 dark:via-transparent dark:to-slate-950/60" />
                 </div>
 
                 {/* Grid Pattern */}

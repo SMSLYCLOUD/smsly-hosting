@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Database, Archive, Play, Trash2, StopCircle, RefreshCw, Loader2, Server_icon } from "lucide-react"
+import { Database, Archive, Play, Trash2, StopCircle, RefreshCw, Loader2, ServerIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
