@@ -322,5 +322,81 @@ class AddonProvisioner:
         return {'running': False, 'status': 'unknown'}
 
 
+    def create_backup(self, addon) -> str:
+        """
+        Create a backup of the addon database.
+        Returns the path to the backup file.
+        """
+        import os
+        from datetime import datetime
+        
+        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = os.path.join("/tmp", "backups", str(addon.service.id))
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        filename = f"{addon.addon_type.lower()}_{addon.id}_{timestamp}.dump"
+        backup_path = os.path.join(backup_dir, filename)
+        
+        try:
+            if addon.addon_type == 'POSTGRES':
+                # PG dump
+                cmd = f"docker exec {container_name} pg_dump -U app_user app_db > {backup_path}"
+                subprocess.run(cmd, shell=True, check=True)
+            
+            elif addon.addon_type == 'REDIS':
+                # Redis save and copy
+                subprocess.run(['docker', 'exec', container_name, 'redis-cli', 'save'], check=True)
+                # Copy from container to host
+                cmd = f"docker cp {container_name}:/data/dump.rdb {backup_path}"
+                subprocess.run(cmd, shell=True, check=True)
+                
+            elif addon.addon_type == 'MYSQL':
+                # MySQL dump
+                # Password via env or config is tricky in exec, use passed password if stored (it's not easily available here without fetching)
+                # Ideally we store password in Vault. For now assuming we can exec without password if root or use config file
+                # Use mysqldump with root password in command (secure temp env var better)
+                # Simplified for MVP:
+                cmd = f"docker exec {container_name} mysqldump -u root --password=$MYSQL_ROOT_PASSWORD app_db > {backup_path}"
+                subprocess.run(cmd, shell=True, check=True)
+                
+            elif addon.addon_type == 'MONGODB':
+                # Mongo dump
+                cmd = f"docker exec {container_name} mongodump --username=app_user --password=$MONGO_INITDB_ROOT_PASSWORD --db=app_db --archive" 
+                # Redirect to file
+                full_cmd = f"{cmd} > {backup_path}"
+                subprocess.run(full_cmd, shell=True, check=True)
+            
+            return backup_path
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Backup failed for {addon.id}: {e}")
+            raise e
+
+    def restore_backup(self, addon, backup_path: str) -> bool:
+        """
+        Restore a backup to the addon database.
+        """
+        container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        
+        try:
+            if addon.addon_type == 'POSTGRES':
+                # Drop and recreate schema or just restore
+                # cat backup | docker exec -i container psql ...
+                cmd = f"cat {backup_path} | docker exec -i {container_name} psql -U app_user app_db"
+                subprocess.run(cmd, shell=True, check=True)
+                
+            elif addon.addon_type == 'REDIS':
+                # Copy file back, restart
+                subprocess.run(['docker', 'stop', container_name], check=True)
+                cmd = f"docker cp {backup_path} {container_name}:/data/dump.rdb"
+                subprocess.run(cmd, shell=True, check=True)
+                subprocess.run(['docker', 'start', container_name], check=True)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Restore failed for {addon.id}: {e}")
+            raise e
+
 # Singleton instance
 addon_provisioner = AddonProvisioner()

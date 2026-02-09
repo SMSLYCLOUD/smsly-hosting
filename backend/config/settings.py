@@ -35,6 +35,7 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
+GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
 # SECURITY: No wildcard default - prevents host header injection
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
@@ -80,6 +81,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
+    'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
     'allauth.account.middleware.AccountMiddleware',
 ]
 
@@ -209,7 +212,14 @@ REST_FRAMEWORK = {
 }
 
 # Celery
-CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+REDIS_PASSWORD = config('REDIS_PASSWORD', default='')
+REDIS_HOST = config('REDIS_HOST', default='redis')
+REDIS_PORT = config('REDIS_PORT', default='6379')
+
+if REDIS_PASSWORD:
+    CELERY_BROKER_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+else:
+    CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_BEAT_SCHEDULE = {
     'collect-metrics-every-5-minutes': {

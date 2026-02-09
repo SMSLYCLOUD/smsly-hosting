@@ -12,6 +12,8 @@ class RemediationEngine:
     Analyzes issues and applies fixes autonomously.
     """
 
+    MAX_MEMORY_LIMIT = 2048  # 2GB Hard Limit
+    
     RECOMMENDATIONS = {
         'OOM_KILLED': {
             'action': 'SCALE_UP',
@@ -48,6 +50,10 @@ class RemediationEngine:
                 return False
 
             if fix['action'] == 'SCALE_UP' and fix['resource'] == 'MEMORY':
+                if service.memory_mb >= self.MAX_MEMORY_LIMIT:
+                    logger.warning(f"Memory limit reached for {service.name} ({service.memory_mb}MB)")
+                    return False
+                
                 old_mem = service.memory_mb
                 service.memory_mb += fix['amount']
                 service.save()

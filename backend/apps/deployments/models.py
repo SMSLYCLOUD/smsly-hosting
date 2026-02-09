@@ -19,6 +19,23 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
+class Region(models.Model):
+    """
+    Physical deployment regions (e.g. us-east-1, eu-central-1).
+    """
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    provider = models.CharField(max_length=50, default='aws')
+    country_code = models.CharField(max_length=2, help_text="ISO 3166-1 alpha-2")
+    city = models.CharField(max_length=100)
+    lat = models.FloatField(null=True, blank=True)
+    lng = models.FloatField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.provider})"
+
+
 class Service(TimeStampedModel):
     """
     Represents a hosted application/service.
@@ -80,11 +97,41 @@ class Service(TimeStampedModel):
     min_replicas = models.IntegerField(default=1)
     max_replicas = models.IntegerField(default=1)
     autoscale_cpu_target = models.IntegerField(
-        default=80, help_text="Target CPU utilization percentage")
+        default=80, help_text="Target CPU utilization percentage (HPA)")
+    vpa_enabled = models.BooleanField(
+        default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
 
-    # Strategy
+    # Multi-Region
+    regions = models.ManyToManyField(
+        Region,
+        blank=True,
+        related_name='services',
+        help_text="Regions to deploy this service to")
+    primary_region = models.ForeignKey(
+        Region,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='primary_services')
+
+    # Deployment Strategy
+    DEPLOY_STRATEGY_CHOICES = [
+        ('ROLLING', 'Rolling Update'),
+        ('BLUE_GREEN', 'Blue/Green'),
+        ('CANARY', 'Canary'),
+    ]
+    deploy_strategy = models.CharField(
+        max_length=20,
+        choices=DEPLOY_STRATEGY_CHOICES,
+        default='ROLLING',
+        help_text="Deployment strategy for this service")
+    canary_percentage = models.IntegerField(
+        default=10,
+        help_text="Percentage of traffic routed to canary (1-100)")
+
+    # Legacy compat
     use_blue_green = models.BooleanField(
-        default=False, help_text="Use Blue/Green deployment strategy")
+        default=False, help_text="Deprecated: use deploy_strategy instead")
 
     # Preview Environments
     is_preview = models.BooleanField(default=False)
@@ -181,8 +228,29 @@ class Deployment(TimeStampedModel):
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
+    # Rollback tracking
+    is_rollback = models.BooleanField(
+        default=False, help_text="Whether this deployment is a rollback")
+    rollback_from = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rollback_deployments',
+        help_text="The deployment this was rolled back from")
+
     class Meta:
         ordering = ['-created_at']
 
+    @property
+    def duration_seconds(self):
+        """Compute deployment duration in seconds."""
+        if self.started_at and self.finished_at:
+            return (self.finished_at - self.started_at).total_seconds()
+        return None
+
     def __str__(self):
-        return f"{self.service.name} - {self.commit_hash[:7]} ({self.status})"
+        label = f"{self.service.name} - {self.commit_hash[:7]} ({self.status})"
+        if self.is_rollback:
+            label = f"[ROLLBACK] {label}"
+        return label

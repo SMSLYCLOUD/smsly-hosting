@@ -19,9 +19,16 @@ class AddonSerializer(serializers.ModelSerializer):
             'name',
             'addon_type',
             'status',
-            'connection_url',
             'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
+
+
+class BackupSerializer(serializers.ModelSerializer):
+    class Meta:
+        from .models_addons import Backup
+        model = Backup
+        fields = ['id', 'addon', 'status', 'size_bytes', 'created_at', 'completed_at', 'error_message']
+        read_only_fields = ['status', 'size_bytes', 'created_at', 'completed_at', 'error_message']
 
 
 class AddonViewSet(viewsets.ModelViewSet):
@@ -86,3 +93,59 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'status': addon.status,
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'])
+    def backup(self, request, pk=None):
+        """Trigger a backup for this addon."""
+        addon = self.get_object()
+        from .tasks import backup_addon_task
+        task = backup_addon_task.delay(str(addon.id))
+        return Response({'status': 'backup_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None):
+        """Restore a backup to this addon."""
+        addon = self.get_object()
+        backup_id = request.data.get('backup_id')
+        if not backup_id:
+            return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify backup belongs to addon
+        from .models_addons import Backup
+        if not Backup.objects.filter(id=backup_id, addon=addon).exists():
+             return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .tasks import restore_addon_task
+        task = restore_addon_task.delay(backup_id)
+        return Response({'status': 'restore_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=['get'])
+    def backups(self, request, pk=None):
+        """List backups for this addon."""
+        addon = self.get_object()
+        from .models_addons import Backup
+        backups = Backup.objects.filter(addon=addon).order_by('-created_at')
+        serializer = BackupSerializer(backups, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def download_backup(self, request, pk=None):
+        """Download a backup file."""
+        addon = self.get_object()
+        backup_id = request.query_params.get('backup_id')
+        if not backup_id:
+            return Response({'error': 'backup_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from .models_addons import Backup
+        try:
+            backup = Backup.objects.get(id=backup_id, addon=addon)
+        except Backup.DoesNotExist:
+            return Response({'error': 'Backup not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+        import os
+        from django.http import FileResponse
+        if not os.path.exists(backup.file_path):
+             return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+             
+        response = FileResponse(open(backup.file_path, 'rb'), as_attachment=True, filename=os.path.basename(backup.file_path))
+        return response

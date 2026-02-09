@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# SMSLY Hosting - Production VPS Deployment Script v3.0
+# SMSLY Hosting - Production VPS Deployment Script v3.1 (Hardened)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,8 +9,31 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# ─── Logging ────────────────────────────────────────────────────────────────
+LOG_FILE="/var/log/smsly-deploy.log"
+INSTALL_DIR="/opt/smsly-hosting"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "" >> "$LOG_FILE"
+echo "═══ SMSLY Deploy Log — $(date -Iseconds) ═══" >> "$LOG_FILE"
+
+# ─── Rollback Trap ──────────────────────────────────────────────────────────
+cleanup_on_failure() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}DEPLOYMENT FAILED (exit: $exit_code). Check: $LOG_FILE${NC}"
+        if [ -f "$INSTALL_DIR/docker-compose.prod.yml" ]; then
+            cd "$INSTALL_DIR" 2>/dev/null || true
+            docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+        fi
+        if [ -f "$INSTALL_DIR/.env.backup" ]; then
+            mv "$INSTALL_DIR/.env.backup" "$INSTALL_DIR/.env" 2>/dev/null || true
+        fi
+    fi
+}
+trap cleanup_on_failure EXIT
+
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}  SMSLY Hosting - Production VPS Deployment v3.0${NC}"
+echo -e "${BLUE}  SMSLY Hosting - Production VPS Deployment v3.1${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -49,7 +72,6 @@ echo -e "${GREEN}✓ Firewall configured${NC}"
 
 # ─── STEP 4: Clone Repo ─────────────────────────────────────────────────────
 echo -e "${YELLOW}[4/8] Setting up files...${NC}"
-INSTALL_DIR="/opt/smsly-hosting"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
@@ -61,57 +83,74 @@ if [ ! -f "docker-compose.prod.yml" ]; then
 fi
 echo -e "${GREEN}✓ Files ready${NC}"
 
-# ─── STEP 5: Generate Secrets ───────────────────────────────────────────────
+# ─── STEP 5: Generate Secrets (IDEMPOTENT) ──────────────────────────────────
 echo -e "${YELLOW}[5/8] Generating secrets...${NC}"
-
-# Install cryptography
-pip3 install cryptography -q 2>/dev/null || true
 
 # Get server IP
 SERVER_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 echo -e "${BLUE}  Server IP: ${SERVER_IP}${NC}"
 
-# Deployment mode
-echo ""
-echo -e "${BLUE}Select Deployment Mode:${NC}"
-echo -e "  1) IP Mode (Easy) - http://${SERVER_IP}:8090"
-echo -e "  2) SSL Mode (Prod) - https://your-domain.com"
-echo ""
-read -p "Choice [1]: " MODE_CHOICE
-MODE_CHOICE="${MODE_CHOICE:-1}"
-
-if [ "$MODE_CHOICE" = "2" ]; then
-    USE_SSL=true
-    read -p "Domain: " DOMAIN
-    read -p "Email for SSL: " ACME_EMAIL
-    ALLOWED_HOSTS="$DOMAIN"
-    ACCESS_URL="https://$DOMAIN"
+if [ -f .env ]; then
+    echo -e "${GREEN}✓ Existing .env found — preserving${NC}"
+    cp .env .env.backup
+    source .env 2>/dev/null || true
+    DOMAIN="${DOMAIN:-$SERVER_IP}"
+    USE_SSL="${USE_SSL:-false}"
+    if [ "$USE_SSL" = "true" ]; then
+        ACCESS_URL="https://$DOMAIN"
+    else
+        ACCESS_URL="http://$SERVER_IP:8090"
+    fi
 else
-    USE_SSL=false
-    DOMAIN="$SERVER_IP"
-    ACME_EMAIL=""
-    ALLOWED_HOSTS="$SERVER_IP,localhost,127.0.0.1"
-    ACCESS_URL="http://$SERVER_IP:8090"
-fi
+    # Deployment mode
+    echo ""
+    echo -e "${BLUE}Select Deployment Mode:${NC}"
+    echo -e "  1) IP Mode (Easy) - http://${SERVER_IP}:8090"
+    echo -e "  2) SSL Mode (Prod) - https://your-domain.com"
+    echo ""
+    read -p "Choice [1]: " MODE_CHOICE
+    MODE_CHOICE="${MODE_CHOICE:-1}"
 
-echo -e "${BLUE}  → Generating secure credentials...${NC}"
+    if [ "$MODE_CHOICE" = "2" ]; then
+        USE_SSL=true
+        read -p "Domain: " DOMAIN
+        read -p "Email for SSL: " ACME_EMAIL
+        ALLOWED_HOSTS="$DOMAIN"
+        ACCESS_URL="https://$DOMAIN"
+    else
+        USE_SSL=false
+        DOMAIN="$SERVER_IP"
+        ACME_EMAIL=""
+        ALLOWED_HOSTS="$SERVER_IP,localhost,127.0.0.1"
+        ACCESS_URL="http://$SERVER_IP:8090"
+    fi
 
-# Generate secrets using ONLY safe characters (no special shell chars)
-SECRET_KEY=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=$(openssl rand -hex 16)
-FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
-echo -e "${GREEN}✓ Secrets generated${NC}"
+    # Install cryptography for Fernet key
+    pip3 install cryptography -q 2>/dev/null || true
 
-# Create .env
-cat > .env << ENVEOF
-# SMSLY Hosting - Generated $(date)
+    SECRET_KEY=$(openssl rand -hex 32)
+    POSTGRES_PASSWORD=$(openssl rand -hex 16)
+
+    # Generate valid Fernet key (Python ONLY — no invalid fallback)
+    FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; k=Fernet.generate_key().decode(); Fernet(k.encode()); print(k)" 2>/dev/null)
+    if [ -z "$FIELD_ENCRYPTION_KEY" ]; then
+        echo -e "${RED}✗ Cannot generate Fernet key. Install: pip3 install cryptography${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ Secrets generated (Fernet key validated)${NC}"
+
+    # Create .env
+    cat > .env << ENVEOF
+# SMSLY Hosting - Generated $(date -Iseconds)
 SECRET_KEY=${SECRET_KEY}
 FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 DOMAIN=${DOMAIN}
 USE_SSL=${USE_SSL}
-ACME_EMAIL=${ACME_EMAIL}
+ACME_EMAIL=${ACME_EMAIL:-}
 DEBUG=False
 ALLOWED_HOSTS=${ALLOWED_HOSTS}
 CSRF_TRUSTED_ORIGINS=http://${DOMAIN}:8090,https://${DOMAIN}
@@ -125,8 +164,9 @@ CONTAINER_REGISTRY_URL=registry:5000
 NEXT_PUBLIC_API_URL=/api/v1
 ENVEOF
 
-chmod 600 .env
-echo -e "${GREEN}✓ Environment configured${NC}"
+    chmod 600 .env
+    echo -e "${GREEN}✓ Environment configured${NC}"
+fi
 
 # ─── STEP 6: Validate ───────────────────────────────────────────────────────
 echo -e "${YELLOW}[6/8] Validating...${NC}"
@@ -178,6 +218,9 @@ docker compose -f docker-compose.prod.yml ps
 
 echo -e "${GREEN}✓ Deployment verified${NC}"
 
+# ─── Remove rollback trap on success ─────────────────────────────────────────
+trap - EXIT
+
 # ─── DONE ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -194,5 +237,6 @@ echo -e "📝 ${BLUE}Create admin user:${NC}"
 echo -e "   cd ${INSTALL_DIR}"
 echo -e "   docker compose -f docker-compose.prod.yml exec backend python manage.py createsuperuser"
 echo ""
+echo -e "${BLUE}📋 Deploy log: $LOG_FILE${NC}"
 echo -e "${YELLOW}⚠️  Credentials saved to: ${INSTALL_DIR}/.env${NC}"
 echo ""

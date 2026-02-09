@@ -7,6 +7,13 @@ from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
 from .views_cron import CronJobViewSet
 from .views_storage import VolumeViewSet
+from .views_templates import TemplateViewSet
+from .views_blueprints import BlueprintViewSet
+from .views_topology import TopologyViewSet
+from .views_analysis import RepoAnalysisView
+from .views_chat import AIChatView
+from .views_webhooks import GitHubWebhookView
+from .views_tunnels import TunnelViewSet
 
 # Create main router
 router = DefaultRouter()
@@ -17,6 +24,10 @@ router = DefaultRouter()
 router.register(r'services', ServiceViewSet, basename='service')
 router.register(r'deployments', DeploymentViewSet, basename='deployment')
 router.register(r'addons', AddonViewSet, basename='addon')
+router.register(r'templates', TemplateViewSet, basename='template')
+router.register(r'blueprints', BlueprintViewSet, basename='blueprint')
+router.register(r'topology', TopologyViewSet, basename='topology')
+router.register(r'tunnels', TunnelViewSet, basename='tunnel')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
@@ -33,4 +44,9 @@ services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 
 urlpatterns = router.urls + [
     path('', include(services_router.urls)),
+    # Non-router views
+    path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
+    path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
+    path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
 ]
+

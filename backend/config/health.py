@@ -1,49 +1,108 @@
-"""Health check endpoint for production readiness."""
+"""Health check endpoints for SMSLY Hosting — production hardened."""
+import time
 from django.http import JsonResponse
 from django.db import connection
 from django.core.cache import cache
-import logging
+from django.conf import settings
+from apps.core.circuit_breaker import database_breaker, redis_breaker
 
-logger = logging.getLogger(__name__)
+# Track process start time for uptime calculation
+_PROCESS_START = time.monotonic()
+_VERSION = getattr(settings, 'SMSLY_VERSION', '2.0.0')
 
 
-def health(request):
+def health_check(request):
     """
-    Health check endpoint for load balancers and orchestration systems.
-    
-    Returns:
-        200 OK if all systems are operational
-        503 Service Unavailable if critical dependencies are down
+    Comprehensive health check — checks all critical dependencies.
+    Used by load balancers and monitoring systems.
+    Returns 200 if healthy, 503 if any dependency is down.
     """
-    status = {
-        "status": "healthy",
-        "database": "unknown",
-        "cache": "unknown"
-    }
-    http_status = 200
-    
-    # Check database connection
+    db_status = 'healthy'
+    cache_status = 'healthy'
+    deployment_count = 0
+    checks_passed = True
+
+    # Check database
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-        status["database"] = "healthy"
-    except Exception as e:
-        logger.error(f"Database health check failed: {e}")
-        status["database"] = "unhealthy"
-        status["status"] = "unhealthy"
-        http_status = 503
-    
-    # Check Redis/cache connection
+            # Protect DB call with circuit breaker
+            @database_breaker
+            def check_db():
+                cursor.execute('SELECT 1')
+            check_db()
+    except Exception:
+        db_status = 'unhealthy'
+        checks_passed = False
+
+    # Check cache (Redis)
     try:
-        cache.set("health_check", "ok", timeout=10)
-        if cache.get("health_check") == "ok":
-            status["cache"] = "healthy"
-        else:
-            raise Exception("Cache set/get mismatch")
-    except Exception as e:
-        logger.error(f"Cache health check failed: {e}")
-        status["cache"] = "unhealthy"
-        status["status"] = "unhealthy"
-        http_status = 503
-    
-    return JsonResponse(status, status=http_status)
+        @redis_breaker
+        def check_cache():
+            cache.set('_health_check', '1', 10)
+            val = cache.get('_health_check')
+            if val != '1':
+                raise ValueError('Cache read mismatch')
+        check_cache()
+    except Exception:
+        cache_status = 'unhealthy'
+        checks_passed = False
+
+    # Count recent deployments (non-critical, won't fail health check)
+    try:
+        from apps.deployments.models import Deployment
+        deployment_count = Deployment.objects.count()
+    except Exception:
+        pass
+
+    uptime_seconds = int(time.monotonic() - _PROCESS_START)
+
+    payload = {
+        'status': 'healthy' if checks_passed else 'unhealthy',
+        'version': _VERSION,
+        'uptime_seconds': uptime_seconds,
+        'database': db_status,
+        'cache': cache_status,
+        'deployments_total': deployment_count,
+    }
+
+    status_code = 200 if checks_passed else 503
+    return JsonResponse(payload, status=status_code)
+
+
+def liveness_check(request):
+    """
+    Liveness probe — is the process alive and responsive?
+    Should NOT check external deps (DB, cache). Only checks the process itself.
+    Used by Kubernetes liveness probes.
+    """
+    return JsonResponse({
+        'status': 'alive',
+        'version': _VERSION,
+        'uptime_seconds': int(time.monotonic() - _PROCESS_START),
+    })
+
+
+def readiness_check(request):
+    """
+    Readiness probe — can the process handle traffic?
+    Checks database and cache connectivity.
+    Used by Kubernetes readiness probes.
+    """
+    ready = True
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+    except Exception:
+        ready = False
+
+    try:
+        cache.set('_readiness_check', '1', 10)
+        if cache.get('_readiness_check') != '1':
+            raise ValueError('Cache mismatch')
+    except Exception:
+        ready = False
+
+    if ready:
+        return JsonResponse({'status': 'ready'})
+    return JsonResponse({'status': 'not_ready'}, status=503)

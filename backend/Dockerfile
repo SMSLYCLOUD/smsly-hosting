@@ -13,9 +13,17 @@ RUN apt-get update \
     postgresql-client \
     curl \
     wget \
-    && curl -fsSL https://get.docker.com -o get-docker.sh \
-    && sh get-docker.sh \
-    # Install Nixpacks
+    # Security: Install Docker via official repo with GPG verification
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli docker-buildx-plugin \
+    # Install Nixpacks (Current safest method)
     && curl -sL https://nixpacks.com/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,6 +31,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+
+# Security: Run as non-root user
+RUN useradd -m -u 1000 smsly && \
+    chown -R smsly:smsly /app
+USER smsly
 
 # Use Entrypoint
 ENTRYPOINT ["./entrypoint.sh"]

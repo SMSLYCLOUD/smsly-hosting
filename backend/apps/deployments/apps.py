@@ -14,6 +14,7 @@ class DeploymentsConfig(AppConfig):
         from . import models_templates
         from . import models_cron
         from . import models_storage
+        from . import models_tunnels
 
         # Import signals
         # Note: We assume there's a signals.py or we define them here.

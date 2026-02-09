@@ -4,8 +4,16 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.conf import settings
+from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from .models import Service, Deployment, EnvironmentVariable
-from .serializers import ServiceSerializer, DeploymentSerializer, DeploymentTriggerSerializer, EnvVarSerializer
+from .serializers import (
+    ServiceSerializer, DeploymentSerializer,
+    ServiceSerializer, DeploymentSerializer,
+    DeploymentTriggerSerializer, EnvVarSerializer,
+    DeploymentTimelineSerializer, InstantRollbackSerializer,
+    AuditLogSerializer
+)
+from .models_audit import AuditLog
 from .tasks import smart_deploy_task
 from apps.cloud.models import CloudProvider
 import os
@@ -61,6 +69,132 @@ class ServiceViewSet(viewsets.ModelViewSet):
         smart_deploy_task.delay(str(deployment.id), str(provider.id))
         return Response(DeploymentSerializer(deployment).data)
 
+    @action(detail=True, methods=['post'], url_path='instant-rollback')
+    def instant_rollback(self, request, pk=None):
+        """
+        Instantly rollback a service to its last successful deployment.
+        POST /api/v1/services/{id}/instant-rollback/
+        Body: { "message": "optional reason" } (Optional)
+
+        This is the ONE-CLICK rollback that beats Railway.
+        No need to find the deployment ID — just hit this endpoint.
+        """
+        service = self.get_object()
+        serializer = InstantRollbackSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get('message', '')
+
+        # Find the most recent ACTIVE deployment
+        last_good = (
+            Deployment.objects
+            .filter(service=service, status=Deployment.Status.ACTIVE)
+            .order_by('-finished_at')
+            .first()
+        )
+
+        if not last_good:
+            return Response(
+                {'error': 'No previous successful deployment to rollback to'},
+                status=status.HTTP_404_NOT_FOUND)
+
+        # Find the current (latest) deployment to mark as source
+        current = (
+            Deployment.objects
+            .filter(service=service)
+            .order_by('-created_at')
+            .first()
+        )
+
+        # Create rollback deployment
+        rollback_msg = f"INSTANT ROLLBACK to {last_good.commit_hash[:7]}"
+        if reason:
+            rollback_msg += f" — {reason}"
+
+        rollback_deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash=last_good.commit_hash,
+            commit_message=rollback_msg,
+            is_rollback=True,
+            rollback_from=current,
+        )
+
+        provider = service.provider or CloudProvider.objects.first()
+        if provider:
+            smart_deploy_task.delay(
+                str(rollback_deployment.id), str(provider.id))
+
+        return Response({
+            'deployment': DeploymentSerializer(rollback_deployment).data,
+            'rolled_back_to': DeploymentSerializer(last_good).data,
+            'message': f'Rollback initiated to {last_good.commit_hash[:7]}',
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'])
+    def timeline(self, request, pk=None):
+        """
+        Deployment timeline for a service — paginated, lightweight.
+        GET /api/v1/services/{id}/timeline/
+        Query params: ?status=ACTIVE&limit=20
+        """
+        service = self.get_object()
+        deployments = service.deployments.all().order_by('-created_at')
+
+        # Filter by status if requested
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            deployments = deployments.filter(status=status_filter.upper())
+
+        page = self.paginate_queryset(deployments)
+        if page is not None:
+            serializer = DeploymentTimelineSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = DeploymentTimelineSerializer(deployments, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def stats(self, request, pk=None):
+        """
+        Deployment statistics for a service.
+        GET /api/v1/services/{id}/stats/
+
+        Returns: total deploys, success rate, avg duration, rollback count.
+        """
+        service = self.get_object()
+        deploys = service.deployments.all()
+
+        total = deploys.count()
+        active = deploys.filter(status=Deployment.Status.ACTIVE).count()
+        failed = deploys.filter(status=Deployment.Status.FAILED).count()
+        rollbacks = deploys.filter(is_rollback=True).count()
+
+        # Average duration of successful deployments
+        successful = deploys.filter(
+            status=Deployment.Status.ACTIVE,
+            started_at__isnull=False,
+            finished_at__isnull=False,
+        ).annotate(
+            duration=ExpressionWrapper(
+                F('finished_at') - F('started_at'),
+                output_field=DurationField()
+            )
+        ).aggregate(avg_duration=Avg('duration'))
+
+        avg_seconds = None
+        if successful['avg_duration']:
+            avg_seconds = successful['avg_duration'].total_seconds()
+
+        success_rate = (active / total * 100) if total > 0 else 0
+
+        return Response({
+            'total_deployments': total,
+            'active': active,
+            'failed': failed,
+            'rollbacks': rollbacks,
+            'success_rate': round(success_rate, 1),
+            'avg_duration_seconds': round(avg_seconds, 1) if avg_seconds else None,
+        })
+
     # --- Nested Resources: Environment Variables ---
     @action(detail=True, methods=['get'], url_path='env_vars')
     def list_env_vars(self, request, pk=None):
@@ -105,7 +239,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     def rollback(self, request, pk=None):
         """
         Rollback to this specific deployment.
-        Effectively triggers a new deployment using the commit hash/image from this one.
+        Effectively triggers a new deployment using the commit hash/image
+        from this one.
         """
         target_deployment = self.get_object()
         service = target_deployment.service
@@ -115,7 +250,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash=target_deployment.commit_hash,
-            commit_message=f"Rollback to {target_deployment.commit_hash[:7]}"
+            commit_message=f"Rollback to {target_deployment.commit_hash[:7]}",
+            is_rollback=True,
+            rollback_from=target_deployment,
         )
 
         provider = service.provider or CloudProvider.objects.first()
@@ -165,6 +302,47 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """
+        Cancel a queued or building deployment.
+        POST /api/v1/deployments/{id}/cancel/
+        """
+        deployment = self.get_object()
+
+        if deployment.status not in (
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+        ):
+            return Response(
+                {'error': f'Cannot cancel deployment in {deployment.status} '
+                          f'status. Only QUEUED or BUILDING deployments can '
+                          f'be cancelled.'},
+                status=status.HTTP_409_CONFLICT)
+
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.finished_at = timezone.now()
+        deployment.build_logs += "\n\n[CANCELLED] Deployment cancelled by user."
+        deployment.save()
+
+        return Response(DeploymentSerializer(deployment).data)
+
+    @action(detail=True, methods=['get'], url_path='build-logs')
+    def build_logs(self, request, pk=None):
+        """
+        Get build logs for a deployment (REST fallback for non-WebSocket).
+        GET /api/v1/deployments/{id}/build-logs/
+        """
+        deployment = self.get_object()
+        return Response({
+            'id': str(deployment.id),
+            'status': deployment.status,
+            'build_logs': deployment.build_logs,
+            'started_at': deployment.started_at,
+            'finished_at': deployment.finished_at,
+            'duration_seconds': deployment.duration_seconds,
+        })
+
+    @action(detail=True, methods=['post'])
     def diagnose(self, request, pk=None):
         """
         Trigger AI diagnosis for a deployment.
@@ -194,7 +372,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         if uploaded_file.size > MAX_UPLOAD_SIZE:
             size_mb = uploaded_file.size / 1024 / 1024
             return Response(
-                {'error': f'File too large. Maximum size is 100MB, got {size_mb:.1f}MB'},
+                {'error': f'File too large. Maximum size is 100MB, '
+                          f'got {size_mb:.1f}MB'},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
             )
 
@@ -217,8 +396,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
             # Security: Use secure upload directory
             import secrets
-            # Use settings.MEDIA_ROOT or fallback to /tmp/smsly/uploads
-            # Using /var/smsly requires root, which CI/CD runner lacks
             base_dir = getattr(settings, 'MEDIA_ROOT', '/tmp/smsly/uploads')
             upload_dir = os.path.join(base_dir, 'uploads')
             os.makedirs(upload_dir, mode=0o700, exist_ok=True)
@@ -270,3 +447,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         except Service.DoesNotExist:
             return Response({'error': 'Service not found'},
                             status=status.HTTP_404_NOT_FOUND)
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = AuditLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        # In a real multi-tenant app, filter by owner/team
+        # For now, return all logs where actor matches username or is system
+        return AuditLog.objects.all().order_by('-timestamp')

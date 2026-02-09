@@ -3,7 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .services.stripe import StripeService
-from .models import UsageRecord
+from .models import UsageRecord, BillingAccount
+from .serializers import CheckoutSessionSerializer, PortalSessionSerializer
 from django.db.models import Sum
 
 
@@ -52,3 +53,32 @@ class SimulateBillingView(APIView):
             "services": services,
             "simulation_mode": True
         })
+
+
+class CreateCheckoutSessionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = CheckoutSessionSerializer(data=request.data)
+        if serializer.is_valid():
+            # mock Stripe logic
+            account, _ = BillingAccount.objects.get_or_create(user=request.user)
+            
+            # Real impl would use stripe.checkout.Session.create(...)
+            # Returning mock URL for now
+            return Response({
+                'checkout_url': 'https://checkout.stripe.com/test-session-123' 
+            })
+        return Response(serializer.errors, status=500)
+
+class PortalSessionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = PortalSessionSerializer(data=request.data)
+        if serializer.is_valid():
+             # mock Stripe logic
+            return Response({
+                'portal_url': 'https://billing.stripe.com/p/login/test'
+            })
+        return Response(serializer.errors, status=500)

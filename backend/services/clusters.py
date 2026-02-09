@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 class ClusterManager:
     """
     Manages the deployment to the cluster (Image -> Container/Pod).
+    Supports:
+    - Multi-Region Deployment (via Node Affinity)
+    - Vertical Pod Autoscaling (VPA)
+    - Horizontal Pod Autoscaling (HPA)
+    - Zero-Trust Network Policies
     """
 
     def __init__(self, deployment):
@@ -40,49 +45,104 @@ class ClusterManager:
             self.net_v1 = client.NetworkingV1Api()
             self.autoscaling_v2 = client.AutoscalingV2Api()
             self.batch_v1 = client.BatchV1Api()
+            self.custom_obj = client.CustomObjectsApi()  # For VPA
 
     @retry(stop=stop_after_attempt(3),
            wait=wait_exponential(multiplier=1, min=4, max=10))
     def deploy_service(self, image_tag):
         """
-        Deploys the image to Kubernetes.
+        Deploys the image to Kubernetes, handling multi-region distribution.
         """
-        logger.info(f"Deploying {image_tag} to cluster")
+        regions = list(self.service.regions.all())
+        
+        # If no regions configured, use default/primary behavior (single deployment)
+        if not regions:
+            logger.info(f"Deploying {self.service.name} to default region")
+            return self._deploy_to_region(image_tag, region=None)
 
+        # Multi-region deployment
+        results = []
+        for region in regions:
+            logger.info(f"Deploying {self.service.name} to region {region.slug}")
+            result = self._deploy_to_region(image_tag, region=region)
+            results.append(result)
+        
+        return ", ".join(results)
+
+    def _deploy_to_region(self, image_tag, region=None):
+        """
+        Deploys the service to a specific region (or default).
+        """
         # Determine namespace (Isolation strategy)
-        # Using service name suffix or project ID if available.
-        # For this phase, we isolate per service to keep it simple and secure.
         namespace = self._sanitize_name(f"ns-{self.service.name}")
 
-        name = self._sanitize_name(f"svc-{self.service.name}")
+        # Base name
+        base_name = f"svc-{self.service.name}"
+        
+        # Suffix if region-specific
+        name = base_name
+        if region:
+            name = f"{base_name}-{region.slug}"
+
+        name = self._sanitize_name(name)
 
         if not self.k8s_available:
-            self._log("Kubernetes not available. Mocking deployment.")
-            time.sleep(2)
+            self._log(f"Kubernetes not available. Mocking deployment to {name}.")
+            time.sleep(1)
             return f"mock-pod-{name}"
 
         # Ensure Namespace exists
         self._ensure_namespace(namespace)
 
         # Define Deployment
-        # If blue/green, append suffix (simple implementation)
-        # Real world would manage 'active' and 'idle' services and switch
-        # traffic
         deployment_name = name
-        if self.service.use_blue_green:
+        
+        # Strategy modification
+        # If blue/green, append suffix (simple implementation)
+        if self.service.deploy_strategy == 'BLUE_GREEN':
             deployment_name = f"{name}-{self.deployment.commit_hash[:7]}"
+
+        # Node Affinity for Region
+        affinity = {}
+        if region:
+            affinity = {
+                "nodeAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": {
+                        "nodeSelectorTerms": [{
+                            "matchExpressions": [{
+                                "key": "topology.kubernetes.io/region",
+                                "operator": "In",
+                                "values": [region.slug]
+                            }]
+                        }]
+                    }
+                }
+            }
 
         deployment_manifest = {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
-            "metadata": {"name": deployment_name},
+            "metadata": {
+                "name": deployment_name,
+                "labels": {
+                    "app": name,
+                    "service": self.service.name,
+                    "region": region.slug if region else "default"
+                }
+            },
             "spec": {
-                "replicas": 1,
-                # Unique selector per version
+                "replicas": self.service.min_replicas,
                 "selector": {"matchLabels": {"app": deployment_name}},
                 "template": {
-                    "metadata": {"labels": {"app": deployment_name}},
+                    "metadata": {
+                        "labels": {
+                            "app": deployment_name,
+                            "service": self.service.name,
+                            "region": region.slug if region else "default"
+                        }
+                    },
                     "spec": {
+                        "affinity": affinity,
                         "containers": [{
                             "name": name,
                             "image": image_tag,
@@ -138,28 +198,41 @@ class ClusterManager:
                 else:
                     raise e
 
-            # Ensure Service exists (and points to the new deployment)
+            # Ensure Service exists
             self._ensure_service(
                 name, namespace, target_app_label=deployment_name)
 
             # Ensure Ingress exists if public_domain is set
+            # For multi-region, we might create multiple ingresses or one global
+            # For now, we create one per region-deployment for direct access
             if self.service.public_domain and self.service.domain_verified:
-                self._ensure_ingress(name, namespace)
+                self._ensure_ingress(name, namespace, region=region)
             elif self.service.public_domain and not self.service.domain_verified:
                 self._log(
-                    f"Skipping Ingress creation: Domain {self.service.public_domain} not verified.")
+                    f"Skipping Ingress: Domain {self.service.public_domain} "
+                    f"not verified.")
 
             # Ensure HPA
             if self.service.max_replicas > 1:
                 self._ensure_hpa(name, namespace)
 
-            # Ensure CronJobs
-            for cron in self.service.cron_jobs.all():
-                self._ensure_cronjob(cron, namespace)
+            # Ensure VPA
+            if self.service.vpa_enabled:
+                self._ensure_vpa(name, namespace)
+
+            # Ensure CronJobs (Only in primary region or default)
+            # We don't want cronjobs running in every region typically
+            is_primary = not region or (
+                self.service.primary_region and 
+                region.id == self.service.primary_region.id
+            )
+            if is_primary:
+                for cron in self.service.cron_jobs.all():
+                    self._ensure_cronjob(cron, namespace)
 
             # Ensure PVCs
             for vol in self.service.volumes.all():
-                self._ensure_pvc(vol, namespace)
+                self._ensure_pvc(vol, namespace, region)
 
             return f"pod-{name}"
 
@@ -189,12 +262,12 @@ class ClusterManager:
             self.core_v1.read_namespaced_service(name, namespace)
             self.core_v1.patch_namespaced_service(
                 name, namespace, service_manifest)
-            self._log("Updated Service resource.")
+            self._log(f"Updated Service {name}.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
                 self.core_v1.create_namespaced_service(
                     namespace, service_manifest)
-                self._log("Created new Service resource.")
+                self._log(f"Created Service {name}.")
             else:
                 raise e
 
@@ -245,18 +318,76 @@ class ClusterManager:
                 name, namespace)
             self.autoscaling_v2.patch_namespaced_horizontal_pod_autoscaler(
                 name, namespace, hpa_manifest)
-            self._log("Updated Auto-Scaling configuration.")
+            self._log("Updated HPA configuration.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
                 self.autoscaling_v2.create_namespaced_horizontal_pod_autoscaler(
                     namespace, hpa_manifest)
-                self._log("Created Auto-Scaling configuration.")
+                self._log("Created HPA configuration.")
             else:
                 raise e
 
-    def _ensure_pvc(self, vol, namespace):
+    def _ensure_vpa(self, name, namespace):
+        """
+        Ensure VerticalPodAutoscaler exists.
+        Requires VPA CRD installed in cluster.
+        """
+        vpa_name = f"{name}-vpa"
+        vpa_manifest = {
+            "apiVersion": "autoscaling.k8s.io/v1",
+            "kind": "VerticalPodAutoscaler",
+            "metadata": {"name": vpa_name},
+            "spec": {
+                "targetRef": {
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "name": name
+                },
+                "updatePolicy": {
+                    "updateMode": "Auto"
+                }
+            }
+        }
+        
+        try:
+            # VPA is a Custom Resource
+            group = "autoscaling.k8s.io"
+            version = "v1"
+            plural = "verticalpodautoscalers"
+            
+            try:
+                self.custom_obj.get_namespaced_custom_object(
+                    group, version, namespace, plural, vpa_name)
+                self.custom_obj.patch_namespaced_custom_object(
+                    group, version, namespace, plural, vpa_name, vpa_manifest)
+                self._log(f"Updated VPA {vpa_name}.")
+            except client.exceptions.ApiException as e:
+                if e.status == 404:
+                    self.custom_obj.create_namespaced_custom_object(
+                        group, version, namespace, plural, vpa_manifest)
+                    self._log(f"Created VPA {vpa_name}.")
+                else:
+                    # If CRD not found, log warning but don't crash
+                    if e.status == 404: 
+                         self._log("VPA CRD not found in cluster. Skipping VPA.")
+                    else:
+                         # Log but don't fail deployment for VPA
+                         logger.warning(f"VPA error: {e}")
+                         self._log(f"Warning: Failed to configure VPA: {e}")
+        except Exception as e:
+            logger.error(f"VPA configuration failed: {e}")
+            self._log(f"Warning: VPA configuration failed: {e}")
+
+
+    def _ensure_pvc(self, vol, namespace, region=None):
         """Ensure a PersistentVolumeClaim exists."""
-        name = self._sanitize_name(f"pvc-{vol.id}")
+        base_name = f"pvc-{vol.id}"
+        name = base_name
+        if region:
+            name = f"{base_name}-{region.slug}"
+            
+        name = self._sanitize_name(name)
+            
         manifest = {
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
@@ -318,13 +449,27 @@ class ClusterManager:
             else:
                 raise e
 
-    def _ensure_ingress(self, name, namespace):
+    def _ensure_ingress(self, name, namespace, region=None):
         """Ensure a K8s Ingress exists for the domain."""
+        
+        # For multi-region, we might want unique domains per region
+        # e.g. us-east.app.com
+        hostname = self.service.public_domain
+        if region:
+            # Basic strategy: prefix region to domain if multi-region
+            # But the main need is usually global routing (handled by external DNS/LB)
+            # Here we just ensure the Ingress rule exists for the region's pod service
+            # If utilizing GeoDNS, we might use the SAME hostname and let DNS resolve to closest IP
+            # So, keep hostname same, but Ingress targets the region-specific service
+            pass
+            
+        ingress_name = name 
+        
         ingress_manifest = {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
             "metadata": {
-                "name": name,
+                "name": ingress_name,
                 "annotations": {
                     "kubernetes.io/ingress.class": "nginx",
                     "cert-manager.io/cluster-issuer": "letsencrypt-prod"
@@ -332,7 +477,7 @@ class ClusterManager:
             },
             "spec": {
                 "rules": [{
-                    "host": self.service.public_domain,
+                    "host": hostname,
                     "http": {
                         "paths": [{
                             "path": "/",
@@ -347,22 +492,22 @@ class ClusterManager:
                     }
                 }],
                 "tls": [{
-                    "hosts": [self.service.public_domain],
-                    "secretName": f"{name}-tls"
+                    "hosts": [hostname],
+                    "secretName": f"{ingress_name}-tls"
                 }]
             }
         }
         try:
-            self.net_v1.read_namespaced_ingress(name, namespace)
+            self.net_v1.read_namespaced_ingress(ingress_name, namespace)
             self.net_v1.patch_namespaced_ingress(
-                name, namespace, ingress_manifest)
-            self._log(f"Updated Ingress for {self.service.public_domain}.")
+                ingress_name, namespace, ingress_manifest)
+            self._log(f"Updated Ingress for {hostname}.")
         except client.exceptions.ApiException as e:
             if e.status == 404:
                 self.net_v1.create_namespaced_ingress(
                     namespace, ingress_manifest)
                 self._log(
-                    f"Created new Ingress for {self.service.public_domain}.")
+                    f"Created new Ingress for {hostname}.")
             else:
                 raise e
 
@@ -394,12 +539,18 @@ class ClusterManager:
         """Append logs atomically to avoid race conditions."""
         from django.db.models import Value
         from django.db.models.functions import Concat
-        from apps.deployments.models import Deployment
+        
+        # Don't try to log if deployment is None (simulation)
+        if not self.deployment:
+            return
 
         timestamp = time.strftime("%H:%M:%S")
         log_line = f"[{timestamp}] [K8S] {message}\n"
 
         # Atomic append using Concat to avoid race condition
+        # We need to import Deployment model here to avoid circular imports
+        from apps.deployments.models import Deployment
+        
         Deployment.objects.filter(id=self.deployment.id).update(
             build_logs=Concat('build_logs', Value(log_line))
         )

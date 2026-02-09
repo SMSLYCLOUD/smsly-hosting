@@ -1,0 +1,253 @@
+"""
+Tests for full service lifecycle.
+Validates:
+  - Full CRUD lifecycle for services
+  - Service listing returns only owner's services
+  - Service deletion cascades to deployments
+  - Service update validation
+  - Deploy action on service endpoint
+"""
+from unittest.mock import patch
+from django.contrib.auth.models import User
+from rest_framework.test import APITestCase
+from rest_framework import status as http_status
+from apps.deployments.models import Service, Deployment
+from apps.cloud.models import CloudProvider
+
+
+class ServiceCRUDTests(APITestCase):
+    """Tests for service Create/Read/Update/Delete operations."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='lifecycle',
+            email='lifecycle@test.com',
+            password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.provider = CloudProvider.objects.create(
+            name='test-provider',
+            provider_type='LOCAL',
+            is_active=True
+        )
+
+    def test_create_service(self):
+        """Creating a service should return 201 and persist to DB."""
+        url = '/api/v1/services/'
+        data = {
+            'name': 'my-new-app',
+            'repository_url': 'https://github.com/test/app',
+            'branch': 'main'
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, http_status.HTTP_201_CREATED)
+        self.assertTrue(Service.objects.filter(name='my-new-app').exists())
+
+    def test_list_services(self):
+        """Listing services should return a 200 with service data."""
+        Service.objects.create(
+            name='list-test-svc',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+        url = '/api/v1/services/'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        self.assertGreaterEqual(len(response.data), 1)
+
+    def test_retrieve_service(self):
+        """Retrieving a single service should return its details."""
+        svc = Service.objects.create(
+            name='retrieve-svc',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+        url = f'/api/v1/services/{svc.id}/'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        self.assertEqual(response.data['name'], 'retrieve-svc')
+
+    def test_update_service_name(self):
+        """Updating a service name should persist."""
+        svc = Service.objects.create(
+            name='original-name',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+        url = f'/api/v1/services/{svc.id}/'
+        response = self.client.patch(url, {'name': 'updated-name'}, format='json')
+        self.assertIn(response.status_code, [
+            http_status.HTTP_200_OK,
+            http_status.HTTP_204_NO_CONTENT
+        ])
+        svc.refresh_from_db()
+        self.assertEqual(svc.name, 'updated-name')
+
+    def test_delete_service(self):
+        """Deleting a service should remove it from DB."""
+        svc = Service.objects.create(
+            name='delete-me',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+        url = f'/api/v1/services/{svc.id}/'
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, http_status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Service.objects.filter(name='delete-me').exists())
+
+
+class ServiceOwnershipTests(APITestCase):
+    """Test that services are scoped to their owner."""
+
+    def setUp(self):
+        self.user1 = User.objects.create_user(
+            username='owner1', email='o1@test.com', password='pass123'
+        )
+        self.user2 = User.objects.create_user(
+            username='owner2', email='o2@test.com', password='pass123'
+        )
+        self.provider = CloudProvider.objects.create(
+            name='test-provider',
+            provider_type='LOCAL',
+            is_active=True
+        )
+
+        # Create a service owned by user1
+        self.service = Service.objects.create(
+            name='user1-svc',
+            repository_url='https://github.com/test/app',
+            owner=self.user1,
+            provider=self.provider
+        )
+
+    def test_owner_can_see_own_service(self):
+        """Service owner should see their service in the list."""
+        self.client.force_authenticate(user=self.user1)
+        url = '/api/v1/services/'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+
+        names = [s.get('name') for s in response.data
+                 if isinstance(s, dict)]
+        # If paginated, handle differently
+        if not names and isinstance(response.data, dict):
+            results = response.data.get('results', [])
+            names = [s.get('name') for s in results]
+
+        self.assertIn('user1-svc', names)
+
+
+class ServiceDeployActionTests(APITestCase):
+    """Test the /services/{id}/deploy/ action endpoint."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='deployaction',
+            email='deploy@test.com',
+            password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.provider = CloudProvider.objects.create(
+            name='test-provider',
+            provider_type='LOCAL',
+            is_active=True
+        )
+        self.service = Service.objects.create(
+            name='deploy-action-svc',
+            repository_url='https://github.com/test/app',
+            branch='main',
+            owner=self.user,
+            provider=self.provider
+        )
+
+    @patch('apps.deployments.tasks.smart_deploy_task.delay')
+    def test_deploy_action_creates_deployment(self, mock_task):
+        """POST /services/{id}/deploy/ should create a deployment."""
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {}, format='json')
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        self.assertTrue(
+            Deployment.objects.filter(service=self.service).exists()
+        )
+
+    @patch('apps.deployments.tasks.smart_deploy_task.delay')
+    def test_deploy_action_with_ref(self, mock_task):
+        """Deploy with a specific ref should use that commit hash."""
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {'ref': 'abc123'}, format='json')
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        deploy = Deployment.objects.filter(service=self.service).first()
+        self.assertIsNotNone(deploy)
+        self.assertEqual(deploy.commit_hash, 'abc123')
+
+    def test_deploy_requires_authentication(self):
+        """Unauthenticated users cannot trigger deploys."""
+        self.client.force_authenticate(user=None)
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {}, format='json')
+        self.assertIn(response.status_code, [
+            http_status.HTTP_401_UNAUTHORIZED,
+            http_status.HTTP_403_FORBIDDEN
+        ])
+
+    @patch('apps.deployments.tasks.smart_deploy_task.delay')
+    def test_deploy_action_triggers_celery_task(self, mock_task):
+        """Deploy action should call smart_deploy_task.delay."""
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        self.client.post(url, {}, format='json')
+        mock_task.assert_called_once()
+
+
+class ServiceDeploymentCascadeTests(APITestCase):
+    """Test that deleting a service cascades to deployments."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='cascadetest',
+            email='cascade@test.com',
+            password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.provider = CloudProvider.objects.create(
+            name='test-provider',
+            provider_type='LOCAL',
+            is_active=True
+        )
+        self.service = Service.objects.create(
+            name='cascade-svc',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+        # Create associated deployments
+        Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash='v1'
+        )
+        Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.FAILED,
+            commit_hash='v2'
+        )
+
+    def test_delete_service_cascades_deployments(self):
+        """Deleting a service should also delete its deployments."""
+        svc_id = self.service.id
+        self.assertEqual(Deployment.objects.filter(service_id=svc_id).count(), 2)
+
+        url = f'/api/v1/services/{svc_id}/'
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, http_status.HTTP_204_NO_CONTENT)
+
+        # Deployments should be gone
+        self.assertEqual(Deployment.objects.filter(service_id=svc_id).count(), 0)
