@@ -3,7 +3,8 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, Cloud } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket } from 'lucide-react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -73,12 +74,9 @@ export function Navbar() {
         {/* Logo */}
         <div className="flex items-center">
             <Link href="/" className="mr-8 flex items-center gap-2 group">
-                <div className="bg-primary/10 p-2 rounded-lg group-hover:bg-primary/20 transition-colors">
-                    <Cloud className="w-5 h-5 text-primary" />
-                </div>
-                <span className="text-lg" style={{ letterSpacing: '-0.02em' }}>
-                    <span className="font-black text-slate-900 dark:text-white">SMSLY</span>
-                    <span className="font-bold text-slate-500 dark:text-white ml-0.5">Cloud</span>
+                <Image src="/images/logo.png" alt="SMSLY" width={44} height={44} className="flex-shrink-0" priority />
+                <span className="text-2xl font-bold text-slate-800 dark:text-white" style={{ letterSpacing: '-0.02em' }}>
+                    cloud
                 </span>
             </Link>
 
