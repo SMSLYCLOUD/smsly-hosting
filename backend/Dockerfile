@@ -33,7 +33,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Security: Run as non-root user
-RUN useradd -m -u 1000 smsly && \
+RUN chmod +x entrypoint.sh && \
+    useradd -m -u 1000 smsly && \
     chown -R smsly:smsly /app
 USER smsly
 
