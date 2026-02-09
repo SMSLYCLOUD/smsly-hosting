@@ -225,9 +225,9 @@ export default function Home() {
             <section className="relative pt-32 pb-24 overflow-hidden">
                 {/* Background Effects */}
                 <div className="absolute inset-0 -z-10">
-                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 via-white to-cyan-50/50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900" />
-                    <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl animate-pulse" />
-                    <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 via-white to-green-50/50 dark:from-slate-900 dark:via-slate-950 dark:to-slate-900" />
+                    <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse" />
+                    <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-green-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
                 </div>
 
                 {/* Grid Pattern */}
@@ -238,10 +238,10 @@ export default function Home() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.5 }}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800 rounded-full mb-8 shadow-sm"
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800 rounded-full mb-8 shadow-sm"
                     >
-                        <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span className="text-sm font-semibold text-indigo-800 dark:text-indigo-300">The Hyperscale PaaS</span>
+                        <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">The Hyperscale PaaS</span>
                     </motion.div>
 
                     <motion.h1
@@ -251,7 +251,7 @@ export default function Home() {
                         className="text-5xl md:text-7xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-tight mb-6"
                     >
                         Deploy Anything, <br className="hidden md:block" />
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-cyan-500 to-emerald-500">
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-green-500 to-teal-500">
                             Anywhere.
                         </span>
                     </motion.h1>
@@ -272,7 +272,7 @@ export default function Home() {
                         transition={{ delay: 0.3, duration: 0.5 }}
                         className="mt-10 flex flex-col sm:flex-row gap-4 justify-center"
                     >
-                        <Link href="/new" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-white bg-gradient-to-r from-indigo-600 to-cyan-600 rounded-xl hover:from-indigo-700 hover:to-cyan-700 transition-all shadow-lg shadow-indigo-200 dark:shadow-indigo-900/30">
+                        <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-white bg-gradient-to-r from-emerald-600 to-green-600 rounded-xl hover:from-emerald-700 hover:to-green-700 transition-all shadow-lg shadow-emerald-200 dark:shadow-emerald-900/30">
                             Start Deploying <ArrowRight className="w-5 h-5" />
                         </Link>
                         <Link href="/services" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 transition-all">
@@ -300,7 +300,7 @@ export default function Home() {
                         transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
                         className="p-4 rounded-2xl bg-white/80 dark:bg-slate-800/80 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-xl"
                     >
-                        <GitBranch className="w-8 h-8 text-indigo-600 dark:text-indigo-400" />
+                        <GitBranch className="w-8 h-8 text-emerald-600 dark:text-emerald-400" />
                     </motion.div>
                 </div>
                 <div className="absolute top-32 right-20 hidden lg:block">
@@ -350,7 +350,7 @@ export default function Home() {
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-5xl font-extrabold mb-6">Built for Modern Development</h2>
                         <p className="text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
-                            Not just another PaaS. We&apos;ve reimagined <span className="text-cyan-400 font-semibold">cloud deployment</span> from the ground up.
+                            Not just another PaaS. We&apos;ve reimagined <span className="text-emerald-400 font-semibold">cloud deployment</span> from the ground up.
                         </p>
                     </div>
 
@@ -362,14 +362,14 @@ export default function Home() {
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
                                 transition={{ delay: i * 0.2 }}
-                                className="relative p-8 rounded-3xl bg-slate-800 border border-slate-700 hover:border-indigo-500/50 transition-all group h-full"
+                                className="relative p-8 rounded-3xl bg-slate-800 border border-slate-700 hover:border-emerald-500/50 transition-all group h-full"
                             >
                                 <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${feature.color} flex items-center justify-center mb-6 shadow-lg relative overflow-hidden`}>
                                     <feature.icon className="w-7 h-7 text-white relative z-10" />
                                     <div className="absolute inset-0 bg-white/20 animate-ping opacity-0 group-hover:opacity-30 rounded-2xl transition-opacity duration-700" />
                                 </div>
                                 <h3 className="text-2xl font-bold text-white mb-2">{feature.title}</h3>
-                                <p className="text-indigo-400 font-medium text-sm mb-4 uppercase tracking-wider">{feature.subtitle}</p>
+                                <p className="text-emerald-400 font-medium text-sm mb-4 uppercase tracking-wider">{feature.subtitle}</p>
                                 <p className="text-slate-400 leading-relaxed">
                                     {feature.description}
                                 </p>
@@ -387,7 +387,7 @@ export default function Home() {
                         <div className="flex flex-wrap justify-center gap-8 md:gap-16">
                             {complianceStandards.map((std, i) => (
                                 <div key={i} className="flex items-center gap-2 text-slate-300 opacity-60 hover:opacity-100 transition-opacity">
-                                    <std.icon className="w-5 h-5 text-indigo-500" />
+                                    <std.icon className="w-5 h-5 text-emerald-500" />
                                     <span className="font-bold text-lg">{std.name}</span>
                                 </div>
                             ))}
@@ -405,7 +405,7 @@ export default function Home() {
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
                     >
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-sm font-medium rounded-full mb-4">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-sm font-medium rounded-full mb-4">
                             <Zap className="w-3.5 h-3.5" />
                             Powerful Features
                         </div>
@@ -425,7 +425,7 @@ export default function Home() {
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
                                 transition={{ delay: i * 0.1 }}
-                                className="group p-6 rounded-2xl bg-white dark:bg-slate-800/50 backdrop-blur-xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500/50 hover:shadow-xl hover:shadow-indigo-500/5 transition-all duration-300"
+                                className="group p-6 rounded-2xl bg-white dark:bg-slate-800/50 backdrop-blur-xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500/50 hover:shadow-xl hover:shadow-emerald-500/5 transition-all duration-300"
                             >
                                 <div className={`inline-flex p-3 rounded-xl ${feature.bg} mb-4 group-hover:scale-110 transition-transform`}>
                                     <feature.icon className={`w-6 h-6 ${feature.color}`} />
@@ -531,7 +531,7 @@ $ smsly deploy
                                 viewport={{ once: true }}
                                 transition={{ delay: i * 0.12, duration: 0.6, type: "spring", stiffness: 100 }}
                                 whileHover={{ y: -8, scale: 1.03 }}
-                                className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 transition-all group cursor-pointer h-full"
+                                className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700 hover:border-emerald-300 dark:hover:border-emerald-600 transition-all group cursor-pointer h-full"
                             >
                                 <motion.div
                                     className={`w-12 h-12 rounded-xl ${app.color} flex items-center justify-center mb-6 shadow-lg`}
@@ -554,7 +554,7 @@ $ smsly deploy
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-4">Loved by Developers</h2>
                         <p className="text-lg text-slate-600 dark:text-slate-400">
-                            Join thousands of teams shipping faster with SMSLY Hosting.
+                            Join thousands of teams shipping faster with SMSLY Cloud.
                         </p>
                     </div>
 
@@ -604,7 +604,7 @@ $ smsly deploy
                                 <tr className="bg-slate-800 border-b border-slate-700">
                                     <th className="px-6 py-4 text-sm font-semibold text-slate-300 uppercase tracking-wider">Feature</th>
                                     <th className="px-6 py-4 text-sm font-semibold text-slate-400 uppercase tracking-wider">Traditional PaaS</th>
-                                    <th className="px-6 py-4 text-sm font-semibold text-indigo-400 uppercase tracking-wider">SMSLY Hosting</th>
+                                    <th className="px-6 py-4 text-sm font-semibold text-emerald-400 uppercase tracking-wider">SMSLY Cloud</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -632,15 +632,15 @@ $ smsly deploy
             </section>
 
             {/* CTA SECTION */}
-            <section className="py-24 bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-600 text-white">
+            <section className="py-24 bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 text-white">
                 <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
                     <h2 className="text-4xl md:text-5xl font-extrabold mb-6">Ready to Deploy?</h2>
                     <p className="text-xl mb-10 text-white/80 max-w-2xl mx-auto">
-                        Join thousands of developers shipping faster with SMSLY Hosting.
+                        Join thousands of developers shipping faster with SMSLY Cloud.
                         Start free, scale infinitely.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-indigo-600 bg-white rounded-xl hover:bg-slate-100 transition-all shadow-lg">
+                        <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-emerald-600 bg-white rounded-xl hover:bg-slate-100 transition-all shadow-lg">
                             Get Started Free <ArrowRight className="w-5 h-5" />
                         </Link>
                         <Link href="/contact" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-lg font-bold text-white border-2 border-white/30 rounded-xl hover:bg-white/10 transition-all">
@@ -654,13 +654,13 @@ $ smsly deploy
             <footer className="py-12 px-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
                 <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-                            <span className="text-white font-bold text-sm">S</span>
+                        <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
+                            <Cloud className="w-4 h-4 text-white" />
                         </div>
-                        <span className="font-bold text-slate-900 dark:text-white">SMSLY Hosting</span>
+                        <span className="font-bold text-slate-900 dark:text-white">SMSLY Cloud</span>
                     </div>
                     <div className="text-slate-500 dark:text-slate-400 text-sm">
-                        © 2026 SMSLY Hosting. Built for developers.
+                        © 2026 SMSLY Cloud. Built for developers.
                     </div>
                     <div className="flex items-center gap-6 text-sm text-slate-500 dark:text-slate-400">
                         <Link href="/docs" className="hover:text-slate-900 dark:hover:text-white transition-colors">Docs</Link>

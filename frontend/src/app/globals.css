@@ -4,70 +4,70 @@
 
 @layer base {
   :root {
-    /* LIGHT MODE: Clinical Sci-Fi */
-    --background: 210 40% 98%;   /* bone-50 */
-    --foreground: 222.2 84% 4.9%; /* slate-900 */
+    /* LIGHT MODE: Clean Green & White */
+    --background: 0 0% 100%;          /* Pure white */
+    --foreground: 150 10% 12%;        /* Dark green-gray */
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 150 10% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 150 10% 12%;
 
-    /* Brand Primary: Neon Cyan */
-    --primary: 189 94% 43%;     /* #06b6d4 */
-    --primary-foreground: 210 40% 98%;
+    /* Brand Primary: Emerald Green */
+    --primary: 160 84% 39%;           /* #10b981 emerald-500 */
+    --primary-foreground: 0 0% 100%;  /* White */
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 152 20% 96%;
+    --secondary-foreground: 150 10% 12%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 150 10% 96%;
+    --muted-foreground: 150 10% 45%;
 
-    --accent: 189 94% 43%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 160 84% 39%;
+    --accent-foreground: 0 0% 100%;
 
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 189 94% 43%;
+    --border: 150 10% 90%;
+    --input: 150 10% 90%;
+    --ring: 160 84% 39%;
 
     --radius: 0.5rem;
   }
 
   .dark {
-    /* DARK MODE: Bio-Digital Deep Space */
-    --background: 224 71% 4%;     /* #030712 (Rich Black) */
-    --foreground: 210 40% 98%;    /* bone-50 */
+    /* DARK MODE: Deep Green Space */
+    --background: 160 20% 4%;         /* Very dark green-black */
+    --foreground: 150 10% 95%;        /* Near white */
 
-    --card: 222.2 47% 11%;        /* #0f172a (Slate 900) - slightly lighter than bg */
-    --card-foreground: 210 40% 98%;
+    --card: 160 15% 8%;               /* Dark green card */
+    --card-foreground: 150 10% 95%;
 
-    --popover: 222.2 47% 11%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 160 15% 8%;
+    --popover-foreground: 150 10% 95%;
 
-    /* Brand Primary: Neon Cyan */
-    --primary: 186 70% 50%;       /* Cyan 500 */
-    --primary-foreground: 222.2 47.4% 11.2%;
+    /* Brand Primary: Bright Emerald */
+    --primary: 160 84% 45%;           /* Emerald, slightly brighter for dark */
+    --primary-foreground: 160 20% 4%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 160 15% 15%;
+    --secondary-foreground: 150 10% 95%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 160 15% 15%;
+    --muted-foreground: 150 10% 60%;
 
     /* Semantic Accents */
-    --accent: 186 70% 50%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 160 84% 45%;
+    --accent-foreground: 160 20% 4%;
 
     --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 150 10% 95%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 186 70% 50%;
+    --border: 160 15% 18%;
+    --input: 160 15% 18%;
+    --ring: 160 84% 45%;
   }
 }
 
@@ -88,7 +88,7 @@
 }
 
 .bio-card:hover, .glass-card:hover {
-  @apply border-primary/30 shadow-[0_0_30px_rgba(6,182,212,0.1)];
+  @apply border-primary/30 shadow-[0_0_30px_rgba(16,185,129,0.1)];
 }
 
 /* React Flow Overrides - Themed */

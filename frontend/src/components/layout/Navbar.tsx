@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, Cloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -74,14 +74,16 @@ export function Navbar() {
         <div className="flex items-center">
             <Link href="/" className="mr-8 flex items-center gap-2 group">
                 <div className="bg-primary/10 p-2 rounded-lg group-hover:bg-primary/20 transition-colors">
-                    <Rocket className="w-5 h-5 text-primary" />
+                    <Cloud className="w-5 h-5 text-primary" />
                 </div>
-                <span className="font-bold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
-                SMSly Hosting
+                <span className="text-lg" style={{ letterSpacing: '-0.02em' }}>
+                    <span className="font-black text-emerald-500">SMSLY</span>
+                    <span className="font-medium text-foreground/70 ml-1">Cloud</span>
                 </span>
             </Link>
 
-            {/* Desktop Nav */}
+            {/* Desktop Nav - Only show when authenticated */}
+            {user && (
             <nav className="hidden md:flex items-center space-x-1">
                 {navLinks.map((link) => {
                     const Icon = link.icon;
@@ -111,15 +113,18 @@ export function Navbar() {
                     )
                 })}
             </nav>
+            )}
         </div>
 
         {/* Right Side Buttons (Desktop) */}
         <div className="hidden md:flex items-center space-x-3">
+          {user && (
           <Link href="/new">
-              <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-600 hover:to-cyan-600 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
+              <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
                   Deploy
               </Button>
           </Link>
+          )}
 
           <div className="w-px h-6 bg-border mx-2" />
 
@@ -204,6 +209,7 @@ export function Navbar() {
                 className="md:hidden bg-background border-b border-border overflow-hidden"
             >
                 <div className="p-4 space-y-4">
+                    {user && (
                     <nav className="flex flex-col space-y-2">
                         {navLinks.map((link) => (
                              <Link
@@ -218,12 +224,15 @@ export function Navbar() {
                             </Link>
                         ))}
                     </nav>
+                    )}
                     <div className="pt-4 border-t border-border flex flex-col gap-3">
+                        {user && (
                         <Link href="/new" onClick={() => setIsMenuOpen(false)}>
-                            <Button className="w-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white font-bold h-11">
+                            <Button className="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold h-11">
                                 Deploy Project
                             </Button>
                         </Link>
+                        )}
                         {user ? (
                              <Button variant="destructive" className="w-full justify-start" onClick={() => { handleLogout(); setIsMenuOpen(false); }}>
                                 <LogOut className="mr-2 h-4 w-4" /> Log out
