@@ -238,7 +238,7 @@ export default function Home() {
                         className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-100 dark:border-emerald-800 rounded-full mb-8 shadow-sm"
                     >
                         <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                        <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">The Hyperscale PaaS</span>
+                        <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Intelligent Cloud Infrastructure</span>
                     </motion.div>
 
                     <motion.h1
