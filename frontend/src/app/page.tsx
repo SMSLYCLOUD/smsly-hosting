@@ -225,13 +225,13 @@ export default function Home() {
             {/* HERO SECTION */}
             <section className="relative pt-32 pb-24 overflow-hidden">
                 {/* Background Effects */}
-                <div className="absolute inset-0 -z-10">
+                <div className="absolute inset-0 z-0">
                     <CloudHeroAnimation />
-                    <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-white/60 dark:from-slate-950/40 dark:via-transparent dark:to-slate-950/60" />
                 </div>
+                <div className="absolute inset-0 z-0 bg-gradient-to-b from-white/20 via-transparent to-white/30 dark:from-slate-950/20 dark:via-transparent dark:to-slate-950/30" />
 
                 {/* Grid Pattern */}
-                <div className="absolute inset-0 -z-10 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:64px_64px] opacity-30" />
+                <div className="absolute inset-0 z-0 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:64px_64px] opacity-20" />
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
                     <motion.div

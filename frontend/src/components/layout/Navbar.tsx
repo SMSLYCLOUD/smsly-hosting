@@ -73,11 +73,8 @@ export function Navbar() {
 
         {/* Logo */}
         <div className="flex items-center">
-            <Link href="/" className="mr-8 flex items-center gap-2 group">
-                <Image src="/images/logo.png" alt="SMSLY" width={44} height={44} className="flex-shrink-0" priority />
-                <span className="text-2xl font-bold text-slate-800 dark:text-white" style={{ letterSpacing: '-0.02em' }}>
-                    cloud
-                </span>
+            <Link href="/" className="mr-8 flex items-center group">
+                <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto" priority />
             </Link>
 
             {/* Desktop Nav - Only show when authenticated */}
