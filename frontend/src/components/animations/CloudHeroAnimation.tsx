@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 
+interface Raindrop {
+  x: number;
+  y: number;
+  speed: number;
+  length: number;
+  opacity: number;
+}
+
 interface Cloud {
   x: number;
   y: number;
@@ -11,7 +19,6 @@ interface Cloud {
   phase: number;
   drift: number;
   blobs: { ox: number; oy: number; r: number }[];
-  // Lightning
   lightningTimer: number;
   lightningDuration: number;
   lightningIntensity: number;
@@ -45,17 +52,17 @@ export function CloudHeroAnimation() {
     }
     return {
       x: Math.random() * (w + radius * 4) - radius * 2,
-      y: h * 0.1 + Math.random() * h * 0.7,
+      y: h * 0.05 + Math.random() * h * 0.5,
       radius,
       speed: 0.08 + Math.random() * 0.4 + (sizeRoll > 0.7 ? 0 : 0.15),
-      opacity: 0.5 + Math.random() * 0.45,
+      opacity: 0.55 + Math.random() * 0.4,
       phase: Math.random() * Math.PI * 2,
-      drift: (Math.random() - 0.5) * 0.15,
+      drift: (Math.random() - 0.5) * 0.1,
       blobs,
-      lightningTimer: 3000 + Math.random() * 8000,
+      lightningTimer: 5000 + Math.random() * 15000,
       lightningDuration: 0,
       lightningIntensity: 0,
-      canFlash: radius > 100, // Only big clouds flash
+      canFlash: radius > 120,
     };
   }, []);
 
@@ -67,6 +74,7 @@ export function CloudHeroAnimation() {
 
     let w = 0, h = 0, t = 0;
     const clouds: Cloud[] = [];
+    const raindrops: Raindrop[] = [];
 
     const resize = () => {
       const parent = canvas.parentElement;
@@ -80,8 +88,19 @@ export function CloudHeroAnimation() {
     const init = () => {
       resize();
       clouds.length = 0;
+      raindrops.length = 0;
       const count = 8 + Math.floor(Math.random() * 7);
       for (let i = 0; i < count; i++) clouds.push(createCloud(w, h));
+      // Initialize raindrops
+      for (let i = 0; i < 60; i++) {
+        raindrops.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          speed: 3 + Math.random() * 5,
+          length: 8 + Math.random() * 15,
+          opacity: 0.1 + Math.random() * 0.25,
+        });
+      }
     };
 
     const drawCloud = (cloud: Cloud) => {
@@ -94,19 +113,17 @@ export function CloudHeroAnimation() {
         const bx = cloud.x + blob.ox + wobbleX;
         const by = cloud.y + blob.oy + bobY;
         const gradient = ctx.createRadialGradient(bx, by, 0, bx, by, blob.r);
-        
         if (isDark) {
           const li = flashBoost * 0.6;
-          gradient.addColorStop(0, `rgba(${148 + li * 100},${163 + li * 80},${184 + li * 70},${cloud.opacity * 0.2 + li * 0.4})`);
-          gradient.addColorStop(0.7, `rgba(100,116,139,${cloud.opacity * 0.08})`);
+          gradient.addColorStop(0, `rgba(${148 + li * 100},${163 + li * 80},${184 + li * 70},${cloud.opacity * 0.25 + li * 0.4})`);
+          gradient.addColorStop(0.7, `rgba(100,116,139,${cloud.opacity * 0.1})`);
           gradient.addColorStop(1, 'rgba(71,85,105,0)');
         } else {
-          // White cloud with lightning glow
           const baseOpacity = cloud.opacity + flashBoost * 0.3;
-          const warmth = flashBoost * 40; // Slight golden tint during flash
-          gradient.addColorStop(0, `rgba(${255},${255 - warmth * 0.3},${255 - warmth},${Math.min(1, baseOpacity)})`);
-          gradient.addColorStop(0.5, `rgba(255,255,${255 - warmth * 0.5},${baseOpacity * 0.8})`);
-          gradient.addColorStop(0.85, `rgba(255,255,255,${baseOpacity * 0.3})`);
+          const warmth = flashBoost * 30;
+          gradient.addColorStop(0, `rgba(255,${255 - warmth * 0.2},${255 - warmth},${Math.min(1, baseOpacity)})`);
+          gradient.addColorStop(0.5, `rgba(255,255,${255 - warmth * 0.3},${baseOpacity * 0.85})`);
+          gradient.addColorStop(0.85, `rgba(255,255,255,${baseOpacity * 0.35})`);
           gradient.addColorStop(1, 'rgba(255,255,255,0)');
         }
         ctx.beginPath();
@@ -115,59 +132,109 @@ export function CloudHeroAnimation() {
         ctx.fill();
       }
 
-      // Lightning bolt flash — a bright inner glow
+      // Lightning inner glow
       if (flashBoost > 0.3) {
-        const lx = cloud.x + (Math.random() - 0.5) * cloud.radius * 0.5;
-        const ly = cloud.y + bobY + (Math.random() - 0.5) * cloud.radius * 0.3;
-        const lr = cloud.radius * 0.3 * flashBoost;
+        const lx = cloud.x + (Math.random() - 0.5) * cloud.radius * 0.4;
+        const ly = cloud.y + bobY + (Math.random() - 0.5) * cloud.radius * 0.2;
+        const lr = cloud.radius * 0.35 * flashBoost;
         const lg = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
         if (isDark) {
-          lg.addColorStop(0, `rgba(200,220,255,${flashBoost * 0.5})`);
-          lg.addColorStop(0.5, `rgba(150,180,255,${flashBoost * 0.2})`);
+          lg.addColorStop(0, `rgba(180,200,255,${flashBoost * 0.5})`);
+          lg.addColorStop(0.5, `rgba(140,170,255,${flashBoost * 0.2})`);
         } else {
-          lg.addColorStop(0, `rgba(255,255,230,${flashBoost * 0.6})`);
-          lg.addColorStop(0.5, `rgba(255,255,200,${flashBoost * 0.25})`);
+          lg.addColorStop(0, `rgba(255,255,220,${flashBoost * 0.7})`);
+          lg.addColorStop(0.5, `rgba(255,255,180,${flashBoost * 0.3})`);
         }
         lg.addColorStop(1, 'rgba(255,255,255,0)');
         ctx.beginPath();
         ctx.arc(lx, ly, lr, 0, Math.PI * 2);
         ctx.fillStyle = lg;
         ctx.fill();
+
+        // Lightning bolt streak
+        if (flashBoost > 0.6 && Math.random() > 0.5) {
+          ctx.save();
+          ctx.strokeStyle = isDark
+            ? `rgba(180,200,255,${flashBoost * 0.6})`
+            : `rgba(255,255,200,${flashBoost * 0.8})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          let bx = cloud.x + (Math.random() - 0.5) * cloud.radius * 0.3;
+          let by = cloud.y + cloud.radius * 0.3;
+          ctx.moveTo(bx, by);
+          for (let seg = 0; seg < 4; seg++) {
+            bx += (Math.random() - 0.5) * 20;
+            by += 10 + Math.random() * 15;
+            ctx.lineTo(bx, by);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
       }
     };
 
-    // Sun rays from top-right corner
-    const drawSunRays = () => {
+    // Sun glow from top-right
+    const drawSun = () => {
       const isDark = document.documentElement.classList.contains('dark');
       if (isDark) return;
-      
-      const sx = w * 0.85;
-      const sy = -30;
-      const rayCount = 5;
-      
+
+      const sx = w * 0.88;
+      const sy = 20;
+      const pulse = 1 + Math.sin(t * 0.001) * 0.08;
+
+      // Sun halo
+      const halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, 120 * pulse);
+      halo.addColorStop(0, 'rgba(255,250,200,0.25)');
+      halo.addColorStop(0.4, 'rgba(255,245,180,0.08)');
+      halo.addColorStop(1, 'rgba(255,240,150,0)');
+      ctx.beginPath();
+      ctx.arc(sx, sy, 120 * pulse, 0, Math.PI * 2);
+      ctx.fillStyle = halo;
+      ctx.fill();
+
+      // Sun rays
       ctx.save();
+      const rayCount = 6;
       for (let i = 0; i < rayCount; i++) {
-        const angle = (Math.PI * 0.15) + (i / rayCount) * Math.PI * 0.35;
-        const len = h * 0.7 + Math.sin(t * 0.0003 + i) * 40;
-        const rayWidth = 25 + Math.sin(t * 0.0005 + i * 1.5) * 10;
-        
+        const angle = (Math.PI * 0.2) + (i / rayCount) * Math.PI * 0.4;
+        const shimmer = Math.sin(t * 0.0005 + i * 1.2) * 0.015;
+        const len = h * 0.55 + Math.sin(t * 0.0003 + i) * 30;
         const gradient = ctx.createLinearGradient(sx, sy, sx + Math.cos(angle) * len, sy + Math.sin(angle) * len);
-        gradient.addColorStop(0, `rgba(255,255,220,${0.06 + Math.sin(t * 0.0004 + i) * 0.02})`);
-        gradient.addColorStop(1, 'rgba(255,255,220,0)');
-        
+        gradient.addColorStop(0, `rgba(255,250,200,${0.04 + shimmer})`);
+        gradient.addColorStop(1, 'rgba(255,250,200,0)');
         ctx.beginPath();
         ctx.moveTo(sx, sy);
-        ctx.lineTo(
-          sx + Math.cos(angle - 0.02) * len,
-          sy + Math.sin(angle - 0.02) * len
-        );
-        ctx.lineTo(
-          sx + Math.cos(angle + 0.02) * len + rayWidth,
-          sy + Math.sin(angle + 0.02) * len + rayWidth
-        );
+        ctx.lineTo(sx + Math.cos(angle - 0.015) * len, sy + Math.sin(angle - 0.015) * len);
+        ctx.lineTo(sx + Math.cos(angle + 0.015) * len + 15, sy + Math.sin(angle + 0.015) * len + 15);
         ctx.closePath();
         ctx.fillStyle = gradient;
         ctx.fill();
+      }
+      ctx.restore();
+    };
+
+    // Rain
+    const drawRain = () => {
+      const isDark = document.documentElement.classList.contains('dark');
+      ctx.save();
+      for (const drop of raindrops) {
+        ctx.beginPath();
+        ctx.moveTo(drop.x, drop.y);
+        ctx.lineTo(drop.x - 0.5, drop.y + drop.length);
+        ctx.strokeStyle = isDark
+          ? `rgba(150,180,220,${drop.opacity * 0.6})`
+          : `rgba(120,160,220,${drop.opacity})`;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+
+        // Move
+        drop.y += drop.speed;
+        drop.x -= 0.3; // Slight wind
+        if (drop.y > h) {
+          drop.y = -drop.length;
+          drop.x = Math.random() * w;
+        }
+        if (drop.x < 0) drop.x = w;
       }
       ctx.restore();
     };
@@ -176,37 +243,36 @@ export function CloudHeroAnimation() {
       t += 16;
       ctx.clearRect(0, 0, w, h);
 
-      // Sun rays behind clouds
-      drawSunRays();
+      // Sun behind everything
+      drawSun();
+
+      // Rain behind clouds
+      drawRain();
 
       for (const cloud of clouds) {
         cloud.x += cloud.speed;
         cloud.y += cloud.drift;
-
         if (cloud.x > w + cloud.radius * 3) {
           cloud.x = -cloud.radius * 3;
-          cloud.y = h * 0.1 + Math.random() * h * 0.7;
+          cloud.y = h * 0.05 + Math.random() * h * 0.5;
         }
-        if (cloud.y < -cloud.radius || cloud.y > h + cloud.radius) {
+        if (cloud.y < -cloud.radius * 0.5 || cloud.y > h * 0.6 + cloud.radius) {
           cloud.drift *= -1;
         }
 
-        // Lightning timing
+        // Lightning
         if (cloud.canFlash) {
           cloud.lightningTimer -= 16;
           if (cloud.lightningTimer <= 0) {
-            cloud.lightningDuration = 80 + Math.random() * 120; // Flash lasts 80-200ms
-            cloud.lightningIntensity = 0.6 + Math.random() * 0.4;
-            cloud.lightningTimer = 4000 + Math.random() * 12000; // Next flash in 4-16s
+            cloud.lightningDuration = 60 + Math.random() * 150;
+            cloud.lightningIntensity = 0.5 + Math.random() * 0.5;
+            cloud.lightningTimer = 6000 + Math.random() * 18000;
           }
           if (cloud.lightningDuration > 0) {
             cloud.lightningDuration -= 16;
-            // Rapid flicker effect
-            cloud.lightningIntensity *= (Math.random() > 0.3 ? 0.85 : 1.1);
+            cloud.lightningIntensity *= (Math.random() > 0.3 ? 0.82 : 1.15);
             cloud.lightningIntensity = Math.min(1, cloud.lightningIntensity);
-            if (cloud.lightningDuration <= 0) {
-              cloud.lightningIntensity = 0;
-            }
+            if (cloud.lightningDuration <= 0) cloud.lightningIntensity = 0;
           }
         }
 

@@ -222,7 +222,7 @@ export default function Home() {
         <main className="min-h-screen bg-white dark:bg-slate-950">
             <Navbar />
 
-            <section className="relative pt-32 pb-24 overflow-hidden" style={{ background: 'linear-gradient(to bottom, #a7f3d0, #6ee7b7 25%, #ecfdf5 60%, #ffffff)' }}>
+            <section className="relative pt-32 pb-24 overflow-hidden" style={{ background: 'linear-gradient(to bottom, #87CEEB, #56CCF2 30%, #B8E8F5 60%, #ffffff)' }}>
                 {/* Dark mode override */}
                 <div className="absolute inset-0 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-950 dark:block hidden" />
                 {/* Cloud Animation */}
