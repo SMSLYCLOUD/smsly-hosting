@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { useAuth } from "@/components/auth-provider";
+import { Starfield } from "@/components/effects/Starfield";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -117,30 +118,8 @@ export default function DashboardPage() {
     <main className="min-h-screen flex flex-col cloud-bg transition-colors duration-500">
       <Navbar />
 
-      {/* Cloud Wisps — Slow-Drifting Cloud Shapes */}
-      <div className="cloud-wisp w-[600px] h-[400px] bg-white/80 dark:bg-slate-400/10 -top-32 -left-40" style={{ animationDelay: '0s', animationDuration: '30s' }} />
-      <div className="cloud-wisp w-[500px] h-[350px] bg-sky-100/60 dark:bg-sky-500/5 top-1/3 -right-28" style={{ animationDelay: '5s', animationDuration: '22s' }} />
-      <div className="cloud-wisp w-[450px] h-[300px] bg-blue-50/50 dark:bg-blue-400/5 bottom-20 left-1/4" style={{ animationDelay: '10s', animationDuration: '28s' }} />
-      <div className="cloud-wisp w-[350px] h-[250px] bg-cyan-50/40 dark:bg-cyan-500/4 top-1/2 right-1/4" style={{ animationDelay: '15s', animationDuration: '25s' }} />
-
-      {/* Aurora / Magnetic Field Bands */}
-      <div className="aurora-band bg-gradient-to-r from-transparent via-emerald-400/30 to-transparent top-[10%] -left-[20%]" style={{ animationDelay: '0s', animationDuration: '20s' }} />
-      <div className="aurora-band bg-gradient-to-r from-transparent via-cyan-400/20 to-transparent top-[18%] -left-[10%]" style={{ animationDelay: '7s', animationDuration: '25s' }} />
-      <div className="aurora-band bg-gradient-to-r from-transparent via-violet-400/15 to-transparent top-[25%] -left-[15%]" style={{ animationDelay: '14s', animationDuration: '22s' }} />
-
-      {/* Sun Glow — Warm Ambient Light */}
-      <div className="sun-glow w-[300px] h-[300px] -top-20 right-[10%] bg-gradient-radial from-amber-200/30 via-yellow-100/10 to-transparent" style={{ background: 'radial-gradient(circle, rgba(251,191,36,0.15) 0%, rgba(253,224,71,0.05) 40%, transparent 70%)' }} />
-
-      {/* Rising Mist — Subliminal Upward Float */}
-      <div className="rising-mist bg-white/60 dark:bg-slate-300/30 left-[12%] bottom-0" style={{ animationDuration: '18s', animationDelay: '0s' }} />
-      <div className="rising-mist bg-sky-200/50 dark:bg-sky-400/20 left-[30%] bottom-0" style={{ animationDuration: '22s', animationDelay: '3s' }} />
-      <div className="rising-mist bg-white/50 dark:bg-slate-400/20 left-[48%] bottom-0" style={{ animationDuration: '16s', animationDelay: '7s' }} />
-      <div className="rising-mist bg-sky-100/40 dark:bg-cyan-400/15 left-[68%] bottom-0" style={{ animationDuration: '25s', animationDelay: '2s' }} />
-      <div className="rising-mist bg-white/45 dark:bg-slate-300/20 left-[82%] bottom-0" style={{ animationDuration: '20s', animationDelay: '10s' }} />
-      <div className="rising-mist bg-sky-200/35 dark:bg-sky-300/15 left-[42%] bottom-0" style={{ animationDuration: '19s', animationDelay: '5s' }} />
-
-      {/* Subtle Mist Overlay */}
-      <div className="absolute inset-0 dot-grid opacity-20 pointer-events-none" />
+      {/* Real Starfield Background */}
+      <Starfield />
 
       <div className="flex-1 p-8 relative z-10">
     <motion.div
