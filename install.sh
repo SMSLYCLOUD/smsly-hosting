@@ -568,14 +568,15 @@ docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[6/8] Creating Admin User...${NC}"
-ADMIN_PASS=$(openssl rand -hex 8)
+ADMIN_PASS="smslyhosting"
 ADMIN_CREATED=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); existed = User.objects.filter(username='admin').exists(); print('EXISTS' if existed else 'CREATED'); existed or User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
 if [[ "$ADMIN_CREATED" == *"EXISTS"* ]]; then
     echo -e "${GREEN}  ✓ Admin user already exists — skipping${NC}"
     ADMIN_PASS="<unchanged — see previous install>"
 else
-    echo -e "${GREEN}  ✓ Admin user created${NC}"
+    echo -e "${GREEN}  ✓ Admin user created (default password: smslyhosting)${NC}"
+    echo -e "${YELLOW}  ⚠ IMPORTANT: Change the default password after first login!${NC}"
 fi
 
 # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────

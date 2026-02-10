@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle } from "lucide-react";
+import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X } from "lucide-react";
 import { servicesApi, Service } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
+import { useAuth } from "@/components/auth-provider";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -26,6 +27,16 @@ const stagger = {
 export default function DashboardPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const [showPasswordWarning, setShowPasswordWarning] = useState(false);
+
+  useEffect(() => {
+    // Show warning if logged in as 'admin' and not dismissed
+    if (user?.username === 'admin' && typeof window !== 'undefined') {
+      const dismissed = localStorage.getItem('password_warning_dismissed');
+      if (!dismissed) setShowPasswordWarning(true);
+    }
+  }, [user]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -138,6 +149,39 @@ export default function DashboardPage() {
           </motion.button>
         </Link>
       </motion.div>
+
+      {/* Default Password Warning */}
+      <AnimatePresence>
+        {showPasswordWarning && (
+          <motion.div
+            initial={{ opacity: 0, y: -10, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -10, height: 0 }}
+            className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3"
+          >
+            <ShieldAlert className="text-amber-500 mt-0.5 flex-shrink-0" size={20} />
+            <div className="flex-1">
+              <p className="font-semibold text-amber-600 dark:text-amber-400">Default password detected</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                You are using the default admin password. For security, please{' '}
+                <Link href="/settings" className="text-primary font-medium underline hover:no-underline">
+                  change your password in Settings
+                </Link>.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setShowPasswordWarning(false);
+                localStorage.setItem('password_warning_dismissed', 'true');
+              }}
+              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 p-1 rounded-lg hover:bg-muted/50"
+              aria-label="Dismiss warning"
+            >
+              <X size={16} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Alert Banner (if failed services) */}
       {failedServices > 0 && (
