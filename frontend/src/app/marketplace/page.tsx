@@ -62,8 +62,11 @@ export default function MarketplacePage() {
     // Initial Fetch
     React.useEffect(() => {
         const loadData = async () => {
-            const token = localStorage.getItem("smsly_token")
-            if (!token) return
+            const token = localStorage.getItem("smsly_token") || localStorage.getItem("auth_token")
+            if (!token) {
+                setIsLoading(false)
+                return
+            }
 
             try {
                 // Fetch Addons
