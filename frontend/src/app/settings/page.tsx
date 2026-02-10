@@ -12,6 +12,7 @@ import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Chec
 import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Navbar } from "@/components/layout/Navbar";
 
 interface CloudProvider {
   id: string;
@@ -81,6 +82,8 @@ export default function SettingsPage() {
   };
 
   return (
+    <main className="min-h-screen flex flex-col bg-background">
+      <Navbar />
     <div className="container mx-auto py-10 max-w-4xl">
       <PageHeader
         title="Settings"
@@ -298,5 +301,6 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
     </div>
+    </main>
   );
 }

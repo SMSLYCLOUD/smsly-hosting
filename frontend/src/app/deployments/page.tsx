@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Rocket, Clock, CheckCircle, XCircle, Loader2, RefreshCw, ExternalLink } from "lucide-react";
 import api from "@/lib/api";
 import { motion } from "framer-motion";
+import { Navbar } from "@/components/layout/Navbar";
 
 interface Deployment {
   id: string;
@@ -75,15 +76,20 @@ export default function DeploymentsPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto py-10">
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <main className="min-h-screen flex flex-col bg-background">
+        <Navbar />
+        <div className="container mx-auto py-10">
+          <div className="flex items-center justify-center h-64">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
+    <main className="min-h-screen flex flex-col bg-background">
+      <Navbar />
     <div className="container mx-auto py-10">
       <PageHeader
         title="Deployments"
@@ -168,5 +174,6 @@ export default function DeploymentsPage() {
         </div>
       )}
     </div>
+    </main>
   );
 }

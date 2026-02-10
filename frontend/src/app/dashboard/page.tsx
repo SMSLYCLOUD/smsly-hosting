@@ -7,6 +7,7 @@ import { servicesApi, Service } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { Navbar } from "@/components/layout/Navbar";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -102,8 +103,11 @@ export default function DashboardPage() {
 
 
   return (
+    <main className="min-h-screen flex flex-col bg-background transition-colors duration-500">
+      <Navbar />
+      <div className="flex-1 p-8">
     <motion.div
-      className="flex-1 space-y-6"
+      className="flex-1 space-y-6 max-w-7xl mx-auto"
       initial="initial"
       animate="animate"
       variants={stagger}
@@ -250,6 +254,8 @@ export default function DashboardPage() {
         </motion.div>
       </div>
     </motion.div>
+      </div>
+    </main>
   );
 }
 

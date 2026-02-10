@@ -4,6 +4,7 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { Github, Box, Layers, ArrowRight, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Navbar } from "@/components/layout/Navbar"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -121,6 +122,8 @@ export default function NewServicePage() {
   }
 
   return (
+    <main className="min-h-screen flex flex-col bg-background">
+      <Navbar />
     <div className="container max-w-4xl py-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
@@ -286,6 +289,7 @@ export default function NewServicePage() {
         </div>
       </div>
     </div>
+    </main>
   )
 }
 
