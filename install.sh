@@ -487,6 +487,7 @@ fernet_key = Fernet.generate_key().decode()
 pg_pass = secrets.token_hex(16)
 redis_pass = secrets.token_hex(16)
 gateway_secret = secrets.token_hex(32)
+webhook_secret = secrets.token_hex(32)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -496,6 +497,7 @@ print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
 print(f'POSTGRES_PASSWORD={pg_pass}')
 print(f'REDIS_PASSWORD={redis_pass}')
 print(f'GATEWAY_SECRET={gateway_secret}')
+print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -532,6 +534,9 @@ USE_SSL=$USE_SSL
 
 # Inter-service HMAC authentication secret
 GATEWAY_SECRET=$GATEWAY_SECRET
+
+# GitHub webhook signature verification
+GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 
 # Security
 ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
