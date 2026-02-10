@@ -18,15 +18,18 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV production
 
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-
-# Security: Run as non-root user
+# Security: Create user first
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nextjs -u 1001 && \
-    chown -R nextjs:nodejs /app
+    adduser -S nextjs -u 1001
+
+# Copy files with correct ownership directly (faster than chown -R)
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+
+# Copy all build output with correct permissions
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+
 USER nextjs
 
 EXPOSE 3000
