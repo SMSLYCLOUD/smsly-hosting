@@ -73,8 +73,8 @@ export default function AppStorePage() {
             {/* Hero / Search */}
             <section className="border-b bg-muted/40 py-12">
                 <div className="container max-w-6xl">
-                    <h1 className="text-3xl font-bold tracking-tight mb-4">Marketplace</h1>
-                    <p className="text-muted-foreground mb-8 text-lg">One-click deploy production-ready applications.</p>
+                    <h1 className="text-3xl font-bold tracking-tight mb-4">Templates</h1>
+                    <p className="text-muted-foreground mb-8 text-lg">Browse and deploy production-ready application templates.</p>
 
                     <div className="relative max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />

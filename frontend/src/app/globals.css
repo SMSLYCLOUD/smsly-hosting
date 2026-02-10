@@ -108,6 +108,106 @@
     hsl(var(--background));
 }
 
+/* ===== CLOUD BACKGROUND: "Inside the Cloud" ===== */
+.cloud-bg {
+  @apply relative overflow-hidden;
+  background:
+    radial-gradient(ellipse 120% 60% at 30% 20%, rgba(255, 255, 255, 0.9) 0%, transparent 50%),
+    radial-gradient(ellipse 100% 80% at 70% 60%, rgba(224, 242, 254, 0.7) 0%, transparent 45%),
+    radial-gradient(ellipse 80% 50% at 10% 70%, rgba(186, 230, 253, 0.5) 0%, transparent 40%),
+    radial-gradient(ellipse 60% 40% at 90% 30%, rgba(207, 250, 254, 0.4) 0%, transparent 35%),
+    radial-gradient(ellipse 140% 100% at 50% 50%, rgba(240, 249, 255, 0.95) 0%, transparent 70%),
+    linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 30%, #f8fafc 60%, #ffffff 100%);
+}
+.dark .cloud-bg {
+  background:
+    radial-gradient(ellipse 120% 60% at 30% 20%, rgba(148, 163, 184, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 100% 80% at 70% 60%, rgba(56, 189, 248, 0.05) 0%, transparent 45%),
+    radial-gradient(ellipse 80% 50% at 10% 70%, rgba(125, 211, 252, 0.04) 0%, transparent 40%),
+    radial-gradient(ellipse 60% 40% at 90% 30%, rgba(103, 232, 249, 0.03) 0%, transparent 35%),
+    radial-gradient(ellipse 140% 100% at 50% 50%, rgba(15, 23, 42, 0.95) 0%, transparent 70%),
+    linear-gradient(180deg, #0f172a 0%, #0c1526 30%, #0f172a 60%, hsl(var(--background)) 100%);
+}
+
+/* ===== CLOUD WISPS: Slow-Drifting Shapes ===== */
+.cloud-wisp {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.35;
+  pointer-events: none;
+  animation: cloud-drift 35s ease-in-out infinite alternate;
+}
+.dark .cloud-wisp {
+  opacity: 0.1;
+}
+@keyframes cloud-drift {
+  0% { transform: translateX(0) translateY(0) scale(1); }
+  25% { transform: translateX(30px) translateY(-15px) scale(1.05); }
+  50% { transform: translateX(-20px) translateY(10px) scale(0.95); }
+  75% { transform: translateX(15px) translateY(20px) scale(1.02); }
+  100% { transform: translateX(-10px) translateY(-5px) scale(1); }
+}
+
+/* ===== AURORA BANDS: Magnetic Field Lines (Subliminal) ===== */
+.aurora-band {
+  position: absolute;
+  width: 200%;
+  height: 150px;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.06;
+  pointer-events: none;
+  animation: aurora-flow 40s ease-in-out infinite alternate;
+}
+.dark .aurora-band {
+  opacity: 0.10;
+}
+@keyframes aurora-flow {
+  0% { transform: translateX(-5%) skewY(-1deg) scaleX(1); }
+  33% { transform: translateX(3%) skewY(0.5deg) scaleX(1.05); }
+  66% { transform: translateX(-3%) skewY(-0.5deg) scaleX(0.98); }
+  100% { transform: translateX(4%) skewY(1deg) scaleX(1.02); }
+}
+
+/* ===== SUN GLOW: Warm Ambient Light ===== */
+.sun-glow {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: sun-pulse 8s ease-in-out infinite alternate;
+}
+@keyframes sun-pulse {
+  0% { opacity: 0.15; transform: scale(1); }
+  50% { opacity: 0.25; transform: scale(1.08); }
+  100% { opacity: 0.15; transform: scale(1); }
+}
+.dark .sun-glow {
+  opacity: 0.05 !important;
+}
+
+/* ===== RISING MIST: Upward Subliminal Particles ===== */
+.rising-mist {
+  position: absolute;
+  width: 3px;
+  height: 40px;
+  border-radius: 50%;
+  opacity: 0.04;
+  pointer-events: none;
+  filter: blur(1px);
+  animation: mist-rise linear infinite;
+}
+.dark .rising-mist {
+  opacity: 0.03;
+}
+@keyframes mist-rise {
+  0% { transform: translateY(100vh) translateX(0) scale(0.8); opacity: 0; }
+  15% { opacity: 0.04; }
+  50% { transform: translateY(50vh) translateX(10px) scale(1); opacity: 0.04; }
+  85% { opacity: 0.04; }
+  100% { transform: translateY(-50px) translateX(-5px) scale(1.2); opacity: 0; }
+}
+
 /* ===== PREMIUM CARDS: Glassmorphism + Depth ===== */
 .card-premium {
   @apply relative overflow-hidden;

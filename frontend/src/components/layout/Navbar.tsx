@@ -54,8 +54,8 @@ export function Navbar() {
 
   const publicLinks = [
     { href: '/#features', label: 'Features' },
-    { href: '/templates', label: 'Templates' },
-    { href: '/store', label: 'Marketplace' },
+    { href: '/store', label: 'Templates' },
+    { href: '/marketplace', label: 'Addons' },
   ];
 
   const authLinks = [
