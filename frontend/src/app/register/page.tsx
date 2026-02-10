@@ -5,13 +5,16 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Github, Chrome } from "lucide-react";
+import { Navbar } from "@/components/layout/Navbar";
 
 export default function RegisterPage() {
     // Use backend base URL (without /api/v1) for OAuth endpoints
     const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
 
     return (
-        <div className="min-h-screen flex items-center justify-center premium-bg p-4 overflow-hidden">
+        <div className="min-h-screen flex flex-col premium-bg overflow-hidden">
+            <Navbar />
+            <div className="flex-1 flex items-center justify-center p-4 relative">
             {/* Floating Gradient Orbs */}
             <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -right-32" style={{ animationDelay: '0s' }} />
             <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 bottom-1/4 -left-20" style={{ animationDelay: '4s' }} />
@@ -67,6 +70,7 @@ export default function RegisterPage() {
                     </Link>
                 </CardFooter>
             </Card>
+            </div>
         </div>
     );
 }

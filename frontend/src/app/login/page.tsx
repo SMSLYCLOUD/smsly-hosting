@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
+import { Navbar } from "@/components/layout/Navbar";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -55,7 +56,9 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center premium-bg p-4 overflow-hidden">
+    <div className="min-h-screen flex flex-col premium-bg overflow-hidden">
+      <Navbar />
+      <div className="flex-1 flex items-center justify-center p-4 relative">
       {/* Floating Gradient Orbs */}
       <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -left-32" style={{ animationDelay: '0s' }} />
       <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 top-1/4 -right-20" style={{ animationDelay: '4s' }} />
@@ -194,6 +197,7 @@ export default function LoginPage() {
           </Link>
         </CardFooter>
       </Card>
+      </div>
     </div>
   );
 }
