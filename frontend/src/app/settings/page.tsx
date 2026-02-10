@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2 } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +30,59 @@ export default function SettingsPage() {
   const [newProvider, setNewProvider] = useState({ name: "", api_key: "", provider_type: "hetzner" });
   const [addingProvider, setAddingProvider] = useState(false);
 
+  // AI Config State
+  const [aiProvider, setAiProvider] = useState("mock");
+  const [aiKeys, setAiKeys] = useState({ openai: "", grok: "", gemini: "" });
+  const [aiProviders, setAiProviders] = useState<{id: string; name: string; configured: boolean; active: boolean}[]>([]);
+  const [loadingAI, setLoadingAI] = useState(true);
+  const [savingAI, setSavingAI] = useState(false);
+  const [testingAI, setTestingAI] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+
   useEffect(() => {
     fetchProviders();
+    fetchAIConfig();
   }, []);
+
+  const fetchAIConfig = async () => {
+    try {
+      const res = await api.get("/cloud/intelligence/ai_config/");
+      setAiProvider(res.data.active_provider === "Mock AI" ? "mock" : res.data.active_provider?.toLowerCase() || "mock");
+      setAiProviders(res.data.providers || []);
+    } catch (err) {
+      console.error("Failed to fetch AI config", err);
+    } finally {
+      setLoadingAI(false);
+    }
+  };
+
+  const handleSaveAI = async () => {
+    setSavingAI(true);
+    try {
+      await api.post("/cloud/intelligence/update_ai_config/", {
+        provider: aiProvider,
+        api_key: aiKeys[aiProvider as keyof typeof aiKeys] || "",
+      });
+      toast({ title: "AI Configuration saved", description: `Provider set to ${aiProvider}.` });
+      fetchAIConfig();
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to save AI config.", variant: "destructive" });
+    } finally {
+      setSavingAI(false);
+    }
+  };
+
+  const handleTestAI = async () => {
+    setTestingAI(true);
+    try {
+      const res = await api.post("/cloud/intelligence/ask/", { message: "Hello, confirm you are working." });
+      toast({ title: `${res.data.provider} responded`, description: res.data.response?.substring(0, 100) + "..." });
+    } catch (err) {
+      toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
+    } finally {
+      setTestingAI(false);
+    }
+  };
 
   const fetchProviders = async () => {
     try {
@@ -98,7 +148,7 @@ export default function SettingsPage() {
       />
 
       <Tabs defaultValue="profile" className="space-y-6">
-        <TabsList className="grid grid-cols-4 w-full">
+        <TabsList className="grid grid-cols-5 w-full">
           <TabsTrigger value="profile" className="flex items-center gap-2">
             <User className="h-4 w-4" /> Profile
           </TabsTrigger>
@@ -110,6 +160,9 @@ export default function SettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="providers" className="flex items-center gap-2">
             <Cloud className="h-4 w-4" /> Providers
+          </TabsTrigger>
+          <TabsTrigger value="ai" className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4" /> AI
           </TabsTrigger>
         </TabsList>
 
@@ -299,6 +352,80 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* AI Configuration Tab */}
+        <TabsContent value="ai">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-emerald-500" /> AI Provider
+                </CardTitle>
+                <CardDescription>Choose your AI provider for the deployment assistant.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  {[{id: 'openai', name: 'OpenAI', desc: 'GPT-4o'}, {id: 'grok', name: 'Grok', desc: 'xAI'}, {id: 'gemini', name: 'Gemini', desc: 'Google'}].map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => setAiProvider(p.id)}
+                      className={`p-4 rounded-lg border-2 text-left transition-all ${
+                        aiProvider === p.id
+                          ? 'border-emerald-500 bg-emerald-500/10'
+                          : 'border-border hover:border-muted-foreground/30'
+                      }`}
+                    >
+                      <div className="font-semibold text-sm">{p.name}</div>
+                      <div className="text-xs text-muted-foreground">{p.desc}</div>
+                      {aiProviders.find(ap => ap.id === p.id)?.configured && (
+                        <Badge variant="outline" className="mt-2 text-[10px] bg-green-500/10 text-green-500 border-green-500/30">Key Set</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>API Key</CardTitle>
+                <CardDescription>Enter the API key for your selected provider. Keys are encrypted at rest.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="ai-key">{aiProvider === 'openai' ? 'OpenAI' : aiProvider === 'grok' ? 'Grok (xAI)' : 'Gemini'} API Key</Label>
+                  <div className="relative">
+                    <Input
+                      id="ai-key"
+                      type={showKey ? 'text' : 'password'}
+                      placeholder={aiProvider === 'openai' ? 'sk-...' : aiProvider === 'grok' ? 'xai-...' : 'AI...'}
+                      value={aiKeys[aiProvider as keyof typeof aiKeys] || ''}
+                      onChange={(e) => setAiKeys(prev => ({ ...prev, [aiProvider]: e.target.value }))}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button onClick={handleSaveAI} disabled={savingAI}>
+                    {savingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+                    Save Configuration
+                  </Button>
+                  <Button variant="outline" onClick={handleTestAI} disabled={testingAI}>
+                    {testingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                    Test Connection
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>

@@ -150,3 +150,73 @@ class IntelligenceViewSet(viewsets.ViewSet):
             'providers': providers_list,
         })
 
+    @action(detail=False, methods=['post'])
+    def update_ai_config(self, request):
+        """
+        Update AI provider configuration.
+        POST /api/v1/cloud/intelligence/update_ai_config/
+        Body: { "provider": "grok", "api_key": "xai-..." }
+        """
+        import os
+        from pathlib import Path
+
+        provider_name = request.data.get('provider', '').strip().lower()
+        api_key = request.data.get('api_key', '').strip()
+
+        valid_providers = ['openai', 'grok', 'gemini', 'mock']
+        if provider_name not in valid_providers:
+            return Response(
+                {'error': f'Invalid provider. Choose from: {valid_providers}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Map provider to env var name
+        key_map = {
+            'openai': 'OPENAI_API_KEY',
+            'grok': 'GROK_API_KEY',
+            'gemini': 'GEMINI_API_KEY',
+        }
+
+        # Set provider in environment (immediate effect)
+        os.environ['AI_PROVIDER'] = provider_name
+
+        # Set API key if provided
+        if api_key and provider_name in key_map:
+            env_var = key_map[provider_name]
+            os.environ[env_var] = api_key
+
+        # Persist to .env file
+        env_path = Path(__file__).resolve().parent.parent.parent / '.env'
+        env_lines = []
+        if env_path.exists():
+            env_lines = env_path.read_text().splitlines()
+
+        # Update or add AI_PROVIDER
+        updated_keys = set()
+        new_lines = []
+        for line in env_lines:
+            key = line.split('=', 1)[0].strip() if '=' in line else ''
+            if key == 'AI_PROVIDER':
+                new_lines.append(f'AI_PROVIDER={provider_name}')
+                updated_keys.add('AI_PROVIDER')
+            elif api_key and key == key_map.get(provider_name, ''):
+                new_lines.append(f'{key}={api_key}')
+                updated_keys.add(key)
+            else:
+                new_lines.append(line)
+
+        if 'AI_PROVIDER' not in updated_keys:
+            new_lines.append(f'AI_PROVIDER={provider_name}')
+        if api_key and provider_name in key_map:
+            env_var = key_map[provider_name]
+            if env_var not in updated_keys:
+                new_lines.append(f'{env_var}={api_key}')
+
+        env_path.write_text('\n'.join(new_lines) + '\n')
+
+        return Response({
+            'status': 'saved',
+            'provider': provider_name,
+            'key_set': bool(api_key),
+        })
+
