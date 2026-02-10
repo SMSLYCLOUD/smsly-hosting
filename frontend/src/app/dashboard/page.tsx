@@ -9,7 +9,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { useAuth } from "@/components/auth-provider";
-import { Starfield } from "@/components/effects/Starfield";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -115,11 +114,8 @@ export default function DashboardPage() {
 
 
   return (
-    <main className="min-h-screen flex flex-col cloud-bg transition-colors duration-500">
+    <main className="min-h-screen flex flex-col transition-colors duration-500">
       <Navbar />
-
-      {/* Real Starfield Background */}
-      <Starfield />
 
       <div className="flex-1 p-8 relative z-10">
     <motion.div

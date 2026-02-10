@@ -14,6 +14,7 @@ export const metadata: Metadata = {
 };
 
 import { FloatingAI } from "@/components/ai/FloatingAI";
+import { GlobalBackground } from "@/components/effects/GlobalBackground";
 
 export default function RootLayout({
   children,
@@ -22,7 +23,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} ${mono.variable} font-sans antialiased`}>
+      <body className={`${inter.variable} ${mono.variable} font-sans antialiased cloud-bg`}>
         <ThemeProvider
             attribute="class"
             defaultTheme="system"
@@ -30,6 +31,7 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <AuthProvider>
+                <GlobalBackground />
                 {children}
                 <FloatingAI />
                 <Toaster />
@@ -39,3 +41,4 @@ export default function RootLayout({
     </html>
   );
 }
+
