@@ -231,6 +231,7 @@ chars = string.ascii_letters + string.digits
 secret_key = ''.join(secrets.choice(chars) for _ in range(50))
 fernet_key = Fernet.generate_key().decode()
 pg_pass = secrets.token_hex(16)
+redis_pass = secrets.token_hex(16)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -238,6 +239,7 @@ Fernet(fernet_key.encode())
 print(f'SECRET_KEY={secret_key}')
 print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
 print(f'POSTGRES_PASSWORD={pg_pass}')
+print(f'REDIS_PASSWORD={redis_pass}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -264,8 +266,9 @@ POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
 DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
 
-REDIS_URL=redis://redis:6379/0
-CELERY_BROKER_URL=redis://redis:6379/0
+REDIS_PASSWORD=$REDIS_PASSWORD
+REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+CELERY_BROKER_URL=redis://:$REDIS_PASSWORD@redis:6379/0
 
 DOMAIN=$DOMAIN
 ACME_EMAIL=${ACME_EMAIL:-}

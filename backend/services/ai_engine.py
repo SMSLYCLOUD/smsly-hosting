@@ -1,7 +1,7 @@
 """AI Engine service."""
 # pylint:
 # disable=line-too-long,broad-exception-caught,logging-fstring-interpolation,too-few-public-methods,wrong-import-order
-from typing import List, Dict
+from typing import Any, List, Dict
 import os
 import logging
 import statistics
