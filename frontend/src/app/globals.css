@@ -75,8 +75,13 @@
   * {
     @apply border-border;
   }
+  html {
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     -webkit-font-smoothing: antialiased;
   }

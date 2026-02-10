@@ -56,7 +56,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col premium-bg overflow-hidden">
+    <div className="min-h-screen flex flex-col premium-bg overflow-x-hidden">
       <Navbar />
       <div className="flex-1 flex items-center justify-center p-4 relative">
       {/* Floating Gradient Orbs */}

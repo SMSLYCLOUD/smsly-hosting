@@ -66,9 +66,10 @@ ufw --force enable
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
-ufw allow 8090/tcp
+# ZH-FIX: Do NOT expose 8090 publicly — nginx binds 127.0.0.1:8090 only.
+# Caddy handles public :80/:443 and proxies to localhost:8090.
 ufw reload
-echo -e "${GREEN}✓ Firewall configured${NC}"
+echo -e "${GREEN}✓ Firewall configured (ports 22, 80, 443 only)${NC}"
 
 # ─── STEP 4: Clone Repo ─────────────────────────────────────────────────────
 echo -e "${YELLOW}[4/8] Setting up files...${NC}"
@@ -132,6 +133,9 @@ else
 
     SECRET_KEY=$(openssl rand -hex 32)
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    REDIS_PASSWORD=$(openssl rand -hex 16)
+    GATEWAY_SECRET=$(openssl rand -hex 32)
+    GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
 
     # Generate valid Fernet key (Python ONLY — no invalid fallback)
     FIELD_ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; k=Fernet.generate_key().decode(); Fernet(k.encode()); print(k)" 2>/dev/null)
@@ -148,6 +152,9 @@ else
 SECRET_KEY=${SECRET_KEY}
 FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+REDIS_PASSWORD=${REDIS_PASSWORD}
+GATEWAY_SECRET=${GATEWAY_SECRET}
+GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
 DOMAIN=${DOMAIN}
 USE_SSL=${USE_SSL}
 ACME_EMAIL=${ACME_EMAIL:-}
@@ -155,11 +162,11 @@ DEBUG=False
 ALLOWED_HOSTS=${ALLOWED_HOSTS}
 CSRF_TRUSTED_ORIGINS=http://${DOMAIN}:8090,https://${DOMAIN}
 CORS_ALLOWED_ORIGINS=http://${DOMAIN}:8090,https://${DOMAIN}
-CORS_ALLOW_ALL=False
 POSTGRES_DB=smsly_hosting
 POSTGRES_USER=smsly_admin
 DATABASE_URL=postgresql://smsly_admin:${POSTGRES_PASSWORD}@db:5432/smsly_hosting
-REDIS_URL=redis://redis:6379/0
+REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
 CONTAINER_REGISTRY_URL=registry:5000
 NEXT_PUBLIC_API_URL=/api/v1
 ENVEOF
@@ -170,7 +177,7 @@ fi
 
 # ─── STEP 6: Validate ───────────────────────────────────────────────────────
 echo -e "${YELLOW}[6/8] Validating...${NC}"
-if [ -z "$SECRET_KEY" ] || [ -z "$FIELD_ENCRYPTION_KEY" ] || [ -z "$POSTGRES_PASSWORD" ]; then
+if [ -z "$SECRET_KEY" ] || [ -z "$FIELD_ENCRYPTION_KEY" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$REDIS_PASSWORD" ]; then
     echo -e "${RED}✗ Secret generation failed${NC}"
     exit 1
 fi

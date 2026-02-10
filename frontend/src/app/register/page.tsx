@@ -12,7 +12,7 @@ export default function RegisterPage() {
     const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
 
     return (
-        <div className="min-h-screen flex flex-col premium-bg overflow-hidden">
+        <div className="min-h-screen flex flex-col premium-bg overflow-x-hidden">
             <Navbar />
             <div className="flex-1 flex items-center justify-center p-4 relative">
             {/* Floating Gradient Orbs */}

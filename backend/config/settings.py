@@ -35,7 +35,11 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+# ZH-010 FIX: Webhook secret is mandatory in production (fail-closed)
+if DEBUG:
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+else:
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # No default = crash if missing
 # SECURITY: No wildcard default - prevents host header injection
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
@@ -228,16 +232,17 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
-# CORS - Use allowlist in production
+# CORS - ZH-006 FIX: Never allow all origins. Hardcoded to False.
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = config('CORS_ALLOW_ALL', default=False, cast=bool)
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:3000,https://smsly-hosting.com',
     cast=Csv())
+# ZH-007 FIX: No wildcard subdomains — explicit trusted origins only
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='https://*.railway.app,https://smsly-hosting.com',
+    default='https://smsly-hosting.com,https://hosting.smsly.cloud',
     cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',

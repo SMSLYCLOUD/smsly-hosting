@@ -376,15 +376,42 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     USE_SSL="${USE_SSL:-false}"
     PUBLIC_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
-    # ─── BLINDSPOT FIX: Ensure GATEWAY_SECRET exists in .env ────────────────
-    if ! grep -q "GATEWAY_SECRET" "$INSTALL_DIR/.env"; then
-        echo -e "${BLUE}  → Adding missing GATEWAY_SECRET to .env${NC}"
-        GATEWAY_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32)
-        echo "" >> "$INSTALL_DIR/.env"
-        echo "# Inter-service HMAC authentication secret" >> "$INSTALL_DIR/.env"
-        echo "GATEWAY_SECRET=$GATEWAY_SECRET" >> "$INSTALL_DIR/.env"
-        echo -e "${GREEN}  ✓ GATEWAY_SECRET added${NC}"
+    # ─── Patch missing required variables into existing .env ───────────────
+    # Older .env files may be missing secrets added in later versions.
+    # This ensures ALL required variables exist before docker-compose starts.
+
+    _gen_secret() { python3 -c "import secrets; print(secrets.token_hex($1))" 2>/dev/null || openssl rand -hex "$1"; }
+
+    _ensure_env_var() {
+        local var_name="$1" var_value="$2" var_comment="${3:-}"
+        if ! grep -q "^${var_name}=" "$INSTALL_DIR/.env"; then
+            echo -e "${BLUE}  → Adding missing $var_name to .env${NC}"
+            echo "" >> "$INSTALL_DIR/.env"
+            [ -n "$var_comment" ] && echo "# $var_comment" >> "$INSTALL_DIR/.env"
+            echo "${var_name}=${var_value}" >> "$INSTALL_DIR/.env"
+            echo -e "${GREEN}  ✓ $var_name added${NC}"
+        fi
+    }
+
+    # Generate missing secrets
+    _ensure_env_var "REDIS_PASSWORD" "$(_gen_secret 16)" "Redis authentication password"
+    _ensure_env_var "GATEWAY_SECRET" "$(_gen_secret 32)" "Inter-service HMAC authentication secret"
+    _ensure_env_var "GITHUB_WEBHOOK_SECRET" "$(_gen_secret 32)" "GitHub webhook signature verification"
+
+    # Re-source to pick up any newly added values
+    source "$INSTALL_DIR/.env" 2>/dev/null || true
+
+    # Fix Redis/Celery URLs if they don't include password authentication
+    if grep -q "^REDIS_URL=redis://redis:" "$INSTALL_DIR/.env" 2>/dev/null; then
+        echo -e "${BLUE}  → Fixing REDIS_URL to include authentication${NC}"
+        sed -i "s|^REDIS_URL=redis://redis:|REDIS_URL=redis://:${REDIS_PASSWORD}@redis:|" "$INSTALL_DIR/.env"
+        echo -e "${GREEN}  ✓ REDIS_URL updated with auth${NC}"
     fi
+
+    _ensure_env_var "CELERY_BROKER_URL" "redis://:${REDIS_PASSWORD}@redis:6379/0" "Celery broker (Redis with auth)"
+
+    # Ensure DATABASE_URL exists (older installs may be missing it)
+    _ensure_env_var "DATABASE_URL" "postgresql://smsly_admin:${POSTGRES_PASSWORD:-changeme}@db:5432/smsly_hosting" "PostgreSQL connection string"
 
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────

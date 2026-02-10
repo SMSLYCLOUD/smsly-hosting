@@ -8,7 +8,7 @@ import { Starfield } from './Starfield';
  */
 export function GlobalBackground() {
   return (
-    <div className="fixed inset-0 z-0 pointer-events-none" aria-hidden="true">
+    <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden="true">
       {/* Real stars on canvas */}
       <Starfield />
 

@@ -31,6 +31,9 @@ def check_required_env_vars():
         'SECRET_KEY',
         'FIELD_ENCRYPTION_KEY',
         'POSTGRES_PASSWORD',
+        'REDIS_PASSWORD',
+        'GATEWAY_SECRET',
+        'GITHUB_WEBHOOK_SECRET',
         'ALLOWED_HOSTS',
     ]
     
@@ -74,12 +77,8 @@ def check_security_settings():
         success(f"ALLOWED_HOSTS configured: {allowed_hosts}")
     
     # Check CORS
-    cors_all = os.getenv('CORS_ALLOW_ALL', 'False').lower()
-    if cors_all in ['true', '1', 'yes']:
-        warning("CORS_ALLOW_ALL is enabled (only use for development)")
-        issues.append("CORS wide open")
-    else:
-        success("CORS is restricted")
+    # CORS_ALLOW_ALL_ORIGINS is now hardcoded to False in settings.py (ZH-006 FIX)
+    success("CORS_ALLOW_ALL_ORIGINS hardcoded to False")
     
     # Check FIELD_ENCRYPTION_KEY format
     encryption_key = os.getenv('FIELD_ENCRYPTION_KEY', '')

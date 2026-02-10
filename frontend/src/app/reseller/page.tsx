@@ -6,7 +6,7 @@ import { Users, DollarSign, Activity, Settings } from 'lucide-react';
 
 export default function ResellerPage() {
     return (
-        <main className="h-screen flex flex-col bg-background">
+        <main className="min-h-screen flex flex-col bg-background">
             <Navbar />
             <div className="container mx-auto py-10">
                 <div className="flex justify-between items-center mb-8">

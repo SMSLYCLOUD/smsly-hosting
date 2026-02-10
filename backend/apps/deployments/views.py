@@ -24,9 +24,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
     """
     Service Management and Nested Resources.
     """
-    queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """ZH-001 FIX: Only return services owned by the requesting user."""
+        return Service.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -228,12 +231,15 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     """
     API endpoint for managing Deployments.
     """
-    queryset = Deployment.objects.all()
     serializer_class = DeploymentSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [
         parsers.JSONParser,
         parsers.MultiPartParser]  # Enable File Uploads
+
+    def get_queryset(self):
+        """ZH-002 FIX: Only return deployments for services owned by the requesting user."""
+        return Deployment.objects.filter(service__owner=self.request.user)
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -277,7 +283,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             provider_id = serializer.validated_data['provider_id']
 
             try:
-                service = Service.objects.get(id=service_id)
+                # ZH-011 FIX: Verify service ownership before triggering deployment
+                service = Service.objects.get(id=service_id, owner=request.user)
                 provider = CloudProvider.objects.get(id=provider_id)
 
                 deployment = Deployment.objects.create(
@@ -385,14 +392,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            service = Service.objects.get(id=service_id)
-
-            # Security: Verify ownership
-            if hasattr(service, 'owner') and service.owner != request.user:
-                return Response(
-                    {'error': 'Permission denied. You do not own this service'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
+            # ZH-011 FIX: Verify ownership at query level (fail-closed)
+            service = Service.objects.get(id=service_id, owner=request.user)
 
             # Security: Use secure upload directory
             import secrets
@@ -454,6 +455,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # In a real multi-tenant app, filter by owner/team
-        # For now, return all logs where actor matches username or is system
-        return AuditLog.objects.all().order_by('-timestamp')
+        """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
+        return AuditLog.objects.filter(
+            actor=self.request.user.username
+        ).order_by('-timestamp')

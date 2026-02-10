@@ -26,6 +26,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         team = serializer.save(owner=self.request.user)
         # Add creator as admin
         TeamMember.objects.create(
+            team=team,
             user=self.request.user,
             role=TeamMember.Role.ADMIN)
 
