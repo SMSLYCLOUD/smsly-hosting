@@ -46,6 +46,11 @@ class SecurityMiddleware:
     def _should_verify_signature(self, request):
         """
         Determine if the request requires signature verification.
+        
+        HMAC V2 is for INTER-SERVICE authentication (gateway → backend).
+        Browser users authenticate via Token auth (Authorization: Token xxx)
+        or session auth (Cookie). Those requests skip HMAC verification
+        and are instead validated by DRF's authentication classes.
         """
         # Always allow OPTIONS (CORS)
         if request.method == 'OPTIONS':
@@ -60,6 +65,16 @@ class SecurityMiddleware:
 
         # Only enforce on /api/
         if not path.startswith('/api/'):
+            return False
+        
+        # Skip HMAC for requests with user authentication (browser/frontend).
+        # These are validated by DRF's TokenAuthentication / SessionAuthentication.
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Token ') or auth_header.startswith('Bearer '):
+            return False
+        
+        # Skip HMAC for session-authenticated requests (browser with cookies)
+        if request.COOKIES.get('sessionid') or request.COOKIES.get('csrftoken'):
             return False
             
         return self.enforce_signature
