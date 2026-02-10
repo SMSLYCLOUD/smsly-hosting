@@ -327,11 +327,9 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
     else
         if [ -d "$INSTALL_DIR/.git" ]; then
              cd "$INSTALL_DIR"
-             # BLINDSPOT FIX: stash local changes before pulling
-             if ! git diff --quiet HEAD 2>/dev/null; then
-                 git stash push -m "install-$(date +%s)" || true
-             fi
-             git pull origin main
+             # Force-reset to match remote (handles chmod changes, local edits, etc.)
+             git fetch origin main
+             git reset --hard origin/main
         else
              git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
         fi
@@ -565,10 +563,10 @@ if [ "$USE_SSL" = "true" ]; then
     docker compose -f docker-compose.traefik.yml up -d
 
     echo -e "${BLUE}  → Starting App Stack (Attached to Proxy)...${NC}"
-    docker compose -f "$COMPOSE_FILE" -f docker-compose.traefik-adapter.yml up -d --build
+    docker compose -f "$COMPOSE_FILE" -f docker-compose.traefik-adapter.yml up -d --build --force-recreate
 else
     echo -e "${BLUE}  → Starting App Stack (Standard)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --build
+    docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate
 fi
 
 # -----------------------------------------------------------------------------
