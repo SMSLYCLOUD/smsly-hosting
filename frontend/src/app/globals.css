@@ -110,7 +110,7 @@
 
 /* ===== CLOUD BACKGROUND: Nebula-Inspired Atmosphere ===== */
 .cloud-bg {
-  @apply relative overflow-hidden;
+  @apply relative;
   background:
     radial-gradient(ellipse 100% 80% at 20% 10%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
     radial-gradient(ellipse 80% 60% at 80% 30%, rgba(6, 182, 212, 0.06) 0%, transparent 45%),
