@@ -410,8 +410,18 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
     _ensure_env_var "CELERY_BROKER_URL" "redis://:${REDIS_PASSWORD}@redis:6379/0" "Celery broker (Redis with auth)"
 
-    # Ensure DATABASE_URL exists (older installs may be missing it)
-    _ensure_env_var "DATABASE_URL" "postgresql://smsly_admin:${POSTGRES_PASSWORD:-changeme}@db:5432/smsly_hosting" "PostgreSQL connection string"
+    # Ensure DATABASE_URL exists and uses the correct POSTGRES_PASSWORD
+    if grep -q "^DATABASE_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        # Extract password from existing DATABASE_URL and compare with POSTGRES_PASSWORD
+        EXISTING_DB_PASS=$(grep "^DATABASE_URL=" "$INSTALL_DIR/.env" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+        if [ -n "$POSTGRES_PASSWORD" ] && [ "$EXISTING_DB_PASS" != "$POSTGRES_PASSWORD" ]; then
+            echo -e "${BLUE}  → Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
+            sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://smsly_admin:${POSTGRES_PASSWORD}@db:5432/smsly_hosting|" "$INSTALL_DIR/.env"
+            echo -e "${GREEN}  ✓ DATABASE_URL password synced${NC}"
+        fi
+    else
+        _ensure_env_var "DATABASE_URL" "postgresql://smsly_admin:${POSTGRES_PASSWORD}@db:5432/smsly_hosting" "PostgreSQL connection string"
+    fi
 
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────
@@ -586,20 +596,26 @@ if [ "$DB_READY" != "true" ]; then
 fi
 
 # ─── Sync DB password to match .env (handles volume from previous install) ──
-# The DB volume may persist with a password from a previous install.
+# The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
 source "$INSTALL_DIR/.env" 2>/dev/null || true
 echo -e "${BLUE}  → Syncing database password...${NC}"
-docker compose -f "$COMPOSE_FILE" exec -T db \
+
+# Try local trust auth first (Docker default), then try with PGPASSWORD
+if docker compose -f "$COMPOSE_FILE" exec -T db \
     psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
-    >/dev/null 2>&1 || {
-        # If postgres user also requires auth, try with POSTGRES_PASSWORD
-        docker compose -f "$COMPOSE_FILE" exec -T db \
-            psql -U smsly_admin -c "SELECT 1;" >/dev/null 2>&1 && \
-            echo -e "${GREEN}  ✓ Database password already matches${NC}" || \
-            echo -e "${YELLOW}  ⚠ Could not sync password — will attempt migrations anyway${NC}"
-    }
-echo -e "${GREEN}  ✓ Database password synced${NC}"
+    >/dev/null 2>&1; then
+    echo -e "${GREEN}  ✓ Database password synced${NC}"
+elif docker compose -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" db \
+    psql -U smsly_admin -d smsly_hosting -c "SELECT 1;" >/dev/null 2>&1; then
+    echo -e "${GREEN}  ✓ Database password already matches${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Password mismatch — resetting via postgres superuser...${NC}"
+    # Last resort: the Docker postgres container always accepts local postgres user
+    docker compose -f "$COMPOSE_FILE" exec -T db \
+        psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+        2>&1 || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
+fi
 
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
