@@ -9,13 +9,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 
 
-class TeamSerializer(serializers.ModelSerializer):
-    members_count = serializers.IntegerField(
-        source='members.count', read_only=True)
 
-    class Meta:
-        model = Team
-        fields = ['id', 'name', 'created_at', 'members_count']
 
 
 class TeamViewSet(viewsets.ModelViewSet):

@@ -2,9 +2,11 @@ from rest_framework import serializers
 from .models import Team, TeamMember
 
 class TeamSerializer(serializers.ModelSerializer):
+    members_count = serializers.IntegerField(source='members.count', read_only=True)
+
     class Meta:
         model = Team
-        fields = '__all__'
+        fields = ('id', 'name', 'created_at', 'members_count', 'owner')
         read_only_fields = ('owner', 'created_at')
 
 class TeamMemberSerializer(serializers.ModelSerializer):
