@@ -55,8 +55,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
-      <Card className="w-full max-w-md shadow-xl border-slate-200 dark:border-slate-800">
+    <div className="min-h-screen flex items-center justify-center premium-bg p-4 overflow-hidden">
+      {/* Floating Gradient Orbs */}
+      <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -left-32" style={{ animationDelay: '0s' }} />
+      <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 top-1/4 -right-20" style={{ animationDelay: '4s' }} />
+      <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 -bottom-20 left-1/3" style={{ animationDelay: '8s' }} />
+      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+
+      <Card className="w-full max-w-md card-premium rounded-2xl relative z-10">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto mb-4">
             <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto mx-auto" />
@@ -100,7 +106,7 @@ export default function LoginPage() {
               </div>
 
               <Button
-                className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
+                className="w-full h-11 btn-shimmer bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-semibold shadow-lg shadow-emerald-500/20"
                 onClick={() => setShowEmailForm(true)}
               >
                 <Mail className="mr-2 h-4 w-4" />
@@ -164,7 +170,7 @@ export default function LoginPage() {
 
                 <Button
                   type="submit"
-                  className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  className="w-full h-11 btn-shimmer bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-semibold shadow-lg shadow-emerald-500/20"
                   disabled={isLoading}
                 >
                   {isLoading ? (

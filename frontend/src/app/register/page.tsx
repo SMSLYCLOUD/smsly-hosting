@@ -11,8 +11,14 @@ export default function RegisterPage() {
     const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
-            <Card className="w-full max-w-md shadow-xl border-slate-200 dark:border-slate-800">
+        <div className="min-h-screen flex items-center justify-center premium-bg p-4 overflow-hidden">
+            {/* Floating Gradient Orbs */}
+            <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -right-32" style={{ animationDelay: '0s' }} />
+            <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 bottom-1/4 -left-20" style={{ animationDelay: '4s' }} />
+            <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 -bottom-20 right-1/3" style={{ animationDelay: '8s' }} />
+            <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+
+            <Card className="w-full max-w-md card-premium rounded-2xl relative z-10">
                 <CardHeader className="text-center space-y-2">
                     <div className="mx-auto mb-4">
                         <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto mx-auto" />
@@ -47,7 +53,7 @@ export default function RegisterPage() {
                         </div>
                     </div>
 
-                    <Button className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white" asChild>
+                    <Button className="w-full h-11 btn-shimmer bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 text-white font-semibold shadow-lg shadow-emerald-500/20" asChild>
                         <a href={`${BACKEND_URL}/accounts/signup/`}>
                             Sign up with Email
                         </a>

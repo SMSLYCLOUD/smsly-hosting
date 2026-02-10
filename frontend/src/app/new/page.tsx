@@ -122,9 +122,13 @@ export default function NewServicePage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col bg-background">
+    <main className="min-h-screen flex flex-col premium-bg">
       <Navbar />
-    <div className="container max-w-4xl py-10">
+      {/* Floating Gradient Orbs */}
+      <div className="floating-orb w-[450px] h-[450px] bg-emerald-500/8 -top-24 -left-24" style={{ animationDelay: '0s' }} />
+      <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 bottom-10 -right-16" style={{ animationDelay: '5s' }} />
+      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+    <div className="container max-w-4xl py-10 relative z-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
         <p className="text-muted-foreground">Deploy your application in seconds.</p>

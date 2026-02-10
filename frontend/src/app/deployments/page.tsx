@@ -76,9 +76,9 @@ export default function DeploymentsPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen flex flex-col bg-background">
+      <main className="min-h-screen flex flex-col premium-bg">
         <Navbar />
-        <div className="container mx-auto py-10">
+        <div className="container mx-auto py-10 relative z-10">
           <div className="flex items-center justify-center h-64">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
@@ -88,9 +88,13 @@ export default function DeploymentsPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col bg-background">
+    <main className="min-h-screen flex flex-col premium-bg">
       <Navbar />
-    <div className="container mx-auto py-10">
+      {/* Floating Gradient Orbs */}
+      <div className="floating-orb w-[400px] h-[400px] bg-emerald-500/8 -top-20 -right-24" style={{ animationDelay: '0s' }} />
+      <div className="floating-orb w-[300px] h-[300px] bg-cyan-500/6 bottom-32 -left-16" style={{ animationDelay: '7s' }} />
+      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+    <div className="container mx-auto py-10 relative z-10">
       <PageHeader
         title="Deployments"
         description="Track all your deployment history and status."

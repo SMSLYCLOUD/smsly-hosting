@@ -103,9 +103,18 @@ export default function DashboardPage() {
 
 
   return (
-    <main className="min-h-screen flex flex-col bg-background transition-colors duration-500">
+    <main className="min-h-screen flex flex-col premium-bg transition-colors duration-500">
       <Navbar />
-      <div className="flex-1 p-8">
+
+      {/* Floating Gradient Orbs */}
+      <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -left-32" style={{ animationDelay: '0s' }} />
+      <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 top-1/3 -right-24" style={{ animationDelay: '4s' }} />
+      <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 bottom-20 left-1/4" style={{ animationDelay: '8s' }} />
+
+      {/* Dot Grid Overlay */}
+      <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
+
+      <div className="flex-1 p-8 relative z-10">
     <motion.div
       className="flex-1 space-y-6 max-w-7xl mx-auto"
       initial="initial"
@@ -122,7 +131,7 @@ export default function DashboardPage() {
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
-            className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-cyan-500 text-white font-medium shadow-lg shadow-primary/30 flex items-center gap-2"
+            className="btn-shimmer px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white font-semibold shadow-lg shadow-primary/25 flex items-center gap-2"
           >
             <Zap size={18} />
             Quick Deploy
@@ -149,17 +158,17 @@ export default function DashboardPage() {
         {stats.map((stat, i) => (
           <motion.div
             key={stat.title}
-            whileHover={{ scale: 1.02, y: -2 }}
-            transition={{ type: "spring", stiffness: 400, damping: 10 }}
+            whileHover={{ scale: 1.03, y: -4 }}
+            transition={{ type: "spring", stiffness: 400, damping: 15 }}
           >
-            <Card className="bg-card/50 backdrop-blur-xl border-border/50 hover:border-primary/30 transition-all hover:shadow-lg hover:shadow-primary/5">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <Card className="card-premium rounded-xl">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
                 <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-                <div className={`p-2 rounded-lg ${stat.bg}`}>
-                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                <div className={`icon-glow p-2.5 rounded-xl ${stat.bg}`}>
+                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="relative z-10">
                 <div className="text-3xl font-bold">{stat.value}</div>
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-xs text-muted-foreground">{stat.subtitle}</p>
@@ -178,15 +187,15 @@ export default function DashboardPage() {
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
         {/* Recent Services */}
         <motion.div variants={fadeInUp} className="col-span-4">
-          <Card className="bg-card/50 backdrop-blur-xl border-border/50 h-full">
-            <CardHeader className="flex flex-row items-center justify-between">
+          <Card className="card-premium rounded-xl h-full">
+            <CardHeader className="flex flex-row items-center justify-between relative z-10">
               <CardTitle>Recent Services</CardTitle>
-              <Link href="/services" className="text-sm text-primary hover:underline">
+              <Link href="/services" className="text-sm text-primary hover:underline font-medium">
                 View all →
               </Link>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
+            <CardContent className="relative z-10">
+              <div className="space-y-3">
                 {services.length === 0 ? (
                   <EmptyState />
                 ) : (
@@ -196,10 +205,10 @@ export default function DashboardPage() {
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.1 }}
-                      className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors group"
+                      className="flex items-center justify-between p-3 rounded-xl hover:bg-primary/5 border border-transparent hover:border-primary/10 transition-all group"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary font-bold">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-cyan-500/10 flex items-center justify-center text-primary font-bold shadow-sm">
                           {svc.name[0].toUpperCase()}
                         </div>
                         <div>
@@ -220,8 +229,8 @@ export default function DashboardPage() {
 
         {/* AI Insights */}
         <motion.div variants={fadeInUp} className="col-span-3">
-          <Card className="bg-gradient-to-br from-card via-card to-primary/5 backdrop-blur-xl border-border/50 h-full">
-            <CardHeader>
+          <Card className="card-premium rounded-xl h-full" style={{ background: 'linear-gradient(135deg, hsl(var(--card) / 0.7), hsl(var(--card) / 0.5), hsl(160 84% 39% / 0.05))' }}>
+            <CardHeader className="relative z-10">
               <CardTitle className="flex items-center gap-2">
                 <span className="relative flex h-3 w-3">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -230,25 +239,34 @@ export default function DashboardPage() {
                 AI Insights
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <CardContent className="space-y-4 relative z-10">
+              <motion.div
+                whileHover={{ scale: 1.01 }}
+                className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all"
+              >
                 <p className="text-sm font-medium text-emerald-500">✓ All systems healthy</p>
                 <p className="text-xs text-muted-foreground mt-1">No critical issues detected</p>
-              </div>
+              </motion.div>
 
-              <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+              <motion.div
+                whileHover={{ scale: 1.01 }}
+                className="p-4 rounded-xl bg-primary/10 border border-primary/20 hover:border-primary/40 transition-all"
+              >
                 <p className="text-sm font-medium text-primary">💡 Cost Optimization</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Your &apos;worker-node&apos; is using only 10% CPU. Consider downsizing to save <span className="text-emerald-500 font-medium">$15/mo</span>.
                 </p>
-              </div>
+              </motion.div>
 
-              <div className="p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+              <motion.div
+                whileHover={{ scale: 1.01 }}
+                className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 hover:border-cyan-500/40 transition-all"
+              >
                 <p className="text-sm font-medium text-cyan-500">🚀 Performance Tip</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   Enable edge caching for your API to reduce latency by up to 40%.
                 </p>
-              </div>
+              </motion.div>
             </CardContent>
           </Card>
         </motion.div>
@@ -290,7 +308,7 @@ function EmptyState() {
         <motion.button
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          className="px-4 py-2 rounded-lg bg-primary text-primary-foreground font-medium"
+          className="btn-shimmer px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white font-semibold shadow-lg shadow-primary/25"
         >
           Deploy Now
         </motion.button>
