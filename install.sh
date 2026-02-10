@@ -1,18 +1,25 @@
 #!/bin/bash
 
 # =============================================================================
-# SMSLY Hosting - Universal Installer v2.0 (Production Hardened)
+# SMSLY Hosting - Universal Installer v3.0 (Production Hardened)
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
 #   1. IP Mode (HTTP :8090) - Quick start, no domain needed.
 #   2. SSL Mode (HTTPS)     - Production ready, requires domain + DNS.
 #
+# Usage:
+#   Fresh install:    sudo bash install.sh
+#   Full update:      sudo bash install.sh --update
+#   Frontend only:    sudo bash install.sh --update-frontend
+#   Backend only:     sudo bash install.sh --update-backend
+#
 # Features:
 #   - Idempotent: safe to re-run without data loss
 #   - Full installation logging to /var/log/smsly-install.log
 #   - Rollback on failure via trap handler
 #   - Secure credential storage (no plaintext to terminal)
+#   - Update mode: git stash → pull → rebuild → restart
 # =============================================================================
 
 set -euo pipefail
@@ -24,18 +31,37 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# ─── Logging ────────────────────────────────────────────────────────────────
+# ─── Constants ───────────────────────────────────────────────────────────────
 LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
+COMPOSE_FILE="docker-compose.prod.yml"
 ROLLBACK_NEEDED=false
+
+# ─── Parse Arguments ─────────────────────────────────────────────────────────
+UPDATE_MODE=""
+case "${1:-}" in
+    --update)          UPDATE_MODE="full" ;;
+    --update-frontend) UPDATE_MODE="frontend" ;;
+    --update-backend)  UPDATE_MODE="backend" ;;
+    --help|-h)
+        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend]"
+        echo ""
+        echo "  (no args)          Fresh install"
+        echo "  --update           Pull latest code and rebuild all services"
+        echo "  --update-frontend  Pull latest code and rebuild frontend only"
+        echo "  --update-backend   Pull latest code and rebuild backend only"
+        exit 0
+        ;;
+esac
 
 # Log all output to file AND terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo ""
-echo "═══════════════════════════════════════════════════════════════"
+echo "═══════════════════════════════════════════════════════════"
 echo "  SMSLY Hosting Install Log — $(date -Iseconds)"
-echo "═══════════════════════════════════════════════════════════════"
+echo "  Mode: ${UPDATE_MODE:-fresh-install}"
+echo "═══════════════════════════════════════════════════════════"
 
 # ─── Rollback Trap ──────────────────────────────────────────────────────────
 cleanup_on_failure() {
@@ -47,15 +73,22 @@ cleanup_on_failure() {
         echo -e "${YELLOW}  → Rolling back...${NC}"
 
         # Stop any containers that were started
-        if [ -f "$INSTALL_DIR/docker-compose.prod.yml" ]; then
+        if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" 2>/dev/null || true
-            docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
         fi
 
         # Restore backup .env if one was created
         if [ -f "$INSTALL_DIR/.env.backup" ]; then
             echo -e "${YELLOW}  → Restoring previous .env from backup${NC}"
             mv "$INSTALL_DIR/.env.backup" "$INSTALL_DIR/.env" 2>/dev/null || true
+        fi
+
+        # Restore git stash if we stashed
+        if [ -f "$INSTALL_DIR/.git-stash-marker" ]; then
+            echo -e "${YELLOW}  → Restoring git stash (rolling back code changes)${NC}"
+            cd "$INSTALL_DIR" && git stash pop 2>/dev/null || true
+            rm -f "$INSTALL_DIR/.git-stash-marker"
         fi
 
         echo -e "${YELLOW}  Full log: $LOG_FILE${NC}"
@@ -65,14 +98,160 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   SMSLY Hosting - Production Installer v2.0${NC}"
+echo -e "${BLUE}   SMSLY Hosting - Production Installer v3.0${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
+
+# =============================================================================
+# UPDATE MODE — Fast path for pulling latest code and rebuilding
+# =============================================================================
+if [ -n "$UPDATE_MODE" ]; then
+    echo -e "${YELLOW}[UPDATE] Running in update mode: $UPDATE_MODE${NC}"
+
+    # ─── Pre-flight ──────────────────────────────────────────────────────────
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"
+        exit 1
+    fi
+
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        echo -e "${RED}✗ No git repository found at $INSTALL_DIR. Run a fresh install first.${NC}"
+        exit 1
+    fi
+
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${RED}✗ No .env file found. Run a fresh install first.${NC}"
+        exit 1
+    fi
+
+    cd "$INSTALL_DIR"
+
+    # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
+    echo -e "${BLUE}  → Checking for local changes...${NC}"
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
+        git stash push -m "install-update-$(date +%s)"
+        touch "$INSTALL_DIR/.git-stash-marker"
+    fi
+
+    echo -e "${BLUE}  → Pulling latest code from GitHub...${NC}"
+    git pull origin main
+
+    # Clean up stash marker (pull succeeded, we commit to the new code)
+    rm -f "$INSTALL_DIR/.git-stash-marker"
+
+    # ─── Validate required files exist ───────────────────────────────────────
+    echo -e "${BLUE}  → Validating deployment files...${NC}"
+
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        echo -e "${RED}✗ Missing $COMPOSE_FILE — cannot deploy.${NC}"
+        exit 1
+    fi
+
+    if [ ! -f "nginx.conf" ]; then
+        echo -e "${RED}✗ Missing nginx.conf — cannot deploy. This file is required for routing.${NC}"
+        exit 1
+    fi
+
+    if [ ! -f "backend/Dockerfile" ]; then
+        echo -e "${RED}✗ Missing backend/Dockerfile${NC}"
+        exit 1
+    fi
+
+    if [ ! -f "frontend/Dockerfile" ]; then
+        echo -e "${RED}✗ Missing frontend/Dockerfile${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}  ✓ All required files present${NC}"
+
+    # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
+    # Using --no-deps prevents cascade restart of unrelated services
+    case "$UPDATE_MODE" in
+        frontend)
+            echo -e "${BLUE}  → Rebuilding frontend container only...${NC}"
+            docker compose -f "$COMPOSE_FILE" build --no-cache frontend
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
+            ;;
+        backend)
+            echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
+            docker compose -f "$COMPOSE_FILE" build --no-cache backend
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            sleep 10  # Wait for backend to start
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
+                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+                sleep 15
+                docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+            }
+
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+
+            echo -e "${BLUE}  → Restarting celery workers...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-beat
+            ;;
+        full)
+            echo -e "${BLUE}  → Rebuilding all containers...${NC}"
+            docker compose -f "$COMPOSE_FILE" build --no-cache frontend backend
+            docker compose -f "$COMPOSE_FILE" up -d
+
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            sleep 10
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
+                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+                sleep 15
+                docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+            }
+
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+            ;;
+    esac
+
+    # ─── Verification ────────────────────────────────────────────────────────
+    echo -e "${BLUE}  → Verifying containers...${NC}"
+    sleep 5
+
+    HEALTH_OK=false
+    for attempt in 1 2 3 4 5; do
+        if curl -sf http://localhost/health >/dev/null 2>&1; then
+            HEALTH_OK=true
+            break
+        elif curl -sf http://localhost:8090/health >/dev/null 2>&1; then
+            HEALTH_OK=true
+            break
+        fi
+        echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
+        sleep 5
+    done
+
+    if [ "$HEALTH_OK" = "true" ]; then
+        echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Health check not responding. Check container logs:${NC}"
+        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE logs --tail=50${NC}"
+    fi
+
+    # Show container status
+    echo -e "\n${BLUE}Container Status:${NC}"
+    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+
+    trap - EXIT
+    echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
+    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    exit 0
+fi
+
+# =============================================================================
+# FRESH INSTALL — Full setup from scratch
+# =============================================================================
 
 # -----------------------------------------------------------------------------
 # 1. Pre-flight Checks
 # -----------------------------------------------------------------------------
-echo -e "${YELLOW}[1/7] Checking system requirements...${NC}"
+echo -e "${YELLOW}[1/8] Checking system requirements...${NC}"
 
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}✗ Please run as root (sudo bash install.sh)${NC}"
@@ -98,7 +277,7 @@ echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/7] Installing dependencies...${NC}"
+echo -e "\n${YELLOW}[2/8] Installing dependencies...${NC}"
 
 # Stop conflicting services if present
 for svc in nginx apache2; do
@@ -136,7 +315,7 @@ echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 # -----------------------------------------------------------------------------
 # 3. Configuration & Secrets (IDEMPOTENT)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/7] Configuration...${NC}"
+echo -e "\n${YELLOW}[3/8] Configuration...${NC}"
 
 mkdir -p "$INSTALL_DIR"
 
@@ -148,6 +327,10 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
     else
         if [ -d "$INSTALL_DIR/.git" ]; then
              cd "$INSTALL_DIR"
+             # BLINDSPOT FIX: stash local changes before pulling
+             if ! git diff --quiet HEAD 2>/dev/null; then
+                 git stash push -m "install-$(date +%s)" || true
+             fi
              git pull origin main
         else
              git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
@@ -155,6 +338,31 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
     fi
 fi
 cd "$INSTALL_DIR"
+
+# ─── BLINDSPOT FIX: Validate required deployment files ──────────────────────
+echo -e "${BLUE}  → Validating deployment files...${NC}"
+MISSING_FILES=()
+for required_file in "$COMPOSE_FILE" "nginx.conf" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh"; do
+    if [ ! -f "$required_file" ]; then
+        MISSING_FILES+=("$required_file")
+    fi
+done
+
+if [ ${#MISSING_FILES[@]} -gt 0 ]; then
+    echo -e "${RED}✗ Missing required files:${NC}"
+    for f in "${MISSING_FILES[@]}"; do
+        echo -e "${RED}    - $f${NC}"
+    done
+    exit 1
+fi
+echo -e "${GREEN}  ✓ All required deployment files present${NC}"
+
+# ─── BLINDSPOT FIX: Ensure correct compose file is used ─────────────────────
+# Check if any containers are running with the wrong compose file (dev instead of prod)
+if docker compose ps --format "table {{.Name}}" 2>/dev/null | grep -q "smsly-hosting"; then
+    echo -e "${YELLOW}  ⚠ Found containers running from docker-compose.yml (dev). Stopping...${NC}"
+    docker compose down 2>/dev/null || true
+fi
 
 # ─── IDEMPOTENCY: Skip secret generation if .env already exists ─────────────
 if [ -f "$INSTALL_DIR/.env" ]; then
@@ -167,6 +375,17 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
     PUBLIC_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+
+    # ─── BLINDSPOT FIX: Ensure GATEWAY_SECRET exists in .env ────────────────
+    if ! grep -q "GATEWAY_SECRET" "$INSTALL_DIR/.env"; then
+        echo -e "${BLUE}  → Adding missing GATEWAY_SECRET to .env${NC}"
+        GATEWAY_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || openssl rand -hex 32)
+        echo "" >> "$INSTALL_DIR/.env"
+        echo "# Inter-service HMAC authentication secret" >> "$INSTALL_DIR/.env"
+        echo "GATEWAY_SECRET=$GATEWAY_SECRET" >> "$INSTALL_DIR/.env"
+        echo -e "${GREEN}  ✓ GATEWAY_SECRET added${NC}"
+    fi
+
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────
     PUBLIC_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
@@ -232,6 +451,7 @@ secret_key = ''.join(secrets.choice(chars) for _ in range(50))
 fernet_key = Fernet.generate_key().decode()
 pg_pass = secrets.token_hex(16)
 redis_pass = secrets.token_hex(16)
+gateway_secret = secrets.token_hex(32)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -240,6 +460,7 @@ print(f'SECRET_KEY={secret_key}')
 print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
 print(f'POSTGRES_PASSWORD={pg_pass}')
 print(f'REDIS_PASSWORD={redis_pass}')
+print(f'GATEWAY_SECRET={gateway_secret}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -274,10 +495,13 @@ DOMAIN=$DOMAIN
 ACME_EMAIL=${ACME_EMAIL:-}
 USE_SSL=$USE_SSL
 
+# Inter-service HMAC authentication secret
+GATEWAY_SECRET=$GATEWAY_SECRET
+
 # Security
 ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://localhost:8090
-CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$PUBLIC_IP
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"
@@ -287,32 +511,38 @@ fi
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/7] Deploying Container Stack...${NC}"
+echo -e "\n${YELLOW}[4/8] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
 docker network create smsly-net 2>/dev/null || true
 docker network create smsly-proxy 2>/dev/null || true
+
+# ─── BLINDSPOT FIX: Ensure entrypoint.sh has execute permissions ────────────
+# Windows git can strip +x bits. Fix before building.
+if [ -f "$INSTALL_DIR/backend/entrypoint.sh" ]; then
+    chmod +x "$INSTALL_DIR/backend/entrypoint.sh"
+fi
 
 if [ "$USE_SSL" = "true" ]; then
     echo -e "${BLUE}  → Starting Traefik (SSL Proxy)...${NC}"
     docker compose -f docker-compose.traefik.yml up -d
 
     echo -e "${BLUE}  → Starting App Stack (Attached to Proxy)...${NC}"
-    docker compose -f docker-compose.prod.yml -f docker-compose.traefik-adapter.yml up -d --build
+    docker compose -f "$COMPOSE_FILE" -f docker-compose.traefik-adapter.yml up -d --build
 else
     echo -e "${BLUE}  → Starting App Stack (Standard)...${NC}"
-    docker compose -f docker-compose.prod.yml up -d --build
+    docker compose -f "$COMPOSE_FILE" up -d --build
 fi
 
 # -----------------------------------------------------------------------------
 # 5. Database Setup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/7] Initializing Database...${NC}"
+echo -e "\n${YELLOW}[5/8] Initializing Database...${NC}"
 
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
-    if docker compose -f docker-compose.prod.yml exec -T db pg_isready -U smsly_admin >/dev/null 2>&1; then
+    if docker compose -f "$COMPOSE_FILE" exec -T db pg_isready -U smsly_admin >/dev/null 2>&1; then
         echo -e "${GREEN}  ✓ Database is ready (attempt $i).${NC}"
         DB_READY=true
         break
@@ -324,22 +554,22 @@ echo ""
 
 if [ "$DB_READY" != "true" ]; then
     echo -e "${RED}  ✗ Database failed to become ready after 2 minutes.${NC}"
-    echo -e "${YELLOW}  Check: docker compose -f docker-compose.prod.yml logs db${NC}"
+    echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs db${NC}"
     exit 1
 fi
 
 echo -e "${BLUE}  → Running Migrations...${NC}"
-docker compose -f docker-compose.prod.yml exec -T backend python manage.py migrate --noinput
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
-docker compose -f docker-compose.prod.yml exec -T backend python manage.py collectstatic --noinput
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/7] Creating Admin User...${NC}"
+echo -e "\n${YELLOW}[6/8] Creating Admin User...${NC}"
 ADMIN_PASS=$(openssl rand -hex 8)
-ADMIN_CREATED=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); existed = User.objects.filter(username='admin').exists(); print('EXISTS' if existed else 'CREATED'); existed or User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')" | docker compose -f docker-compose.prod.yml exec -T backend python manage.py shell 2>/dev/null | tail -1)
+ADMIN_CREATED=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); existed = User.objects.filter(username='admin').exists(); print('EXISTS' if existed else 'CREATED'); existed or User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
 if [[ "$ADMIN_CREATED" == *"EXISTS"* ]]; then
     echo -e "${GREEN}  ✓ Admin user already exists — skipping${NC}"
@@ -372,16 +602,33 @@ if ! command -v caddy &> /dev/null; then
     apt-get install -y caddy >/dev/null 2>&1
 fi
 
+# ─── BLINDSPOT FIX: Caddy proxies to nginx (8090), which handles all routing ─
+# nginx.conf splits traffic: /api → backend:8000, / → frontend:3000
+# Caddy's only job is public-facing :80 and optional HTTPS termination.
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
-cat > /etc/caddy/Caddyfile <<CADDYEOF
+if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+    cat > /etc/caddy/Caddyfile <<CADDYEOF
+$DOMAIN {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+CADDYEOF
+    echo -e "${GREEN}  ✓ Caddy configured for HTTPS: $DOMAIN → 8090${NC}"
+else
+    cat > /etc/caddy/Caddyfile <<CADDYEOF
 :80 {
     reverse_proxy localhost:8090
 }
 CADDYEOF
+    echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
+fi
 
 systemctl restart caddy
 systemctl enable caddy >/dev/null 2>&1
-echo -e "${GREEN}  ✓ Caddy reverse proxy active (port 80 → 8090)${NC}"
+echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
 
 # -----------------------------------------------------------------------------
 # 8. Verification
@@ -390,7 +637,7 @@ echo -e "\n${YELLOW}[8/8] Verifying Deployment...${NC}"
 sleep 5
 
 HEALTH_OK=false
-for attempt in 1 2 3; do
+for attempt in 1 2 3 4 5; do
     if curl -sf http://localhost/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
@@ -398,18 +645,22 @@ for attempt in 1 2 3; do
         HEALTH_OK=true
         break
     fi
-    sleep 3
+    echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
+    sleep 5
 done
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
 else
     echo -e "${YELLOW}  ⚠ Health check did not respond — services may still be starting.${NC}"
-    echo -e "${YELLOW}    Check: docker compose -f docker-compose.prod.yml ps${NC}"
+    echo -e "${YELLOW}    Check: docker compose -f $COMPOSE_FILE ps${NC}"
+    echo -e "${YELLOW}    Logs:  docker compose -f $COMPOSE_FILE logs --tail=50${NC}"
 fi
 
 # Show container status
-docker compose -f docker-compose.prod.yml ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || true
+echo -e "\n${BLUE}Container Status:${NC}"
+docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
+    docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
 
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
@@ -431,5 +682,8 @@ echo -e "   Credentials: $CREDENTIALS_FILE"
 echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${YELLOW}  View credentials: cat $CREDENTIALS_FILE${NC}"
-echo -e "${YELLOW}  View logs:        cat $LOG_FILE${NC}"
+echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
+echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
+echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
+echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
+echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
