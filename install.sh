@@ -186,7 +186,7 @@ if [ -n "$UPDATE_MODE" ]; then
                 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
             }
 
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-beat
@@ -204,7 +204,7 @@ if [ -n "$UPDATE_MODE" ]; then
                 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
             }
 
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
             ;;
     esac
 
@@ -633,6 +633,8 @@ docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noi
 }
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
+# Fix volume ownership — Docker creates named volumes as root
+docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media 2>/dev/null || true
 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
 # -----------------------------------------------------------------------------
