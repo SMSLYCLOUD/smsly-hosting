@@ -359,17 +359,42 @@ CREDS
 chmod 600 "$CREDENTIALS_FILE"
 
 # -----------------------------------------------------------------------------
-# 7. Verification
+# 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[7/7] Verifying Deployment...${NC}"
+echo -e "\n${YELLOW}[7/8] Setting up Caddy Reverse Proxy...${NC}"
+
+if ! command -v caddy &> /dev/null; then
+    echo -e "${BLUE}  → Installing Caddy...${NC}"
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+    apt-get update >/dev/null 2>&1
+    apt-get install -y caddy >/dev/null 2>&1
+fi
+
+echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
+cat > /etc/caddy/Caddyfile <<CADDYEOF
+:80 {
+    reverse_proxy localhost:8090
+}
+CADDYEOF
+
+systemctl restart caddy
+systemctl enable caddy >/dev/null 2>&1
+echo -e "${GREEN}  ✓ Caddy reverse proxy active (port 80 → 8090)${NC}"
+
+# -----------------------------------------------------------------------------
+# 8. Verification
+# -----------------------------------------------------------------------------
+echo -e "\n${YELLOW}[8/8] Verifying Deployment...${NC}"
 sleep 5
 
 HEALTH_OK=false
 for attempt in 1 2 3; do
-    if curl -sf http://localhost:8090/health >/dev/null 2>&1; then
+    if curl -sf http://localhost/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sf -k https://localhost/health >/dev/null 2>&1; then
+    elif curl -sf http://localhost:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -399,7 +424,7 @@ echo -e "${GREEN}═════════════════════
 if [ "$USE_SSL" = "true" ]; then
     echo -e "   URL:         https://$DOMAIN"
 else
-    echo -e "   URL:         http://$PUBLIC_IP:8090"
+    echo -e "   URL:         http://$PUBLIC_IP"
 fi
 echo -e "   Admin:       /admin"
 echo -e "   Credentials: $CREDENTIALS_FILE"
