@@ -585,8 +585,33 @@ if [ "$DB_READY" != "true" ]; then
     exit 1
 fi
 
+# ─── Sync DB password to match .env (handles volume from previous install) ──
+# The DB volume may persist with a password from a previous install.
+# Always reset the password inside PostgreSQL to match the current .env.
+source "$INSTALL_DIR/.env" 2>/dev/null || true
+echo -e "${BLUE}  → Syncing database password...${NC}"
+docker compose -f "$COMPOSE_FILE" exec -T db \
+    psql -U postgres -c "ALTER USER smsly_admin WITH PASSWORD '${POSTGRES_PASSWORD}';" \
+    >/dev/null 2>&1 || {
+        # If postgres user also requires auth, try with POSTGRES_PASSWORD
+        docker compose -f "$COMPOSE_FILE" exec -T db \
+            psql -U smsly_admin -c "SELECT 1;" >/dev/null 2>&1 && \
+            echo -e "${GREEN}  ✓ Database password already matches${NC}" || \
+            echo -e "${YELLOW}  ⚠ Could not sync password — will attempt migrations anyway${NC}"
+    }
+echo -e "${GREEN}  ✓ Database password synced${NC}"
+
+# ─── Restart backend so it picks up the correct DB credentials ──────────────
+echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
+docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
+sleep 5
+
 echo -e "${BLUE}  → Running Migrations...${NC}"
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
+    echo -e "${YELLOW}  ⚠ Migration failed — waiting for backend to stabilize...${NC}"
+    sleep 15
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+}
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
