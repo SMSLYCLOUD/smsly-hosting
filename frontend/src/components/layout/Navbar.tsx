@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -56,6 +56,9 @@ export function Navbar() {
     { href: '/#features', label: 'Features' },
     { href: '/store', label: 'Templates' },
     { href: '/marketplace', label: 'Addons' },
+    { href: '/pricing', label: 'Pricing' },
+    { href: '/docs', label: 'Docs' },
+    { href: '/status', label: 'Status' },
   ];
 
   const authLinks = [
@@ -63,6 +66,8 @@ export function Navbar() {
     { href: '/services', label: 'Services', icon: Layout },
     { href: '/deployments', label: 'Deployments', icon: Rocket },
     { href: '/topology', label: 'Topology', icon: Globe },
+    { href: '/marketplace', label: 'Addons', icon: Box },
+    { href: '/billing', label: 'Billing', icon: CreditCard },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
 
