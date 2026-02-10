@@ -86,9 +86,9 @@ export function Navbar() {
             <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto" priority />
         </Link>
 
-        {/* Public Nav Links - Center */}
+        {/* Nav Links - Center: Show public when logged out, auth when logged in */}
         <nav className="hidden md:flex items-center justify-center flex-1 space-x-1">
-            {publicLinks.map((link) => {
+            {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
                     <Link
@@ -105,7 +105,6 @@ export function Navbar() {
                     </Link>
                 );
             })}
-            {/* Auth links inline when logged in */}
             {user && authLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
