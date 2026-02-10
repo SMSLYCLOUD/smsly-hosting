@@ -7,6 +7,7 @@ from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer,
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.remediator import RemediationEngine
 from apps.intelligence.cost import CostAdvisor
+from apps.intelligence.providers import get_provider, get_available_providers, SYSTEM_PROMPT
 
 
 class CloudProviderViewSet(viewsets.ModelViewSet):
@@ -71,3 +72,81 @@ class IntelligenceViewSet(viewsets.ViewSet):
         advisor = CostAdvisor()
         estimates = advisor.estimate_monthly_cost(float(cpu), float(memory))
         return Response({'estimates': estimates})
+
+    # ---- AI Chat Endpoints ----
+
+    @action(detail=False, methods=['post'])
+    def ask(self, request):
+        """
+        General AI assistant chat.
+        POST /api/v1/cloud/intelligence/ask/
+        Body: { "message": "How do I fix OOM errors?" }
+        """
+        message = request.data.get('message', '').strip()
+        if not message:
+            return Response(
+                {'error': 'Message is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(message) > 2000:
+            return Response(
+                {'error': 'Message too long (max 2000 chars).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        provider = get_provider()
+        response_text = provider.ask(message, system_prompt=SYSTEM_PROMPT)
+        return Response({
+            'response': response_text,
+            'provider': provider.name(),
+        })
+
+    @action(detail=False, methods=['post'])
+    def diagnose(self, request):
+        """
+        AI-powered log diagnosis.
+        POST /api/v1/cloud/intelligence/diagnose/
+        Body: { "logs": "...", "deployment_id": "optional" }
+        """
+        logs = request.data.get('logs', '').strip()
+        deployment_id = request.data.get('deployment_id', 'unknown')
+        if not logs:
+            return Response(
+                {'error': 'Logs are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # First try regex patterns
+        analyzer = LogAnalyzer()
+        issues = analyzer.analyze_logs(logs)
+
+        # Then ask AI for deeper analysis
+        provider = get_provider()
+        ai_prompt = (
+            f"Analyze these deployment logs and provide a diagnosis with fix suggestions.\n"
+            f"Deployment ID: {deployment_id}\n\n"
+            f"Logs:\n```\n{logs[:3000]}\n```\n\n"
+            f"Known issues found by pattern matching: {issues if issues else 'None'}\n\n"
+            f"Provide: 1) Root cause, 2) Fix steps, 3) Prevention tips."
+        )
+        ai_diagnosis = provider.ask(ai_prompt, system_prompt=SYSTEM_PROMPT)
+
+        return Response({
+            'pattern_issues': issues,
+            'ai_diagnosis': ai_diagnosis,
+            'provider': provider.name(),
+        })
+
+    @action(detail=False, methods=['get'])
+    def ai_config(self, request):
+        """
+        Get current AI provider configuration.
+        GET /api/v1/cloud/intelligence/ai_config/
+        """
+        provider = get_provider()
+        providers_list = get_available_providers()
+        return Response({
+            'active_provider': provider.name(),
+            'providers': providers_list,
+        })
+

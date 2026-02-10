@@ -1,0 +1,42 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v1.2.1
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        port: 22
+        timeout: 600s
+        script: |
+          set -e
+          cd /opt/smsly-hosting
+
+          echo "=== Pulling latest code ==="
+          git pull origin main
+
+          echo "=== Rebuilding frontend ==="
+          docker compose -f docker-compose.prod.yml up -d --build --no-deps frontend
+
+          echo "=== Rebuilding backend ==="
+          docker compose -f docker-compose.prod.yml up -d --build --no-deps backend
+
+          echo "=== Restarting nginx ==="
+          docker compose -f docker-compose.prod.yml restart nginx
+
+          echo "=== Running health check ==="
+          sleep 10
+          curl -sf http://localhost/health || echo "WARNING: Health check failed"
+
+          echo "=== Deploy complete ==="
