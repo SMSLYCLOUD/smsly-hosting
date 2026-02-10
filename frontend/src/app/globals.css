@@ -108,38 +108,35 @@
     hsl(var(--background));
 }
 
-/* ===== CLOUD BACKGROUND: "Inside the Cloud" ===== */
+/* ===== CLOUD BACKGROUND: Nebula-Inspired Atmosphere ===== */
 .cloud-bg {
   @apply relative overflow-hidden;
   background:
-    radial-gradient(ellipse 120% 60% at 30% 20%, rgba(255, 255, 255, 0.9) 0%, transparent 50%),
-    radial-gradient(ellipse 100% 80% at 70% 60%, rgba(224, 242, 254, 0.7) 0%, transparent 45%),
-    radial-gradient(ellipse 80% 50% at 10% 70%, rgba(186, 230, 253, 0.5) 0%, transparent 40%),
-    radial-gradient(ellipse 60% 40% at 90% 30%, rgba(207, 250, 254, 0.4) 0%, transparent 35%),
-    radial-gradient(ellipse 140% 100% at 50% 50%, rgba(240, 249, 255, 0.95) 0%, transparent 70%),
-    linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 30%, #f8fafc 60%, #ffffff 100%);
+    radial-gradient(ellipse 100% 80% at 20% 10%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 80% 60% at 80% 30%, rgba(6, 182, 212, 0.06) 0%, transparent 45%),
+    radial-gradient(ellipse 120% 80% at 50% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 10% 60%, rgba(168, 85, 247, 0.04) 0%, transparent 40%),
+    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 30%, #e2e8f0 60%, #f8fafc 100%);
 }
 .dark .cloud-bg {
   background:
-    radial-gradient(ellipse 120% 60% at 30% 20%, rgba(148, 163, 184, 0.08) 0%, transparent 50%),
-    radial-gradient(ellipse 100% 80% at 70% 60%, rgba(56, 189, 248, 0.05) 0%, transparent 45%),
-    radial-gradient(ellipse 80% 50% at 10% 70%, rgba(125, 211, 252, 0.04) 0%, transparent 40%),
-    radial-gradient(ellipse 60% 40% at 90% 30%, rgba(103, 232, 249, 0.03) 0%, transparent 35%),
-    radial-gradient(ellipse 140% 100% at 50% 50%, rgba(15, 23, 42, 0.95) 0%, transparent 70%),
-    linear-gradient(180deg, #0f172a 0%, #0c1526 30%, #0f172a 60%, hsl(var(--background)) 100%);
+    radial-gradient(ellipse 100% 80% at 20% 10%, rgba(139, 92, 246, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse 80% 60% at 80% 30%, rgba(6, 182, 212, 0.08) 0%, transparent 45%),
+    radial-gradient(ellipse 120% 80% at 50% 80%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 10% 60%, rgba(168, 85, 247, 0.05) 0%, transparent 40%),
+    linear-gradient(180deg, #0f172a 0%, #0c0a1a 30%, #0f172a 60%, hsl(var(--background)) 100%);
 }
 
-/* ===== CLOUD WISPS: Slow-Drifting Shapes ===== */
+/* ===== CLOUD WISPS: Slow-Drifting Shapes (No Blur) ===== */
 .cloud-wisp {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.35;
+  opacity: 0.15;
   pointer-events: none;
   animation: cloud-drift 35s ease-in-out infinite alternate;
 }
 .dark .cloud-wisp {
-  opacity: 0.1;
+  opacity: 0.06;
 }
 @keyframes cloud-drift {
   0% { transform: translateX(0) translateY(0) scale(1); }
@@ -149,19 +146,18 @@
   100% { transform: translateX(-10px) translateY(-5px) scale(1); }
 }
 
-/* ===== AURORA BANDS: Magnetic Field Lines (Subliminal) ===== */
+/* ===== AURORA BANDS: Magnetic Field Lines (No Blur) ===== */
 .aurora-band {
   position: absolute;
   width: 200%;
   height: 150px;
   border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.06;
+  opacity: 0.08;
   pointer-events: none;
   animation: aurora-flow 40s ease-in-out infinite alternate;
 }
 .dark .aurora-band {
-  opacity: 0.10;
+  opacity: 0.12;
 }
 @keyframes aurora-flow {
   0% { transform: translateX(-5%) skewY(-1deg) scaleX(1); }
@@ -186,15 +182,14 @@
   opacity: 0.05 !important;
 }
 
-/* ===== RISING MIST: Upward Subliminal Particles ===== */
+/* ===== RISING MIST: Upward Subliminal Particles (No Blur) ===== */
 .rising-mist {
   position: absolute;
   width: 3px;
   height: 40px;
   border-radius: 50%;
-  opacity: 0.04;
+  opacity: 0.06;
   pointer-events: none;
-  filter: blur(1px);
   animation: mist-rise linear infinite;
 }
 .dark .rising-mist {
