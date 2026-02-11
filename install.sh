@@ -38,6 +38,11 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
     fi
+
+    SCRIPT_PATH="$(readlink -f "$0")"
+    SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+    SCRIPT_ARGS="$*"
+
     echo -e "\033[1;33m"
     echo "═══════════════════════════════════════════════════════════"
     echo "  Running inside a screen session for safety."
@@ -45,8 +50,9 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     echo "    screen -r cloudneuron-install"
     echo "═══════════════════════════════════════════════════════════"
     echo -e "\033[0m"
-    exec screen -dmS cloudneuron-install bash -c "SKIP_SCREEN=1 bash $0 $*; exec bash"
-    # Note: 'exec bash' keeps screen alive after script finishes so you can see output
+
+    # Stay ATTACHED (no -dm), use absolute path, set correct working directory
+    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; SKIP_SCREEN=1 bash '$SCRIPT_PATH' $SCRIPT_ARGS; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
 fi
 
 # Colors
