@@ -26,6 +26,9 @@ done
 echo "Collecting static files..."
 python manage.py collectstatic --noinput 2>&1 || echo "⚠ Static files collection failed (non-critical)"
 
-# Start Server (WSGI with gunicorn)
-echo "Starting server on port ${PORT:-8000}..."
-exec gunicorn --bind 0.0.0.0:${PORT:-8000} config.wsgi:application --workers ${WORKERS:-4} --timeout 120
+# Execute the CMD passed from Dockerfile or docker-compose command:
+# - backend: gunicorn (default CMD in Dockerfile)
+# - celery: celery worker (from docker-compose command:)
+# - celery-beat: celery beat (from docker-compose command:)
+echo "Starting: $@"
+exec "$@"
