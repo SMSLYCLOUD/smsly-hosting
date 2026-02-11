@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
-export default function AuthCallbackPage() {
+// Prevent static prerendering — this page needs runtime URL params
+export const dynamic = "force-dynamic";
+
+function CallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -35,5 +38,17 @@ export default function AuthCallbackPage() {
         <p className="text-muted-foreground font-medium">Authenticating...</p>
       </div>
     </div>
+  );
+}
+
+export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <Loader2 className="h-10 w-10 text-emerald-600 animate-spin" />
+      </div>
+    }>
+      <CallbackContent />
+    </Suspense>
   );
 }
