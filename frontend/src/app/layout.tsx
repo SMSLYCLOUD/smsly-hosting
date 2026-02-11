@@ -9,7 +9,7 @@ import { AuthProvider } from "@/components/auth-provider";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: "SMSLY Cloud",
+  title: "CloudNeuron",
   description: "Next-gen hosting platform",
 };
 

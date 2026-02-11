@@ -24,11 +24,11 @@ export default function RegisterPage() {
             <Card className="w-full max-w-md card-premium rounded-2xl relative z-10">
                 <CardHeader className="text-center space-y-2">
                     <div className="mx-auto mb-4">
-                        <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto mx-auto" />
+                        <Image src="/images/logo.png" alt="CloudNeuron" width={120} height={40} className="h-10 w-auto mx-auto" />
                     </div>
                     <CardTitle className="text-2xl font-bold tracking-tight">Create your account</CardTitle>
                     <CardDescription>
-                        Sign up for SMSLY Hosting to deploy your applications.
+                        Sign up for CloudNeuron to deploy your applications.
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">

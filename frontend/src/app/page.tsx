@@ -551,7 +551,7 @@ $ smsly deploy
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-4">Loved by Developers</h2>
                         <p className="text-lg text-slate-600 dark:text-slate-400">
-                            Join thousands of teams shipping faster with SMSLY Cloud.
+                            Join thousands of teams shipping faster with CloudNeuron.
                         </p>
                     </div>
 
@@ -589,7 +589,7 @@ $ smsly deploy
             <section className="py-24 bg-slate-900 text-white">
                 <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16">
-                        <h2 className="text-3xl md:text-4xl font-extrabold mb-4">The SMSLY Advantage</h2>
+                        <h2 className="text-3xl md:text-4xl font-extrabold mb-4">The CloudNeuron Advantage</h2>
                         <p className="text-lg text-slate-400 max-w-2xl mx-auto">
                             Why modern teams are switching from legacy hosting providers.
                         </p>
@@ -601,7 +601,7 @@ $ smsly deploy
                                 <tr className="bg-slate-800 border-b border-slate-700">
                                     <th className="px-6 py-4 text-sm font-semibold text-slate-300 uppercase tracking-wider">Feature</th>
                                     <th className="px-6 py-4 text-sm font-semibold text-slate-400 uppercase tracking-wider">Traditional PaaS</th>
-                                    <th className="px-6 py-4 text-sm font-semibold text-emerald-400 uppercase tracking-wider">SMSLY Cloud</th>
+                                    <th className="px-6 py-4 text-sm font-semibold text-emerald-400 uppercase tracking-wider">CloudNeuron</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -633,7 +633,7 @@ $ smsly deploy
                 <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
                     <h2 className="text-4xl md:text-5xl font-extrabold mb-6">Ready to Deploy?</h2>
                     <p className="text-xl mb-10 text-white/80 max-w-2xl mx-auto">
-                        Join thousands of developers shipping faster with SMSLY Cloud.
+                        Join thousands of developers shipping faster with CloudNeuron.
                         Start free, scale infinitely.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -654,10 +654,10 @@ $ smsly deploy
                         <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center">
                             <Cloud className="w-4 h-4 text-white" />
                         </div>
-                        <span className="font-bold text-slate-900 dark:text-white">SMSLY Cloud</span>
+                        <span className="font-bold text-slate-900 dark:text-white">CloudNeuron</span>
                     </div>
                     <div className="text-slate-500 dark:text-slate-400 text-sm">
-                        © 2026 SMSLY Cloud. Built for developers.
+                        © 2026 CloudNeuron. Built for developers.
                     </div>
                     <div className="flex items-center gap-6 text-sm text-slate-500 dark:text-slate-400">
                         <Link href="/docs" className="hover:text-slate-900 dark:hover:text-white transition-colors">Docs</Link>
