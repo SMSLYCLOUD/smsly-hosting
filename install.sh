@@ -27,8 +27,9 @@
 
 set -euo pipefail
 
-# Ensure we start in a valid directory (prevents getcwd errors if CWD was deleted)
-cd /root 2>/dev/null || cd /
+# ─── Resolve script path BEFORE any cd (screen guard needs absolute path) ────
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 # ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
 # If not already inside a screen session, re-launch inside one.
@@ -39,10 +40,6 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
     fi
 
-    SCRIPT_PATH="$(readlink -f "$0")"
-    SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
-    SCRIPT_ARGS="$*"
-
     echo -e "\033[1;33m"
     echo "═══════════════════════════════════════════════════════════"
     echo "  Running inside a screen session for safety."
@@ -52,8 +49,11 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     echo -e "\033[0m"
 
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; SKIP_SCREEN=1 bash '$SCRIPT_PATH' $SCRIPT_ARGS; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
+    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; SKIP_SCREEN=1 bash '$SCRIPT_PATH' $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
 fi
+
+# Ensure we start in a valid directory (prevents getcwd errors if CWD was deleted)
+cd /root 2>/dev/null || cd /
 
 # Colors
 GREEN='\033[0;32m'
