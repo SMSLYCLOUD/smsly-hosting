@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Activity, Server, Box, DollarSign } from 'lucide-react';
 
 export default function AdminDashboardPage() {
@@ -25,8 +25,7 @@ export default function AdminDashboardPage() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-background flex flex-col">
-      <Navbar />
+    <DashboardShell>
 
       <div className="flex-1 p-6 md:p-12 max-w-7xl mx-auto w-full">
         <h1 className="text-3xl font-bold mb-8 text-foreground">Operator Command Center</h1>
@@ -81,7 +80,7 @@ export default function AdminDashboardPage() {
             </div>
         </div>
       </div>
-    </main>
+    </DashboardShell>
   );
 }
 

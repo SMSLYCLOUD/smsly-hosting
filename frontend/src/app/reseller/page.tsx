@@ -1,13 +1,12 @@
 'use client';
 
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Users, DollarSign, Activity, Settings } from 'lucide-react';
 
 export default function ResellerPage() {
     return (
-        <main className="min-h-screen flex flex-col bg-background">
-            <Navbar />
+        <DashboardShell>
             <div className="container mx-auto py-10">
                 <div className="flex justify-between items-center mb-8">
                     <div>
@@ -59,6 +58,6 @@ export default function ResellerPage() {
                     </Card>
                 </div>
             </div>
-        </main>
+        </DashboardShell>
     );
 }

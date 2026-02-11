@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import dynamic from 'next/dynamic';
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { servicesApi, Service } from '@/lib/api';
 
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
@@ -70,8 +70,7 @@ export default function TopologyPage() {
     }, []);
 
     return (
-        <main className="flex min-h-screen flex-col bg-background">
-            <Navbar />
+        <DashboardShell>
 
             <div className="relative flex-1 bg-black overflow-hidden">
                 <div className="absolute top-4 left-4 z-10 pointer-events-none">
@@ -114,6 +113,6 @@ export default function TopologyPage() {
                 )}
             </div>
 
-        </main>
+        </DashboardShell>
     );
 }

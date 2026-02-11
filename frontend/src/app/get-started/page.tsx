@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Bot, User, Loader2 } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -47,10 +47,9 @@ export default function LivingOnboarding() {
     };
 
     return (
-        <main className="min-h-screen bg-background font-sans flex flex-col">
-            <Navbar />
+        <DashboardShell>
 
-            <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden bg-dot-pattern">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden">
 
                 <div className="max-w-3xl w-full z-10 space-y-8">
 
@@ -87,6 +86,6 @@ export default function LivingOnboarding() {
                     </Button>
                 </div>
             </div>
-        </main>
+        </DashboardShell>
     );
 }

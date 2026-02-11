@@ -4,7 +4,7 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 import { Github, Box, Layers, ArrowRight, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Navbar } from "@/components/layout/Navbar"
+import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -122,12 +122,7 @@ export default function NewServicePage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col premium-bg">
-      <Navbar />
-      {/* Floating Gradient Orbs */}
-      <div className="floating-orb w-[450px] h-[450px] bg-emerald-500/8 -top-24 -left-24" style={{ animationDelay: '0s' }} />
-      <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 bottom-10 -right-16" style={{ animationDelay: '5s' }} />
-      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+    <DashboardShell>
     <div className="container max-w-4xl py-10 relative z-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
@@ -293,7 +288,7 @@ export default function NewServicePage() {
         </div>
       </div>
     </div>
-    </main>
+    </DashboardShell>
   )
 }
 

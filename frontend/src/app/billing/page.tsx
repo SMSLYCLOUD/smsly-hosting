@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Check, CreditCard, Download } from 'lucide-react';
@@ -10,8 +10,7 @@ export default function BillingPage() {
   const [selectedPlan, setSelectedPlan] = useState('pro');
 
   return (
-    <main className="min-h-screen bg-background font-sans">
-      <Navbar />
+    <DashboardShell>
 
       <div className="container max-w-6xl mx-auto p-6 space-y-12">
 
@@ -76,6 +75,6 @@ export default function BillingPage() {
             </Card>
         </section>
       </div>
-    </main>
+    </DashboardShell>
   );
 }

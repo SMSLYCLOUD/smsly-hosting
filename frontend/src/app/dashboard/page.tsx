@@ -7,7 +7,7 @@ import { servicesApi, Service } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { Navbar } from "@/components/layout/Navbar";
+import { DashboardShell } from "@/components/layout/DashboardShell";
 import { useAuth } from "@/components/auth-provider";
 
 const fadeInUp = {
@@ -114,8 +114,7 @@ export default function DashboardPage() {
 
 
   return (
-    <main className="min-h-screen flex flex-col transition-colors duration-500">
-      <Navbar />
+    <DashboardShell>
 
       <div className="flex-1 p-8 relative z-10">
     <motion.div
@@ -309,7 +308,7 @@ export default function DashboardPage() {
       </div>
     </motion.div>
       </div>
-    </main>
+    </DashboardShell>
   );
 }
 

@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Rocket, Clock, CheckCircle, XCircle, Loader2, RefreshCw, ExternalLink } from "lucide-react";
 import api from "@/lib/api";
 import { motion } from "framer-motion";
-import { Navbar } from "@/components/layout/Navbar";
+import { DashboardShell } from "@/components/layout/DashboardShell";
 
 interface Deployment {
   id: string;
@@ -76,24 +76,18 @@ export default function DeploymentsPage() {
 
   if (loading) {
     return (
-      <main className="min-h-screen flex flex-col premium-bg">
-        <Navbar />
+      <DashboardShell>
         <div className="container mx-auto py-10 relative z-10">
           <div className="flex items-center justify-center h-64">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         </div>
-      </main>
+      </DashboardShell>
     );
   }
 
   return (
-    <main className="min-h-screen flex flex-col premium-bg">
-      <Navbar />
-      {/* Floating Gradient Orbs */}
-      <div className="floating-orb w-[400px] h-[400px] bg-emerald-500/8 -top-20 -right-24" style={{ animationDelay: '0s' }} />
-      <div className="floating-orb w-[300px] h-[300px] bg-cyan-500/6 bottom-32 -left-16" style={{ animationDelay: '7s' }} />
-      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+    <DashboardShell>
     <div className="container mx-auto py-10 relative z-10">
       <PageHeader
         title="Deployments"
@@ -178,6 +172,6 @@ export default function DeploymentsPage() {
         </div>
       )}
     </div>
-    </main>
+    </DashboardShell>
   );
 }

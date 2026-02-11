@@ -29,7 +29,7 @@ export default function ServicesPage() {
   }, []);
 
   return (
-    <main className="h-screen flex flex-col bg-background transition-colors duration-500">
+    <main className="h-screen flex flex-col premium-bg transition-colors duration-500">
       <Navbar />
 
       {/* View Toggle Bar */}

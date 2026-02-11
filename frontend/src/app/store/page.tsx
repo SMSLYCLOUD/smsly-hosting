@@ -6,7 +6,7 @@ import { Database, Layout, Box, Globe, Cpu, Search, Server, Cloud, Activity } fr
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Navbar } from '@/components/layout/Navbar';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 import { templatesApi } from '@/lib/api';
 
 const categories = [
@@ -67,8 +67,7 @@ export default function AppStorePage() {
     );
 
     return (
-        <main className="min-h-screen bg-background text-foreground font-sans">
-            <Navbar />
+        <DashboardShell>
 
             {/* Hero / Search */}
             <section className="border-b bg-muted/40 py-12">
@@ -141,6 +140,6 @@ export default function AppStorePage() {
                     </div>
                 )}
             </section>
-        </main>
+        </DashboardShell>
     );
 }

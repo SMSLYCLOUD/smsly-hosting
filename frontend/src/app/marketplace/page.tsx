@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
+import { DashboardShell } from "@/components/layout/DashboardShell"
 
 // Types
 interface Service {
@@ -207,6 +208,7 @@ export default function MarketplacePage() {
     if (isLoading) return <div className="p-8 text-center text-muted-foreground">Loading marketplace...</div>
 
     return (
+        <DashboardShell>
         <div className="container py-8 space-y-8">
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Marketplace</h1>
@@ -367,5 +369,6 @@ export default function MarketplacePage() {
                 </DialogContent>
             </Dialog>
         </div>
+        </DashboardShell>
     )
 }

@@ -12,7 +12,7 @@ import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Chec
 import { useToast } from "@/components/ui/use-toast";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Navbar } from "@/components/layout/Navbar";
+import { DashboardShell } from "@/components/layout/DashboardShell";
 
 interface CloudProvider {
   id: string;
@@ -132,12 +132,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <main className="min-h-screen flex flex-col premium-bg">
-      <Navbar />
-      {/* Floating Gradient Orbs */}
-      <div className="floating-orb w-[400px] h-[400px] bg-emerald-500/8 -top-20 -right-20" style={{ animationDelay: '0s' }} />
-      <div className="floating-orb w-[300px] h-[300px] bg-cyan-500/6 bottom-20 -left-16" style={{ animationDelay: '6s' }} />
-      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+    <DashboardShell>
     <div className="container mx-auto py-10 max-w-4xl relative z-10">
       <PageHeader
         title="Settings"
@@ -432,6 +427,6 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
     </div>
-    </main>
+    </DashboardShell>
   );
 }
