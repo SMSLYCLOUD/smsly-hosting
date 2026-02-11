@@ -279,14 +279,45 @@ echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[2/8] Installing dependencies...${NC}"
 
-# Stop conflicting services if present
-for svc in nginx apache2; do
+# Stop conflicting services if present (anything that holds port 80/443)
+for svc in nginx apache2 caddy; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
         systemctl stop "$svc" || true
         systemctl disable "$svc" || true
     fi
 done
+
+# ─── NUCLEAR CLEANUP: Remove ALL stale SMSLY containers, volumes, networks ──
+# This prevents: port conflicts, stale DB password volumes, orphan containers
+echo -e "${BLUE}  → Cleaning up previous SMSLY installation artifacts...${NC}"
+
+# Stop and remove all smsly-hosting containers (including orphans)
+SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly" -q 2>/dev/null || true)
+if [ -n "$SMSLY_CONTAINERS" ]; then
+    echo -e "${YELLOW}  → Stopping ${#SMSLY_CONTAINERS} SMSLY container(s)...${NC}"
+    docker stop $SMSLY_CONTAINERS 2>/dev/null || true
+    docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
+fi
+
+# Remove stale Docker volumes (postgres data with old passwords, etc.)
+SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q 2>/dev/null || true)
+if [ -n "$SMSLY_VOLUMES" ]; then
+    echo -e "${YELLOW}  → Removing stale SMSLY volumes (fresh DB will be created)...${NC}"
+    for vol in $SMSLY_VOLUMES; do
+        docker volume rm "$vol" 2>/dev/null || true
+    done
+fi
+
+# Remove stale Docker networks
+SMSLY_NETWORKS=$(docker network ls --filter "name=smsly" -q 2>/dev/null || true)
+if [ -n "$SMSLY_NETWORKS" ]; then
+    for net in $SMSLY_NETWORKS; do
+        docker network rm "$net" 2>/dev/null || true
+    done
+fi
+
+echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
 apt-get update -qq
 apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
@@ -563,16 +594,11 @@ if [ -f "$INSTALL_DIR/backend/entrypoint.sh" ]; then
     chmod +x "$INSTALL_DIR/backend/entrypoint.sh"
 fi
 
-if [ "$USE_SSL" = "true" ]; then
-    echo -e "${BLUE}  → Starting Traefik (SSL Proxy)...${NC}"
-    docker compose -f docker-compose.traefik.yml up -d
-
-    echo -e "${BLUE}  → Starting App Stack (Attached to Proxy)...${NC}"
-    docker compose -f "$COMPOSE_FILE" -f docker-compose.traefik-adapter.yml up -d --build --force-recreate
-else
-    echo -e "${BLUE}  → Starting App Stack (Standard)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate
-fi
+# Both IP and SSL modes use the same compose stack.
+# Caddy (step 7) handles public-facing HTTP/HTTPS termination.
+# Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
+echo -e "${BLUE}  → Starting App Stack...${NC}"
+docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 
 # -----------------------------------------------------------------------------
 # 5. Database Setup
@@ -626,11 +652,23 @@ docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
 sleep 5
 
 echo -e "${BLUE}  → Running Migrations...${NC}"
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
-    echo -e "${YELLOW}  ⚠ Migration failed — waiting for backend to stabilize...${NC}"
-    sleep 15
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
-}
+MIGRATE_OK=false
+for attempt in 1 2 3; do
+    if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
+        MIGRATE_OK=true
+        break
+    fi
+    WAIT=$((attempt * 10))
+    echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
+    docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
+    sleep "$WAIT"
+done
+
+if [ "$MIGRATE_OK" != "true" ]; then
+    echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
+    echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
+    exit 1
+fi
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
 # Fix volume ownership — Docker creates named volumes as root
@@ -700,9 +738,27 @@ CADDYEOF
     echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
 fi
 
+# Kill anything holding port 80/443 before Caddy binds
+for port in 80 443; do
+    PID=$(lsof -ti :$port 2>/dev/null || ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' || true)
+    if [ -n "$PID" ] && [ "$PID" != "0" ]; then
+        echo -e "${YELLOW}  → Killing process holding port $port (PID: $PID)${NC}"
+        kill -9 $PID 2>/dev/null || true
+        sleep 1
+    fi
+done
+
 systemctl restart caddy
 systemctl enable caddy >/dev/null 2>&1
-echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
+
+# Verify Caddy is running
+sleep 2
+if systemctl is-active --quiet caddy; then
+    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
+else
+    echo -e "${RED}  ✗ Caddy failed to start. Check: journalctl -u caddy --no-pager -n 20${NC}"
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # 8. Verification
