@@ -10,9 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import api from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
+import api, { systemApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface CloudProvider {
   id: string;
@@ -38,11 +40,22 @@ export default function SettingsPage() {
   const [savingAI, setSavingAI] = useState(false);
   const [testingAI, setTestingAI] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [systemConfig, setSystemConfig] = useState<any>(null);
 
   useEffect(() => {
     fetchProviders();
     fetchAIConfig();
+    fetchSystemConfig();
   }, []);
+
+  const fetchSystemConfig = async () => {
+    try {
+      const config = await systemApi.getConfig();
+      setSystemConfig(config);
+    } catch (err) {
+      console.error("Failed to fetch system config", err);
+    }
+  };
 
   const fetchAIConfig = async () => {
     try {
@@ -158,6 +171,9 @@ export default function SettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="ai" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" /> AI
+          </TabsTrigger>
+          <TabsTrigger value="system" className="flex items-center gap-2">
+            <SettingsIcon className="h-4 w-4" /> System
           </TabsTrigger>
         </TabsList>
 
@@ -424,6 +440,80 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+        <TabsContent value="system">
+          <Card>
+            <CardHeader>
+              <CardTitle>System Configuration</CardTitle>
+              <CardDescription>Server-side configuration variables (Read-only).</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {systemConfig ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Variable</TableHead>
+                      <TableHead>Value</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell className="font-mono">VERSION</TableCell>
+                      <TableCell>{systemConfig.VERSION}</TableCell>
+                      <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono">DEBUG_MODE</TableCell>
+                      <TableCell>{systemConfig.DEBUG ? "Enabled" : "Disabled"}</TableCell>
+                      <TableCell>
+                        <Badge variant={systemConfig.DEBUG ? "destructive" : "default"}>
+                          {systemConfig.DEBUG ? "Unsafe" : "Secure"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono">DOMAIN</TableCell>
+                      <TableCell>{systemConfig.DOMAIN}</TableCell>
+                      <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono">SSL_ENABLED</TableCell>
+                      <TableCell>{systemConfig.USE_SSL ? "True" : "False"}</TableCell>
+                      <TableCell>
+                        <Badge variant={systemConfig.USE_SSL ? "default" : "secondary"}>
+                          {systemConfig.USE_SSL ? "Secure" : "Insecure"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono">ALLOWED_HOSTS</TableCell>
+                      <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.ALLOWED_HOSTS)}>
+                        {Array.isArray(systemConfig.ALLOWED_HOSTS) ? systemConfig.ALLOWED_HOSTS.join(", ") : String(systemConfig.ALLOWED_HOSTS)}
+                      </TableCell>
+                      <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-mono">CORS_ORIGINS</TableCell>
+                      <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CORS_ALLOWED_ORIGINS)}>
+                        {Array.isArray(systemConfig.CORS_ALLOWED_ORIGINS) ? systemConfig.CORS_ALLOWED_ORIGINS.join(", ") : String(systemConfig.CORS_ALLOWED_ORIGINS)}
+                      </TableCell>
+                      <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                    </TableRow>
+                     <TableRow>
+                      <TableCell className="font-mono">TIME_ZONE</TableCell>
+                      <TableCell>{systemConfig.TIME_ZONE}</TableCell>
+                      <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

@@ -182,4 +182,11 @@ export const templatesApi = {
   }
 };
 
+export const systemApi = {
+  getConfig: async (): Promise<any> => {
+    const response = await api.get('/system/config/');
+    return response.data;
+  }
+};
+
 export default api;

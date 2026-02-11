@@ -43,6 +43,9 @@ else:
 # SECURITY: No wildcard default - prevents host header injection
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
 
+DOMAIN = config('DOMAIN', default='localhost')
+
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
