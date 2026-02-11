@@ -24,6 +24,9 @@
 
 set -euo pipefail
 
+# Ensure we start in a valid directory (prevents getcwd errors if CWD was deleted)
+cd /root 2>/dev/null || cd /
+
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
