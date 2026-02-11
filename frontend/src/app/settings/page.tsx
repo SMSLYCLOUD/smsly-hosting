@@ -8,12 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { OAuthTab } from "@/components/settings/OAuthTab";
 
 interface CloudProvider {
   id: string;
@@ -155,21 +156,27 @@ export default function SettingsPage() {
       />
 
       <Tabs defaultValue="profile" className="space-y-6">
-        <TabsList className="grid grid-cols-6 w-full">
+        <TabsList className="grid grid-cols-4 md:grid-cols-8 w-full">
           <TabsTrigger value="profile" className="flex items-center gap-2">
             <User className="h-4 w-4" /> Profile
           </TabsTrigger>
           <TabsTrigger value="notifications" className="flex items-center gap-2">
-            <Bell className="h-4 w-4" /> Notifications
+            <Bell className="h-4 w-4" /> Alerts
           </TabsTrigger>
           <TabsTrigger value="security" className="flex items-center gap-2">
             <Shield className="h-4 w-4" /> Security
           </TabsTrigger>
           <TabsTrigger value="providers" className="flex items-center gap-2">
-            <Cloud className="h-4 w-4" /> Providers
+            <Cloud className="h-4 w-4" /> Cloud
           </TabsTrigger>
           <TabsTrigger value="ai" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" /> AI
+          </TabsTrigger>
+          <TabsTrigger value="oauth" className="flex items-center gap-2">
+            <Key className="h-4 w-4" /> OAuth
+          </TabsTrigger>
+          <TabsTrigger value="infra" className="flex items-center gap-2">
+            <Server className="h-4 w-4" /> Infra
           </TabsTrigger>
           <TabsTrigger value="system" className="flex items-center gap-2">
             <SettingsIcon className="h-4 w-4" /> System
@@ -440,79 +447,294 @@ export default function SettingsPage() {
             </Card>
           </div>
         </TabsContent>
+        {/* OAuth Configuration Tab */}
+        <TabsContent value="oauth">
+          <OAuthTab />
+        </TabsContent>
+
+        {/* Infrastructure Tab */}
+        <TabsContent value="infra">
+          {systemConfig ? (
+            <div className="space-y-6">
+              {/* Redis / Celery */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Server className="h-5 w-5 text-orange-500" /> Redis & Celery</CardTitle>
+                  <CardDescription>Task queue and caching infrastructure.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">REDIS_HOST</TableCell>
+                        <TableCell>{systemConfig.REDIS_HOST}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">REDIS_PORT</TableCell>
+                        <TableCell>{systemConfig.REDIS_PORT}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">REDIS_PASSWORD</TableCell>
+                        <TableCell>{systemConfig.REDIS_PASSWORD_SET ? "Set" : "Not set"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.REDIS_PASSWORD_SET ? "default" : "secondary"}>{systemConfig.REDIS_PASSWORD_SET ? "Secure" : "Unprotected"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CELERY_BACKEND</TableCell>
+                        <TableCell>{systemConfig.CELERY_RESULT_BACKEND}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Container Registry */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-blue-500" /> Container Registry</CardTitle>
+                  <CardDescription>Docker image registry for deployments.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">REGISTRY_URL</TableCell>
+                        <TableCell>{systemConfig.CONTAINER_REGISTRY_URL || "Not set"}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">REGISTRY_USER</TableCell>
+                        <TableCell>{systemConfig.REGISTRY_USER}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">REGISTRY_PASSWORD</TableCell>
+                        <TableCell>{systemConfig.REGISTRY_PASSWORD_SET ? "Set" : "Not set"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.REGISTRY_PASSWORD_SET ? "default" : "secondary"}>{systemConfig.REGISTRY_PASSWORD_SET ? "Secure" : "Missing"}</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Rate Limiting */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-yellow-500" /> Rate Limiting</CardTitle>
+                  <CardDescription>API throttle rates per client type.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Scope</TableHead><TableHead>Limit</TableHead><TableHead>Type</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {systemConfig.THROTTLE_RATES && Object.entries(systemConfig.THROTTLE_RATES).map(([key, value]) => (
+                        <TableRow key={key}>
+                          <TableCell className="font-mono">{key}</TableCell>
+                          <TableCell>{String(value)}</TableCell>
+                          <TableCell><Badge variant="outline">Throttle</Badge></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Database */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><SettingsIcon className="h-5 w-5 text-purple-500" /> Database</CardTitle>
+                  <CardDescription>Database connection info (read-only).</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">ENGINE</TableCell>
+                        <TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_ENGINE}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">DATABASE</TableCell>
+                        <TableCell>{systemConfig.DATABASE_NAME}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">HOST</TableCell>
+                        <TableCell>{systemConfig.DATABASE_HOST}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+          )}
+        </TabsContent>
+
+        {/* System Config Tab (General + Security + Network + Auth) */}
         <TabsContent value="system">
-          <Card>
-            <CardHeader>
-              <CardTitle>System Configuration</CardTitle>
-              <CardDescription>Server-side configuration variables (Read-only).</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {systemConfig ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Variable</TableHead>
-                      <TableHead>Value</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <TableRow>
-                      <TableCell className="font-mono">VERSION</TableCell>
-                      <TableCell>{systemConfig.VERSION}</TableCell>
-                      <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono">DEBUG_MODE</TableCell>
-                      <TableCell>{systemConfig.DEBUG ? "Enabled" : "Disabled"}</TableCell>
-                      <TableCell>
-                        <Badge variant={systemConfig.DEBUG ? "destructive" : "default"}>
-                          {systemConfig.DEBUG ? "Unsafe" : "Secure"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono">DOMAIN</TableCell>
-                      <TableCell>{systemConfig.DOMAIN}</TableCell>
-                      <TableCell><Badge variant="outline">Config</Badge></TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono">SSL_ENABLED</TableCell>
-                      <TableCell>{systemConfig.USE_SSL ? "True" : "False"}</TableCell>
-                      <TableCell>
-                        <Badge variant={systemConfig.USE_SSL ? "default" : "secondary"}>
-                          {systemConfig.USE_SSL ? "Secure" : "Insecure"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono">ALLOWED_HOSTS</TableCell>
-                      <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.ALLOWED_HOSTS)}>
-                        {Array.isArray(systemConfig.ALLOWED_HOSTS) ? systemConfig.ALLOWED_HOSTS.join(", ") : String(systemConfig.ALLOWED_HOSTS)}
-                      </TableCell>
-                      <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                    </TableRow>
-                    <TableRow>
-                      <TableCell className="font-mono">CORS_ORIGINS</TableCell>
-                      <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CORS_ALLOWED_ORIGINS)}>
-                        {Array.isArray(systemConfig.CORS_ALLOWED_ORIGINS) ? systemConfig.CORS_ALLOWED_ORIGINS.join(", ") : String(systemConfig.CORS_ALLOWED_ORIGINS)}
-                      </TableCell>
-                      <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                    </TableRow>
-                     <TableRow>
-                      <TableCell className="font-mono">TIME_ZONE</TableCell>
-                      <TableCell>{systemConfig.TIME_ZONE}</TableCell>
-                      <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              ) : (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {systemConfig ? (
+            <div className="space-y-6">
+              {/* General */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>General</CardTitle>
+                  <CardDescription>Core platform settings.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">VERSION</TableCell>
+                        <TableCell>{systemConfig.VERSION}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">DEBUG</TableCell>
+                        <TableCell>{systemConfig.DEBUG ? "Enabled" : "Disabled"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.DEBUG ? "destructive" : "default"}>{systemConfig.DEBUG ? "Unsafe" : "Secure"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">DOMAIN</TableCell>
+                        <TableCell>{systemConfig.DOMAIN}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">TIME_ZONE</TableCell>
+                        <TableCell>{systemConfig.TIME_ZONE}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SITE_ID</TableCell>
+                        <TableCell>{systemConfig.SITE_ID}</TableCell>
+                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Security */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-red-500" /> Security</CardTitle>
+                  <CardDescription>TLS, HSTS, cookies, and signature verification.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">SSL_REDIRECT</TableCell>
+                        <TableCell>{systemConfig.SECURE_SSL_REDIRECT ? "Enabled" : "Disabled"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.SECURE_SSL_REDIRECT ? "default" : "secondary"}>{systemConfig.SECURE_SSL_REDIRECT ? "Secure" : "Insecure"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">HSTS</TableCell>
+                        <TableCell>{systemConfig.SECURE_HSTS_SECONDS ? `${systemConfig.SECURE_HSTS_SECONDS}s` : "Disabled"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.SECURE_HSTS_SECONDS ? "default" : "secondary"}>{systemConfig.SECURE_HSTS_SECONDS ? "Active" : "Off"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">HSTS_SUBDOMAINS</TableCell>
+                        <TableCell>{systemConfig.SECURE_HSTS_INCLUDE_SUBDOMAINS ? "Yes" : "No"}</TableCell>
+                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">HSTS_PRELOAD</TableCell>
+                        <TableCell>{systemConfig.SECURE_HSTS_PRELOAD ? "Yes" : "No"}</TableCell>
+                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SESSION_COOKIE_SECURE</TableCell>
+                        <TableCell>{systemConfig.SESSION_COOKIE_SECURE ? "Yes" : "No"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.SESSION_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.SESSION_COOKIE_SECURE ? "Secure" : "Insecure"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CSRF_COOKIE_SECURE</TableCell>
+                        <TableCell>{systemConfig.CSRF_COOKIE_SECURE ? "Yes" : "No"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.CSRF_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.CSRF_COOKIE_SECURE ? "Secure" : "Insecure"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SIGNATURE_CHECK</TableCell>
+                        <TableCell>{systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "Disabled" : "Enabled"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "destructive" : "default"}>{systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "Unsafe" : "Secure"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">WEBHOOK_SECRET</TableCell>
+                        <TableCell>{systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "Set" : "Not set"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "default" : "destructive"}>{systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "Secure" : "Missing"}</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Network */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Network & CORS</CardTitle>
+                  <CardDescription>Allowed hosts, CORS origins, and CSRF trusted origins.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">ALLOWED_HOSTS</TableCell>
+                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.ALLOWED_HOSTS)}>{Array.isArray(systemConfig.ALLOWED_HOSTS) ? systemConfig.ALLOWED_HOSTS.join(", ") : String(systemConfig.ALLOWED_HOSTS)}</TableCell>
+                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CORS_ORIGINS</TableCell>
+                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CORS_ALLOWED_ORIGINS)}>{Array.isArray(systemConfig.CORS_ALLOWED_ORIGINS) ? systemConfig.CORS_ALLOWED_ORIGINS.join(", ") : String(systemConfig.CORS_ALLOWED_ORIGINS)}</TableCell>
+                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CSRF_ORIGINS</TableCell>
+                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CSRF_TRUSTED_ORIGINS)}>{Array.isArray(systemConfig.CSRF_TRUSTED_ORIGINS) ? systemConfig.CSRF_TRUSTED_ORIGINS.join(", ") : String(systemConfig.CSRF_TRUSTED_ORIGINS)}</TableCell>
+                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Auth */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Authentication</CardTitle>
+                  <CardDescription>Login method and redirect configuration.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">AUTH_METHOD</TableCell>
+                        <TableCell>{systemConfig.ACCOUNT_AUTH_METHOD}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">LOGIN_REDIRECT</TableCell>
+                        <TableCell>{systemConfig.LOGIN_REDIRECT_URL}</TableCell>
+                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+          )}
         </TabsContent>
       </Tabs>
     </div>
