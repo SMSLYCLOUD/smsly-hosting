@@ -17,8 +17,6 @@ class SecurityMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
         self.secret_key = getattr(settings, 'SECRET_KEY', '')
-        # Allow disabling signature check in dev ONLY if explicitly set
-        self.enforce_signature = not getattr(settings, 'DEBUG', False)
         
         # Exempt routes (Health checks, Auth callbacks, Admin)
         self.exempt_routes = [
@@ -42,6 +40,16 @@ class SecurityMiddleware:
 
         response = self.get_response(request)
         return response
+
+    @property
+    def enforce_signature(self):
+        """
+        Determine if signature verification should be enforced.
+        Checks settings dynamically to support test overrides.
+        """
+        if getattr(settings, 'SMSLY_DISABLE_SIGNATURE_CHECK', False):
+            return False
+        return not getattr(settings, 'DEBUG', False)
 
     def _should_verify_signature(self, request):
         """

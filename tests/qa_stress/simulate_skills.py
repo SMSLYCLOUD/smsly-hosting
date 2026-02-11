@@ -25,11 +25,11 @@ def test_chart_skill():
         plt.legend()
         plt.grid(True)
 
-        chart_path = os.path.join(OUTPUT_DIR, "test_chart.png")
-        plt.savefig(chart_path)
+        output_path = os.path.join(OUTPUT_DIR, "test_chart.png")
+        plt.savefig(output_path)
         plt.close()
-        print(f"✅ Chart created at {chart_path}")
-        return chart_path
+        print(f"✅ Chart created at {output_path}")
+        return output_path
     except Exception as e:
         print(f"❌ Chart creation failed: {e}")
         return None
