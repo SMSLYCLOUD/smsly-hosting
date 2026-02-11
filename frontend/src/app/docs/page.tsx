@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Search, BookOpen, Rocket, Settings, Code, Shield, Database, Terminal, ArrowRight, FileText, Server, Globe } from 'lucide-react';
+import { Search, BookOpen, Rocket, Settings, Code, Shield, Database, Terminal, ArrowRight, FileText, Server, Globe, Download, RefreshCw, HardDrive, Key, Wrench } from 'lucide-react';
 import { Navbar } from '@/components/layout/Navbar';
 
 const categories = [
@@ -11,10 +11,21 @@ const categories = [
     icon: Rocket,
     color: 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300',
     articles: [
-      { title: 'Quick Start Guide', desc: 'Deploy your first app in 5 minutes', href: '#' },
-      { title: 'Creating an Account', desc: 'Sign up and set up your workspace', href: '#' },
-      { title: 'Connecting Your Repository', desc: 'Link GitHub, GitLab, or Bitbucket', href: '#' },
-      { title: 'Understanding Deployments', desc: 'How builds and deployments work', href: '#' },
+      { title: 'Installation Guide', desc: 'Complete setup on Ubuntu — one command', href: '/docs/install' },
+      { title: 'Quick Start (5 Minutes)', desc: 'Deploy your first app after installation', href: '/docs/install#fresh-installation' },
+      { title: 'System Requirements', desc: 'CPU, RAM, OS, and port requirements', href: '/docs/install#system-requirements' },
+      { title: 'Deployment Modes', desc: 'IP Mode vs SSL Mode explained', href: '/docs/install#deployment-modes' },
+    ],
+  },
+  {
+    title: 'Updates & Maintenance',
+    icon: RefreshCw,
+    color: 'bg-teal-100 dark:bg-teal-900/50 text-teal-700 dark:text-teal-300',
+    articles: [
+      { title: 'Update CloudNeuron', desc: 'Full, frontend-only, or backend-only update', href: '/docs/install#updating-cloudneuron' },
+      { title: 'Rollback on Failure', desc: 'Automatic and manual rollback procedures', href: '/docs/install#rollback-on-failure' },
+      { title: 'Managing Services', desc: 'View logs, restart containers, health checks', href: '/docs/install#managing-services' },
+      { title: 'Uninstallation', desc: 'Complete or partial removal guide', href: '/docs/install#uninstallation' },
     ],
   },
   {
@@ -22,9 +33,9 @@ const categories = [
     icon: Server,
     color: 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300',
     articles: [
-      { title: 'Git Push Deploys', desc: 'Automatic deploys on every push', href: '#' },
-      { title: 'Environment Variables', desc: 'Managing secrets and configuration', href: '#' },
-      { title: 'Custom Domains & SSL', desc: 'Set up your own domain with auto-SSL', href: '#' },
+      { title: 'Git Push Deploys', desc: 'Automatic deploys on every push', href: '/docs/install#updating-cloudneuron' },
+      { title: 'Environment Variables', desc: 'Managing secrets and configuration', href: '/docs/install#credential-locations' },
+      { title: 'Custom Domains & SSL', desc: 'Set up your own domain with auto-SSL', href: '/docs/install#ssl--custom-domains' },
       { title: 'Preview Environments', desc: 'Ephemeral environments per PR', href: '#' },
     ],
   },
@@ -35,8 +46,30 @@ const categories = [
     articles: [
       { title: 'Build Configuration', desc: 'Customize your build process', href: '#' },
       { title: 'Scaling & Resources', desc: 'CPU, memory, and replica settings', href: '#' },
-      { title: 'Networking', desc: 'Ports, internal services, and routing', href: '#' },
-      { title: 'Health Checks', desc: 'Configure liveness and readiness probes', href: '#' },
+      { title: 'Networking', desc: 'Ports, internal services, and routing', href: '/docs/install#container-map' },
+      { title: 'Health Checks', desc: 'Configure liveness and readiness probes', href: '/docs/install#health-check' },
+    ],
+  },
+  {
+    title: 'Database',
+    icon: Database,
+    color: 'bg-cyan-100 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-300',
+    articles: [
+      { title: 'Database Backup', desc: 'Manual and automated backup procedures', href: '/docs/install#database-operations' },
+      { title: 'Database Restore', desc: 'Restore from backup files', href: '/docs/install#restore-from-backup' },
+      { title: 'Reset Admin Password', desc: 'Recover admin access via CLI', href: '/docs/install#reset-admin-password' },
+      { title: 'Connection Pooling', desc: 'PgBouncer and connection management', href: '#' },
+    ],
+  },
+  {
+    title: 'Security',
+    icon: Shield,
+    color: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300',
+    articles: [
+      { title: 'Security Hardening', desc: 'Post-install checklist and UFW firewall', href: '/docs/install#security-hardening' },
+      { title: 'Zero Trust Architecture', desc: 'How CloudNeuron secures your infrastructure', href: '#' },
+      { title: 'Secret Management', desc: 'Encrypted env vars with rotation', href: '/docs/install#credential-locations' },
+      { title: 'Troubleshooting', desc: 'Common issues and solutions', href: '/docs/install#troubleshooting' },
     ],
   },
   {
@@ -50,37 +83,15 @@ const categories = [
       { title: 'Templates API', desc: 'List and deploy from templates', href: '#' },
     ],
   },
-  {
-    title: 'Security',
-    icon: Shield,
-    color: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300',
-    articles: [
-      { title: 'Zero Trust Architecture', desc: 'How SMSLY secures your infrastructure', href: '#' },
-      { title: 'Secret Management', desc: 'Encrypted env vars with rotation', href: '#' },
-      { title: 'RBAC & Permissions', desc: 'Role-based access control for teams', href: '#' },
-      { title: 'Compliance', desc: 'SOC 2, HIPAA, and GDPR guides', href: '#' },
-    ],
-  },
-  {
-    title: 'Databases',
-    icon: Database,
-    color: 'bg-cyan-100 dark:bg-cyan-900/50 text-cyan-700 dark:text-cyan-300',
-    articles: [
-      { title: 'Managed PostgreSQL', desc: 'One-click Postgres with backups', href: '#' },
-      { title: 'Managed Redis', desc: 'In-memory store with persistence', href: '#' },
-      { title: 'Database Backups', desc: 'Automated backups and point-in-time recovery', href: '#' },
-      { title: 'Connection Pooling', desc: 'PgBouncer and connection management', href: '#' },
-    ],
-  },
 ];
 
 const popularArticles = [
-  { title: 'Deploy a Next.js App', icon: Globe },
-  { title: 'Set Up Custom Domains', icon: Globe },
-  { title: 'Configure Environment Variables', icon: Terminal },
-  { title: 'Enable Auto-Scaling', icon: Server },
-  { title: 'Set Up CI/CD Pipeline', icon: Code },
-  { title: 'Monitor Your Application', icon: FileText },
+  { title: 'Install CloudNeuron', icon: Download, href: '/docs/install' },
+  { title: 'Update Software', icon: RefreshCw, href: '/docs/install#updating-cloudneuron' },
+  { title: 'Custom Domains', icon: Globe, href: '/docs/install#ssl--custom-domains' },
+  { title: 'Environment Variables', icon: Terminal, href: '/docs/install#credential-locations' },
+  { title: 'Database Backups', icon: HardDrive, href: '/docs/install#database-operations' },
+  { title: 'Troubleshooting', icon: Wrench, href: '/docs/install#troubleshooting' },
 ];
 
 export default function DocsPage() {
@@ -110,7 +121,7 @@ export default function DocsPage() {
             How Can We Help?
           </h1>
           <p className="text-xl text-slate-600 dark:text-slate-400 mb-8">
-            Everything you need to build, deploy, and scale with SMSLY Cloud.
+            Everything you need to install, deploy, and scale with CloudNeuron.
           </p>
 
           {/* Search */}
@@ -136,7 +147,7 @@ export default function DocsPage() {
               {popularArticles.map((article) => (
                 <Link
                   key={article.title}
-                  href="#"
+                  href={article.href}
                   className="flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-300 dark:hover:border-emerald-700 hover:shadow-md transition-all text-center group"
                 >
                   <article.icon className="w-6 h-6 text-emerald-600 dark:text-emerald-400 group-hover:scale-110 transition-transform" />
@@ -183,8 +194,37 @@ export default function DocsPage() {
         </div>
       </section>
 
+      {/* ─── Update Software CTA ─── */}
+      <section className="py-12 px-4 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 border-t border-b border-slate-200 dark:border-slate-800">
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center gap-6">
+          <div className="flex-shrink-0 p-4 bg-emerald-100 dark:bg-emerald-900/50 rounded-2xl">
+            <RefreshCw className="w-8 h-8 text-emerald-700 dark:text-emerald-300" />
+          </div>
+          <div className="flex-1 text-center md:text-left">
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">Keep CloudNeuron Updated</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Update your installation from the terminal with a single command, or trigger an update from Settings → System.
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <Link
+              href="/docs/install#updating-cloudneuron"
+              className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-emerald-700 dark:text-emerald-300 bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-700 rounded-xl hover:shadow-md transition-all"
+            >
+              <FileText className="w-4 h-4" /> Read Guide
+            </Link>
+            <Link
+              href="/settings"
+              className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-all"
+            >
+              <Settings className="w-4 h-4" /> Update Now
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* CTA */}
-      <section className="py-16 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+      <section className="py-16 bg-slate-50 dark:bg-slate-900">
         <div className="max-w-4xl mx-auto px-4 text-center">
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3">Can&apos;t find what you&apos;re looking for?</h2>
           <p className="text-slate-600 dark:text-slate-400 mb-6">Our support team is here to help.</p>
