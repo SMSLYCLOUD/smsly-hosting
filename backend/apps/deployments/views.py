@@ -1,5 +1,6 @@
 """Views module."""
 from rest_framework import viewsets, permissions, status, parsers
+from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
@@ -456,6 +457,23 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
-        return AuditLog.objects.filter(
-            actor=self.request.user.username
-        ).order_by('-timestamp')
+
+class SystemConfigView(APIView):
+    """
+    Expose safe server configuration to the frontend.
+    GET /api/v1/system/config/
+    """
+    permission_classes = [permissions.IsAuthenticated]  # Admin/User only
+
+    def get(self, request):
+        return Response({
+            'DEBUG': settings.DEBUG,
+            'USE_SSL': getattr(settings, 'SECURE_SSL_REDIRECT', False),
+            'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),  # Added to settings.py via .env
+            'ALLOWED_HOSTS': settings.ALLOWED_HOSTS,
+            'CORS_ALLOWED_ORIGINS': getattr(settings, 'CORS_ALLOWED_ORIGINS', []),
+            'CSRF_TRUSTED_ORIGINS': getattr(settings, 'CSRF_TRUSTED_ORIGINS', []),
+            'SECURE_SSL_REDIRECT': getattr(settings, 'SECURE_SSL_REDIRECT', False),
+            'TIME_ZONE': settings.TIME_ZONE,
+            'VERSION': '3.0.0',
+        })
