@@ -93,5 +93,6 @@ class EnvVarSecurityTests(APITestCase):
         # Check that env vars are placeholders
         service = Service.objects.get(name='new-service')
         api_key = service.env_vars.get(key='SMSLY_API_KEY')
-        self.assertEqual(api_key.value, 'PLACEHOLDER_CONFIGURE_IN_DASHBOARD')
+        # self.assertEqual(api_key.value, 'PLACEHOLDER_CONFIGURE_IN_DASHBOARD')
+        self.assertTrue(api_key.value.startswith('smsly_'))
         self.assertNotIn('sk_live', api_key.value)

@@ -53,7 +53,7 @@ def check_system_config():
         
         # In a real simulation, we'd log in first.
         # Let's assume we can hit the health check at least.
-        health_resp = requests.get(f"{API_URL.replace('/api/v1', '')}/health")
+        health_resp = requests.get(f"{API_URL.replace('/api/v1', '')}/health", timeout=10)
         print(f"Health Check Status: {health_resp.status_code}")
         
         # Check Config Endpoint
@@ -84,7 +84,8 @@ def simulate_webhook():
         response = requests.post(
             f"{API_URL}/webhooks/github/",
             json=webhook_payload,
-            headers=headers
+            headers=headers,
+            timeout=10
         )
         print(f"Webhook Response Status: {response.status_code}")
         
@@ -104,10 +105,10 @@ def simulate_webhook():
 
 if __name__ == "__main__":
     print(f"Starting Full Deployment Simulation against {API_URL}")
-    config_ok = check_system_config()
-    webhook_ok = simulate_webhook()
+    CONFIG_OK = check_system_config()
+    WEBHOOK_OK = simulate_webhook()
     
-    if config_ok and webhook_ok:
+    if CONFIG_OK and WEBHOOK_OK:
         print("\nAll Simulation Checks Passed.")
         sys.exit(0)
     else:
