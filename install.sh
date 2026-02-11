@@ -301,6 +301,16 @@ if [ -n "$UPDATE_MODE" ]; then
     docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
         docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
 
+    # ─── Re-apply OOM protection (scores reset when containers restart) ──────
+    echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
+    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1; do
+        CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
+        if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
+            echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
+        fi
+    done
+    echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db)${NC}"
+
     trap - EXIT
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
@@ -315,7 +325,7 @@ fi
 # -----------------------------------------------------------------------------
 # 1. Pre-flight Checks
 # -----------------------------------------------------------------------------
-echo -e "${YELLOW}[1/8] Checking system requirements...${NC}"
+echo -e "${YELLOW}[1/9] Checking system requirements...${NC}"
 
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}✗ Please run as root (sudo bash install.sh)${NC}"
@@ -357,7 +367,7 @@ echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/8] Installing dependencies...${NC}"
+echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
 
 # Stop conflicting services if present (anything that holds port 80/443)
 # NOTE: Don't stop Caddy here — we install/configure it in step 7.
@@ -428,7 +438,7 @@ echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 # -----------------------------------------------------------------------------
 # 3. Configuration & Secrets (IDEMPOTENT)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/8] Configuration...${NC}"
+echo -e "\n${YELLOW}[3/9] Configuration...${NC}"
 
 mkdir -p "$INSTALL_DIR"
 
@@ -664,7 +674,7 @@ fi
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/8] Deploying Container Stack...${NC}"
+echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
 docker network create smsly-net 2>/dev/null || true
@@ -685,7 +695,7 @@ docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphan
 # -----------------------------------------------------------------------------
 # 5. Database Setup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/8] Initializing Database...${NC}"
+echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
 
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
@@ -760,7 +770,7 @@ docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/8] Creating Admin User...${NC}"
+echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
 ADMIN_PASS="smslyhosting"
 ADMIN_CREATED=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); existed = User.objects.filter(username='admin').exists(); print('EXISTS' if existed else 'CREATED'); existed or User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
@@ -785,7 +795,7 @@ chmod 600 "$CREDENTIALS_FILE"
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[7/8] Setting up Caddy Reverse Proxy...${NC}"
+echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
 
 if ! command -v caddy &> /dev/null; then
     echo -e "${BLUE}  → Installing Caddy...${NC}"
@@ -855,16 +865,89 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# 8. Verification
+# 8. System Memory Hardening (Prevents OOM kills)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[8/8] Verifying Deployment...${NC}"
+echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
+
+# ─── Swap: Ensure at least 2GB total swap ────────────────────────────────────
+CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$CURRENT_SWAP_MB" -lt 2000 ]; then
+    NEEDED_MB=$((2048 - CURRENT_SWAP_MB))
+    echo -e "${BLUE}  → Current swap: ${CURRENT_SWAP_MB}MB. Adding ${NEEDED_MB}MB...${NC}"
+    SWAPFILE="/swapfile-smsly"
+    if [ ! -f "$SWAPFILE" ]; then
+        fallocate -l ${NEEDED_MB}M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=$NEEDED_MB status=none
+        chmod 600 "$SWAPFILE"
+        mkswap "$SWAPFILE" >/dev/null 2>&1
+        swapon "$SWAPFILE" 2>/dev/null || true
+        # Make permanent (idempotent)
+        if ! grep -q "$SWAPFILE" /etc/fstab 2>/dev/null; then
+            echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+        fi
+        echo -e "${GREEN}  ✓ Swap file created and activated (${NEEDED_MB}MB)${NC}"
+    else
+        # Swap file exists but may not be active
+        swapon "$SWAPFILE" 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Existing swap file activated${NC}"
+    fi
+else
+    echo -e "${GREEN}  ✓ Swap already sufficient (${CURRENT_SWAP_MB}MB)${NC}"
+fi
+
+# ─── Sysctl tuning (idempotent) ──────────────────────────────────────────────
+SYSCTL_UPDATED=false
+
+ensure_sysctl() {
+    local key="$1" value="$2" desc="$3"
+    CURRENT=$(sysctl -n "$key" 2>/dev/null || echo "")
+    if [ "$CURRENT" != "$value" ]; then
+        sysctl -w "$key=$value" >/dev/null 2>&1 || true
+        # Make permanent (idempotent)
+        if grep -q "^$key" /etc/sysctl.conf 2>/dev/null; then
+            sed -i "s|^$key.*|$key = $value|" /etc/sysctl.conf
+        else
+            echo "# $desc" >> /etc/sysctl.conf
+            echo "$key = $value" >> /etc/sysctl.conf
+        fi
+        SYSCTL_UPDATED=true
+        echo -e "${GREEN}  ✓ $key = $value ($desc)${NC}"
+    fi
+}
+
+ensure_sysctl "vm.overcommit_memory" "1" "Redis background save fix"
+ensure_sysctl "vm.swappiness" "10" "Prefer RAM over swap"
+ensure_sysctl "net.core.somaxconn" "511" "Redis connection backlog"
+
+if [ "$SYSCTL_UPDATED" = "false" ]; then
+    echo -e "${GREEN}  ✓ Sysctl settings already optimal${NC}"
+fi
+
+# ─── OOM Protection for critical containers ──────────────────────────────────
+echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
+for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1; do
+    CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
+    if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
+        echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
+    fi
+done
+echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db)${NC}"
+
+echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
+
+# -----------------------------------------------------------------------------
+# 9. Verification
+# -----------------------------------------------------------------------------
+echo -e "\n${YELLOW}[9/9] Verifying Deployment...${NC}"
+VERIFY_PASS_COUNT=0
+VERIFY_TOTAL=5
 sleep 5
 
-# ─── Verify nginx loaded custom config (not default) ───────────────────────
-echo -e "${BLUE}  → Verifying nginx configuration...${NC}"
+# ─── Check 1: Verify nginx loaded custom config (not default) ──────────────
+echo -e "${BLUE}  → [1/5] Verifying nginx configuration...${NC}"
 NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
 if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
     echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
@@ -872,11 +955,14 @@ else
     NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
     if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
         echo -e "${GREEN}  ✓ Nginx config fixed after force-recreate${NC}"
+        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     else
         echo -e "${RED}  ✗ Nginx config still incorrect. Manual fix needed.${NC}"
     fi
 fi
 
+# ─── Check 2: Health check ─────────────────────────────────────────────────
+echo -e "${BLUE}  → [2/5] Running health check...${NC}"
 HEALTH_OK=false
 for attempt in 1 2 3 4 5; do
     if curl -sfL http://localhost/health >/dev/null 2>&1; then
@@ -892,16 +978,47 @@ done
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${YELLOW}  ⚠ Health check did not respond — services may still be starting.${NC}"
-    echo -e "${YELLOW}    Check: docker compose -f $COMPOSE_FILE ps${NC}"
-    echo -e "${YELLOW}    Logs:  docker compose -f $COMPOSE_FILE logs --tail=50${NC}"
+fi
+
+# ─── Check 3: All containers running ──────────────────────────────────────
+echo -e "${BLUE}  → [3/5] Checking container status...${NC}"
+RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
+TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
+if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
+fi
+
+# ─── Check 4: Swap is sufficient ──────────────────────────────────────────
+echo -e "${BLUE}  → [4/5] Checking swap...${NC}"
+SWAP_TOTAL=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$SWAP_TOTAL" -ge 1500 ]; then
+    echo -e "${GREEN}  ✓ Swap sufficient (${SWAP_TOTAL}MB)${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
+fi
+
+# ─── Check 5: Caddy running ───────────────────────────────────────────────
+echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
+if systemctl is-active --quiet caddy 2>/dev/null; then
+    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Caddy is not running${NC}"
 fi
 
 # Show container status
 echo -e "\n${BLUE}Container Status:${NC}"
 docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
     docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+
+echo -e "\n${BLUE}Verification Score: $VERIFY_PASS_COUNT/$VERIFY_TOTAL${NC}"
 
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
@@ -922,9 +1039,32 @@ echo -e "   Admin:       /admin"
 echo -e "   Credentials: $CREDENTIALS_FILE"
 echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
+echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
+echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
 echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
+
+# ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
+if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
+    echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
+    if [ -t 0 ] && [ -z "${SKIP_REBOOT:-}" ]; then
+        echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
+        echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
+        for i in $(seq 30 -1 1); do
+            printf "\r${YELLOW}  Rebooting in %2d seconds... ${NC}" "$i"
+            sleep 1
+        done
+        echo -e "\n${BLUE}  → Rebooting now...${NC}"
+        reboot
+    else
+        echo -e "${YELLOW}  Non-interactive mode — skipping auto-reboot.${NC}"
+        echo -e "${YELLOW}  Run 'sudo reboot' manually to apply sysctl changes.${NC}"
+    fi
+else
+    echo -e "\n${RED}  ⚠ Only $VERIFY_PASS_COUNT/$VERIFY_TOTAL checks passed — skipping auto-reboot.${NC}"
+    echo -e "${YELLOW}  Fix the failed checks above, then run: sudo reboot${NC}"
+fi

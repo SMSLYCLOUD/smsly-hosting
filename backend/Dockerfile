@@ -38,5 +38,7 @@ RUN chmod +x entrypoint.sh && \
     chown -R smsly:smsly /app
 USER smsly
 
-# Use Entrypoint
+# Use Entrypoint (handles migrations + static files)
 ENTRYPOINT ["./entrypoint.sh"]
+# Default CMD: gunicorn for backend. Celery/celery-beat override via docker-compose command:
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.wsgi:application", "--workers", "2", "--timeout", "120"]
