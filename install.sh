@@ -30,6 +30,25 @@ set -euo pipefail
 # Ensure we start in a valid directory (prevents getcwd errors if CWD was deleted)
 cd /root 2>/dev/null || cd /
 
+# ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
+# If not already inside a screen session, re-launch inside one.
+# To reattach after disconnect: screen -r cloudneuron-install
+if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
+    # Install screen if missing
+    if ! command -v screen &> /dev/null; then
+        apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
+    fi
+    echo -e "\033[1;33m"
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  Running inside a screen session for safety."
+    echo "  If SSH disconnects, reconnect and run:"
+    echo "    screen -r cloudneuron-install"
+    echo "═══════════════════════════════════════════════════════════"
+    echo -e "\033[0m"
+    exec screen -dmS cloudneuron-install bash -c "SKIP_SCREEN=1 bash $0 $*; exec bash"
+    # Note: 'exec bash' keeps screen alive after script finishes so you can see output
+fi
+
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
