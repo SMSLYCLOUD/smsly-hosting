@@ -1,46 +1,68 @@
-# SMSLY Hosting (Universal PaaS)
+<p align="center">
+  <img src="docs/cloudneuron-logo.png" alt="CloudNeuron" width="400" />
+</p>
 
-[![CI/CD](https://github.com/SMSLYCLOUD/smsly-hosting/actions/workflows/test.yml/badge.svg)](https://github.com/SMSLYCLOUD/smsly-hosting/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Production Ready](https://img.shields.io/badge/production-ready-brightgreen.svg)](https://github.com/SMSLYCLOUD/smsly-hosting)
+<h1 align="center">CloudNeuron</h1>
+<p align="center"><strong>by SMSLY</strong></p>
 
-**The Self-Healing, Multi-Cloud PaaS. 100% Production-Ready.**
+<p align="center">
+  <a href="https://github.com/SMSLYCLOUD/smsly-hosting/actions"><img src="https://github.com/SMSLYCLOUD/smsly-hosting/actions/workflows/test.yml/badge.svg" alt="CI/CD" /></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://github.com/SMSLYCLOUD/smsly-hosting"><img src="https://img.shields.io/badge/production-ready-brightgreen.svg" alt="Production Ready" /></a>
+</p>
 
-SMSLY Hosting is an open-source alternative to Vercel/Railway/Heroku that runs on **your own infrastructure** (AWS, Azure, GCP, or bare metal). Enterprise-grade security, zero-downtime deployments, and automated disaster recovery out of the box.
-
----
-
-## 🔐 Production-Ready Security
-
-- ✅ **Fail-Closed Configuration** — No insecure defaults (`SECRET_KEY`, `ALLOWED_HOSTS` crash if missing)
-- ✅ **Docker Socket Isolation** — Secured via read-only proxy (no root-equivalent access)
-- ✅ **Multi-Tenancy Tested** — Users cannot access each other's resources
-- ✅ **Automatic SSL/TLS** — Let's Encrypt certificates via Caddy (zero configuration)
-- ✅ **Zero-Downtime Deployments** — Health checks enable rolling updates
-- ✅ **Webhook Signature Validation** — HMAC-SHA256 for GitHub webhooks
-- ✅ **Fernet Encryption** — Sensitive fields encrypted at rest
+<p align="center"><em>The Self-Healing, Multi-Cloud PaaS — Deploy Anything, Anywhere.</em></p>
 
 ---
 
-## 🚀 Key Features
+**CloudNeuron** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
+
+---
+
+## 🔐 Security
+
+| Feature | Status |
+|---------|--------|
+| Fail-closed config (`SECRET_KEY`, `ALLOWED_HOSTS` crash if missing) | ✅ |
+| Docker socket isolation via read-only proxy | ✅ |
+| Multi-tenancy tested (user-level data isolation) | ✅ |
+| Automatic SSL/TLS via Let's Encrypt (Caddy) | ✅ |
+| Zero-downtime rolling deployments | ✅ |
+| GitHub webhook HMAC-SHA256 signature validation | ✅ |
+| Fernet encryption for secrets at rest | ✅ |
+| OAuth social login (GitHub, Google) | ✅ |
+| Inter-service HMAC V2 authentication | ✅ |
+| App-layer rate limiting | ✅ |
+
+---
+
+## 🚀 Features
 
 ### ⚡ Serverless Functions ("Hot Functions")
-Deploy code, not containers. SMSLY wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
+Deploy code, not containers. CloudNeuron wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
 
 ### 👁️ AI-Driven Observability
-Statistical anomaly detection (Z-Score) and Generative AI (Gemini/OpenAI/Grok) for **automated diagnostics** and **root cause analysis**.
+Statistical anomaly detection (Z-Score) and generative AI (Gemini / OpenAI / Grok) for **automated diagnostics** and **root cause analysis**.
 
 ### 🔄 GitHub Integration & PR Previews
-- **Auto-Deploy**: Push to `main` deploys to production
+- **Auto-Deploy**: Push to `main` → production deploy
 - **Preview Environments**: Every PR gets an ephemeral environment
 
-### 🛡️ Enterprise-Grade Reliability
-- **Disaster Recovery**: Automated backups with documented recovery procedures (RTO < 15 min)
-- **Health Monitoring**: `/health` endpoint with DB + Redis validation
-- **Comprehensive Testing**: 80%+ coverage on critical security paths
+### 🔑 OAuth Social Login
+- **GitHub & Google**: One-click sign-in for your users
+- **Admin UI**: Configure credentials directly from the Settings page
+- **Management Command**: `python manage.py setup_social_apps` for automated setup
+
+### 🛡️ Enterprise Reliability
+- **Disaster Recovery**: Automated backups (RTO < 15 min)
+- **Health Monitoring**: `/health` with DB + Redis validation
+- **80%+ Test Coverage** on critical security paths
 
 ### 🌍 Multi-Cloud & Hybrid
 Works on AWS, Azure, GCP, or bare metal. Air-gapped deployments supported.
+
+### ⚙️ Full Config UI
+Every platform setting is visible in the Settings page — **8 tabs** covering Profile, Alerts, Security, Cloud Providers, AI, OAuth, Infrastructure, and System config. Secrets are never exposed.
 
 ---
 
@@ -48,25 +70,23 @@ Works on AWS, Azure, GCP, or bare metal. Air-gapped deployments supported.
 
 ### Quick Install (Fresh Ubuntu VPS)
 
-Download and run the installer interactively:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh
 sudo bash /tmp/install.sh
 ```
 
-The installer will prompt you to choose:
+The installer prompts you to choose:
 1. **IP Mode** — Quick start at `http://YOUR_IP` (no domain needed)
 2. **SSL Mode** — Production-ready at `https://your-domain.com` (requires DNS A record)
 
-> **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input for mode selection, domain, and email configuration.
+> **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input.
 
 ### What the Installer Does
 
 | Step | Description |
 |------|-------------|
 | 1. Pre-flight | Checks OS, root access, system resources |
-| 2. Dependencies | Installs Docker, Python, required packages. **Stops conflicting services** (nginx, apache2, caddy) |
+| 2. Dependencies | Installs Docker, Python, required packages |
 | 3. Configuration | Generates Fernet keys, DB passwords, Redis auth, HMAC secrets |
 | 4. Deployment | Builds and starts all containers (backend, frontend, celery, DB, Redis, nginx) |
 | 5. Database | Waits for PostgreSQL, syncs passwords, runs Django migrations |
@@ -123,6 +143,7 @@ curl http://localhost:8090/health
 | **SSL/Proxy** | Caddy (automatic Let's Encrypt) |
 | **Builder** | Nixpacks (auto-detect buildpacks) |
 | **Internal Proxy** | Nginx (routes `/api` → backend, `/` → frontend) |
+| **Auth** | django-allauth (GitHub, Google OAuth) |
 
 ---
 
@@ -144,7 +165,7 @@ curl http://localhost:8090/health
               │                │                │
      ┌────────▼───────┐ ┌─────▼──────┐ ┌───────▼───────┐
      │   Backend      │ │  Frontend  │ │  Celery       │
-     │   Django/      │ │  Next.js   │ │  Workers +    │
+     │   Django /     │ │  Next.js   │ │  Workers +    │
      │   Gunicorn     │ │  SSR       │ │  Beat         │
      └────────┬───────┘ └────────────┘ └───────┬───────┘
               │                                │
@@ -161,14 +182,15 @@ curl http://localhost:8090/health
 ```
 smsly-hosting/
 ├── backend/                  # Django API + Celery tasks
-│   ├── apps/                 # Django apps (services, deployments, cloud, teams)
+│   ├── apps/                 # Django apps (deployments, cloud, teams, billing, intelligence)
 │   ├── config/               # Django settings, WSGI, URLs
 │   ├── Dockerfile
 │   └── entrypoint.sh
 ├── frontend/                 # Next.js 15 frontend
 │   ├── src/app/              # App Router pages
-│   ├── src/components/       # React components
+│   ├── src/components/       # React components (ui, settings, layout, ai)
 │   └── Dockerfile
+├── docs/                     # Documentation & assets
 ├── docker-compose.prod.yml   # Production stack
 ├── nginx.conf                # Internal routing
 ├── install.sh                # Universal installer (v3.0)
@@ -192,22 +214,40 @@ All configuration is stored in `.env` (generated by the installer):
 | `USE_SSL` | `true` for HTTPS mode, `false` for HTTP |
 | `ALLOWED_HOSTS` | Django allowed hosts (auto-populated) |
 | `CSRF_TRUSTED_ORIGINS` | CSRF protection (auto-populated) |
+| `GITHUB_CLIENT_ID` | OAuth: GitHub app Client ID |
+| `GITHUB_CLIENT_SECRET` | OAuth: GitHub app Client Secret |
+| `GOOGLE_CLIENT_ID` | OAuth: Google app Client ID |
+| `GOOGLE_CLIENT_SECRET` | OAuth: Google app Client Secret |
+
+> **All configuration is also visible in the Settings UI** (Settings → System / Infra / OAuth tabs). Secrets are displayed as "Set" / "Not set" only.
 
 ---
 
 ## 📚 Documentation
 
+- [Features Overview](docs/FEATURES.md)
 - [Production Deployment Guide](PRODUCTION_DEPLOYMENT.md)
 - [Operations Runbook](RUNBOOK.md) — Disaster recovery, backups, monitoring
+- [Security Audit](docs/SECURITY_AUDIT.md)
+- [Global Deployment Guide](docs/GLOBAL_DEPLOY.md)
+- [Infrastructure Audit](audit_reports/INFRASTRUCTURE_AUDIT.md)
+- [QA Report](QA_REPORT.md)
 
 ---
 
 ## 🤝 Contributing
 
-We welcome global contributors! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+We welcome contributors! See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 ---
 
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  <strong>CloudNeuron</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
+  <em>Deploy anything. Own everything.</em>
+</p>
