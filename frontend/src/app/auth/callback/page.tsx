@@ -1,24 +1,32 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    // In session-based auth (django-allauth default), the cookie is set by the backend response.
-    // We just need to redirect to the dashboard.
-    // If we were using token auth, we would parse ?token=... from URL here.
+    // Parse the auth_token injected by CustomAccountAdapter / CustomSocialAccountAdapter
+    const token = searchParams.get("auth_token");
 
-    // Slight delay to ensure cookies are settled
+    if (token) {
+      // Store the DRF token for API calls
+      localStorage.setItem("auth_token", token);
+
+      // Also set a cookie so the middleware can detect authenticated state
+      document.cookie = `sessionid=${token}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+    }
+
+    // Redirect to dashboard after token is stored
     const timer = setTimeout(() => {
-        router.push("/dashboard");
-    }, 1000);
+      router.push("/dashboard");
+    }, 500);
 
     return () => clearTimeout(timer);
-  }, [router]);
+  }, [router, searchParams]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">

@@ -2,20 +2,34 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
-  const session = request.cookies.get("sessionid"); // Standard Django session cookie
-  const isAuthPage = request.nextUrl.pathname.startsWith("/login") || request.nextUrl.pathname.startsWith("/auth");
+  // Check for any auth indicator: Django session cookie OR DRF token cookie
+  const session = request.cookies.get("sessionid");
+  const authToken = request.cookies.get("auth_token");
+  const isAuthenticated = !!(session || authToken);
+
+  // Allow the callback page through so it can parse the token from the URL
+  const isCallbackPage = request.nextUrl.pathname.startsWith("/auth/callback");
+
+  const isAuthPage =
+    request.nextUrl.pathname === "/login" ||
+    request.nextUrl.pathname === "/register";
+
   const isProtectedPage =
     request.nextUrl.pathname.startsWith("/dashboard") ||
     request.nextUrl.pathname.startsWith("/new") ||
     request.nextUrl.pathname.startsWith("/services") ||
     request.nextUrl.pathname.startsWith("/store") ||
-    request.nextUrl.pathname.startsWith("/marketplace");
+    request.nextUrl.pathname.startsWith("/marketplace") ||
+    request.nextUrl.pathname.startsWith("/settings");
 
-  if (isProtectedPage && !session) {
+  // Protect dashboard routes — redirect to login if not authenticated
+  if (isProtectedPage && !isAuthenticated) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (isAuthPage && session) {
+  // If already logged in and visiting login/register, redirect to dashboard
+  // But never redirect from the callback page
+  if (isAuthPage && isAuthenticated && !isCallbackPage) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -29,7 +43,9 @@ export const config = {
     "/services/:path*",
     "/store/:path*",
     "/marketplace/:path*",
+    "/settings/:path*",
     "/login",
-    "/auth/:path*"
+    "/register",
+    "/auth/:path*",
   ],
 };

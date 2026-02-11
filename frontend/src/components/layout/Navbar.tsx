@@ -46,7 +46,9 @@ export function Navbar() {
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token');
+    // Clear both auth cookies to prevent stale session trapping
     document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+    document.cookie = 'sessionid=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
     setUser(null);
     setIsUserMenuOpen(false);
     router.push('/login');
