@@ -83,7 +83,7 @@ export function Navbar() {
 
         {/* Logo - Left */}
         <Link href="/" className="flex items-center group flex-shrink-0">
-            <Image src="/images/logo.png" alt="SMSLY" width={120} height={40} className="h-10 w-auto" priority />
+            <Image src="/images/logo.png" alt="CloudNeuron" width={120} height={40} className="h-10 w-auto" priority />
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================================
-# SMSLY Hosting - Universal Installer v3.0 (Production Hardened)
+# CloudNeuron by SMSLY - Universal Installer v3.1 (Production Hardened)
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -20,6 +20,9 @@
 #   - Rollback on failure via trap handler
 #   - Secure credential storage (no plaintext to terminal)
 #   - Update mode: git stash → pull → rebuild → restart
+#   - Disk space pre-check (prevents mid-build failures)
+#   - Nginx config verification (prevents 502 from default config)
+#   - Caddyfile IP catch-all (prevents unreachable dashboard)
 # =============================================================================
 
 set -euo pipefail
@@ -101,7 +104,7 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   SMSLY Hosting - Production Installer v3.0${NC}"
+echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
@@ -168,6 +171,21 @@ if [ -n "$UPDATE_MODE" ]; then
 
     echo -e "${GREEN}  ✓ All required files present${NC}"
 
+    # ─── Disk space check (prevents mid-build failure) ───────────────────────
+    DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
+    if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
+        echo -e "${YELLOW}  ⚠ WARNING: Only ${DISK_AVAIL_MB}MB disk space available.${NC}"
+        echo -e "${YELLOW}    Docker builds typically need 2GB+. Cleaning Docker cache...${NC}"
+        docker system prune -f --volumes 2>/dev/null || true
+        docker builder prune -f 2>/dev/null || true
+        DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
+        echo -e "${BLUE}  → Disk space after cleanup: ${DISK_AVAIL_MB}MB${NC}"
+        if [ "$DISK_AVAIL_MB" -lt 1000 ]; then
+            echo -e "${RED}  ✗ Still insufficient disk space (${DISK_AVAIL_MB}MB). Need at least 1GB.${NC}"
+            exit 1
+        fi
+    fi
+
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
     case "$UPDATE_MODE" in
@@ -211,16 +229,34 @@ if [ -n "$UPDATE_MODE" ]; then
             ;;
     esac
 
+    # ─── CRITICAL FIX: Force-recreate nginx to pick up config mount ──────────
+    # Docker 'up -d' does NOT recreate unchanged containers. nginx image doesn't
+    # change between updates, but the mounted nginx.conf may have changed.
+    # Without this, nginx runs default config → 502 on all frontend routes.
+    echo -e "${BLUE}  → Force-recreating nginx (ensures config mount is fresh)...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
+
+    # Verify nginx loaded the correct custom config (not the default)
+    sleep 2
+    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
+    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
+        echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
+    else
+        echo -e "${RED}  ✗ WARNING: Nginx may be running default config!${NC}"
+        echo -e "${YELLOW}    Expected 'events {' but got: $NGINX_CONFIG_CHECK${NC}"
+        echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
+    fi
+
     # ─── Verification ────────────────────────────────────────────────────────
     echo -e "${BLUE}  → Verifying containers...${NC}"
     sleep 5
 
     HEALTH_OK=false
     for attempt in 1 2 3 4 5; do
-        if curl -sf http://localhost/health >/dev/null 2>&1; then
+        if curl -sfL http://localhost/health >/dev/null 2>&1; then
             HEALTH_OK=true
             break
-        elif curl -sf http://localhost:8090/health >/dev/null 2>&1; then
+        elif curl -sfL http://localhost:8090/health >/dev/null 2>&1; then
             HEALTH_OK=true
             break
         fi
@@ -275,6 +311,22 @@ if [ -f /etc/os-release ]; then
         fi
     fi
 fi
+
+# ─── Disk space check (prevents mid-build OOM / no-space failures) ──────────
+DISK_AVAIL_MB=$(df -BM / | tail -1 | awk '{print $4}' | tr -d 'M')
+echo -e "${BLUE}  Disk space available: ${DISK_AVAIL_MB}MB${NC}"
+if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
+    echo -e "${YELLOW}  ⚠ Low disk space (${DISK_AVAIL_MB}MB). Recommended: 3GB+${NC}"
+    echo -e "${YELLOW}    Attempting Docker cache cleanup...${NC}"
+    docker system prune -f 2>/dev/null || true
+    docker builder prune -f 2>/dev/null || true
+    DISK_AVAIL_MB=$(df -BM / | tail -1 | awk '{print $4}' | tr -d 'M')
+    if [ "$DISK_AVAIL_MB" -lt 1500 ]; then
+        echo -e "${RED}  ✗ Insufficient disk space (${DISK_AVAIL_MB}MB). Need at least 1.5GB for fresh install.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ After cleanup: ${DISK_AVAIL_MB}MB available${NC}"
+fi
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 
 # -----------------------------------------------------------------------------
@@ -283,7 +335,9 @@ echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 echo -e "\n${YELLOW}[2/8] Installing dependencies...${NC}"
 
 # Stop conflicting services if present (anything that holds port 80/443)
-for svc in nginx apache2 caddy; do
+# NOTE: Don't stop Caddy here — we install/configure it in step 7.
+# Stopping it on re-installs breaks the reverse proxy unnecessarily.
+for svc in nginx apache2; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Stopping conflicting service: $svc${NC}"
         systemctl stop "$svc" || true
@@ -722,7 +776,14 @@ fi
 # Caddy's only job is public-facing :80 and optional HTTPS termination.
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
 if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+    # ─── FIX: Include both domain AND IP catch-all ─────────────────────────
+    # Without the :80 block, the dashboard is unreachable via direct IP.
+    # Caddy auto-provisions HTTPS for the domain block.
     cat > /etc/caddy/Caddyfile <<CADDYEOF
+# CloudNeuron Reverse Proxy — Auto-generated
+# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
+# IP: $PUBLIC_IP → HTTP fallback
+
 $DOMAIN {
     reverse_proxy localhost:8090
     encode gzip
@@ -730,10 +791,15 @@ $DOMAIN {
         output file /var/log/caddy/access.log
     }
 }
+
+:80 {
+    reverse_proxy localhost:8090
+}
 CADDYEOF
-    echo -e "${GREEN}  ✓ Caddy configured for HTTPS: $DOMAIN → 8090${NC}"
+    echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
 else
     cat > /etc/caddy/Caddyfile <<CADDYEOF
+# CloudNeuron Reverse Proxy — Auto-generated
 :80 {
     reverse_proxy localhost:8090
 }
@@ -769,12 +835,29 @@ fi
 echo -e "\n${YELLOW}[8/8] Verifying Deployment...${NC}"
 sleep 5
 
+# ─── Verify nginx loaded custom config (not default) ───────────────────────
+echo -e "${BLUE}  → Verifying nginx configuration...${NC}"
+NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
+if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
+    echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
+else
+    echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
+    sleep 3
+    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
+    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
+        echo -e "${GREEN}  ✓ Nginx config fixed after force-recreate${NC}"
+    else
+        echo -e "${RED}  ✗ Nginx config still incorrect. Manual fix needed.${NC}"
+    fi
+fi
+
 HEALTH_OK=false
 for attempt in 1 2 3 4 5; do
-    if curl -sf http://localhost/health >/dev/null 2>&1; then
+    if curl -sfL http://localhost/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sf http://localhost:8090/health >/dev/null 2>&1; then
+    elif curl -sfL http://localhost:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi

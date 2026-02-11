@@ -49,7 +49,7 @@ export function Sidebar() {
             {/* Logo Placeholder */}
             <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center font-bold">S</div>
           </div>
-          <h1 className="text-2xl font-bold">SMSLY</h1>
+          <h1 className="text-2xl font-bold">CloudNeuron</h1>
         </Link>
         <div className="space-y-1">
           {routes.map((route) => (
