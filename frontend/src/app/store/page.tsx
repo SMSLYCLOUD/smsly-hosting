@@ -51,9 +51,11 @@ export default function AppStorePage() {
         async function loadTemplates() {
             try {
                 const data = await templatesApi.list();
-                setApps(data);
+                // Defensive: ensure data is always an array
+                setApps(Array.isArray(data) ? data : []);
             } catch (error) {
                 console.error("Failed to fetch templates:", error);
+                setApps([]);
             } finally {
                 setLoading(false);
             }

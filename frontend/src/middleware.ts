@@ -8,6 +8,7 @@ export function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/dashboard") ||
     request.nextUrl.pathname.startsWith("/new") ||
     request.nextUrl.pathname.startsWith("/services") ||
+    request.nextUrl.pathname.startsWith("/store") ||
     request.nextUrl.pathname.startsWith("/marketplace");
 
   if (isProtectedPage && !session) {
@@ -26,6 +27,7 @@ export const config = {
     "/dashboard/:path*",
     "/new/:path*",
     "/services/:path*",
+    "/store/:path*",
     "/marketplace/:path*",
     "/login",
     "/auth/:path*"
