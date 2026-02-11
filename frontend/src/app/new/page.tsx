@@ -56,7 +56,7 @@ export default function NewServicePage() {
   const handleDeploy = async () => {
     setIsDeploying(true)
     try {
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         if (!token) throw new Error("Not authenticated")
 
         // 1. Create Service

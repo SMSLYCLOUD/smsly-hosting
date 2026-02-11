@@ -62,7 +62,7 @@ export default function MarketplacePage() {
     // Initial Fetch
     React.useEffect(() => {
         const loadData = async () => {
-            const token = localStorage.getItem("smsly_token") || localStorage.getItem("auth_token")
+            const token = localStorage.getItem("auth_token")
             if (!token) {
                 setIsLoading(false)
                 return
@@ -95,7 +95,7 @@ export default function MarketplacePage() {
     const handleProvision = async () => {
         if (!selectedType || !selectedService || !addonName) return
         setIsProvisioning(true)
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         
         try {
             const res = await fetch("/api/v1/addons/", {
@@ -127,7 +127,7 @@ export default function MarketplacePage() {
         setActiveAddon(addon)
         setIsBackupsOpen(true)
         setIsLoadingBackups(true)
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         
         try {
             const res = await fetch(`/api/v1/addons/${addon.id}/backups/`, {
@@ -143,7 +143,7 @@ export default function MarketplacePage() {
 
     const handleCreateBackup = async () => {
         if (!activeAddon) return
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         try {
              const res = await fetch(`/api/v1/addons/${activeAddon.id}/backup/`, {
                 method: "POST",
@@ -163,7 +163,7 @@ export default function MarketplacePage() {
         if (!activeAddon) return
         if (!confirm("This will overwrite current data. Continue?")) return
         
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         try {
              const res = await fetch(`/api/v1/addons/${activeAddon.id}/restore/`, {
                 method: "POST",
@@ -183,7 +183,7 @@ export default function MarketplacePage() {
 
     const handleDownload = async (backup: Backup) => {
         if (!activeAddon) return
-        const token = localStorage.getItem("smsly_token")
+        const token = localStorage.getItem("auth_token")
         
         try {
             const res = await fetch(`/api/v1/addons/${activeAddon.id}/download_backup/?backup_id=${backup.id}`, {
