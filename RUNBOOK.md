@@ -1,4 +1,4 @@
-# SMSLY Hosting Operations Runbook
+# CloudNeuron Operations Runbook
 
 ## Quick Reference
 
@@ -153,7 +153,7 @@ open http://localhost:3001  # Grafana (admin/admin)
 Add to crontab (`crontab -e`):
 
 ```bash
-*/5 * * * * curl -f https://hosting.smsly.cloud/health || echo "SMSLY Hosting health check failed" | mail -s "Alert: Hosting Down" admin@smsly.cloud
+*/5 * * * * curl -f https://hosting.smsly.cloud/health || echo "CloudNeuron health check failed" | mail -s "Alert: CloudNeuron Down" admin@smsly.cloud
 ```
 
 ---

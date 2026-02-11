@@ -1,6 +1,6 @@
 # Global Deployment Guide
 
-SMSLY Hosting is designed to run anywhere.
+CloudNeuron is designed to run anywhere.
 
 ## 1. Kubernetes (Any Cloud)
 Use our Helm Chart to deploy the control plane to EKS, GKE, AKS, or DigitalOcean K8s.

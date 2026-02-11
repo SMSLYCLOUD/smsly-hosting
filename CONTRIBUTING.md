@@ -1,4 +1,4 @@
-# Contributing to SMSLY Hosting
+# Contributing to CloudNeuron
 
 We are building the **Universal PaaS** for the world. Whether you are in San Francisco, Lagos, Berlin, or Tokyo, we want your code.
 
