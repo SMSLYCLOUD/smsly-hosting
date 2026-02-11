@@ -160,6 +160,7 @@ services:
   frontend:
     build:
       context: ./frontend
+      network: host
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
     restart: unless-stopped
