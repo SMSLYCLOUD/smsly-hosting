@@ -467,13 +467,51 @@ class SystemConfigView(APIView):
 
     def get(self, request):
         return Response({
+            # General
+            'VERSION': '3.0.0',
             'DEBUG': settings.DEBUG,
+            'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),
+            'TIME_ZONE': settings.TIME_ZONE,
+            'SITE_ID': settings.SITE_ID,
+
+            # Security
             'USE_SSL': getattr(settings, 'SECURE_SSL_REDIRECT', False),
-            'DOMAIN': getattr(settings, 'DOMAIN', 'localhost'),  # Added to settings.py via .env
+            'SECURE_SSL_REDIRECT': getattr(settings, 'SECURE_SSL_REDIRECT', False),
+            'SECURE_HSTS_SECONDS': getattr(settings, 'SECURE_HSTS_SECONDS', 0),
+            'SECURE_HSTS_INCLUDE_SUBDOMAINS': getattr(settings, 'SECURE_HSTS_INCLUDE_SUBDOMAINS', False),
+            'SECURE_HSTS_PRELOAD': getattr(settings, 'SECURE_HSTS_PRELOAD', False),
+            'SESSION_COOKIE_SECURE': getattr(settings, 'SESSION_COOKIE_SECURE', False),
+            'CSRF_COOKIE_SECURE': getattr(settings, 'CSRF_COOKIE_SECURE', False),
+            'SMSLY_DISABLE_SIGNATURE_CHECK': getattr(settings, 'SMSLY_DISABLE_SIGNATURE_CHECK', False),
+
+            # Network
             'ALLOWED_HOSTS': settings.ALLOWED_HOSTS,
             'CORS_ALLOWED_ORIGINS': getattr(settings, 'CORS_ALLOWED_ORIGINS', []),
             'CSRF_TRUSTED_ORIGINS': getattr(settings, 'CSRF_TRUSTED_ORIGINS', []),
-            'SECURE_SSL_REDIRECT': getattr(settings, 'SECURE_SSL_REDIRECT', False),
-            'TIME_ZONE': settings.TIME_ZONE,
-            'VERSION': '3.0.0',
+
+            # Auth
+            'ACCOUNT_AUTH_METHOD': getattr(settings, 'ACCOUNT_AUTHENTICATION_METHOD', 'username'),
+            'LOGIN_REDIRECT_URL': getattr(settings, 'LOGIN_REDIRECT_URL', '/'),
+
+            # Infrastructure — Redis / Celery
+            'REDIS_HOST': getattr(settings, 'REDIS_HOST', 'redis'),
+            'REDIS_PORT': getattr(settings, 'REDIS_PORT', '6379'),
+            'REDIS_PASSWORD_SET': bool(getattr(settings, 'REDIS_PASSWORD', '')),
+            'CELERY_RESULT_BACKEND': getattr(settings, 'CELERY_RESULT_BACKEND', ''),
+
+            # Container Registry
+            'CONTAINER_REGISTRY_URL': getattr(settings, 'CONTAINER_REGISTRY_URL', ''),
+            'REGISTRY_USER': getattr(settings, 'REGISTRY_USER', '') or 'Not set',
+            'REGISTRY_PASSWORD_SET': bool(getattr(settings, 'REGISTRY_PASSWORD', '')),
+
+            # Rate Limiting
+            'THROTTLE_RATES': settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {}),
+
+            # Database (safe subset)
+            'DATABASE_ENGINE': settings.DATABASES['default'].get('ENGINE', ''),
+            'DATABASE_NAME': settings.DATABASES['default'].get('NAME', ''),
+            'DATABASE_HOST': settings.DATABASES['default'].get('HOST', 'localhost'),
+
+            # Webhook
+            'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
         })
