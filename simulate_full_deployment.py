@@ -7,7 +7,7 @@ import time
 
 # --- MOCK DATA ---
 GITHUB_SECRET = 'your-github-webhook-secret-here'  # Will be overridden by environment or args for real test
-API_URL = 'http://localhost:8000/api/v1'  # Backend API URL
+API_URL = 'http://localhost:8090/api/v1'  # Target Nginx on Host Port 8090
 
 # Simulate GitHub Push Payload
 webhook_payload = {
