@@ -14,6 +14,7 @@ from .views_analysis import RepoAnalysisView
 from .views_chat import AIChatView
 from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
+from .views_oauth import oauth_providers_status, oauth_credentials
 
 # Create main router
 router = DefaultRouter()
@@ -49,5 +50,7 @@ urlpatterns = router.urls + [
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
+    path('oauth/status/', oauth_providers_status, name='oauth-status'),
+    path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
 ]
 
