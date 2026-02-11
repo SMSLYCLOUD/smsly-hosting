@@ -13,24 +13,27 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Stage 2: Runner
+# Stage 2: Runner (standalone mode for production + middleware support)
 FROM node:20-alpine AS runner
 WORKDIR /app
-ENV NODE_ENV production
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 # Security: Create user first
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nextjs -u 1001
 
-# Copy files with correct ownership directly (faster than chown -R)
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+# Copy standalone server (includes all necessary node_modules inline)
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 
-# Copy all build output with correct permissions
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+# Copy static assets (not included in standalone output)
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
 USER nextjs
 
 EXPOSE 3000
-CMD ["npm", "start"]
+
+# Use standalone server directly (supports middleware, SSR, rewrites)
+CMD ["node", "server.js"]
