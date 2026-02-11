@@ -18,6 +18,7 @@ try:
 except Exception as e:
     raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'")
 DEBUG = config('DEBUG', default=False, cast=bool)
+SMSLY_DISABLE_SIGNATURE_CHECK = config('SMSLY_DISABLE_SIGNATURE_CHECK', default=False, cast=bool)
 
 # Security hardening
 if not DEBUG:
