@@ -219,7 +219,7 @@ const stagger = {
 
 export default function Home() {
     return (
-        <main className="min-h-screen bg-white dark:bg-slate-950">
+        <main className="min-h-screen relative">
             <Navbar />
 
             <section className="relative pt-32 pb-24 overflow-hidden" style={{ background: 'linear-gradient(to bottom, #87CEEB, #56CCF2 30%, #B8E8F5 60%, #ffffff)' }}>
