@@ -27,7 +27,7 @@ class AzureAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         return f"/subscriptions/{self.subscription_id}/resourceGroups/smsly-rg/providers/Microsoft.App/containerApps/{service_name}"
 
     def deploy_function(self, function_name: str,

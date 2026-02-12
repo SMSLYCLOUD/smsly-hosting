@@ -237,7 +237,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             image=image_name,
             env_vars=env_vars,
             cpu=int(service.cpu_cores * 1024),
-            memory=service.memory_mb
+            memory=service.memory_mb,
+            replicas=service.min_replicas
         )
 
         # Step 3: Success

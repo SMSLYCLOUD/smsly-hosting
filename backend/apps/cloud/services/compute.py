@@ -39,12 +39,12 @@ class ComputeService:
                 f"Provider {self.provider.provider_type} not supported yet")
 
     def deploy_container(self, name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int = 256, memory: int = 512) -> CloudResource:
+                         env_vars: Dict[str, str], cpu: int = 256, memory: int = 512, replicas: int = 1) -> CloudResource:
         """
         Deploy a container service (ECS/Cloud Run/Azure Container Apps).
         """
         resource_id = self.adapter.deploy_container(
-            name, image, env_vars, cpu, memory)
+            name, image, env_vars, cpu, memory, replicas)
 
         resource, created = CloudResource.objects.update_or_create(
             provider=self.provider,

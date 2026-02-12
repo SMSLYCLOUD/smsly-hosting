@@ -161,7 +161,7 @@ docker compose -f docker-compose.prod.yml down
 
 ```bash
 ssh root@<VPS_IP>
-curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/deploy-vps.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh | sudo bash
 ```
 
 The script auto-handles:
@@ -486,7 +486,7 @@ python manage.py migrate
 | Scenario | Action | RTO |
 |---|---|---|
 | DB corruption | Stop writers → `pg_restore` from latest backup → restart | 15 min |
-| Full server failure | New VPS → `deploy-vps.sh` → restore DB + registry volumes | 60 min |
+| Full server failure | New VPS → `install.sh` → restore DB + registry volumes | 60 min |
 | Failed deployment | `git checkout <hash>` → `docker compose up -d --build` | 5 min |
 
 ### Backup Retention

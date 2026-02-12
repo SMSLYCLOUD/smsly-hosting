@@ -43,10 +43,10 @@ class LocalAdapter(BaseCloudAdapter):
         return self.docker_client is not None or self.k8s_client is not None
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         if self.k8s_client:
             return self._deploy_k8s(
-                service_name, image, env_vars, cpu, memory)
+                service_name, image, env_vars, cpu, memory, replicas)
         elif self.docker_client:
             return self._deploy_docker(service_name, image, env_vars)
         else:
@@ -115,14 +115,14 @@ class LocalAdapter(BaseCloudAdapter):
         return container.id
 
     def _deploy_k8s(self, name: str, image: str,
-                    env: Dict[str, str], cpu: int, memory: int) -> str:
+                    env: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         namespace = 'default'
 
         # 1. Deployment
         deployment = client.V1Deployment(
             metadata=client.V1ObjectMeta(name=name),
             spec=client.V1DeploymentSpec(
-                replicas=1,
+                replicas=replicas,
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(labels={"app": name}),

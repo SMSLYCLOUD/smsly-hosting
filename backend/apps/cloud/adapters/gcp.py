@@ -18,7 +18,7 @@ class GCPAdapter(BaseCloudAdapter):
         return True
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         return f"projects/{self.project_id}/locations/{self.region}/services/{service_name}"
 
     def deploy_function(self, function_name: str,
