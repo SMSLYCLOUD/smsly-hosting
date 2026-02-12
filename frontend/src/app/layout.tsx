@@ -9,8 +9,11 @@ import { AuthProvider } from "@/components/auth-provider";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: "CloudNeuron",
-  description: "Next-gen hosting platform",
+  title: "CloudNeuron - The Intelligent Cloud Platform",
+  description: "Deploy apps in seconds. Scale globally with AI. Experience zero-config deployments and true multi-cloud freedom.",
+  icons: {
+    icon: "/images/logo.svg",
+  },
 };
 
 import { FloatingAI } from "@/components/ai/FloatingAI";
@@ -41,4 +44,3 @@ export default function RootLayout({
     </html>
   );
 }
-
