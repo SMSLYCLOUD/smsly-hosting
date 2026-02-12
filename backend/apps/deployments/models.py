@@ -153,6 +153,7 @@ class Service(TimeStampedModel):
     def save(self, *args, **kwargs):
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
+        self.full_clean()  # Enforce validation (e.g. max_length)
         super().save(*args, **kwargs)
 
 
@@ -254,3 +255,7 @@ class Deployment(TimeStampedModel):
         if self.is_rollback:
             label = f"[ROLLBACK] {label}"
         return label
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
