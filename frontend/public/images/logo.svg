@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10b981"/>
+      <stop offset="1" stop-color="#047857"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" rx="40" fill="url(#g)"/>
+  <!-- Neural Network Connections -->
+  <path d="M100 60 L140 90 L130 140 L70 140 L60 90 Z" fill="none" stroke="white" stroke-width="8" stroke-linejoin="round" opacity="0.5"/>
+  <line x1="100" y1="60" x2="100" y2="100" stroke="white" stroke-width="6"/>
+  <line x1="140" y1="90" x2="100" y2="100" stroke="white" stroke-width="6"/>
+  <line x1="130" y1="140" x2="100" y2="100" stroke="white" stroke-width="6"/>
+  <line x1="70" y1="140" x2="100" y2="100" stroke="white" stroke-width="6"/>
+  <line x1="60" y1="90" x2="100" y2="100" stroke="white" stroke-width="6"/>
+
+  <!-- Nodes -->
+  <circle cx="100" cy="60" r="12" fill="white"/>
+  <circle cx="140" cy="90" r="12" fill="white"/>
+  <circle cx="130" cy="140" r="12" fill="white"/>
+  <circle cx="70" cy="140" r="12" fill="white"/>
+  <circle cx="60" cy="90" r="12" fill="white"/>
+
+  <!-- Central Core -->
+  <circle cx="100" cy="100" r="16" fill="white"/>
+</svg>

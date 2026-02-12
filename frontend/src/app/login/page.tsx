@@ -62,8 +62,9 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-md card-premium rounded-2xl">
         <CardHeader className="text-center space-y-2">
-          <div className="mx-auto mb-4">
-            <Image src="/images/logo.png" alt="CloudNeuron" width={120} height={40} className="h-10 w-auto mx-auto" />
+          <div className="mx-auto mb-4 flex flex-col items-center gap-2">
+            <Image src="/images/logo.svg" alt="CloudNeuron" width={48} height={48} className="h-12 w-12 mx-auto rounded-xl shadow-md" />
+            <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">CloudNeuron</span>
           </div>
           <CardTitle className="text-2xl font-bold tracking-tight">
             {showEmailForm ? "Sign in with Email" : "Welcome back"}
