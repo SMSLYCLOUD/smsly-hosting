@@ -17,7 +17,7 @@ class BaseCloudAdapter(ABC):
     # --- Compute ---
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         """
         Deploy a containerized application.
         Returns the resource ID (ARN, etc).
