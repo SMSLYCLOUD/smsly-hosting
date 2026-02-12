@@ -27,7 +27,8 @@ class SecurityMiddleware:
             '/media/',
             # Auth endpoints often need to be public or handle their own flow
             '/accounts/',
-            '/api/v1/auth/', 
+            '/api/v1/auth/',
+            '/api/v1/webhooks/',  # Webhooks have their own signature verification
         ]
 
     def __call__(self, request):
@@ -83,6 +84,10 @@ class SecurityMiddleware:
         
         # Skip HMAC for session-authenticated requests (browser with cookies)
         if request.COOKIES.get('sessionid') or request.COOKIES.get('csrftoken'):
+            return False
+
+        # Skip if user is already authenticated (e.g. via session/token middleware)
+        if hasattr(request, 'user') and request.user.is_authenticated:
             return False
             
         return self.enforce_signature

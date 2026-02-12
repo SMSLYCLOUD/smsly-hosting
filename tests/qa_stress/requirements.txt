@@ -1,1 +1,8 @@
-psutil\nfpdf\nopenpyxl\npython-docx\nmatplotlib\npandas
+psutil
+fpdf
+openpyxl
+python-docx
+matplotlib
+pandas
+numpy
+requests

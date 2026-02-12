@@ -116,10 +116,10 @@ class BuildSecurityTests(TestCase):
             service=self.service,
             status=Deployment.Status.BUILDING,
             commit_hash='sec123',
-            security_scan='{"vulnerabilities": 0, "status": "clean"}'
+            vulnerability_report={"vulnerabilities": 0, "status": "clean"}
         )
         deployment.refresh_from_db()
-        self.assertIn('clean', deployment.security_scan)
+        self.assertEqual(deployment.vulnerability_report['status'], 'clean')
 
     def test_deployment_container_id_set_after_success(self):
         """After a successful build+deploy, container_id should be set."""

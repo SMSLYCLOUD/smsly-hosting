@@ -14,7 +14,8 @@ class AIDiagnosisTests(APITestCase):
         self.deployment = Deployment.objects.create(
             service=self.service,
             status=Deployment.Status.FAILED,
-            build_logs="Error: JavaScript heap out of memory"
+            build_logs="Error: JavaScript heap out of memory",
+            commit_hash='abc1234'
         )
 
     def test_diagnosis_generation(self):
@@ -29,9 +30,5 @@ class AIDiagnosisTests(APITestCase):
 
         response = self.client.post(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn("diagnosis", response.data)
-        # Note: The mock AI might return a generic message in simulation mode
-        # self.assertIn("ran out of memory", response.data['diagnosis'])
-
-        self.deployment.refresh_from_db()
-        self.assertIsNotNone(self.deployment.ai_diagnosis)
+        # Verify the async task trigger message
+        self.assertEqual(response.data['message'], 'Analysis started')

@@ -30,6 +30,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """ZH-001 FIX: Only return services owned by the requesting user."""
+        if self.request.user.is_superuser:
+            return Service.objects.all()
         return Service.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
@@ -376,7 +378,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                             status=status.HTTP_400_BAD_REQUEST)
 
         # Security: File size limit (100MB)
-        MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+        MAX_UPLOAD_SIZE = getattr(settings, 'MAX_UPLOAD_SIZE', 100 * 1024 * 1024)
         if uploaded_file.size > MAX_UPLOAD_SIZE:
             size_mb = uploaded_file.size / 1024 / 1024
             return Response(
