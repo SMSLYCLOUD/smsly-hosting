@@ -58,7 +58,7 @@ if [ ! -f .env ]; then
     FIELD_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=")
     SECRET_KEY=$(openssl rand -hex 32)
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
-    PUBLIC_IP=$(curl -s ifconfig.me || echo "localhost")
+    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | head -n 1 || echo "localhost")
 
     cat <<EOF > .env
 ENVIRONMENT=production
