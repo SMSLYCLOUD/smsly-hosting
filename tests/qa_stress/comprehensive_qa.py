@@ -102,7 +102,7 @@ class ReportGenerator:
 
     def generate(self):
         with open(REPORT_FILE, "w") as f:
-            f.write(f"# 🛡️ Jules Ultimate QA Protocol Report\n\n")
+            f.write("# 🛡️ Jules Ultimate QA Protocol Report\n\n")
             f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"**Summary:** {self.summary['passed']}/{self.summary['total']} Passed ({self.summary['failed']} Failed)\n\n")
             for section in self.sections:
@@ -199,9 +199,9 @@ class AdversarialTester:
             Service.objects.create(name=bad_name, owner=self.user)
             # If created, check it didn't execute SQL
             if User.objects.exists():
-                 checks.append(reporter.add_result("SQL Injection Name", True, "Created safely, DB intact"))
+                checks.append(reporter.add_result("SQL Injection Name", True, "Created safely, DB intact"))
             else:
-                 checks.append(reporter.add_result("SQL Injection Name", False, "CRITICAL: DB Tables Dropped!"))
+                checks.append(reporter.add_result("SQL Injection Name", False, "CRITICAL: DB Tables Dropped!"))
         except Exception as e:
             # Creation failure is also acceptable if validation catches it
             checks.append(reporter.add_result("SQL Injection Name", True, f"Blocked/Failed safely: {e}"))
@@ -222,7 +222,7 @@ class AdversarialTester:
             svc.save()
             checks.append(reporter.add_result("Huge Name (1000 chars)", False, "Validation bypassed! Saved 1000 chars"))
         except Exception as e:
-             checks.append(reporter.add_result("Huge Name (1000 chars)", True, f"Correctly rejected: {e}"))
+            checks.append(reporter.add_result("Huge Name (1000 chars)", True, f"Correctly rejected: {e}"))
 
         return "\n".join(checks)
 
@@ -241,7 +241,7 @@ class AdversarialTester:
             else:
                 checks.append(reporter.add_result("Special Char Env Var", False, "Corruption on retrieval"))
         except Exception as e:
-             checks.append(reporter.add_result("Special Char Env Var", False, str(e)))
+            checks.append(reporter.add_result("Special Char Env Var", False, str(e)))
 
         return "\n".join(checks)
 

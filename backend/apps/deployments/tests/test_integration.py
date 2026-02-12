@@ -142,19 +142,18 @@ class FileUploadSecurityTests(APITestCase):
             http_status.HTTP_400_BAD_REQUEST)
         self.assertIn('Invalid file type', response.data.get('error', ''))
 
+    @override_settings(MAX_UPLOAD_SIZE=500)
     def test_upload_enforces_size_limit(self):
         """Test that oversized files are rejected."""
         from django.core.files.uploadedfile import SimpleUploadedFile
 
         url = '/api/v1/deployments/upload/'
-        # Create a mock file that claims to be 150MB
+        # Create a file larger than 500 bytes
         large_file = SimpleUploadedFile(
             "large.zip",
-            b"x" * 1024,  # Actual content doesn't matter
+            b"x" * 1024,  # 1KB content
             content_type="application/zip"
         )
-        # Override size to simulate 150MB file
-        large_file.size = 150 * 1024 * 1024
 
         data = {
             'service_id': str(self.service.id),
