@@ -26,10 +26,10 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
     ];
 
     return (
-        <main className="min-h-screen flex flex-col bg-background text-foreground">
+        <main className="min-h-screen flex flex-col text-foreground relative">
             <Navbar />
 
-            <div className="border-b border-border bg-card">
+            <div className="border-b border-border bg-card/60 backdrop-blur-md">
                 <div className="container mx-auto py-6">
                     <div className="flex items-center gap-4 mb-6">
                         <Link href="/dashboard" className="p-2 hover:bg-muted rounded-full transition-colors text-muted-foreground hover:text-foreground">
@@ -84,7 +84,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                 </div>
             </div>
 
-            <div className="flex-1 bg-background/50">
+            <div className="flex-1 relative z-10">
                 <div className="container mx-auto py-8">
                     {children}
                 </div>
