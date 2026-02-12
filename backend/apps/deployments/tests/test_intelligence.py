@@ -14,7 +14,8 @@ class AIDiagnosisTests(APITestCase):
         self.deployment = Deployment.objects.create(
             service=self.service,
             status=Deployment.Status.FAILED,
-            build_logs="Error: JavaScript heap out of memory"
+            build_logs="Error: JavaScript heap out of memory",
+            commit_hash='abc1234'
         )
 
     def test_diagnosis_generation(self):
