@@ -42,7 +42,8 @@ class WebhookSecurityTests(TestCase):
             '/api/v1/webhooks/github/',
             data=payload,
             content_type='application/json',
-            HTTP_X_HUB_SIGNATURE_256=signature
+            HTTP_X_HUB_SIGNATURE_256=signature,
+            HTTP_X_GITHUB_EVENT='push'
         )
         
         self.assertEqual(response.status_code, 200)
@@ -82,7 +83,8 @@ class WebhookSecurityTests(TestCase):
             '/api/v1/webhooks/github/',
             data=payload,
             content_type='application/json',
-            HTTP_X_HUB_SIGNATURE_256=signature
+            HTTP_X_HUB_SIGNATURE_256=signature,
+            HTTP_X_GITHUB_EVENT='push'
         )
         
         # NOTE: Replay protection requires timestamp validation

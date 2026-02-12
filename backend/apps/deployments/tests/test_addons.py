@@ -69,11 +69,13 @@ class AddonProvisioningModelTests(TestCase):
             key='DATABASE_URL',
             value='postgresql://user:pass@db:5432/mydb'
         )
-        self.assertEqual(self.service.env_vars.count(), 1)
+        # Expect 2: DATABASE_URL + SMSLY_API_KEY
+        self.assertEqual(self.service.env_vars.count(), 2)
 
         # Deprovision: remove the env var
         self.service.env_vars.filter(key='DATABASE_URL').delete()
-        self.assertEqual(self.service.env_vars.count(), 0)
+        # Expect 1: SMSLY_API_KEY remains
+        self.assertEqual(self.service.env_vars.count(), 1)
 
     def test_multiple_addons_per_service(self):
         """A service should support multiple addon env vars."""
@@ -87,7 +89,8 @@ class AddonProvisioningModelTests(TestCase):
             key='REDIS_URL',
             value='redis://redis:6379/0'
         )
-        self.assertEqual(self.service.env_vars.count(), 2)
+        # Expect 3: DATABASE_URL + REDIS_URL + SMSLY_API_KEY
+        self.assertEqual(self.service.env_vars.count(), 3)
 
 
 class AddonAPITests(APITestCase):
