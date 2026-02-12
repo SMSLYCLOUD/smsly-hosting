@@ -1,6 +1,6 @@
 # 🛡️ Jules Ultimate QA Protocol Report
 
-**Date:** 2026-02-12 01:10:47
+**Date:** 2026-02-12 01:55:39
 **Summary:** 18/19 Passed (1 Failed)
 
 ## Phase 4: Skills & Artifacts
@@ -19,14 +19,14 @@
 - ✅ **Create 10MB File**: Success
 ## Phase 2: Adversarial & Security
 
-- ✅ **SQL Injection Name**: Blocked/Failed safely: UNIQUE constraint failed: deployments_service.name
-- ✅ **XSS Name Storage**: Blocked: UNIQUE constraint failed: deployments_service.name
+- ✅ **SQL Injection Name**: Blocked/Failed safely: {'name': ['Service with this Name already exists.']}
+- ✅ **XSS Name Storage**: Blocked: {'name': ['Service with this Name already exists.']}
 - ✅ **Huge Name (1000 chars)**: Correctly rejected: {'name': ['Ensure this value has at most 255 characters (it has 1000).']}
 - ✅ **Special Char Env Var**: Stored and retrieved correctly
-- ✅ **Bulk Create 5000 Records**: Time: 0.32s, Count: 5000
+- ✅ **Bulk Create 5000 Records**: Time: 0.33s, Count: 5000
 ## Phase 3: Integration & Workflows
 
-- ✅ **Create Service**: ID: 73ab5012-de50-461a-b851-9447c92d7dc8
-- ✅ **Queue Deployment**: ID: 469655a0-ed3b-4876-ad19-cca9aa8f7b23
+- ✅ **Create Service**: ID: 3fcd3228-7522-49d3-b32f-e526ed3ee3cb
+- ✅ **Queue Deployment**: ID: ef3a6731-a0dc-4da7-8199-54f324ef8c39
 - ✅ **Simulate Build/Deploy**: Status -> ACTIVE
 - ✅ **Verify History**: Found 1 deployment
