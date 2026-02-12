@@ -28,8 +28,8 @@ if not settings.configured:
         FIELD_ENCRYPTION_KEY='oEukOknPHtrnRjXRXAxTisUqXrnVjmQRBna5u4NV-_8=', # Reusing for consistency
         DATABASES={
             'default': {
-                'ENGINE': 'django.db.backends.sqlite3',
-                'NAME': DB_NAME,
+               'ENGINE': 'django.db.backends.sqlite3',
+               'NAME': DB_NAME,
             }
         },
         INSTALLED_APPS=[
@@ -106,7 +106,7 @@ class ReportGenerator:
             f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"**Summary:** {self.summary['passed']}/{self.summary['total']} Passed ({self.summary['failed']} Failed)\n\n")
             for section in self.sections:
-                f.write(section)
+               f.write(section)
         print(f"\n📄 Report generated at: {REPORT_FILE}")
 
 reporter = ReportGenerator()
@@ -127,7 +127,7 @@ class SystemTester:
         # 1. Write to /tmp (Should be allowed)
         try:
             with open("/tmp/jules_test.txt", "w") as f:
-                f.write("test")
+               f.write("test")
             checks.append(reporter.add_result("Write /tmp", True, "Successfully wrote to /tmp"))
         except Exception as e:
             checks.append(reporter.add_result("Write /tmp", False, str(e)))
@@ -136,16 +136,16 @@ class SystemTester:
         sensitive_files = ["/etc/shadow", "/root/.bashrc"]
         for s_file in sensitive_files:
             if os.path.exists(s_file):
-                try:
-                    with open(s_file, "r") as f:
-                        f.read()
-                    checks.append(reporter.add_result(f"Read {s_file}", False, "WARNING: Could read sensitive file!"))
-                except PermissionError:
-                    checks.append(reporter.add_result(f"Read {s_file}", True, "Permission denied (Expected)"))
-                except Exception as e:
-                    checks.append(reporter.add_result(f"Read {s_file}", True, f"Access failed: {e} (Expected)"))
+               try:
+                  with open(s_file, "r") as f:
+                      f.read()
+                  checks.append(reporter.add_result(f"Read {s_file}", False, "WARNING: Could read sensitive file!"))
+               except PermissionError:
+                  checks.append(reporter.add_result(f"Read {s_file}", True, "Permission denied (Expected)"))
+               except Exception as e:
+                  checks.append(reporter.add_result(f"Read {s_file}", True, f"Access failed: {e} (Expected)"))
             else:
-                checks.append(reporter.add_result(f"Read {s_file}", True, "File does not exist (Safe)"))
+               checks.append(reporter.add_result(f"Read {s_file}", True, "File does not exist (Safe)"))
 
         return "\n".join(checks)
 
@@ -166,7 +166,7 @@ class SystemTester:
             # Create 10MB file
             size_mb = 10
             with open("test-results/large_file.dat", "wb") as f:
-                f.write(os.urandom(size_mb * 1024 * 1024))
+               f.write(os.urandom(size_mb * 1024 * 1024))
             checks.append(reporter.add_result(f"Create {size_mb}MB File", True, "Success"))
             os.remove("test-results/large_file.dat")
         except Exception as e:
@@ -199,9 +199,9 @@ class AdversarialTester:
             Service.objects.create(name=bad_name, owner=self.user)
             # If created, check it didn't execute SQL
             if User.objects.exists():
-                checks.append(reporter.add_result("SQL Injection Name", True, "Created safely, DB intact"))
+               checks.append(reporter.add_result("SQL Injection Name", True, "Created safely, DB intact"))
             else:
-                checks.append(reporter.add_result("SQL Injection Name", False, "CRITICAL: DB Tables Dropped!"))
+               checks.append(reporter.add_result("SQL Injection Name", False, "CRITICAL: DB Tables Dropped!"))
         except Exception as e:
             # Creation failure is also acceptable if validation catches it
             checks.append(reporter.add_result("SQL Injection Name", True, f"Blocked/Failed safely: {e}"))
@@ -237,9 +237,9 @@ class AdversarialTester:
             EnvironmentVariable.objects.create(service=svc, key="SPECIAL", value=special_val)
             fetched = EnvironmentVariable.objects.get(service=svc, key="SPECIAL")
             if fetched.value == special_val:
-                checks.append(reporter.add_result("Special Char Env Var", True, "Stored and retrieved correctly"))
+               checks.append(reporter.add_result("Special Char Env Var", True, "Stored and retrieved correctly"))
             else:
-                checks.append(reporter.add_result("Special Char Env Var", False, "Corruption on retrieval"))
+               checks.append(reporter.add_result("Special Char Env Var", False, "Corruption on retrieval"))
         except Exception as e:
             checks.append(reporter.add_result("Special Char Env Var", False, str(e)))
 
@@ -254,7 +254,7 @@ class AdversarialTester:
         records = []
         for _ in range(5000):
             records.append(UsageRecord(
-                service=svc, cpu_cores=1.0, memory_mb=1024, duration_seconds=3600, cost=Decimal('0.01')
+               service=svc, cpu_cores=1.0, memory_mb=1024, duration_seconds=3600, cost=Decimal('0.01')
             ))
 
         start = time.time()
@@ -284,20 +284,20 @@ class IntegrationTester:
         try:
             # 1. Create Service
             svc = Service.objects.create(
-                name=f"e2e-app-{uuid.uuid4().hex[:6]}",
-                owner=self.user,
-                provider=self.provider,
-                deploy_type='GIT',
-                repository_url='https://github.com/smsly/test-repo'
+               name=f"e2e-app-{uuid.uuid4().hex[:6]}",
+               owner=self.user,
+               provider=self.provider,
+               deploy_type='GIT',
+               repository_url='https://github.com/smsly/test-repo'
             )
             checks.append(reporter.add_result("Create Service", True, f"ID: {svc.id}"))
 
             # 2. Create Deployment
             deploy = Deployment.objects.create(
-                service=svc,
-                commit_hash="abc1234",
-                commit_message="Initial commit",
-                status=Deployment.Status.QUEUED
+               service=svc,
+               commit_hash="abc1234",
+               commit_message="Initial commit",
+               status=Deployment.Status.QUEUED
             )
             checks.append(reporter.add_result("Queue Deployment", True, f"ID: {deploy.id}"))
 
@@ -316,9 +316,9 @@ class IntegrationTester:
             # 4. Verify History
             history = Deployment.objects.filter(service=svc)
             if history.count() == 1:
-                checks.append(reporter.add_result("Verify History", True, "Found 1 deployment"))
+               checks.append(reporter.add_result("Verify History", True, "Found 1 deployment"))
             else:
-                checks.append(reporter.add_result("Verify History", False, f"Found {history.count()} deployments"))
+               checks.append(reporter.add_result("Verify History", False, f"Found {history.count()} deployments"))
 
         except Exception as e:
             checks.append(reporter.add_result("E2E Flow Failed", False, str(e)))
@@ -334,37 +334,37 @@ class SkillsTester:
             # Charts
             chart_paths = test_chart_skill()
             if chart_paths:
-                results.append(reporter.add_result("Chart Skill", True, f"Created {len(chart_paths)} charts"))
+               results.append(reporter.add_result("Chart Skill", True, f"Created {len(chart_paths)} charts"))
             else:
-                results.append(reporter.add_result("Chart Skill", False, "Failed to create charts"))
+               results.append(reporter.add_result("Chart Skill", False, "Failed to create charts"))
 
             # DOCX
             docx_path = test_docx_skill(chart_paths)
             if docx_path:
-                results.append(reporter.add_result("DOCX Skill", True, "Advanced DOCX created"))
+               results.append(reporter.add_result("DOCX Skill", True, "Advanced DOCX created"))
             else:
-                results.append(reporter.add_result("DOCX Skill", False, "Failed"))
+               results.append(reporter.add_result("DOCX Skill", False, "Failed"))
 
             # XLSX
             xlsx_path = test_xlsx_skill()
             if xlsx_path:
-                results.append(reporter.add_result("XLSX Skill", True, "Advanced XLSX created"))
+               results.append(reporter.add_result("XLSX Skill", True, "Advanced XLSX created"))
             else:
-                results.append(reporter.add_result("XLSX Skill", False, "Failed"))
+               results.append(reporter.add_result("XLSX Skill", False, "Failed"))
 
             # PDF
             pdf_path = test_pdf_skill()
             if pdf_path:
-                results.append(reporter.add_result("PDF Skill", True, "Advanced PDF created"))
+               results.append(reporter.add_result("PDF Skill", True, "Advanced PDF created"))
             else:
-                results.append(reporter.add_result("PDF Skill", False, "Failed"))
+               results.append(reporter.add_result("PDF Skill", False, "Failed"))
 
             # Frontend
             fe_path = test_frontend_design_skill()
             if fe_path:
-                results.append(reporter.add_result("Frontend Design Skill", True, "React artifact created"))
+               results.append(reporter.add_result("Frontend Design Skill", True, "React artifact created"))
             else:
-                results.append(reporter.add_result("Frontend Design Skill", False, "Failed"))
+               results.append(reporter.add_result("Frontend Design Skill", False, "Failed"))
 
         except Exception as e:
             results.append(reporter.add_result("Skills Execution", False, str(e)))
