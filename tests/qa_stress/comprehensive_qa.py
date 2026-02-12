@@ -145,7 +145,7 @@ class SystemTester:
                 except Exception as e:
                     checks.append(reporter.add_result(f"Read {s_file}", True, f"Access failed: {e} (Expected)"))
             else:
-                 checks.append(reporter.add_result(f"Read {s_file}", True, "File does not exist (Safe)"))
+                checks.append(reporter.add_result(f"Read {s_file}", True, "File does not exist (Safe)"))
 
         return "\n".join(checks)
 
