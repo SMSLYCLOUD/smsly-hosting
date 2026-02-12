@@ -495,7 +495,7 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env" 2>/dev/null || true
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
-    PUBLIC_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
     # ─── Patch missing required variables into existing .env ───────────────
     # Older .env files may be missing secrets added in later versions.
@@ -546,7 +546,8 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────
-    PUBLIC_IP=$(curl -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    # Force IPv4 to ensure valid URL syntax (avoiding [IPv6] bracket issues)
+    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
     echo -e "\n${BLUE}Select Deployment Mode:${NC}"
     echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
