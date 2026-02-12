@@ -36,7 +36,7 @@ class AWSAdapter(BaseCloudAdapter):
             return False
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         """
         Deploys a container to ECS Fargate.
         Steps:
@@ -118,7 +118,7 @@ class AWSAdapter(BaseCloudAdapter):
                 cluster='default',
                 serviceName=service_name,
                 taskDefinition=task_def_arn,
-                desiredCount=1,
+                desiredCount=replicas,
                 launchType='FARGATE',
                 networkConfiguration={
                     'awsvpcConfiguration': {
@@ -134,7 +134,8 @@ class AWSAdapter(BaseCloudAdapter):
                 ecs.update_service(
                     cluster='default',
                     service=service_name,
-                    taskDefinition=task_def_arn
+                    taskDefinition=task_def_arn,
+                    desiredCount=replicas
                 )
             else:
                 raise e
