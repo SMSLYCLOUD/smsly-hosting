@@ -3,12 +3,12 @@ from rest_framework import viewsets, permissions, status, parsers
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.authtoken.models import Token
 from django.utils import timezone
 from django.conf import settings
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from .models import Service, Deployment, EnvironmentVariable
 from .serializers import (
-    ServiceSerializer, DeploymentSerializer,
     ServiceSerializer, DeploymentSerializer,
     DeploymentTriggerSerializer, EnvVarSerializer,
     DeploymentTimelineSerializer, InstantRollbackSerializer,
@@ -19,6 +19,20 @@ from .tasks import smart_deploy_task
 from apps.cloud.models import CloudProvider
 import os
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_provider_for_service(service: Service):
+    """
+    Resolve provider for deployment in a fail-closed way.
+    - If service has an assigned provider, it must be active.
+    - Otherwise, fall back to the first active global provider.
+    """
+    if service.provider:
+        return service.provider if service.provider.is_active else None
+    return CloudProvider.objects.filter(is_active=True).first()
 
 
 class ServiceViewSet(viewsets.ModelViewSet):
@@ -60,9 +74,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         ref = request.data.get('ref', 'HEAD')
 
         # Determine provider
-        provider = service.provider or CloudProvider.objects.first()
+        provider = _resolve_provider_for_service(service)
         if not provider:
-            return Response({'error': 'No cloud provider configured'},
+            return Response({'error': 'No active cloud provider configured'},
                             status=status.HTTP_400_BAD_REQUEST)
 
         deployment = Deployment.objects.create(
@@ -125,7 +139,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             rollback_from=current,
         )
 
-        provider = service.provider or CloudProvider.objects.first()
+        provider = _resolve_provider_for_service(service)
         if provider:
             smart_deploy_task.delay(
                 str(rollback_deployment.id), str(provider.id))
@@ -242,6 +256,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """ZH-002 FIX: Only return deployments for services owned by the requesting user."""
+        if self.request.user.is_superuser:
+            return Deployment.objects.all()
         return Deployment.objects.filter(service__owner=self.request.user)
 
     @action(detail=True, methods=['post'])
@@ -264,13 +280,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             rollback_from=target_deployment,
         )
 
-        provider = service.provider or CloudProvider.objects.first()
+        provider = _resolve_provider_for_service(service)
         if provider:
             smart_deploy_task.delay(str(new_deployment.id), str(provider.id))
             return Response(DeploymentSerializer(
                 new_deployment).data, status=status.HTTP_201_CREATED)
 
-        return Response({'error': 'No provider available'},
+        return Response({'error': 'No active provider available'},
                         status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'])
@@ -361,7 +377,14 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         from apps.deployments.tasks_ai import analyze_failure_task
 
         # Trigger analysis asynchronously
-        analyze_failure_task.delay(str(deployment.id))
+        try:
+            analyze_failure_task.delay(str(deployment.id))
+        except Exception:
+            # Avoid hard-failing the API when the broker is unavailable.
+            logger.exception(
+                "Unable to queue AI diagnosis task for deployment %s",
+                deployment.id,
+            )
 
         return Response({'message': 'Analysis started'})
 
@@ -424,21 +447,18 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             deployment = Deployment.objects.create(
                 service=service,
                 status=Deployment.Status.QUEUED,
+                commit_hash=f"upload-{uuid.uuid4().hex[:32]}",
                 commit_message=f"CLI Upload: {uploaded_file.name}"
             )
 
             # If no provider set on service, find default
-            provider_id = str(
-                service.provider.id) if service.provider else None
+            provider = _resolve_provider_for_service(service)
+            provider_id = str(provider.id) if provider else None
             if not provider_id:
-                default_provider = CloudProvider.objects.first()
-                if default_provider:
-                    provider_id = str(default_provider.id)
-                else:
-                    return Response(
-                        {'error': 'No cloud provider configured'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+                return Response(
+                    {'error': 'No active cloud provider configured'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             smart_deploy_task.delay(str(deployment.id), provider_id)
 
@@ -459,13 +479,30 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
+        if self.request.user.is_superuser:
+            return AuditLog.objects.all()
+
+        username = self.request.user.get_username()
+        return AuditLog.objects.filter(actor=username)
+
+
+class SessionTokenView(APIView):
+    """
+    Exchange an authenticated Django session for a DRF token.
+    Used by the frontend callback page to avoid token-in-URL leakage.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        token, _ = Token.objects.get_or_create(user=request.user)
+        return Response({'token': token.key})
 
 class SystemConfigView(APIView):
     """
     Expose safe server configuration to the frontend.
     GET /api/v1/system/config/
     """
-    permission_classes = [permissions.IsAuthenticated]  # Admin/User only
+    permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
         return Response({

@@ -14,6 +14,12 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
     queryset = CloudProvider.objects.all()
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        # Provider credential mutations are admin-only.
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [permissions.IsAdminUser()]
+        return [permissions.IsAuthenticated()]
+
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return CloudProviderCreateSerializer
@@ -137,7 +143,7 @@ class IntelligenceViewSet(viewsets.ViewSet):
             'provider': provider.name(),
         })
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAdminUser])
     def ai_config(self, request):
         """
         Get current AI provider configuration.
@@ -150,7 +156,7 @@ class IntelligenceViewSet(viewsets.ViewSet):
             'providers': providers_list,
         })
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAdminUser])
     def update_ai_config(self, request):
         """
         Update AI provider configuration.
@@ -219,4 +225,3 @@ class IntelligenceViewSet(viewsets.ViewSet):
             'provider': provider_name,
             'key_set': bool(api_key),
         })
-

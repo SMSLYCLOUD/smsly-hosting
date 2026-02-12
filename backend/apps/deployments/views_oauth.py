@@ -9,6 +9,7 @@ from django.conf import settings
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminUser])
 def oauth_providers_status(request):
     """Get the status of OAuth providers (configured or not)."""
     try:

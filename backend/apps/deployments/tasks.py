@@ -95,6 +95,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
     from apps.deployments.models import Deployment, Service
 
     source_dir = None
+    deployment = None
 
     try:
         deployment = Deployment.objects.get(id=deployment_id)
@@ -231,6 +232,23 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         # Prepare Env Vars
         env_vars = {env.key: env.value for env in service.env_vars.all()}
 
+        # Normalize replicas to a safe value for runtime deployment.
+        requested_replicas = service.min_replicas
+        try:
+            replicas = int(requested_replicas)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid replicas value for service %s: %r. Falling back to 1.",
+                service.name, requested_replicas
+            )
+            replicas = 1
+        if replicas < 1:
+            logger.warning(
+                "Replicas must be >= 1 for service %s. Received %s; using 1.",
+                service.name, replicas
+            )
+            replicas = 1
+
         # Call Universal Adapter
         resource = compute.deploy_container(
             name=service.name,
@@ -238,7 +256,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             env_vars=env_vars,
             cpu=int(service.cpu_cores * 1024),
             memory=service.memory_mb,
-            replicas=service.min_replicas
+            replicas=replicas
         )
 
         # Step 3: Success
@@ -267,10 +285,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
 
     except Exception as e:
         logger.error("Deployment %s failed: %s", deployment_id, e)
-        deployment.status = Deployment.Status.FAILED
-        deployment.finished_at = timezone.now()
-        deployment.save()
-        _broadcast_status(deployment)
+        if deployment is not None:
+            deployment.status = Deployment.Status.FAILED
+            deployment.finished_at = timezone.now()
+            deployment.save()
+            _broadcast_status(deployment)
 
         # Cleanup on failure
         if source_dir and os.path.exists(source_dir):

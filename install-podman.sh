@@ -7,7 +7,7 @@
 # It is designed for users who prefer Podman over Docker.
 # =============================================================================
 
-set -e
+set -euo pipefail
 
 # Colors
 GREEN='\033[0;32m'
@@ -49,15 +49,18 @@ echo -e "\n${YELLOW}[5/6] Configuring SMSLY Hosting...${NC}"
 INSTALL_DIR="/opt/smsly-hosting"
 
 if [ ! -d "$INSTALL_DIR" ]; then
-    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git $INSTALL_DIR || true
+    git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
 fi
-cd $INSTALL_DIR
+cd "$INSTALL_DIR"
 
 # Generate Secrets if missing
 if [ ! -f .env ]; then
-    FIELD_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=")
+    FIELD_KEY=$(python3 -c "import os, base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())")
     SECRET_KEY=$(openssl rand -hex 32)
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    REDIS_PASSWORD=$(openssl rand -hex 16)
+    GATEWAY_SECRET=$(openssl rand -hex 32)
+    GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
     PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | head -n 1 || echo "localhost")
 
     cat <<EOF > .env
@@ -66,8 +69,11 @@ DEBUG=False
 SECRET_KEY=$SECRET_KEY
 FIELD_ENCRYPTION_KEY=$FIELD_KEY
 DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
-REDIS_URL=redis://redis:6379/0
-CELERY_BROKER_URL=redis://redis:6379/0
+REDIS_PASSWORD=$REDIS_PASSWORD
+REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+CELERY_BROKER_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+GATEWAY_SECRET=$GATEWAY_SECRET
+GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting

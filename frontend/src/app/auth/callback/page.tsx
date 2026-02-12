@@ -7,28 +7,79 @@ import { Loader2 } from "lucide-react";
 // Prevent static prerendering — this page needs runtime URL params
 export const dynamic = "force-dynamic";
 
+const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+function setAuthTokenCookie(token: string) {
+  const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+  const cookieParts = [
+    `auth_token=${encodeURIComponent(token)}`,
+    "path=/",
+    `max-age=${AUTH_COOKIE_MAX_AGE_SECONDS}`,
+    "SameSite=Lax",
+  ];
+  if (isSecure) {
+    cookieParts.push("Secure");
+  }
+  document.cookie = cookieParts.join("; ");
+}
+
+function clearAuthTokenCookie() {
+  document.cookie = "auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; SameSite=Lax";
+}
+
+async function fetchSessionToken(): Promise<string | null> {
+  try {
+    const response = await fetch("/api/v1/auth/session-token/", {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    return typeof data?.token === "string" ? data.token : null;
+  } catch (error) {
+    console.error("Failed to fetch session token:", error);
+    return null;
+  }
+}
+
 function CallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    // Parse the auth_token injected by CustomAccountAdapter / CustomSocialAccountAdapter
-    const token = searchParams.get("auth_token");
+    let active = true;
 
-    if (token) {
-      // Store the DRF token for API calls
-      localStorage.setItem("auth_token", token);
+    const completeAuth = async () => {
+      // Backward-compatible fallback only: older backends may still pass token in query.
+      const queryToken = searchParams.get("auth_token");
+      const token = queryToken || await fetchSessionToken();
 
-      // Also set a cookie so the middleware can detect authenticated state
-      document.cookie = `sessionid=${token}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
-    }
+      if (!active) {
+        return;
+      }
 
-    // Redirect to dashboard after token is stored
-    const timer = setTimeout(() => {
-      router.push("/dashboard");
-    }, 500);
+      if (token) {
+        localStorage.setItem("auth_token", token);
+        setAuthTokenCookie(token);
+        router.replace("/dashboard");
+        return;
+      }
 
-    return () => clearTimeout(timer);
+      localStorage.removeItem("auth_token");
+      clearAuthTokenCookie();
+      router.replace("/login");
+    };
+
+    completeAuth();
+
+    return () => {
+      active = false;
+    };
   }, [router, searchParams]);
 
   return (

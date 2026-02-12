@@ -1,6 +1,8 @@
 """Models module."""
 import uuid
 from django.db import models
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from encrypted_model_fields.fields import EncryptedCharField
 from django.utils.translation import gettext_lazy as _
 from apps.cloud.models import CloudProvider
@@ -94,8 +96,10 @@ class Service(TimeStampedModel):
     memory_mb = models.IntegerField(default=512)
 
     # Auto-Scaling
-    min_replicas = models.IntegerField(default=1)
-    max_replicas = models.IntegerField(default=1)
+    min_replicas = models.IntegerField(
+        default=1, validators=[MinValueValidator(1)])
+    max_replicas = models.IntegerField(
+        default=1, validators=[MinValueValidator(1)])
     autoscale_cpu_target = models.IntegerField(
         default=80, help_text="Target CPU utilization percentage (HPA)")
     vpa_enabled = models.BooleanField(
@@ -149,6 +153,17 @@ class Service(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        super().clean()
+        if (
+            self.min_replicas is not None
+            and self.max_replicas is not None
+            and self.max_replicas < self.min_replicas
+        ):
+            raise ValidationError({
+                'max_replicas': 'max_replicas must be greater than or equal to min_replicas.'
+            })
 
     def save(self, *args, **kwargs):
         if not self.verification_token:
