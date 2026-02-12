@@ -54,8 +54,9 @@ class EnvironmentVariableModelTests(TestCase):
             key='DB_HOST',
             value='localhost'
         )
-        self.assertEqual(self.service.env_vars.count(), 1)
-        self.assertEqual(self.service.env_vars.first().key, 'DB_HOST')
+        # Expect 2: DB_HOST + SMSLY_API_KEY (from signal)
+        self.assertEqual(self.service.env_vars.count(), 2)
+        self.assertTrue(self.service.env_vars.filter(key='DB_HOST').exists())
 
     def test_delete_env_var(self):
         """Deleting an env var should remove it from DB."""
@@ -80,7 +81,8 @@ class EnvironmentVariableModelTests(TestCase):
             key='KEY_2',
             value='value_2'
         )
-        self.assertEqual(self.service.env_vars.count(), 2)
+        # Expect 3: KEY_1 + KEY_2 + SMSLY_API_KEY (from signal)
+        self.assertEqual(self.service.env_vars.count(), 3)
 
     def test_env_var_update(self):
         """Updating an env var value should persist."""
@@ -110,7 +112,8 @@ class EnvironmentVariableModelTests(TestCase):
         env_dict = {env.key: env.value for env in self.service.env_vars.all()}
         self.assertEqual(env_dict['DB_HOST'], 'db.smsly.cloud')
         self.assertEqual(env_dict['DB_PASS'], 'supersecret')
-        self.assertEqual(len(env_dict), 2)
+        # Expect 3: DB_HOST + DB_PASS + SMSLY_API_KEY
+        self.assertEqual(len(env_dict), 3)
 
 
 class EnvironmentVariableAPITests(APITestCase):
