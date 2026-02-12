@@ -12,19 +12,15 @@ export default function RegisterPage() {
     const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
 
     return (
-        <div className="min-h-screen flex flex-col premium-bg overflow-x-hidden">
+        <div className="min-h-screen flex flex-col relative overflow-x-hidden">
             <Navbar />
-            <div className="flex-1 flex items-center justify-center p-4 relative">
-            {/* Floating Gradient Orbs */}
-            <div className="floating-orb w-[500px] h-[500px] bg-emerald-500/10 -top-32 -right-32" style={{ animationDelay: '0s' }} />
-            <div className="floating-orb w-[400px] h-[400px] bg-cyan-500/8 bottom-1/4 -left-20" style={{ animationDelay: '4s' }} />
-            <div className="floating-orb w-[350px] h-[350px] bg-violet-500/6 -bottom-20 right-1/3" style={{ animationDelay: '8s' }} />
-            <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
+            <div className="flex-1 flex items-center justify-center p-4 relative z-10">
 
-            <Card className="w-full max-w-md card-premium rounded-2xl relative z-10">
+            <Card className="w-full max-w-md card-premium rounded-2xl">
                 <CardHeader className="text-center space-y-2">
-                    <div className="mx-auto mb-4">
-                        <Image src="/images/logo.png" alt="CloudNeuron" width={120} height={40} className="h-10 w-auto mx-auto" />
+                    <div className="mx-auto mb-4 flex flex-col items-center gap-2">
+                        <Image src="/images/logo.svg" alt="CloudNeuron" width={48} height={48} className="h-12 w-12 mx-auto rounded-xl shadow-md" />
+                        <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">CloudNeuron</span>
                     </div>
                     <CardTitle className="text-2xl font-bold tracking-tight">Create your account</CardTitle>
                     <CardDescription>
