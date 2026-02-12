@@ -11,6 +11,22 @@ import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
 import { Navbar } from "@/components/layout/Navbar";
 
+const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+function setAuthTokenCookie(token: string) {
+  const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+  const cookieParts = [
+    `auth_token=${encodeURIComponent(token)}`,
+    "path=/",
+    `max-age=${AUTH_COOKIE_MAX_AGE_SECONDS}`,
+    "SameSite=Lax",
+  ];
+  if (isSecure) {
+    cookieParts.push("Secure");
+  }
+  document.cookie = cookieParts.join("; ");
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -39,9 +55,23 @@ export default function LoginPage() {
 
       if (response.ok) {
         const data = await response.json();
-        // Store token if returned
-        if (data.key || data.token) {
-          localStorage.setItem("auth_token", data.key || data.token);
+        let token = data.key || data.token || null;
+
+        if (!token) {
+          // Session-only auth fallback: exchange authenticated session for API token.
+          const tokenResponse = await fetch(`${BACKEND_URL}/api/v1/auth/session-token/`, {
+            method: "GET",
+            credentials: "include",
+          });
+          if (tokenResponse.ok) {
+            const tokenData = await tokenResponse.json();
+            token = tokenData?.token || null;
+          }
+        }
+
+        if (token) {
+          localStorage.setItem("auth_token", token);
+          setAuthTokenCookie(token);
         }
         router.push("/dashboard");
       } else {

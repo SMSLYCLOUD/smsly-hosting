@@ -2,7 +2,7 @@
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from rest_framework_nested import routers
-from .views import DeploymentViewSet, ServiceViewSet, SystemConfigView
+from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
 from .views_cron import CronJobViewSet
@@ -46,6 +46,7 @@ services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 urlpatterns = router.urls + [
     path('', include(services_router.urls)),
     # Non-router views
+    path('auth/session-token/', SessionTokenView.as_view(), name='session-token'),
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
@@ -53,4 +54,3 @@ urlpatterns = router.urls + [
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
 ]
-

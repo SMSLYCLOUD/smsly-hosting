@@ -22,6 +22,12 @@ python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().
 
 # POSTGRES_PASSWORD
 openssl rand -base64 32
+
+# REDIS_PASSWORD
+openssl rand -base64 32
+
+# GITHUB_WEBHOOK_SECRET
+openssl rand -hex 32
 ```
 
 ### Create `.env` File
@@ -39,6 +45,8 @@ nano .env
 SECRET_KEY=<generated-secret-key>
 FIELD_ENCRYPTION_KEY=<generated-encryption-key>
 POSTGRES_PASSWORD=<generated-db-password>
+REDIS_PASSWORD=<generated-redis-password>
+GITHUB_WEBHOOK_SECRET=<generated-webhook-secret>
 
 # Domain
 DOMAIN=smsly.cloud
@@ -51,6 +59,10 @@ CORS_ALLOWED_ORIGINS=https://hosting.smsly.cloud
 
 # Database
 DATABASE_URL=postgres://smsly_admin:<POSTGRES_PASSWORD>@db:5432/smsly_hosting
+
+# Redis / Celery (password required in production)
+REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
+CELERY_BROKER_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
 
 # Production mode
 DEBUG=False

@@ -28,6 +28,7 @@ export default function NewServicePage() {
   const [sourceType, setSourceType] = React.useState<"git" | "template" | "docker">("git")
   const [repoUrl, setRepoUrl] = React.useState("")
   const [selectedTemplate, setSelectedTemplate] = React.useState<string | null>(null)
+  const [dockerImage, setDockerImage] = React.useState("")
   
   // Config state
   const [name, setName] = React.useState("")
@@ -39,6 +40,7 @@ export default function NewServicePage() {
     if (step === 1) {
       if (sourceType === "git" && !repoUrl) return
       if (sourceType === "template" && !selectedTemplate) return
+      if (sourceType === "docker" && !dockerImage) return
       
       // Auto-generate name from repo/template if empty
       if (!name) {
@@ -47,6 +49,9 @@ export default function NewServicePage() {
               setName(parts[parts.length - 1]?.replace(".git", "") || "my-service")
           } else if (sourceType === "template") {
               setName(`my-${selectedTemplate}-app`)
+          } else if (sourceType === "docker") {
+              const imageName = dockerImage.split("/").pop()?.split(":")[0]
+              setName((imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-"))
           }
       }
     }
@@ -64,6 +69,11 @@ export default function NewServicePage() {
             ? TEMPLATES.find(t => t.id === selectedTemplate)?.repo 
             : repoUrl
 
+        const deployType =
+          sourceType === "docker"
+            ? "DOCKER"
+            : "GIT" // Templates are backed by git repositories
+
         const createRes = await fetch("/api/v1/services/", {
             method: "POST",
             headers: { 
@@ -72,8 +82,9 @@ export default function NewServicePage() {
             },
             body: JSON.stringify({
                 name,
-                deploy_type: "GIT", // Templates are just git repos
-                repository_url: finalRepo,
+                deploy_type: deployType,
+                repository_url: sourceType === "docker" ? null : finalRepo,
+                docker_image: sourceType === "docker" ? dockerImage : null,
                 branch: "main",
                 cpu_cores: 0.5,
                 memory_mb: 512,
@@ -115,7 +126,7 @@ export default function NewServicePage() {
 
     } catch (err) {
         console.error(err)
-        // toast({ title: "Error", description: "Deployment failed. Check console.", variant: "destructive" })
+        toast({ title: "Error", description: "Deployment failed. Check console.", variant: "destructive" })
     } finally {
         setIsDeploying(false)
     }
@@ -209,6 +220,17 @@ export default function NewServicePage() {
                             ))}
                         </div>
                     )}
+
+                    {sourceType === "docker" && (
+                        <div className="space-y-2">
+                            <Label>Docker Image</Label>
+                            <Input
+                                placeholder="ghcr.io/org/app:latest"
+                                value={dockerImage}
+                                onChange={(e) => setDockerImage(e.target.value)}
+                            />
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -252,7 +274,13 @@ export default function NewServicePage() {
                         <CardContent className="space-y-4">
                             <div className="grid grid-cols-2 gap-4 text-sm">
                                 <div className="text-muted-foreground">Source</div>
-                                <div className="font-medium truncate">{sourceType === "template" ? `Template: ${selectedTemplate}` : repoUrl}</div>
+                                <div className="font-medium truncate">
+                                  {sourceType === "template"
+                                    ? `Template: ${selectedTemplate}`
+                                    : sourceType === "docker"
+                                      ? `Docker: ${dockerImage}`
+                                      : repoUrl}
+                                </div>
                                 
                                 <div className="text-muted-foreground">Name</div>
                                 <div className="font-medium">{name}</div>

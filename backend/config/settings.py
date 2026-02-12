@@ -107,7 +107,7 @@ ACCOUNT_USERNAME_REQUIRED = True
 LOGIN_REDIRECT_URL = '/auth/callback'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 
-# Custom Adapters to inject Token into redirect URL
+# Custom allauth adapters (callback redirect behavior)
 ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
 SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
 
