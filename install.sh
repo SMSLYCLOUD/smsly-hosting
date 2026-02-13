@@ -976,9 +976,10 @@ docker network create smsly-proxy 2>/dev/null || true
 
 # ─── BLINDSPOT FIX: Ensure entrypoint.sh has execute permissions ────────────
 # Windows git can strip +x bits. Fix before building.
-if [ -f "$INSTALL_DIR/backend/entrypoint.sh" ]; then
-    chmod +x "$INSTALL_DIR/backend/entrypoint.sh"
-fi
+#
+# NOTE: backend/Dockerfile already runs `chmod +x entrypoint.sh` inside the image.
+# Avoid mutating the git working tree on the host (file mode flips can block `git pull`).
+#
 
 # Both IP and SSL modes use the same compose stack.
 # Caddy (step 7) handles public-facing HTTP/HTTPS termination.
