@@ -111,6 +111,16 @@ sudo bash install.sh --update-frontend
 sudo bash install.sh --update-backend
 ```
 
+### Wipe Existing Installation (New VPS Reset)
+
+```bash
+cd /opt/smsly-hosting
+sudo bash install.sh --wipe
+```
+
+This removes the existing SMSLY installation directory and SMSLY Docker containers, volumes, and networks.
+For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
+
 ### Manual Deployment
 
 ```bash

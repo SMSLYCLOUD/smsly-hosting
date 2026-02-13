@@ -598,10 +598,10 @@ export default function Home() {
                         <div>
                             <h4 className="font-bold text-slate-900 dark:text-white mb-6">Product</h4>
                             <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
-                                <li><Link href="/features" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Features</Link></li>
+                                <li><Link href="/#features" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Features</Link></li>
                                 <li><Link href="/pricing" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Pricing</Link></li>
-                                <li><Link href="/enterprise" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Enterprise</Link></li>
-                                <li><Link href="/changelog" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Changelog</Link></li>
+                                <li><Link href="/contact" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Enterprise</Link></li>
+                                <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Changelog</Link></li>
                             </ul>
                         </div>
 
@@ -609,8 +609,8 @@ export default function Home() {
                             <h4 className="font-bold text-slate-900 dark:text-white mb-6">Resources</h4>
                             <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
                                 <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Documentation</Link></li>
-                                <li><Link href="/guides" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Guides</Link></li>
-                                <li><Link href="/api" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">API Reference</Link></li>
+                                <li><Link href="/docs/install" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Guides</Link></li>
+                                <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">API Reference</Link></li>
                                 <li><Link href="/status" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">System Status</Link></li>
                             </ul>
                         </div>
@@ -618,9 +618,9 @@ export default function Home() {
                         <div>
                             <h4 className="font-bold text-slate-900 dark:text-white mb-6">Legal</h4>
                             <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
-                                <li><Link href="/privacy" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Privacy Policy</Link></li>
-                                <li><Link href="/terms" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Terms of Service</Link></li>
-                                <li><Link href="/security" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Security</Link></li>
+                                <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Privacy Policy</Link></li>
+                                <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Terms of Service</Link></li>
+                                <li><Link href="/docs/install#security-hardening" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Security</Link></li>
                             </ul>
                         </div>
                     </div>

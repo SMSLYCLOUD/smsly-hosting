@@ -13,6 +13,7 @@
 #   Full update:      sudo bash install.sh --update
 #   Frontend only:    sudo bash install.sh --update-frontend
 #   Backend only:     sudo bash install.sh --update-backend
+#   Wipe install:     sudo bash install.sh --wipe
 #
 # Features:
 #   - Idempotent: safe to re-run without data loss
@@ -61,6 +62,46 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+# Validate and safely detect a usable IPv4 address for installer defaults.
+is_valid_ipv4() {
+    local ip="$1"
+    local octet
+
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r o1 o2 o3 o4 <<< "$ip"
+    for octet in "$o1" "$o2" "$o3" "$o4"; do
+        [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+        [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
+    done
+    return 0
+}
+
+detect_public_ip() {
+    local candidate=""
+    local endpoint=""
+    local endpoints=(
+        "https://api.ipify.org"
+        "https://ifconfig.me/ip"
+        "https://ipv4.icanhazip.com"
+    )
+
+    for endpoint in "${endpoints[@]}"; do
+        candidate="$(curl -4 -fsS -m 5 "$endpoint" 2>/dev/null | tr -d '\r\n' || true)"
+        if is_valid_ipv4 "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    candidate="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
+    if is_valid_ipv4 "$candidate"; then
+        echo "$candidate"
+        return 0
+    fi
+
+    echo "127.0.0.1"
+    return 0
+}
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 LOG_FILE="/var/log/smsly-install.log"
@@ -71,27 +112,37 @@ ROLLBACK_NEEDED=false
 
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
+WIPE_MODE="false"
 case "${1:-}" in
     --update)          UPDATE_MODE="full" ;;
     --update-frontend) UPDATE_MODE="frontend" ;;
     --update-backend)  UPDATE_MODE="backend" ;;
+    --wipe)            WIPE_MODE="true" ;;
     --help|-h)
-        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend]"
+        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--wipe]"
         echo ""
         echo "  (no args)          Fresh install"
         echo "  --update           Pull latest code and rebuild all services"
         echo "  --update-frontend  Pull latest code and rebuild frontend only"
         echo "  --update-backend   Pull latest code and rebuild backend only"
+        echo "  --wipe             Delete existing install artifacts (for fresh VPS reset)"
         exit 0
         ;;
 esac
+
+MODE_LABEL="fresh-install"
+if [ -n "$UPDATE_MODE" ]; then
+    MODE_LABEL="update-$UPDATE_MODE"
+elif [ "$WIPE_MODE" = "true" ]; then
+    MODE_LABEL="wipe"
+fi
 
 # Log all output to file AND terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  SMSLY Hosting Install Log — $(date -Iseconds)"
-echo "  Mode: ${UPDATE_MODE:-fresh-install}"
+echo "  Mode: $MODE_LABEL"
 echo "═══════════════════════════════════════════════════════════"
 
 # ─── Rollback Trap ──────────────────────────────────────────────────────────
@@ -133,6 +184,67 @@ echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
+# =============================================================================
+# WIPE MODE � Remove all install artifacts for a clean re-install
+# =============================================================================
+wipe_existing_install() {
+    echo -e "${YELLOW}[WIPE] Removing existing SMSLY Hosting installation artifacts...${NC}"
+
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --wipe)${NC}"
+        exit 1
+    fi
+
+    if [ "${FORCE_WIPE:-0}" != "1" ]; then
+        if [ -t 0 ]; then
+            echo -e "${RED}  WARNING: This permanently deletes containers, volumes, networks, and $INSTALL_DIR${NC}"
+            read -r -p "  Type WIPE to continue: " WIPE_CONFIRM
+            if [ "$WIPE_CONFIRM" != "WIPE" ]; then
+                echo -e "${YELLOW}  Wipe cancelled by user.${NC}"
+                exit 1
+            fi
+        else
+            echo -e "${RED}x Non-interactive wipe requires FORCE_WIPE=1${NC}"
+            exit 1
+        fi
+    fi
+
+    if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        cd "$INSTALL_DIR"
+        docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+    fi
+
+    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly" -q 2>/dev/null || true)
+    if [ -n "$SMSLY_CONTAINERS" ]; then
+        docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
+    fi
+
+    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q 2>/dev/null || true)
+    if [ -n "$SMSLY_VOLUMES" ]; then
+        for vol in $SMSLY_VOLUMES; do
+            docker volume rm "$vol" 2>/dev/null || true
+        done
+    fi
+
+    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly" -q 2>/dev/null || true)
+    if [ -n "$SMSLY_NETWORKS" ]; then
+        for net in $SMSLY_NETWORKS; do
+            docker network rm "$net" 2>/dev/null || true
+        done
+    fi
+
+    rm -rf "$INSTALL_DIR"
+    rm -f "$LOG_FILE"
+
+    trap - EXIT
+    echo -e "${GREEN}OK Wipe complete. The server is ready for a fresh install.${NC}"
+    echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh${NC}"
+    exit 0
+}
+
+if [ "$WIPE_MODE" = "true" ]; then
+    wipe_existing_install
+fi
 # =============================================================================
 # UPDATE MODE — Fast path for pulling latest code and rebuilding
 # =============================================================================
@@ -495,7 +607,7 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env" 2>/dev/null || true
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
-    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    PUBLIC_IP="$(detect_public_ip)"
 
     # ─── Patch missing required variables into existing .env ───────────────
     # Older .env files may be missing secrets added in later versions.
@@ -547,7 +659,7 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────
     # Force IPv4 to ensure valid URL syntax (avoiding [IPv6] bracket issues)
-    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    PUBLIC_IP="$(detect_public_ip)"
 
     echo -e "\n${BLUE}Select Deployment Mode:${NC}"
     echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
@@ -1048,6 +1160,7 @@ echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
 echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
+echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then

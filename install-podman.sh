@@ -14,6 +14,46 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+# Validate and safely detect a usable IPv4 address for installer defaults.
+is_valid_ipv4() {
+    local ip="$1"
+    local octet
+
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r o1 o2 o3 o4 <<< "$ip"
+    for octet in "$o1" "$o2" "$o3" "$o4"; do
+        [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+        [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
+    done
+    return 0
+}
+
+detect_public_ip() {
+    local candidate=""
+    local endpoint=""
+    local endpoints=(
+        "https://api.ipify.org"
+        "https://ifconfig.me/ip"
+        "https://ipv4.icanhazip.com"
+    )
+
+    for endpoint in "${endpoints[@]}"; do
+        candidate="$(curl -4 -fsS -m 5 "$endpoint" 2>/dev/null | tr -d '\r\n' || true)"
+        if is_valid_ipv4 "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    candidate="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
+    if is_valid_ipv4 "$candidate"; then
+        echo "$candidate"
+        return 0
+    fi
+
+    echo "127.0.0.1"
+    return 0
+}
 
 echo -e "${YELLOW}Starting Podman installation...${NC}"
 
@@ -61,7 +101,7 @@ if [ ! -f .env ]; then
     REDIS_PASSWORD=$(openssl rand -hex 16)
     GATEWAY_SECRET=$(openssl rand -hex 32)
     GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
-    PUBLIC_IP=$(curl -4 -s -m 5 ifconfig.me 2>/dev/null || hostname -I | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | head -n 1 || echo "localhost")
+    PUBLIC_IP="$(detect_public_ip)"
 
     cat <<EOF > .env
 ENVIRONMENT=production
