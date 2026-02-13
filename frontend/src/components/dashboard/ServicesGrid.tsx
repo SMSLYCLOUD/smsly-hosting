@@ -188,7 +188,7 @@ function EmptyServicesState() {
             Deploy from GitHub
           </Button>
         </Link>
-        <Link href="/templates">
+        <Link href="/store">
           <Button variant="outline" size="lg">
             Browse Templates
           </Button>

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -28,7 +27,6 @@ function setAuthTokenCookie(token: string) {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -81,7 +79,9 @@ export default function LoginPage() {
           localStorage.setItem("auth_token", token);
           setAuthTokenCookie(token);
         }
-        router.push("/dashboard");
+
+        // Full reload avoids Next.js route-cache edge cases around auth redirects.
+        window.location.assign("/dashboard");
       } else {
         const errorData = await response.json();
         setError(

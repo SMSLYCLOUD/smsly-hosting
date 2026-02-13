@@ -84,7 +84,7 @@ export function Navbar() {
       <div className="container flex h-16 items-center max-w-7xl mx-auto px-4 sm:px-6">
 
         {/* Logo - Left */}
-        <Link href="/" className="flex items-center group flex-shrink-0 gap-3">
+        <Link href="/" prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
             <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
             <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>
         </Link>
@@ -94,12 +94,13 @@ export function Navbar() {
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
-                    <Link
-                        key={link.href}
-                        href={link.href}
-                        className={`
-                            px-3 py-2 rounded-md text-sm font-medium transition-colors
-                            ${isActive
+                     <Link
+                         key={link.href}
+                         href={link.href}
+                         prefetch={false}
+                         className={`
+                             px-3 py-2 rounded-md text-sm font-medium transition-colors
+                             ${isActive
                                 ? 'text-emerald-600 dark:text-emerald-400'
                                 : 'text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400'}
                         `}
@@ -112,12 +113,13 @@ export function Navbar() {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
                 return (
-                    <Link
-                        key={link.href}
-                        href={link.href}
-                        className={`
-                            relative px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
-                            ${isActive
+                     <Link
+                         key={link.href}
+                         href={link.href}
+                         prefetch={false}
+                         className={`
+                             relative px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
+                             ${isActive
                                 ? 'text-primary bg-primary/5'
                                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
                         `}
@@ -140,11 +142,11 @@ export function Navbar() {
         {/* Right Side Buttons (Desktop) */}
         <div className="hidden md:flex items-center space-x-3">
           {user && (
-          <Link href="/new">
-              <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
-                  Deploy
-              </Button>
-          </Link>
+           <Link href="/new" prefetch={false}>
+               <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
+                   Deploy
+               </Button>
+           </Link>
           )}
 
           <div className="w-px h-6 bg-border mx-2" />
@@ -198,7 +200,7 @@ export function Navbar() {
                 </AnimatePresence>
              </div>
           ) : (
-            <Link href="/login">
+            <Link href="/login" prefetch={false}>
                 <Button variant="ghost" size="sm">Login</Button>
             </Link>
           )}
@@ -234,11 +236,12 @@ export function Navbar() {
                     <nav className="flex flex-col space-y-2">
                         {authLinks.map((link) => (
                              <Link
-                                key={link.href}
-                                href={link.href}
-                                className={`flex items-center gap-3 p-3 rounded-lg font-medium ${
-                                    pathname === link.href ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted'
-                                }`}
+                                 key={link.href}
+                                 href={link.href}
+                                 prefetch={false}
+                                 className={`flex items-center gap-3 p-3 rounded-lg font-medium ${
+                                     pathname === link.href ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted'
+                                 }`}
                                 onClick={() => setIsMenuOpen(false)}
                             >
                                 <link.icon size={20} /> {link.label}
@@ -248,7 +251,7 @@ export function Navbar() {
                     )}
                     <div className="pt-4 border-t border-border flex flex-col gap-3">
                         {user && (
-                        <Link href="/new" onClick={() => setIsMenuOpen(false)}>
+                        <Link href="/new" prefetch={false} onClick={() => setIsMenuOpen(false)}>
                             <Button className="w-full bg-gradient-to-r from-emerald-500 to-green-600 text-white font-bold h-11">
                                 Deploy Project
                             </Button>
@@ -259,7 +262,7 @@ export function Navbar() {
                                 <LogOut className="mr-2 h-4 w-4" /> Log out
                              </Button>
                         ) : (
-                            <Link href="/login" onClick={() => setIsMenuOpen(false)}>
+                            <Link href="/login" prefetch={false} onClick={() => setIsMenuOpen(false)}>
                                 <Button variant="outline" className="w-full">Login</Button>
                             </Link>
                         )}

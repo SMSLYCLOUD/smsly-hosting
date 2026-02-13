@@ -71,6 +71,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.google',
 
     # Local
+    'apps.core',
     'apps.deployments',
     'apps.cloud',
     'apps.teams',
