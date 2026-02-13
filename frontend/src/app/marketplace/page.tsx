@@ -34,12 +34,28 @@ interface Backup {
     created_at: string
 }
 
+type AddonType = Addon["addon_type"]
+
 const ADDON_TYPES = {
-    POSTGRES: { name: "PostgreSQL", icon: "🐘", desc: "Relational Database" },
-    REDIS: { name: "Redis", icon: "🔴", desc: "In-memory Store" },
-    MYSQL: { name: "MySQL", icon: "🐬", desc: "Relational Database" },
-    MONGODB: { name: "MongoDB", icon: "🍃", desc: "NoSQL Database" },
-}
+    POSTGRES: { name: "PostgreSQL", icon: "PG", desc: "Relational Database" },
+    REDIS: { name: "Redis", icon: "RD", desc: "In-memory Store" },
+    MYSQL: { name: "MySQL", icon: "MY", desc: "Relational Database" },
+    MONGODB: { name: "MongoDB", icon: "MG", desc: "NoSQL Database" },
+} as const satisfies Record<AddonType, { name: string; icon: string; desc: string }>
+
+const ADDON_CATALOG = (Object.keys(ADDON_TYPES) as AddonType[]).flatMap((type) => {
+    const base = ADDON_TYPES[type]
+    return Array.from({ length: 25 }, (_, i) => {
+        const n = String(i + 1).padStart(2, "0")
+        return {
+            id: `${type.toLowerCase()}-preset-${n}`,
+            addon_type: type,
+            name: `${base.name} Preset ${n}`,
+            desc: `One-click ${base.name} preset (${n}).`,
+            icon: base.icon,
+        }
+    })
+})
 
 export default function MarketplacePage() {
     const { toast } = useToast()
@@ -49,10 +65,11 @@ export default function MarketplacePage() {
     
     // Provision Modal State
     const [isProvisionOpen, setIsProvisionOpen] = React.useState(false)
-    const [selectedType, setSelectedType] = React.useState<string | null>(null)
+    const [selectedType, setSelectedType] = React.useState<AddonType | null>(null)
     const [selectedService, setSelectedService] = React.useState<string | null>(null)
     const [addonName, setAddonName] = React.useState("")
     const [isProvisioning, setIsProvisioning] = React.useState(false)
+    const [selectedCatalogItem, setSelectedCatalogItem] = React.useState<(typeof ADDON_CATALOG)[number] | null>(null)
 
     // Backups Modal State
     const [isBackupsOpen, setIsBackupsOpen] = React.useState(false)
@@ -87,7 +104,8 @@ export default function MarketplacePage() {
                 })
                 if (servicesRes.ok) {
                     const data = await servicesRes.json()
-                    setServices(data.results || [])
+                    const list = Array.isArray(data) ? data : (data?.results || [])
+                    setServices(Array.isArray(list) ? list : [])
                 }
             } catch (err) {
                 console.error(err)
@@ -227,17 +245,19 @@ export default function MarketplacePage() {
 
             {/* Catalog */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {Object.entries(ADDON_TYPES).map(([type, info]) => (
-                    <Card key={type} className="hover:border-primary/50 transition-colors cursor-pointer" onClick={() => {
-                        setSelectedType(type)
+                {ADDON_CATALOG.map((item) => (
+                    <Card key={item.id} className="hover:border-primary/50 transition-colors cursor-pointer" onClick={() => {
+                        setSelectedType(item.addon_type)
+                        setAddonName(item.name)
+                        setSelectedCatalogItem(item)
                         setIsProvisionOpen(true)
                     }}>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">{info.name}</CardTitle>
-                            <span className="text-2xl">{info.icon}</span>
+                            <CardTitle className="text-sm font-medium">{item.name}</CardTitle>
+                            <span className="text-sm font-mono">{item.icon}</span>
                         </CardHeader>
                         <CardContent>
-                            <div className="text-xs text-muted-foreground">{info.desc}</div>
+                            <div className="text-xs text-muted-foreground">{item.desc}</div>
                         </CardContent>
                     </Card>
                 ))}
@@ -269,7 +289,7 @@ export default function MarketplacePage() {
                                             )}>{addon.status}</span>
                                         </div>
                                         <div className="text-xs text-muted-foreground">
-                                            {ADDON_TYPES[addon.addon_type]?.name} • Attached to service {addon.service}
+                                            {ADDON_TYPES[addon.addon_type]?.name} - Attached to service {addon.service}
                                         </div>
                                     </div>
                                 </div>
@@ -342,7 +362,7 @@ export default function MarketplacePage() {
             <Dialog open={isProvisionOpen} onOpenChange={setIsProvisionOpen}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Provision {ADDON_TYPES[selectedType as keyof typeof ADDON_TYPES]?.name}</DialogTitle>
+                        <DialogTitle>Provision {selectedCatalogItem?.name || (selectedType ? ADDON_TYPES[selectedType]?.name : "Addon")}</DialogTitle>
                         <DialogDescription>Add a managed database to your service.</DialogDescription>
                     </DialogHeader>
                     
