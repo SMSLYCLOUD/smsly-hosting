@@ -827,17 +827,16 @@ else
     echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
     echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
 
-    if [ -t 0 ]; then
+    # If env vars are pre-seeded, skip prompting even in interactive shells.
+    if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+        echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
+        MODE_CHOICE=2
+    elif [ -t 0 ]; then
         read -p "Enter choice [1]: " MODE_CHOICE
         MODE_CHOICE=${MODE_CHOICE:-1}
     else
-        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            echo -e "${BLUE}  → Non-interactive preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
-            MODE_CHOICE=2
-        else
-            echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
-            MODE_CHOICE=1
-        fi
+        echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
+        MODE_CHOICE=1
     fi
 
     DOMAIN=""
