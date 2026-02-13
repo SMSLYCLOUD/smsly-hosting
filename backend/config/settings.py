@@ -99,7 +99,8 @@ ROOT_URLCONF = 'config.urls'
 SITE_ID = 1
 
 # dj-rest-auth / allauth configuration
-ACCOUNT_LOGIN_METHODS = {'username'}
+# Allow signing in with either username or email.
+ACCOUNT_LOGIN_METHODS = {'username', 'email'}
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'username*', 'password1*', 'password2*']
 
 # Redirect to frontend callback after login
