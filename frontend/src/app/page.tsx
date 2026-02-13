@@ -137,19 +137,19 @@ const testimonials = [
         quote: "CloudNeuron's predictive scaling handled our Black Friday traffic without a single hiccup. It felt like magic.",
         author: "Sarah Jenkins",
         role: "VP Engineering, E-Shopify",
-        image: "https://ui-avatars.com/api/?name=Sarah+Jenkins&background=6366f1&color=fff"
+        image: "https://ui-avatars.com/api/?name=Sarah+Jenkins&background=6366f1&color=fff&format=png"
     },
     {
         quote: "We moved our entire microservices architecture from AWS ECS to CloudNeuron. Dev productivity is up 300%.",
         author: "David Chen",
         role: "Lead Architect, FinTech Global",
-        image: "https://ui-avatars.com/api/?name=David+Chen&background=10b981&color=fff"
+        image: "https://ui-avatars.com/api/?name=David+Chen&background=10b981&color=fff&format=png"
     },
     {
         quote: "The ability to deploy to bare metal and cloud simultaneously gives us the best of both worlds.",
         author: "Emily Ross",
         role: "CTO, StartupXYZ",
-        image: "https://ui-avatars.com/api/?name=Emily+Ross&background=f59e0b&color=fff"
+        image: "https://ui-avatars.com/api/?name=Emily+Ross&background=f59e0b&color=fff&format=png"
     }
 ];
 
