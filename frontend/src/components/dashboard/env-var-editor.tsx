@@ -28,38 +28,43 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
   const [bulkText, setBulkText] = React.useState("")
   const [isSaving, setIsSaving] = React.useState(false)
 
-  // Sync simple <-> bulk when switching modes
-  React.useEffect(() => {
-    if (mode === "bulk") {
-      const text = vars
-        .map((v) => `${v.key}=${v.value}`)
-        .join("\n")
-      setBulkText(text)
-    } else {
-      // Parse bulk text back to simple
-      const newVars: EnvVar[] = []
-      bulkText.trim().split("\n").forEach((line, i) => {
-        const parts = line.split("=")
-        if (parts.length >= 2) {
-            const key = parts[0].trim()
-            const value = parts.slice(1).join("=").trim()
-            if (key) {
-                // Preserve secret status if key matches existing, else default false
-                const existing = vars.find(v => v.key === key)
-                newVars.push({
-                    key, 
-                    value, 
-                    isSecret: existing?.isSecret || false,
-                    id: existing?.id
-                })
-            }
+  const parseBulkText = (text: string, existingVars: EnvVar[]): EnvVar[] => {
+    const parsedVars: EnvVar[] = []
+    text.trim().split("\n").forEach((line) => {
+      const parts = line.split("=")
+      if (parts.length >= 2) {
+        const key = parts[0].trim()
+        const value = parts.slice(1).join("=").trim()
+        if (key) {
+          const existing = existingVars.find(v => v.key === key)
+          parsedVars.push({
+            key,
+            value,
+            isSecret: existing?.isSecret || false,
+            id: existing?.id
+          })
         }
-      })
-      if (newVars.length > 0 || bulkText.trim() === "") {
-        setVars(newVars)
       }
+    })
+    return parsedVars
+  }
+
+  const switchMode = (nextMode: "simple" | "bulk") => {
+    if (nextMode === mode) return
+
+    if (nextMode === "bulk") {
+      const text = vars.map((v) => `${v.key}=${v.value}`).join("\n")
+      setBulkText(text)
+      setMode(nextMode)
+      return
     }
-  }, [mode])
+
+    const parsed = parseBulkText(bulkText, vars)
+    if (parsed.length > 0 || bulkText.trim() === "") {
+      setVars(parsed)
+    }
+    setMode(nextMode)
+  }
 
   const addVar = () => {
     setVars([...vars, { key: "", value: "", isSecret: false }])
@@ -115,14 +120,14 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
                 <Button 
                     variant={mode === "simple" ? "secondary" : "ghost"} 
                     size="sm" 
-                    onClick={() => setMode("simple")}
+                    onClick={() => switchMode("simple")}
                 >
                     <List className="mr-2 h-4 w-4" /> Simple
                 </Button>
                 <Button 
                     variant={mode === "bulk" ? "secondary" : "ghost"} 
                     size="sm" 
-                    onClick={() => setMode("bulk")}
+                    onClick={() => switchMode("bulk")}
                 >
                     <FileText className="mr-2 h-4 w-4" /> Bulk
                 </Button>

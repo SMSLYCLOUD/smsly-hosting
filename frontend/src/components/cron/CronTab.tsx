@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, CronJob } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,11 +16,8 @@ export function CronTab({ serviceId }: { serviceId: string }) {
     const [newSchedule, setNewSchedule] = useState('*/15 * * * *');
     const [newCommand, setNewCommand] = useState('');
 
-    useEffect(() => {
-        loadJobs();
-    }, [serviceId]);
-
-    const loadJobs = async () => {
+    const loadJobs = useCallback(async () => {
+        setLoading(true);
         try {
             const data = await servicesApi.getCronJobs(serviceId);
             setJobs(data);
@@ -29,7 +26,11 @@ export function CronTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
+
+    useEffect(() => {
+        void loadJobs();
+    }, [loadJobs]);
 
     const handleAdd = async () => {
         if (!newName || !newSchedule || !newCommand) return;
@@ -41,7 +42,7 @@ export function CronTab({ serviceId }: { serviceId: string }) {
             });
             setNewName('');
             setNewCommand('');
-            loadJobs();
+            await loadJobs();
             toast({ title: "Cron Job added" });
         } catch (err) {
             toast({ title: "Failed to add cron job", variant: "destructive" });
@@ -52,7 +53,7 @@ export function CronTab({ serviceId }: { serviceId: string }) {
         if (!confirm('Delete this scheduled task?')) return;
         try {
             await servicesApi.deleteCronJob(serviceId, id);
-            loadJobs();
+            await loadJobs();
             toast({ title: "Cron Job deleted" });
         } catch (err) {
             toast({ title: "Failed to delete", variant: "destructive" });

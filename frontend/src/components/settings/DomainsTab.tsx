@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,11 +18,7 @@ export function DomainsTab({ service }: { service: Service }) {
 
     const defaultDomain = service.public_domain || `${service.name}.localhost`;
 
-    useEffect(() => {
-        loadDomains();
-    }, [service.id]);
-
-    const loadDomains = async () => {
+    const loadDomains = useCallback(async () => {
         try {
             setLoading(true);
             const envVars = await servicesApi.getEnvVars(service.id);
@@ -41,9 +37,13 @@ export function DomainsTab({ service }: { service: Service }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [service.id]);
 
-    const saveDomains = async (newDomainList: string[]) => {
+    useEffect(() => {
+        void loadDomains();
+    }, [loadDomains]);
+
+    const saveDomains = useCallback(async (newDomainList: string[]) => {
         try {
             const value = newDomainList.join(',');
             if (envVarId) {
@@ -64,12 +64,12 @@ export function DomainsTab({ service }: { service: Service }) {
             }
 
             toast({ title: "Domains updated", description: "Redeploy to apply changes." });
-            loadDomains();
+            await loadDomains();
         } catch (err) {
             console.error(err);
             toast({ title: "Failed to save domains", variant: "destructive" });
         }
-    };
+    }, [envVarId, loadDomains, service.id]);
 
     const handleAdd = () => {
         if (!newDomain) return;
@@ -84,14 +84,14 @@ export function DomainsTab({ service }: { service: Service }) {
         }
 
         const updated = [...domains, newDomain];
-        saveDomains(updated);
+        void saveDomains(updated);
         setNewDomain('');
     };
 
     const handleDelete = (domain: string) => {
         if (!confirm(`Remove ${domain}?`)) return;
         const updated = domains.filter(d => d !== domain);
-        saveDomains(updated);
+        void saveDomains(updated);
     };
 
     if (loading) return <div className="p-4 text-center">Loading domains...</div>;

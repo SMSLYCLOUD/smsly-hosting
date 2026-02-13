@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, EnvVar } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,11 +16,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     const [newIsSecret, setNewIsSecret] = useState(false);
     const [visibleValues, setVisibleValues] = useState<Record<string, boolean>>({});
 
-    useEffect(() => {
-        loadVars();
-    }, [serviceId]);
-
-    const loadVars = async () => {
+    const loadVars = useCallback(async () => {
+        setLoading(true);
         try {
             const data = await servicesApi.getEnvVars(serviceId);
             setVars(data);
@@ -30,7 +27,11 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
+
+    useEffect(() => {
+        void loadVars();
+    }, [loadVars]);
 
     const handleAdd = async () => {
         if (!newKey || !newValue) return;
@@ -43,7 +44,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             setNewKey('');
             setNewValue('');
             setNewIsSecret(false);
-            loadVars();
+            await loadVars();
             toast({ title: "Variable added" });
         } catch (err) {
             toast({ title: "Failed to add variable", variant: "destructive" });
@@ -54,7 +55,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         if (!confirm('Are you sure?')) return;
         try {
             await servicesApi.deleteEnvVar(serviceId, id);
-            loadVars();
+            await loadVars();
             toast({ title: "Variable deleted" });
         } catch (err) {
             toast({ title: "Failed to delete variable", variant: "destructive" });

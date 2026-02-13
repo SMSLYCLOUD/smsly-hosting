@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Volume } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,11 +27,8 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
     const [currentPath, setCurrentPath] = useState('');
     const [loadingFiles, setLoadingFiles] = useState(false);
 
-    useEffect(() => {
-        loadVolumes();
-    }, [serviceId]);
-
-    const loadVolumes = async () => {
+    const loadVolumes = useCallback(async () => {
+        setLoading(true);
         try {
             const data = await servicesApi.getVolumes(serviceId);
             setVolumes(data);
@@ -40,7 +37,11 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
+
+    useEffect(() => {
+        void loadVolumes();
+    }, [loadVolumes]);
 
     const handleAdd = async () => {
         if (!newName || !newPath) return;
@@ -51,7 +52,7 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
                 size_gb: 1
             });
             setNewName('');
-            loadVolumes();
+            await loadVolumes();
             toast({ title: "Volume created", description: "Redeploy to attach." });
         } catch (err) {
             toast({ title: "Failed to create volume", variant: "destructive" });
@@ -62,7 +63,7 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
         if (!confirm('Delete this volume? Data will be lost.')) return;
         try {
             await servicesApi.deleteVolume(serviceId, id);
-            loadVolumes();
+            await loadVolumes();
             toast({ title: "Volume deleted" });
         } catch (err) {
             toast({ title: "Failed to delete", variant: "destructive" });
