@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { Navbar } from '@/components/layout/Navbar';
 import { Button } from '@/components/ui/button';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
@@ -525,9 +526,11 @@ export default function Home() {
                                 </p>
                                 <div className="flex items-center gap-4">
                                     <div className="w-12 h-12 rounded-full bg-slate-200 overflow-hidden">
-                                        <img
+                                        <Image
                                             src={testimonial.image}
                                             alt={testimonial.author}
+                                            width={48}
+                                            height={48}
                                             className="w-full h-full object-cover"
                                         />
                                     </div>

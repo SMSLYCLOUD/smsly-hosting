@@ -45,8 +45,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """ZH-001 FIX: Only return services owned by the requesting user."""
         if self.request.user.is_superuser:
-            return Service.objects.all()
-        return Service.objects.filter(owner=self.request.user)
+            return Service.objects.all().order_by('-created_at')
+        return Service.objects.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)

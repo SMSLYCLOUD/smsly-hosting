@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Deployment } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -13,11 +13,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [loading, setLoading] = useState(true);
     const [rollingBackId, setRollingBackId] = useState<string | null>(null);
 
-    useEffect(() => {
-        loadDeployments();
-    }, [serviceId]);
-
-    const loadDeployments = async () => {
+    const loadDeployments = useCallback(async () => {
+        setLoading(true);
         try {
             const data = await servicesApi.getDeployments(serviceId);
             setDeployments(data);
@@ -27,7 +24,11 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
+
+    useEffect(() => {
+        void loadDeployments();
+    }, [loadDeployments]);
 
     const handleRollback = async (deployment: Deployment) => {
         if (!confirm(`Rollback to commit ${deployment.commit_hash.substring(0, 7)}? This will trigger a new deployment.`)) return;
@@ -43,7 +44,9 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
 
             toast({ title: "Rollback initiated", description: "A new deployment has started." });
             // Wait a bit then refresh
-            setTimeout(loadDeployments, 2000);
+            setTimeout(() => {
+                void loadDeployments();
+            }, 2000);
         } catch (err) {
             console.error(err);
             toast({ title: "Rollback failed", variant: "destructive" });
