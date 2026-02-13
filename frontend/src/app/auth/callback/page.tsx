@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 // Prevent static prerendering — this page needs runtime URL params
@@ -48,7 +48,6 @@ async function fetchSessionToken(): Promise<string | null> {
 }
 
 function CallbackContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -66,13 +65,15 @@ function CallbackContent() {
       if (token) {
         localStorage.setItem("auth_token", token);
         setAuthTokenCookie(token);
-        router.replace("/dashboard");
+
+        // Full reload avoids Next.js route-cache edge cases around auth redirects.
+        window.location.replace("/dashboard");
         return;
       }
 
       localStorage.removeItem("auth_token");
       clearAuthTokenCookie();
-      router.replace("/login");
+      window.location.replace("/login");
     };
 
     completeAuth();
@@ -80,7 +81,7 @@ function CallbackContent() {
     return () => {
       active = false;
     };
-  }, [router, searchParams]);
+  }, [searchParams]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">

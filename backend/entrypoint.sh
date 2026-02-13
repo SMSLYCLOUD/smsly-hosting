@@ -64,8 +64,15 @@ collect_static_nonfatal() {
         echo "WARNING: collectstatic failed (non-fatal)"
 }
 
+setup_social_apps_nonfatal() {
+    echo "Configuring OAuth social apps..."
+    python manage.py setup_social_apps >/dev/null 2>&1 || \
+        echo "WARNING: setup_social_apps failed (non-fatal)"
+}
+
 if is_web_container "$@"; then
     run_migrations_with_retry
+    setup_social_apps_nonfatal
     create_admin_if_configured
     collect_static_nonfatal
 fi
