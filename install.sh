@@ -395,19 +395,19 @@ wipe_existing_install() {
         docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
     fi
 
-    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly" -q 2>/dev/null || true)
+    SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting" -q 2>/dev/null || true)
     if [ -n "$SMSLY_CONTAINERS" ]; then
         docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
     fi
 
-    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q 2>/dev/null || true)
+    SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly-hosting" -q 2>/dev/null || true)
     if [ -n "$SMSLY_VOLUMES" ]; then
         for vol in $SMSLY_VOLUMES; do
             docker volume rm "$vol" 2>/dev/null || true
         done
     fi
 
-    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly" -q 2>/dev/null || true)
+    SMSLY_NETWORKS=$(docker network ls --filter "name=smsly-hosting" -q 2>/dev/null || true)
     if [ -n "$SMSLY_NETWORKS" ]; then
         for net in $SMSLY_NETWORKS; do
             docker network rm "$net" 2>/dev/null || true
