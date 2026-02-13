@@ -37,7 +37,7 @@ export default function LoginPage() {
   // Use absolute URL for production - NEXT_PUBLIC vars are baked at build time
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
-    : process.env.NEXT_PUBLIC_API_URL || "https://hosting.smsly.cloud";
+    : process.env.NEXT_PUBLIC_API_URL || "https://cloud.smsly.cloud";
   
   console.log('DEBUG: BACKEND_URL', BACKEND_URL);
 

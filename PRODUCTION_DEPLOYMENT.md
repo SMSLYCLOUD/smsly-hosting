@@ -53,9 +53,9 @@ DOMAIN=smsly.cloud
 ACME_EMAIL=admin@smsly.cloud
 
 # Hosts
-ALLOWED_HOSTS=hosting.smsly.cloud
-CSRF_TRUSTED_ORIGINS=https://hosting.smsly.cloud
-CORS_ALLOWED_ORIGINS=https://hosting.smsly.cloud
+ALLOWED_HOSTS=cloud.smsly.cloud
+CSRF_TRUSTED_ORIGINS=https://cloud.smsly.cloud
+CORS_ALLOWED_ORIGINS=https://cloud.smsly.cloud
 
 # Database
 DATABASE_URL=postgres://smsly_admin:<POSTGRES_PASSWORD>@db:5432/smsly_hosting
@@ -69,15 +69,26 @@ DEBUG=False
 CORS_ALLOW_ALL=False
 ```
 
-## 2. Deploy with SSL (Traefik)
+## 2. Deploy with SSL (Recommended: Installer + Caddy)
 
-### Create External Network
+The universal installer provisions **Caddy** and configures automatic Let's Encrypt SSL.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh
+sudo USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@smsly.cloud bash /tmp/install.sh
+```
+
+Admin credentials are written to: `/opt/smsly-hosting/.credentials`
+
+### Alternative: Traefik (Optional)
+
+### Traefik: Create External Network
 
 ```bash
 docker network create smsly-proxy
 ```
 
-### Deploy Services
+### Traefik: Deploy Services
 
 ```bash
 # Deploy Traefik (SSL termination)
@@ -107,7 +118,7 @@ docker compose -f docker-compose.prod.yml ps
 curl http://localhost:8090/health
 
 # Check SSL is working
-curl https://hosting.smsly.cloud/health
+curl https://cloud.smsly.cloud/health
 ```
 
 ## 3. Enable Monitoring (Optional)
@@ -126,7 +137,7 @@ docker compose -f docker-compose.observability.yml up -d
 
 - [ ] `/health` endpoint returns 200 OK
 - [ ] SSL certificate issued by Let's Encrypt
-- [ ] Admin panel accessible at https://hosting.smsly.cloud/admin/
+- [ ] Admin panel accessible at https://cloud.smsly.cloud/admin/
 - [ ] Test deployment creation via API
 - [ ] Verify Docker socket proxy is working (no direct socket mount)
 - [ ] Check logs: `docker compose -f docker-compose.prod.yml logs -f`
@@ -187,7 +198,7 @@ docker compose -f docker-compose.prod.yml start backend celery
 
 ```bash
 # Add to cron (every 5 minutes)
-*/5 * * * * curl -f https://hosting.smsly.cloud/health || /usr/local/bin/alert.sh "CloudNeuron Down"
+*/5 * * * * curl -f https://cloud.smsly.cloud/health || /usr/local/bin/alert.sh "CloudNeuron Down"
 ```
 
 ### View Logs
@@ -221,4 +232,4 @@ See [RUNBOOK.md](RUNBOOK.md) for common issues and solutions.
 
 - **Logs**: `/opt/smsly-hosting/` (mount Loki for centralized logging)
 - **Metrics**: Prometheus endpoint at `:8082/metrics`
-- **Health**: `https://hosting.smsly.cloud/health`
+- **Health**: `https://cloud.smsly.cloud/health`

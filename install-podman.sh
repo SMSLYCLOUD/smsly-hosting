@@ -102,6 +102,7 @@ if [ ! -f .env ]; then
     GATEWAY_SECRET=$(openssl rand -hex 32)
     GITHUB_WEBHOOK_SECRET=$(openssl rand -hex 32)
     PUBLIC_IP="$(detect_public_ip)"
+    ADMIN_PASS="$(openssl rand -hex 16)"
 
     cat <<EOF > .env
 ENVIRONMENT=production
@@ -119,13 +120,25 @@ POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
 DOMAIN=$PUBLIC_IP
 ALLOWED_HOSTS=$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090,https://hosting.smsly.cloud
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,http://localhost:8090,http://$PUBLIC_IP
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,http://$PUBLIC_IP
 
-# Admin Defaults
-ADMIN_USER=admin
-ADMIN_EMAIL=admin@$PUBLIC_IP
-ADMIN_PASSWORD=admin
+# Admin bootstrap (used on first boot by backend/entrypoint.sh)
+DJANGO_SUPERUSER_USERNAME=admin
+DJANGO_SUPERUSER_EMAIL=admin@$PUBLIC_IP
+DJANGO_SUPERUSER_PASSWORD=$ADMIN_PASS
 EOF
+
+    # Save credentials to secure file (NOT echoed to terminal)
+    CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
+    cat > "$CREDENTIALS_FILE" <<CREDS
+# SMSLY Hosting Admin Credentials
+# Generated: $(date -Iseconds)
+# KEEP THIS FILE SECURE
+Username: admin
+Password: $ADMIN_PASS
+CREDS
+    chmod 600 "$CREDENTIALS_FILE"
 fi
 
 # 6. Deploy

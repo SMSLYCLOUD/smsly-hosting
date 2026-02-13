@@ -1,66 +1,74 @@
 #!/bin/sh
 
-# ─── Wait for database to be ready before running migrations ────────────────
-# The database may still be initializing. Retry with backoff.
-echo "Waiting for database..."
-MAX_RETRIES=5
-RETRY=0
-while [ $RETRY -lt $MAX_RETRIES ]; do
-    if python manage.py migrate --noinput 2>&1; then
-        echo "✓ Migrations complete."
-        break
+# Entrypoint shared by backend/celery/celery-beat images.
+#
+# Production safety goals:
+# - Only the web container (gunicorn) runs migrations/static/admin bootstrap.
+# - Never ship a hardcoded default admin password.
+#   Admin creation only runs when DJANGO_SUPERUSER_PASSWORD is explicitly set.
+
+set -e
+
+is_web_container() {
+    [ "${1:-}" = "gunicorn" ]
+}
+
+run_migrations_with_retry() {
+    echo "Running migrations..."
+    max_retries="${MIGRATE_MAX_RETRIES:-5}"
+    retry=0
+    while [ "$retry" -lt "$max_retries" ]; do
+        if python manage.py migrate --noinput; then
+            echo "Migrations complete."
+            return 0
+        fi
+        retry=$((retry + 1))
+        wait_secs=$((retry * 5))
+        echo "Migration attempt $retry/$max_retries failed. Retrying in ${wait_secs}s..."
+        sleep "$wait_secs"
+    done
+
+    echo "ERROR: migrations failed after $max_retries attempts."
+    return 1
+}
+
+create_admin_if_configured() {
+    admin_user="${DJANGO_SUPERUSER_USERNAME:-admin}"
+    admin_email="${DJANGO_SUPERUSER_EMAIL:-admin@localhost}"
+    admin_pass="${DJANGO_SUPERUSER_PASSWORD:-}"
+
+    echo "Checking for existing superuser..."
+    has_superuser="$(python manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); print('yes' if User.objects.filter(is_superuser=True).exists() else 'no')" 2>/dev/null | tail -n 1 || true)"
+
+    if [ "$has_superuser" != "no" ]; then
+        echo "Superuser already exists (or check failed). Skipping admin creation."
+        return 0
     fi
-    RETRY=$((RETRY + 1))
-    if [ $RETRY -eq $MAX_RETRIES ]; then
-        echo "✗ Migrations failed after $MAX_RETRIES attempts."
-        echo "  Check DATABASE_URL and database connectivity."
-        echo "  Starting server anyway (may have limited functionality)..."
-        break
+
+    if [ -z "$admin_pass" ]; then
+        echo "No superuser found. DJANGO_SUPERUSER_PASSWORD is not set; skipping admin creation."
+        return 0
     fi
-    WAIT=$((RETRY * 5))
-    echo "⚠ Migration attempt $RETRY/$MAX_RETRIES failed. Retrying in ${WAIT}s..."
-    sleep $WAIT
-done
 
-# ─── Create default admin account if no superuser exists ────────────────────
-# Uses env vars with sensible defaults for first-time setup.
-# IMPORTANT: Change the default password immediately after first login!
-ADMIN_USER="${DJANGO_SUPERUSER_USERNAME:-admin}"
-ADMIN_EMAIL="${DJANGO_SUPERUSER_EMAIL:-admin@localhost}"
-ADMIN_PASS="${DJANGO_SUPERUSER_PASSWORD:-admin}"
-
-echo "Checking for existing superuser..."
-HAS_SUPERUSER=$(python manage.py shell -c "
-from django.contrib.auth import get_user_model
-User = get_user_model()
-print('yes' if User.objects.filter(is_superuser=True).exists() else 'no')
-" 2>/dev/null)
-
-if [ "$HAS_SUPERUSER" = "no" ]; then
-    echo "⚡ No superuser found. Creating default admin account..."
-    DJANGO_SUPERUSER_PASSWORD="$ADMIN_PASS" python manage.py createsuperuser \
+    echo "No superuser found. Creating admin account..."
+    DJANGO_SUPERUSER_PASSWORD="$admin_pass" python manage.py createsuperuser \
         --noinput \
-        --username "$ADMIN_USER" \
-        --email "$ADMIN_EMAIL" 2>&1 && \
-    echo "╔══════════════════════════════════════════════════════════╗" && \
-    echo "║  ⚠  DEFAULT ADMIN CREATED                              ║" && \
-    echo "║  Username: $ADMIN_USER                                  ║" && \
-    echo "║  Password: $ADMIN_PASS                                  ║" && \
-    echo "║                                                         ║" && \
-    echo "║  ⚠  CHANGE THIS PASSWORD IMMEDIATELY AFTER LOGIN!      ║" && \
-    echo "╚══════════════════════════════════════════════════════════╝" || \
-    echo "⚠ Failed to create default admin (may already exist)"
-else
-    echo "✓ Superuser already exists. Skipping creation."
+        --username "$admin_user" \
+        --email "$admin_email" >/dev/null 2>&1 || \
+        echo "WARNING: failed to create admin (may already exist)"
+}
+
+collect_static_nonfatal() {
+    echo "Collecting static files..."
+    python manage.py collectstatic --noinput >/dev/null 2>&1 || \
+        echo "WARNING: collectstatic failed (non-fatal)"
+}
+
+if is_web_container "$@"; then
+    run_migrations_with_retry
+    create_admin_if_configured
+    collect_static_nonfatal
 fi
 
-# Collect static files (non-critical — don't block startup)
-echo "Collecting static files..."
-python manage.py collectstatic --noinput 2>&1 || echo "⚠ Static files collection failed (non-critical)"
-
-# Execute the CMD passed from Dockerfile or docker-compose command:
-# - backend: gunicorn (default CMD in Dockerfile)
-# - celery: celery worker (from docker-compose command:)
-# - celery-beat: celery beat (from docker-compose command:)
-echo "Starting: $@"
+echo "Starting: $*"
 exec "$@"

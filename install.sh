@@ -811,6 +811,12 @@ else
     # Force IPv4 to ensure valid URL syntax (avoiding [IPv6] bracket issues)
     PUBLIC_IP="$(detect_public_ip)"
 
+    # Allow non-interactive SSL installs by pre-seeding env vars:
+    #   USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@example.com SKIP_SCREEN=1 bash install.sh
+    PRESET_DOMAIN="${DOMAIN:-}"
+    PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
+    PRESET_USE_SSL="${USE_SSL:-}"
+
     echo -e "\n${BLUE}Select Deployment Mode:${NC}"
     echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
     echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
@@ -819,8 +825,13 @@ else
         read -p "Enter choice [1]: " MODE_CHOICE
         MODE_CHOICE=${MODE_CHOICE:-1}
     else
-        echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
-        MODE_CHOICE=1
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            echo -e "${BLUE}  → Non-interactive preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
+            MODE_CHOICE=2
+        else
+            echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
+            MODE_CHOICE=1
+        fi
     fi
 
     DOMAIN=""
@@ -829,13 +840,18 @@ else
 
     if [ "$MODE_CHOICE" -eq "2" ]; then
         USE_SSL="true"
-        while [ -z "$DOMAIN" ]; do
-            read -p "Enter your Domain (e.g., app.example.com): " DOMAIN
-        done
+        if [ ! -t 0 ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            DOMAIN="${PRESET_DOMAIN}"
+            ACME_EMAIL="${PRESET_ACME_EMAIL}"
+        else
+            while [ -z "$DOMAIN" ]; do
+                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN
+            done
 
-        while [ -z "$ACME_EMAIL" ]; do
-            read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL
-        done
+            while [ -z "$ACME_EMAIL" ]; do
+                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL
+            done
+        fi
 
         echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
         if command -v host &> /dev/null; then
@@ -843,9 +859,14 @@ else
             if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
                 echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
                 echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                read -p "  Continue anyway? (y/n) " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+                if [ -t 0 ]; then
+                    read -p "  Continue anyway? (y/n) " -n 1 -r
+                    echo
+                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+                else
+                    echo -e "${RED}x Non-interactive install cannot prompt for DNS mismatch. Aborting.${NC}"
+                    exit 1
+                fi
             else
                 echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
             fi
@@ -926,8 +947,8 @@ GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 
 # Security
 ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
-CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$PUBLIC_IP
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://$PUBLIC_IP
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"

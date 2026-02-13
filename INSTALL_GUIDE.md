@@ -45,7 +45,16 @@ curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/insta
 sudo bash /tmp/install.sh
 ```
 
-> **Important:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input for mode selection and configuration.
+> **Important:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input unless you pre-seed SSL env vars.
+
+### Non-Interactive SSL Install (Optional)
+
+If you're automating installation (CI or one-line SSH), you can run SSL mode non-interactively:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && \
+sudo USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@smsly.cloud SKIP_SCREEN=1 bash /tmp/install.sh
+```
 
 ### What Happens During Installation
 
@@ -58,7 +67,7 @@ The installer runs 8 automated steps:
 | **3. Configuration** | Generates all secrets: Django `SECRET_KEY`, Fernet encryption key, DB password, Redis password, HMAC gateway secret |
 | **4. Deployment** | Builds and starts all Docker containers (backend, frontend, celery, DB, Redis, nginx) |
 | **5. Database** | Waits for PostgreSQL, syncs passwords, runs Django migrations |
-| **6. Admin User** | Creates admin superuser (default password: `smslyhosting`) |
+| **6. Admin User** | Creates admin superuser (credentials saved to `/opt/smsly-hosting/.credentials`) |
 | **7. Reverse Proxy** | Installs and configures Caddy for HTTP or HTTPS with auto-SSL |
 | **8. Verification** | Runs health checks, prints container status |
 
@@ -74,8 +83,8 @@ Credentials: /opt/smsly-hosting/.credentials
 
 **First steps:**
 1. Open the URL in your browser
-2. Log in with `admin` / `smslyhosting`
-3. **Change the default password immediately** (Settings → Security)
+2. Log in with `admin` and the password in `/opt/smsly-hosting/.credentials`
+3. (Recommended) Change the admin password (Settings → Security)
 4. Configure your cloud providers (Settings → Cloud)
 
 ---
@@ -373,7 +382,7 @@ docker compose -f docker-compose.prod.yml logs --tail=100 <service_name>
 
 ### Post-Install Checklist
 
-- [ ] Change default admin password
+- [ ] Change the admin password (recommended)
 - [ ] Set `DEBUG=False` in `.env` (default)
 - [ ] Configure `ALLOWED_HOSTS` to only your domain
 - [ ] Enable SSL mode for production

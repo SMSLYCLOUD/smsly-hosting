@@ -175,7 +175,7 @@ export default function InstallGuidePage() {
 sudo bash /tmp/install.sh`}</CodeBlock>
 
           <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 my-4 text-sm text-amber-800 dark:text-amber-200">
-            <strong>Important:</strong> Do NOT pipe directly from curl. The installer requires interactive input for mode selection and domain configuration.
+            <strong>Important:</strong> Do NOT pipe directly from curl. The installer requires interactive input unless you pre-seed SSL env vars.
           </div>
 
           <h3>What Happens During Installation</h3>
@@ -186,7 +186,7 @@ sudo bash /tmp/install.sh`}</CodeBlock>
               { step: '3', title: 'Configuration', desc: 'Generates secrets: Django SECRET_KEY, Fernet key, DB/Redis passwords, HMAC gateway secret' },
               { step: '4', title: 'Deployment', desc: 'Builds and starts all Docker containers' },
               { step: '5', title: 'Database', desc: 'Waits for PostgreSQL, syncs passwords, runs Django migrations' },
-              { step: '6', title: 'Admin User', desc: 'Creates admin superuser (default password: smslyhosting)' },
+              { step: '6', title: 'Admin User', desc: 'Creates admin superuser (credentials saved to /opt/smsly-hosting/.credentials)' },
               { step: '7', title: 'Reverse Proxy', desc: 'Installs Caddy for HTTP or HTTPS with auto-SSL' },
               { step: '8', title: 'Verification', desc: 'Runs health checks, prints container status' },
             ].map(item => (
@@ -203,8 +203,8 @@ sudo bash /tmp/install.sh`}</CodeBlock>
           <h3>After Installation</h3>
           <ol>
             <li>Open the URL shown in the terminal</li>
-            <li>Log in with <code>admin</code> / <code>smslyhosting</code></li>
-            <li><strong>Change the default password immediately</strong> (Settings → Security)</li>
+            <li>Log in with <code>admin</code> and the password in <code>/opt/smsly-hosting/.credentials</code></li>
+            <li>(Recommended) Change the admin password (Settings → Security)</li>
             <li>Configure your cloud providers (Settings → Cloud)</li>
           </ol>
 
@@ -420,7 +420,7 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
           <h3>Post-Install Checklist</h3>
           <div className="not-prose my-4 space-y-2">
             {[
-              'Change default admin password',
+              'Change the admin password (recommended)',
               'Verify DEBUG=False in .env',
               'Configure ALLOWED_HOSTS to only your domain',
               'Enable SSL mode for production',
