@@ -18,6 +18,11 @@ export function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/dashboard") ||
     request.nextUrl.pathname.startsWith("/new") ||
     request.nextUrl.pathname.startsWith("/services") ||
+    request.nextUrl.pathname.startsWith("/deployments") ||
+    request.nextUrl.pathname.startsWith("/topology") ||
+    request.nextUrl.pathname.startsWith("/billing") ||
+    request.nextUrl.pathname.startsWith("/admin-dashboard") ||
+    request.nextUrl.pathname.startsWith("/project") ||
     request.nextUrl.pathname.startsWith("/store") ||
     request.nextUrl.pathname.startsWith("/marketplace") ||
     request.nextUrl.pathname.startsWith("/settings");
@@ -41,6 +46,11 @@ export const config = {
     "/dashboard/:path*",
     "/new/:path*",
     "/services/:path*",
+    "/deployments/:path*",
+    "/topology/:path*",
+    "/billing/:path*",
+    "/admin-dashboard/:path*",
+    "/project/:path*",
     "/store/:path*",
     "/marketplace/:path*",
     "/settings/:path*",
