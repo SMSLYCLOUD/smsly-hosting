@@ -561,6 +561,9 @@ if [ -n "$UPDATE_MODE" ]; then
     # Without this, nginx runs default config → 502 on all frontend routes.
     echo -e "${BLUE}  → Force-recreating nginx (ensures config mount is fresh)...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
+    # Workaround: on some hosts, the 127.0.0.1 port publish doesn't bind
+    # immediately after recreate. A restart reliably brings up docker-proxy.
+    docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
 
     # Verify nginx loaded the correct custom config (not the default)
     sleep 2
@@ -579,14 +582,17 @@ if [ -n "$UPDATE_MODE" ]; then
 
     HEALTH_OK=false
     for attempt in 1 2 3 4 5; do
-        if curl -sfL http://localhost/health >/dev/null 2>&1; then
+        if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
             HEALTH_OK=true
             break
-        elif curl -sfL http://localhost:8090/health >/dev/null 2>&1; then
+        elif curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
             HEALTH_OK=true
             break
         fi
         echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
+        if [ "$attempt" -eq 1 ]; then
+            docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
+        fi
         sleep 5
     done
 
@@ -1254,6 +1260,7 @@ if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
 else
     echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
+    docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
     sleep 3
     NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
     if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
@@ -1268,14 +1275,17 @@ fi
 echo -e "${BLUE}  → [2/5] Running health check...${NC}"
 HEALTH_OK=false
 for attempt in 1 2 3 4 5; do
-    if curl -sfL http://localhost/health >/dev/null 2>&1; then
+    if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sfL http://localhost:8090/health >/dev/null 2>&1; then
+    elif curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
     echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
+    if [ "$attempt" -eq 1 ]; then
+        docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
+    fi
     sleep 5
 done
 
