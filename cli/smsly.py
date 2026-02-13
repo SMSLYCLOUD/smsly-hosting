@@ -37,6 +37,8 @@ def login(email, password):
     """Login to SMSLY Hosting"""
     try:
         response = requests.post(f"{API_URL}/auth/login/", json={
+            # Support both username/email logins (depends on server auth config).
+            "username": email,
             "email": email,
             "password": password
         })

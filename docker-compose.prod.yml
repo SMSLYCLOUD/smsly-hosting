@@ -95,9 +95,12 @@ services:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
     depends_on:
-      - db
-      - redis
-      - socket-proxy
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
     networks:
       - smsly-net
 
@@ -109,8 +112,10 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
-      - db
-      - redis
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - smsly-net
 

@@ -36,13 +36,17 @@ def alert_user_task(self, deployment_id: str, error_message: str):
                 "No ALERT_PHONE_NUMBER configured. Skipping SMS alert.")
             return {"status": "skipped", "reason": "no_phone_configured"}
 
+        scheme = "https" if config("USE_SSL", default=False, cast=bool) else "http"
+        dashboard_host = config("DOMAIN", default="cloud.smsly.cloud")
+        dashboard_url = f"{scheme}://{dashboard_host}"
+
         # Compose alert message
         message = (
-            f"🚨 SMSLY Hosting Alert\n"
+            f"SMSLY Hosting Alert\n"
             f"Service: {service_name}\n"
             f"Status: FAILED\n"
             f"Error: {error_message[:100]}\n"
-            f"View logs: https://hosting.smsly.cloud/deployments/{deployment_id}"
+            f"View logs: {dashboard_url}/deployments/{deployment_id}"
         )
 
         # Send via SMSLY SMS service
@@ -140,7 +144,7 @@ def notify_deployment_success(deployment_id: str):
             return {"status": "skipped", "reason": "no_phone_configured"}
 
         message = (
-            f"✅ SMSLY Hosting\n"
+            f"SMSLY Hosting\n"
             f"Service: {service_name}\n"
             f"Status: DEPLOYED\n"
             f"Commit: {deployment.commit_hash[:7]}"

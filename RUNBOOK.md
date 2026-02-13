@@ -153,7 +153,7 @@ open http://localhost:3001  # Grafana (admin/admin)
 Add to crontab (`crontab -e`):
 
 ```bash
-*/5 * * * * curl -f https://hosting.smsly.cloud/health || echo "CloudNeuron health check failed" | mail -s "Alert: CloudNeuron Down" admin@smsly.cloud
+*/5 * * * * curl -f https://cloud.smsly.cloud/health || echo "CloudNeuron health check failed" | mail -s "Alert: CloudNeuron Down" admin@smsly.cloud
 ```
 
 ---
@@ -242,7 +242,7 @@ docker compose -f docker-compose.prod.yml logs -f backend
 
 4. Update DNS to point to new server
 
-5. Verify health: `curl https://hosting.smsly.cloud/health`
+5. Verify health: `curl https://cloud.smsly.cloud/health`
 
 #### Scenario 3: Rollback After Failed Deployment
 
@@ -298,7 +298,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
 
 # 4. Verify health
-curl https://hosting.smsly.cloud/health
+curl https://cloud.smsly.cloud/health
 ```
 
 ### Rollback Procedure
@@ -325,4 +325,3 @@ docker scan smsly-hosting_backend:latest
 # Check for known vulnerabilities in dependencies
 docker compose -f docker-compose.prod.yml exec backend pip-audit
 ```
-

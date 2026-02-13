@@ -241,12 +241,12 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,https://smsly-hosting.com',
+    default='http://localhost:3000,https://smsly-hosting.com,https://cloud.smsly.cloud',
     cast=Csv())
 # ZH-007 FIX: No wildcard subdomains — explicit trusted origins only
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='https://smsly-hosting.com,https://hosting.smsly.cloud',
+    default='https://smsly-hosting.com,https://cloud.smsly.cloud',
     cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',

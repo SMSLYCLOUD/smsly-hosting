@@ -78,9 +78,9 @@ sudo bash /tmp/install.sh
 
 The installer prompts you to choose:
 1. **IP Mode** — Quick start at `http://YOUR_IP` (no domain needed)
-2. **SSL Mode** — Production-ready at `https://your-domain.com` (requires DNS A record)
+2. **SSL Mode** — Production-ready at `https://cloud.smsly.cloud` (requires DNS A record)
 
-> **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input.
+> **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input unless you pre-seed SSL env vars.
 
 ### What the Installer Does
 
@@ -91,7 +91,7 @@ The installer prompts you to choose:
 | 3. Configuration | Generates Fernet keys, DB passwords, Redis auth, HMAC secrets |
 | 4. Deployment | Builds and starts all containers (backend, frontend, celery, DB, Redis, nginx) |
 | 5. Database | Waits for PostgreSQL, syncs passwords, runs Django migrations |
-| 6. Admin | Creates admin superuser (default password: `smslyhosting`) |
+| 6. Admin | Creates admin superuser (credentials saved to `/opt/smsly-hosting/.credentials`) |
 | 7. Reverse Proxy | Installs and configures Caddy (HTTP or HTTPS with auto-SSL) |
 | 8. Memory Hardening | Adds swap/sysctl tuning + OOM protection for critical containers |
 | 9. Verification | Health checks, proxy validation, container status report |
