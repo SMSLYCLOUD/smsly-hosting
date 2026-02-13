@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Database, Layout, Box, Globe, Cpu, Search, Server, Cloud, Activity } from 'lucide-react';
+import { Database, Layout, Box, Cpu, Search, Cloud, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { templatesApi } from '@/lib/api';
+import { useToast } from '@/components/ui/use-toast';
+import api, { templatesApi } from '@/lib/api';
 
 const categories = [
     { id: 'all', label: 'All Apps' },
@@ -42,10 +43,12 @@ const getColorForCategory = (category: string) => {
 
 export default function AppStorePage() {
     const router = useRouter();
+    const { toast } = useToast();
     const [activeCategory, setActiveCategory] = useState('all');
     const [search, setSearch] = useState('');
     const [apps, setApps] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [deployingId, setDeployingId] = useState<string | null>(null);
 
     useEffect(() => {
         async function loadTemplates() {
@@ -63,6 +66,48 @@ export default function AppStorePage() {
         loadTemplates();
     }, []);
 
+    const handleOneClickDeploy = async (tpl: any) => {
+        if (!tpl?.id) {
+            toast({ title: "Template missing fields", description: "This template can't be deployed.", variant: "destructive" });
+            return;
+        }
+
+        const token = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+        if (!token) {
+            toast({ title: "Login required", description: "Please login to deploy templates.", variant: "destructive" });
+            router.push("/login");
+            return;
+        }
+
+        setDeployingId(String(tpl.id));
+        try {
+            // Backend endpoint provisions required addons first, then triggers deployment via Celery.
+            const res = await api.post(`/templates/${tpl.id}/one_click_deploy/`, {});
+            const serviceId = res?.data?.service_id;
+            const serviceName = res?.data?.service_name || "service";
+
+            if (!serviceId) {
+                throw new Error("Missing service_id from one_click_deploy response");
+            }
+
+            toast({
+                title: "Deployment queued",
+                description: `${tpl.name} is provisioning dependencies and deploying as ${serviceName}.`,
+            });
+            router.push(`/services/${serviceId}`);
+        } catch (err: any) {
+            console.error(err);
+            const msg =
+                err?.response?.data?.error ||
+                err?.response?.data?.detail ||
+                err?.message ||
+                "Deployment failed.";
+            toast({ title: "Deploy failed", description: msg, variant: "destructive" });
+        } finally {
+            setDeployingId(null);
+        }
+    };
+
     const filteredApps = apps.filter(app =>
         (activeCategory === 'all' || app.category === activeCategory) &&
         app.name.toLowerCase().includes(search.toLowerCase())
@@ -76,6 +121,7 @@ export default function AppStorePage() {
                 <div className="container max-w-6xl">
                     <h1 className="text-3xl font-bold tracking-tight mb-4">Templates</h1>
                     <p className="text-muted-foreground mb-8 text-lg">Browse and deploy production-ready application templates.</p>
+                    <p className="text-xs text-muted-foreground mb-6">Total templates: {apps.length}</p>
 
                     <div className="relative max-w-md">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
@@ -114,6 +160,7 @@ export default function AppStorePage() {
                         {filteredApps.map((app) => {
                             const Icon = getIconForCategory(app.category);
                             const color = getColorForCategory(app.category);
+                            const isDeploying = deployingId === String(app.id);
 
                             return (
                                 <Card key={app.id} className="group hover:border-primary/50 transition-all hover:shadow-md cursor-pointer" onClick={() => router.push(`/new?template=${app.id}`)}>
@@ -132,8 +179,16 @@ export default function AppStorePage() {
                                         </CardDescription>
                                     </CardContent>
                                     <CardFooter>
-                                        <Button className="w-full bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold group-hover:bg-primary group-hover:text-primary-foreground transition-all">
-                                            Deploy
+                                        <Button
+                                            className="w-full bg-secondary text-secondary-foreground hover:bg-secondary/80 font-semibold group-hover:bg-primary group-hover:text-primary-foreground transition-all"
+                                            disabled={isDeploying}
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                handleOneClickDeploy(app);
+                                            }}
+                                        >
+                                            {isDeploying ? "Deploying..." : "1-Click Deploy"}
                                         </Button>
                                     </CardFooter>
                                 </Card>

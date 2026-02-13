@@ -5,7 +5,6 @@ Supports OpenAI, Grok (xAI), and Google Gemini.
 Provider selection via AI_PROVIDER env var.
 """
 import os
-import json
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -76,7 +75,7 @@ class OpenAIProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
-# Grok (xAI) Provider — OpenAI-compatible API
+# Grok (xAI) Provider - OpenAI-compatible API
 # ---------------------------------------------------------------------------
 
 class GrokProvider(AIProvider):
@@ -180,16 +179,16 @@ class MockProvider(AIProvider):
         if "deploy" in prompt.lower() or "error" in prompt.lower():
             return (
                 "Based on my analysis, here are some suggestions:\n\n"
-                "1. **Check your Dockerfile** — ensure the build command completes successfully\n"
-                "2. **Verify environment variables** — missing DB_URL or SECRET_KEY will crash on startup\n"
-                "3. **Review memory limits** — OOM kills are common with default 256MB\n\n"
+                "1. **Check your Dockerfile** - ensure the build command completes successfully\n"
+                "2. **Verify environment variables** - missing DB_URL or SECRET_KEY will crash on startup\n"
+                "3. **Review memory limits** - OOM kills are common with default 256MB\n\n"
                 "Would you like me to analyze your deployment logs?"
             )
         return (
             "I'm your SMSLY AI Assistant. I can help with:\n\n"
-            "- **Deployment troubleshooting** — paste your logs and I'll diagnose issues\n"
-            "- **Configuration advice** — optimal Docker, env vars, and resource settings\n"
-            "- **Cost optimization** — compare cloud providers and reduce spend\n\n"
+            "- **Deployment troubleshooting** - paste your logs and I'll diagnose issues\n"
+            "- **Configuration advice** - optimal Docker, env vars, and resource settings\n"
+            "- **Cost optimization** - compare cloud providers and reduce spend\n\n"
             "How can I help?"
         )
 
@@ -206,33 +205,88 @@ PROVIDERS = {
 }
 
 SYSTEM_PROMPT = (
-    "You are the SMSLY Cloud AI Assistant — an expert in cloud deployments, Docker, "
+    "You are the SMSLY Cloud AI Assistant - an expert in cloud deployments, Docker, "
     "Nixpacks, server infrastructure, and DevOps. You help users deploy, debug, and "
     "optimize their applications on SMSLY Hosting. Be concise, precise, and actionable. "
     "Format responses in markdown. Never reveal internal system details or API keys."
 )
 
 
+def _get_db_settings():
+    """
+    Best-effort DB-backed settings lookup.
+
+    This must fail-open because it can be called early during boot/migrations.
+    """
+    try:
+        from django.apps import apps
+        from django.db.utils import OperationalError, ProgrammingError
+
+        model = apps.get_model("intelligence", "AIProviderSettings")
+        if model is None:
+            return None
+        try:
+            return model.get_solo()
+        except (OperationalError, ProgrammingError):
+            return None
+    except Exception:
+        return None
+
+
+def _effective_provider_name() -> str:
+    cfg = _get_db_settings()
+    if cfg and getattr(cfg, "active_provider", None):
+        return str(cfg.active_provider).lower()
+    return os.environ.get("AI_PROVIDER", "mock").lower()
+
+
+def _effective_env_value(db_value: str | None, env_key: str, default: str = "") -> str:
+    if db_value:
+        return str(db_value)
+    return os.environ.get(env_key, default) or default
+
+
 def get_provider() -> AIProvider:
     """Return the configured AI provider, falling back to mock."""
-    provider_name = os.environ.get("AI_PROVIDER", "mock").lower()
+    cfg = _get_db_settings()
+    provider_name = _effective_provider_name()
+
+    # Apply DB overrides to the process env so provider classes (env-backed) work.
+    if cfg:
+        os.environ["AI_PROVIDER"] = provider_name
+        os.environ["OPENAI_API_KEY"] = _effective_env_value(getattr(cfg, "openai_api_key", None), "OPENAI_API_KEY", "")
+        os.environ["OPENAI_MODEL"] = _effective_env_value(getattr(cfg, "openai_model", None), "OPENAI_MODEL", "gpt-4o-mini")
+        os.environ["GROK_API_KEY"] = _effective_env_value(getattr(cfg, "grok_api_key", None), "GROK_API_KEY", "")
+        os.environ["GROK_MODEL"] = _effective_env_value(getattr(cfg, "grok_model", None), "GROK_MODEL", "grok-3-mini")
+        os.environ["GEMINI_API_KEY"] = _effective_env_value(getattr(cfg, "gemini_api_key", None), "GEMINI_API_KEY", "")
+        os.environ["GEMINI_MODEL"] = _effective_env_value(getattr(cfg, "gemini_model", None), "GEMINI_MODEL", "gemini-2.0-flash")
+
     provider_cls = PROVIDERS.get(provider_name, MockProvider)
     return provider_cls()
 
 
 def get_available_providers() -> list:
     """Return list of available providers with connection status."""
+    provider_name = _effective_provider_name()
+    cfg = _get_db_settings()
+
+    env_key_map = {"openai": "OPENAI_API_KEY", "grok": "GROK_API_KEY", "gemini": "GEMINI_API_KEY"}
+    db_key_map = {
+        "openai": getattr(cfg, "openai_api_key", None) if cfg else None,
+        "grok": getattr(cfg, "grok_api_key", None) if cfg else None,
+        "gemini": getattr(cfg, "gemini_api_key", None) if cfg else None,
+    }
+
     result = []
     for key, cls in PROVIDERS.items():
         if key == "mock":
             continue
         instance = cls()
-        env_key_map = {"openai": "OPENAI_API_KEY", "grok": "GROK_API_KEY", "gemini": "GEMINI_API_KEY"}
-        has_key = bool(os.environ.get(env_key_map.get(key, ""), ""))
+        has_key = bool(db_key_map.get(key, None)) or bool(os.environ.get(env_key_map.get(key, ""), ""))
         result.append({
             "id": key,
             "name": instance.name(),
             "configured": has_key,
-            "active": os.environ.get("AI_PROVIDER", "mock").lower() == key,
+            "active": provider_name == key,
         })
     return result

@@ -55,7 +55,7 @@ class AddonProvisioner:
     def __init__(self):
         self.network_name = config(
             'DOCKER_NETWORK',
-            default='smsly-hosting-network')
+            default='smsly-net')
         self._ensure_network()
 
     def _ensure_network(self):

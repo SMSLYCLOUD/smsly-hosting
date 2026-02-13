@@ -3,6 +3,7 @@ from ..models import CloudProvider, CloudResource
 from ..adapters.aws import AWSAdapter
 from ..adapters.azure import AzureAdapter
 from ..adapters.gcp import GCPAdapter
+from ..adapters.local import LocalAdapter
 from typing import Dict, Optional
 
 
@@ -34,6 +35,8 @@ class ComputeService:
                 project_id=self.provider.project_id,
                 region=self.provider.region
             )
+        elif self.provider.provider_type == CloudProvider.ProviderType.LOCAL:
+            return LocalAdapter()
         else:
             raise NotImplementedError(
                 f"Provider {self.provider.provider_type} not supported yet")

@@ -81,6 +81,8 @@ def build_base_templates() -> List[Dict[str, Any]]:
             "repository_url": td.get("docs_url") or "https://hub.docker.com/",
             "docker_image": td["docker_image"],
             "default_port": td["default_port"],
+            # Optional: used by one-click deploy to pre-provision dependencies.
+            "required_addons": list(td.get("required_addons") or []),
         }
         if env_vars:
             entry["env_vars"] = env_vars
