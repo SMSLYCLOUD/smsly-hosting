@@ -322,6 +322,41 @@ class AddonProvisioner:
         return {'running': False, 'status': 'unknown'}
 
 
+    def _validate_backup_path(self, backup_path: str) -> str:
+        """
+        Validate backup path to prevent path traversal and unsafe restore inputs.
+        """
+        import os
+
+        if not backup_path:
+            raise ValueError("backup_path is required")
+
+        real_path = os.path.realpath(backup_path)
+        allowed_root = os.path.realpath(os.path.join("/tmp", "backups"))
+
+        if not real_path.startswith(allowed_root + os.sep):
+            raise ValueError("Invalid backup path outside allowed backup directory")
+
+        if not os.path.isfile(real_path):
+            raise FileNotFoundError(f"Backup file not found: {real_path}")
+
+        return real_path
+
+    def _get_container_env(self, container_name: str, key: str) -> str:
+        """
+        Fetch a container environment variable safely without invoking a shell.
+        """
+        result = subprocess.run(
+            ['docker', 'exec', container_name, 'printenv', key],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        value = result.stdout.strip()
+        if not value:
+            raise ValueError(f"Missing required environment variable {key} in {container_name}")
+        return value
+
     def create_backup(self, addon) -> str:
         """
         Create a backup of the addon database.
@@ -340,35 +375,48 @@ class AddonProvisioner:
         
         try:
             if addon.addon_type == 'POSTGRES':
-                # PG dump
-                cmd = f"docker exec {container_name} pg_dump -U app_user app_db > {backup_path}"
-                subprocess.run(cmd, shell=True, check=True)
-            
+                # Stream pg_dump output directly to file without shell redirection.
+                with open(backup_path, 'wb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', container_name, 'pg_dump', '-U', 'app_user', 'app_db'],
+                        check=True,
+                        stdout=backup_file,
+                    )
+
             elif addon.addon_type == 'REDIS':
-                # Redis save and copy
+                # Redis save and copy using argument lists only.
                 subprocess.run(['docker', 'exec', container_name, 'redis-cli', 'save'], check=True)
-                # Copy from container to host
-                cmd = f"docker cp {container_name}:/data/dump.rdb {backup_path}"
-                subprocess.run(cmd, shell=True, check=True)
-                
+                subprocess.run(['docker', 'cp', f'{container_name}:/data/dump.rdb', backup_path], check=True)
+
             elif addon.addon_type == 'MYSQL':
-                # MySQL dump
-                # Password via env or config is tricky in exec, use passed password if stored (it's not easily available here without fetching)
-                # Ideally we store password in Vault. For now assuming we can exec without password if root or use config file
-                # Use mysqldump with root password in command (secure temp env var better)
-                # Simplified for MVP:
-                cmd = f"docker exec {container_name} mysqldump -u root --password=$MYSQL_ROOT_PASSWORD app_db > {backup_path}"
-                subprocess.run(cmd, shell=True, check=True)
-                
+                mysql_password = self._get_container_env(
+                    container_name, 'MYSQL_ROOT_PASSWORD'
+                )
+
+                with open(backup_path, 'wb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', container_name, 'mysqldump', '-u', 'root', f'--password={mysql_password}', 'app_db'],
+                        check=True,
+                        stdout=backup_file,
+                    )
+
             elif addon.addon_type == 'MONGODB':
-                # Mongo dump
-                cmd = f"docker exec {container_name} mongodump --username=app_user --password=$MONGO_INITDB_ROOT_PASSWORD --db=app_db --archive" 
-                # Redirect to file
-                full_cmd = f"{cmd} > {backup_path}"
-                subprocess.run(full_cmd, shell=True, check=True)
-            
+                mongo_password = self._get_container_env(
+                    container_name, 'MONGO_INITDB_ROOT_PASSWORD'
+                )
+
+                with open(backup_path, 'wb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', container_name, 'mongodump', '--username=app_user', f'--password={mongo_password}', '--db=app_db', '--archive'],
+                        check=True,
+                        stdout=backup_file,
+                    )
+
+            else:
+                raise ValueError(f"Unsupported addon type for backup: {addon.addon_type}")
+
             return backup_path
-            
+
         except subprocess.CalledProcessError as e:
             logger.error(f"Backup failed for {addon.id}: {e}")
             raise e
@@ -378,20 +426,47 @@ class AddonProvisioner:
         Restore a backup to the addon database.
         """
         container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+        validated_backup_path = self._validate_backup_path(backup_path)
         
         try:
             if addon.addon_type == 'POSTGRES':
-                # Drop and recreate schema or just restore
-                # cat backup | docker exec -i container psql ...
-                cmd = f"cat {backup_path} | docker exec -i {container_name} psql -U app_user app_db"
-                subprocess.run(cmd, shell=True, check=True)
-                
+                # Stream backup content as stdin to psql without shell piping.
+                with open(validated_backup_path, 'rb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', '-i', container_name, 'psql', '-U', 'app_user', 'app_db'],
+                        stdin=backup_file,
+                        check=True,
+                    )
+
             elif addon.addon_type == 'REDIS':
                 # Copy file back, restart
                 subprocess.run(['docker', 'stop', container_name], check=True)
-                cmd = f"docker cp {backup_path} {container_name}:/data/dump.rdb"
-                subprocess.run(cmd, shell=True, check=True)
+                subprocess.run(['docker', 'cp', validated_backup_path, f'{container_name}:/data/dump.rdb'], check=True)
                 subprocess.run(['docker', 'start', container_name], check=True)
+
+            elif addon.addon_type == 'MYSQL':
+                mysql_password = self._get_container_env(
+                    container_name, 'MYSQL_ROOT_PASSWORD'
+                )
+                with open(validated_backup_path, 'rb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', '-i', container_name, 'mysql', '-u', 'root', f'--password={mysql_password}', 'app_db'],
+                        stdin=backup_file,
+                        check=True,
+                    )
+
+            elif addon.addon_type == 'MONGODB':
+                mongo_password = self._get_container_env(
+                    container_name, 'MONGO_INITDB_ROOT_PASSWORD'
+                )
+                with open(validated_backup_path, 'rb') as backup_file:
+                    subprocess.run(
+                        ['docker', 'exec', '-i', container_name, 'mongorestore', '--username=app_user', f'--password={mongo_password}', '--db=app_db', '--archive'],
+                        stdin=backup_file,
+                        check=True,
+                    )
+            else:
+                raise ValueError(f"Unsupported addon type for restore: {addon.addon_type}")
             
             return True
         except Exception as e:

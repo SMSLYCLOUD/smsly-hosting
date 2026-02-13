@@ -104,6 +104,187 @@ detect_public_ip() {
 }
 
 # ─── Constants ───────────────────────────────────────────────────────────────
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    if grep -q "^${var_name}=" "$env_file" 2>/dev/null; then
+        sed -i "s|^${var_name}=.*|${var_name}=${var_value}|" "$env_file"
+    else
+        echo "${var_name}=${var_value}" >> "$env_file"
+    fi
+}
+
+env_ensure_var() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    local var_comment="${4:-}"
+    if ! grep -q "^${var_name}=" "$env_file" 2>/dev/null; then
+        echo -e "${BLUE}  -> Adding missing $var_name to .env${NC}"
+        echo "" >> "$env_file"
+        [ -n "$var_comment" ] && echo "# $var_comment" >> "$env_file"
+        echo "${var_name}=${var_value}" >> "$env_file"
+        echo -e "${GREEN}  OK $var_name added${NC}"
+    fi
+}
+
+ensure_env_runtime_defaults() {
+    local env_file="$1"
+    local redis_password=""
+    local postgres_password=""
+    local current_redis_url=""
+    local expected_redis_url=""
+    local current_celery_broker_url=""
+    local current_database_url=""
+    local expected_database_url=""
+
+    [ -f "$env_file" ] || return 1
+
+    env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
+    env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
+    env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
+
+    redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
+    postgres_password="$(env_get_value "$env_file" "POSTGRES_PASSWORD")"
+
+    if [ -n "$redis_password" ]; then
+        expected_redis_url="redis://:${redis_password}@redis:6379/0"
+        current_redis_url="$(env_get_value "$env_file" "REDIS_URL")"
+        current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+
+        if [[ "$current_redis_url" == redis://redis:* ]]; then
+            echo -e "${BLUE}  -> Fixing REDIS_URL to include authentication${NC}"
+            sed -i "s|^REDIS_URL=redis://redis:|REDIS_URL=redis://:${redis_password}@redis:|" "$env_file"
+            current_redis_url="$(env_get_value "$env_file" "REDIS_URL")"
+            echo -e "${GREEN}  OK REDIS_URL updated with auth${NC}"
+        fi
+
+        env_ensure_var "$env_file" "REDIS_URL" "$expected_redis_url" "Redis connection string"
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_redis_url" "Celery broker (Redis with auth)"
+
+        if [[ "$current_redis_url" =~ ^redis://:.*@redis:6379/0$ ]] && [ "$current_redis_url" != "$expected_redis_url" ]; then
+            echo -e "${BLUE}  -> Syncing REDIS_URL with REDIS_PASSWORD${NC}"
+            env_set_value "$env_file" "REDIS_URL" "$expected_redis_url"
+            echo -e "${GREEN}  OK REDIS_URL synced${NC}"
+        fi
+
+        if [[ "$current_celery_broker_url" =~ ^redis://:.*@redis:6379/0$ ]] && [ "$current_celery_broker_url" != "$expected_redis_url" ]; then
+            echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with REDIS_PASSWORD${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_redis_url"
+            echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
+        fi
+    fi
+
+    if [ -n "$postgres_password" ]; then
+        expected_database_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
+
+        if [ -z "$current_database_url" ]; then
+            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string"
+        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@db:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
+            echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
+            env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
+            echo -e "${GREEN}  OK DATABASE_URL password synced${NC}"
+        fi
+    fi
+
+    return 0
+}
+
+validate_env_file() {
+    local env_file="$1"
+    local required_vars=(
+        "SECRET_KEY"
+        "FIELD_ENCRYPTION_KEY"
+        "POSTGRES_PASSWORD"
+        "DATABASE_URL"
+        "REDIS_PASSWORD"
+        "REDIS_URL"
+        "CELERY_BROKER_URL"
+        "GATEWAY_SECRET"
+        "GITHUB_WEBHOOK_SECRET"
+    )
+    local missing_vars=()
+    local invalid_vars=()
+    local var_name=""
+    local var_value=""
+    local secret_key=""
+    local field_encryption_key=""
+    local database_url=""
+    local redis_url=""
+    local celery_broker_url=""
+
+    [ -f "$env_file" ] || {
+        echo -e "${RED}x .env file not found: $env_file${NC}"
+        return 1
+    }
+
+    for var_name in "${required_vars[@]}"; do
+        var_value="$(env_get_value "$env_file" "$var_name")"
+        if [ -z "$var_value" ]; then
+            missing_vars+=("$var_name")
+        fi
+    done
+
+    secret_key="$(env_get_value "$env_file" "SECRET_KEY")"
+    if [ -n "$secret_key" ] && [ "${#secret_key}" -lt 32 ]; then
+        invalid_vars+=("SECRET_KEY (too short)")
+    fi
+
+    field_encryption_key="$(env_get_value "$env_file" "FIELD_ENCRYPTION_KEY")"
+    if [ -n "$field_encryption_key" ] && [[ ! "$field_encryption_key" =~ ^[A-Za-z0-9_-]{43}=$ ]]; then
+        invalid_vars+=("FIELD_ENCRYPTION_KEY (invalid Fernet format)")
+    fi
+
+    database_url="$(env_get_value "$env_file" "DATABASE_URL")"
+    if [ -n "$database_url" ] && [[ ! "$database_url" =~ ^postgres(ql)?:// ]]; then
+        invalid_vars+=("DATABASE_URL (must start with postgres:// or postgresql://)")
+    fi
+
+    redis_url="$(env_get_value "$env_file" "REDIS_URL")"
+    if [ -n "$redis_url" ] && [[ ! "$redis_url" =~ ^redis:// ]]; then
+        invalid_vars+=("REDIS_URL (must start with redis://)")
+    fi
+
+    celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^redis:// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with redis://)")
+    fi
+
+    if [ ${#missing_vars[@]} -gt 0 ] || [ ${#invalid_vars[@]} -gt 0 ]; then
+        echo -e "${RED}x Invalid .env configuration detected.${NC}"
+        if [ ${#missing_vars[@]} -gt 0 ]; then
+            echo -e "${RED}  Missing/empty required variables:${NC}"
+            for var_name in "${missing_vars[@]}"; do
+                echo -e "${RED}    - $var_name${NC}"
+            done
+        fi
+        if [ ${#invalid_vars[@]} -gt 0 ]; then
+            echo -e "${RED}  Invalid values:${NC}"
+            for var_name in "${invalid_vars[@]}"; do
+                echo -e "${RED}    - $var_name${NC}"
+            done
+        fi
+        echo -e "${YELLOW}  Fix .env and rerun install. Backup file: $INSTALL_DIR/.env.backup${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}  OK .env validation passed${NC}"
+    return 0
+}
+
 LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
@@ -268,6 +449,14 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
 
     cd "$INSTALL_DIR"
+
+    echo -e "${BLUE}  -> Validating existing .env configuration...${NC}"
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}x .env validation failed. Fix the values above and re-run update.${NC}"
+        exit 1
+    fi
+
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
     echo -e "${BLUE}  → Checking for local changes...${NC}"
@@ -603,58 +792,19 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     echo -e "${BLUE}  → Backing up existing .env to .env.backup${NC}"
     cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup"
 
-    # Source existing values for the summary at the end
+    # Backfill newer required keys and validate before deployment.
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}x Existing .env is invalid. Fix it or restore .env.backup and rerun.${NC}"
+        exit 1
+    fi
+
+    # Source existing values for summary output.
     source "$INSTALL_DIR/.env" 2>/dev/null || true
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
     PUBLIC_IP="$(detect_public_ip)"
 
-    # ─── Patch missing required variables into existing .env ───────────────
-    # Older .env files may be missing secrets added in later versions.
-    # This ensures ALL required variables exist before docker-compose starts.
-
-    _gen_secret() { python3 -c "import secrets; print(secrets.token_hex($1))" 2>/dev/null || openssl rand -hex "$1"; }
-
-    _ensure_env_var() {
-        local var_name="$1" var_value="$2" var_comment="${3:-}"
-        if ! grep -q "^${var_name}=" "$INSTALL_DIR/.env"; then
-            echo -e "${BLUE}  → Adding missing $var_name to .env${NC}"
-            echo "" >> "$INSTALL_DIR/.env"
-            [ -n "$var_comment" ] && echo "# $var_comment" >> "$INSTALL_DIR/.env"
-            echo "${var_name}=${var_value}" >> "$INSTALL_DIR/.env"
-            echo -e "${GREEN}  ✓ $var_name added${NC}"
-        fi
-    }
-
-    # Generate missing secrets
-    _ensure_env_var "REDIS_PASSWORD" "$(_gen_secret 16)" "Redis authentication password"
-    _ensure_env_var "GATEWAY_SECRET" "$(_gen_secret 32)" "Inter-service HMAC authentication secret"
-    _ensure_env_var "GITHUB_WEBHOOK_SECRET" "$(_gen_secret 32)" "GitHub webhook signature verification"
-
-    # Re-source to pick up any newly added values
-    source "$INSTALL_DIR/.env" 2>/dev/null || true
-
-    # Fix Redis/Celery URLs if they don't include password authentication
-    if grep -q "^REDIS_URL=redis://redis:" "$INSTALL_DIR/.env" 2>/dev/null; then
-        echo -e "${BLUE}  → Fixing REDIS_URL to include authentication${NC}"
-        sed -i "s|^REDIS_URL=redis://redis:|REDIS_URL=redis://:${REDIS_PASSWORD}@redis:|" "$INSTALL_DIR/.env"
-        echo -e "${GREEN}  ✓ REDIS_URL updated with auth${NC}"
-    fi
-
-    _ensure_env_var "CELERY_BROKER_URL" "redis://:${REDIS_PASSWORD}@redis:6379/0" "Celery broker (Redis with auth)"
-
-    # Ensure DATABASE_URL exists and uses the correct POSTGRES_PASSWORD
-    if grep -q "^DATABASE_URL=" "$INSTALL_DIR/.env" 2>/dev/null; then
-        # Extract password from existing DATABASE_URL and compare with POSTGRES_PASSWORD
-        EXISTING_DB_PASS=$(grep "^DATABASE_URL=" "$INSTALL_DIR/.env" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-        if [ -n "$POSTGRES_PASSWORD" ] && [ "$EXISTING_DB_PASS" != "$POSTGRES_PASSWORD" ]; then
-            echo -e "${BLUE}  → Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
-            sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://smsly_admin:${POSTGRES_PASSWORD}@db:5432/smsly_hosting|" "$INSTALL_DIR/.env"
-            echo -e "${GREEN}  ✓ DATABASE_URL password synced${NC}"
-        fi
-    else
-        _ensure_env_var "DATABASE_URL" "postgresql://smsly_admin:${POSTGRES_PASSWORD}@db:5432/smsly_hosting" "PostgreSQL connection string"
-    fi
 
 else
     # ─── Fresh install: generate secrets ────────────────────────────────────
@@ -781,6 +931,11 @@ CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$PUBLIC_IP
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
+        exit 1
+    fi
+
     echo -e "${GREEN}  ✓ Configuration saved to .env (chmod 600)${NC}"
 fi
 
