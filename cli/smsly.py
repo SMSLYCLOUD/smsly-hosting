@@ -31,20 +31,22 @@ def cli():
     pass
 
 @cli.command()
-@click.option('--email', prompt=True)
+@click.option('--login', '--email', prompt=True, help="Username or email")
 @click.option('--password', prompt=True, hide_input=True)
-def login(email, password):
+def login(login, password):
     """Login to SMSLY Hosting"""
     try:
-        response = requests.post(f"{API_URL}/auth/login/", json={
-            # Support both username/email logins (depends on server auth config).
-            "username": email,
-            "email": email,
-            "password": password
-        })
+        identifier = (login or "").strip()
+        payload = {"password": password}
+        if "@" in identifier:
+            payload["email"] = identifier
+        else:
+            payload["username"] = identifier
+
+        response = requests.post(f"{API_URL}/auth/login/", json=payload)
         if response.status_code == 200:
             token = response.json().get('key')
-            save_config({"token": token, "email": email})
+            save_config({"token": token, "login": identifier})
             click.echo(click.style("Login successful!", fg="green"))
         else:
             click.echo(click.style(f"Login failed: {response.text}", fg="red"))

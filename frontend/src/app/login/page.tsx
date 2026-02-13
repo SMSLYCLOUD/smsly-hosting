@@ -39,23 +39,24 @@ export default function LoginPage() {
     ? window.location.origin
     : process.env.NEXT_PUBLIC_API_URL || "https://cloud.smsly.cloud";
   
-  console.log('DEBUG: BACKEND_URL', BACKEND_URL);
-
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError("");
 
     try {
-      // dj-rest-auth can authenticate with username and/or email depending on allauth settings.
-      // We send both fields so users can sign in with either identifier.
+      const identifier = formData.username.trim();
+      const isEmail = identifier.includes("@");
+
+      // dj-rest-auth validates the email field format, so only include it when it
+      // actually looks like an email. Otherwise you'll get a 400 ("Enter a valid email address.").
       const response = await fetch(`${BACKEND_URL}/api/v1/auth/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          username: formData.username,
-          email: formData.username,
+          username: isEmail ? undefined : identifier,
+          email: isEmail ? identifier : undefined,
           password: formData.password,
         }),
       });
