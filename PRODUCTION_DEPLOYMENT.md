@@ -145,7 +145,18 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
 ```
 
-## 6. Disaster Recovery
+## 6. Full Reset (Prepare for New VPS)
+
+```bash
+cd /opt/smsly-hosting
+sudo bash install.sh --wipe
+```
+
+- Deletes `/opt/smsly-hosting`
+- Removes SMSLY Docker containers, volumes, and networks
+- For automation/non-interactive runs: `FORCE_WIPE=1 sudo bash install.sh --wipe`
+
+## 7. Disaster Recovery
 
 ### Backup
 
@@ -170,7 +181,7 @@ gunzip -c backup_20260206.sql.gz | docker compose -f docker-compose.prod.yml exe
 docker compose -f docker-compose.prod.yml start backend celery
 ```
 
-## 7. Monitoring & Alerts
+## 8. Monitoring & Alerts
 
 ### Health Check Monitoring
 
