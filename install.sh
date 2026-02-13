@@ -366,7 +366,7 @@ echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
 # =============================================================================
-# WIPE MODE � Remove all install artifacts for a clean re-install
+# WIPE MODE — Remove all install artifacts for a clean re-install
 # =============================================================================
 wipe_existing_install() {
     echo -e "${YELLOW}[WIPE] Removing existing SMSLY Hosting installation artifacts...${NC}"
@@ -1039,26 +1039,40 @@ docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
-ADMIN_PASS="smslyhosting"
-ADMIN_CREATED=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); existed = User.objects.filter(username='admin').exists(); print('EXISTS' if existed else 'CREATED'); existed or User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
+ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
 
-if [[ "$ADMIN_CREATED" == *"EXISTS"* ]]; then
+if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
     echo -e "${GREEN}  ✓ Admin user already exists — skipping${NC}"
-    ADMIN_PASS="<unchanged — see previous install>"
+    if [ -f "$CREDENTIALS_FILE" ]; then
+        echo -e "${GREEN}  ✓ Credentials file exists — leaving unchanged${NC}"
+    else
+        # Best effort: don't overwrite an unknown existing password.
+        cat > "$CREDENTIALS_FILE" <<CREDS
+# SMSLY Hosting Admin Credentials
+# Generated: $(date -Iseconds)
+# KEEP THIS FILE SECURE
+Username: admin
+Password: <existing — not changed by installer>
+CREDS
+        chmod 600 "$CREDENTIALS_FILE"
+    fi
 else
-    echo -e "${GREEN}  ✓ Admin user created (default password: smslyhosting)${NC}"
-    echo -e "${YELLOW}  ⚠ IMPORTANT: Change the default password after first login!${NC}"
-fi
+    # Production hardening: never ship with a default admin password.
+    # Use a shell-safe hex password (avoids quoting issues in manage.py shell).
+    ADMIN_PASS="$(gen_hex_secret 16)"
+    echo "from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS'); print('CREATED')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
+    echo -e "${GREEN}  ✓ Admin user created${NC}"
 
-# ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
-cat > "$CREDENTIALS_FILE" <<CREDS
+    # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
+    cat > "$CREDENTIALS_FILE" <<CREDS
 # SMSLY Hosting Admin Credentials
 # Generated: $(date -Iseconds)
 # KEEP THIS FILE SECURE
 Username: admin
 Password: $ADMIN_PASS
 CREDS
-chmod 600 "$CREDENTIALS_FILE"
+    chmod 600 "$CREDENTIALS_FILE"
+fi
 
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)

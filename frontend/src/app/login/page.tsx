@@ -38,6 +38,8 @@ export default function LoginPage() {
   const BACKEND_URL = typeof window !== 'undefined'
     ? window.location.origin
     : process.env.NEXT_PUBLIC_API_URL || "https://hosting.smsly.cloud";
+  
+  console.log('DEBUG: BACKEND_URL', BACKEND_URL);
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,12 +47,17 @@ export default function LoginPage() {
     setError("");
 
     try {
-      // dj_rest_auth expects username, not email
+      // dj-rest-auth can authenticate with username and/or email depending on allauth settings.
+      // We send both fields so users can sign in with either identifier.
       const response = await fetch(`${BACKEND_URL}/api/v1/auth/login/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username: formData.username, password: formData.password }),
+        body: JSON.stringify({
+          username: formData.username,
+          email: formData.username,
+          password: formData.password,
+        }),
       });
 
       if (response.ok) {
@@ -76,7 +83,11 @@ export default function LoginPage() {
         router.push("/dashboard");
       } else {
         const errorData = await response.json();
-        setError(errorData.non_field_errors?.[0] || errorData.detail || "Invalid email or password");
+        setError(
+          errorData.non_field_errors?.[0] ||
+            errorData.detail ||
+            "Invalid username/email or password"
+        );
       }
     } catch {
       setError("Unable to connect to server. Please try again.");
@@ -101,7 +112,7 @@ export default function LoginPage() {
           </CardTitle>
           <CardDescription>
             {showEmailForm
-              ? "Enter your email and password to continue"
+              ? "Enter your username or email and password to continue"
               : "Sign in to CloudNeuron to manage your infrastructure."}
           </CardDescription>
         </CardHeader>
@@ -160,11 +171,11 @@ export default function LoginPage() {
 
               <form onSubmit={handleEmailLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
+                  <Label htmlFor="username">Username or Email</Label>
                   <Input
                     id="username"
                     type="text"
-                    placeholder="admin"
+                    placeholder="admin or admin@smsly.cloud"
                     required
                     value={formData.username}
                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}
