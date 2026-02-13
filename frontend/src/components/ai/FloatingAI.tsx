@@ -58,13 +58,13 @@ export function FloatingAI() {
     setIsLoading(true);
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_API_URL || '';
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-      const res = await fetch(`${backendUrl}/api/v1/cloud/intelligence/ask/`, {
+      const res = await fetch(`/api/v1/cloud/intelligence/ask/`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(token ? { Authorization: `Token ${token}` } : {}),
         },
         body: JSON.stringify({ message: trimmed }),
       });

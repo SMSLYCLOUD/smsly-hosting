@@ -954,6 +954,10 @@ GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
 CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
 CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://$PUBLIC_IP
+
+# Docker networking
+# Ensure addon containers and deployed app containers share the same network for connectivity.
+DOCKER_NETWORK=smsly-net
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"

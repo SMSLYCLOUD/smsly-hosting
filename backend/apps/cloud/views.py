@@ -164,7 +164,7 @@ class IntelligenceViewSet(viewsets.ViewSet):
         Body: { "provider": "grok", "api_key": "xai-..." }
         """
         import os
-        from pathlib import Path
+        from apps.intelligence.models import AIProviderSettings
 
         provider_name = request.data.get('provider', '').strip().lower()
         api_key = request.data.get('api_key', '').strip()
@@ -191,34 +191,17 @@ class IntelligenceViewSet(viewsets.ViewSet):
             env_var = key_map[provider_name]
             os.environ[env_var] = api_key
 
-        # Persist to .env file
-        env_path = Path(__file__).resolve().parent.parent.parent / '.env'
-        env_lines = []
-        if env_path.exists():
-            env_lines = env_path.read_text().splitlines()
-
-        # Update or add AI_PROVIDER
-        updated_keys = set()
-        new_lines = []
-        for line in env_lines:
-            key = line.split('=', 1)[0].strip() if '=' in line else ''
-            if key == 'AI_PROVIDER':
-                new_lines.append(f'AI_PROVIDER={provider_name}')
-                updated_keys.add('AI_PROVIDER')
-            elif api_key and key == key_map.get(provider_name, ''):
-                new_lines.append(f'{key}={api_key}')
-                updated_keys.add(key)
-            else:
-                new_lines.append(line)
-
-        if 'AI_PROVIDER' not in updated_keys:
-            new_lines.append(f'AI_PROVIDER={provider_name}')
-        if api_key and provider_name in key_map:
-            env_var = key_map[provider_name]
-            if env_var not in updated_keys:
-                new_lines.append(f'{env_var}={api_key}')
-
-        env_path.write_text('\n'.join(new_lines) + '\n')
+        # Persist to DB so config survives container restarts.
+        cfg = AIProviderSettings.get_solo()
+        cfg.active_provider = provider_name
+        field_map = {
+            'openai': 'openai_api_key',
+            'grok': 'grok_api_key',
+            'gemini': 'gemini_api_key',
+        }
+        if api_key and provider_name in field_map:
+            setattr(cfg, field_map[provider_name], api_key)
+        cfg.save()
 
         return Response({
             'status': 'saved',

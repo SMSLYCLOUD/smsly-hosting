@@ -301,6 +301,108 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         raise self.retry(exc=e, countdown=30)
 
 # ==============================================================================
+# One-Click Template Deploy (Addons + Deploy Orchestration)
+# ==============================================================================
+
+
+@shared_task(bind=True, max_retries=0)
+def one_click_deploy_template_task(self, service_id: str, template_id: str):
+    """
+    Background orchestration for template deployments.
+
+    Why this exists:
+    - Addon provisioning injects env vars into the Service record.
+      Those env vars MUST exist before the container is launched, otherwise the
+      running container will never see the injected values.
+    - This task provisions required addons first, then triggers the deployment.
+    """
+    from apps.deployments.models import Service, Deployment, EnvironmentVariable
+    from apps.deployments.models_addons import Addon
+    from services.addon_provisioner import addon_provisioner
+
+    try:
+        service = Service.objects.get(id=service_id)
+    except Service.DoesNotExist:
+        logger.error("one_click_deploy_template_task: service not found: %s", service_id)
+        return None
+
+    # Load template definition from fixtures
+    try:
+        import json
+        template_path = os.path.join(
+            settings.BASE_DIR, 'apps/deployments/fixtures/templates.json'
+        )
+        with open(template_path, 'r', encoding='utf-8') as f:
+            templates = json.load(f)
+        template = next((t for t in templates if t.get('id') == template_id), None)
+    except Exception as e:
+        logger.error("one_click_deploy_template_task: failed to load template %s: %s", template_id, e)
+        template = None
+
+    required_addons = []
+    if isinstance(template, dict):
+        ra = template.get('required_addons') or []
+        if isinstance(ra, list):
+            required_addons = [str(x) for x in ra if x]
+
+    # Provision required addons synchronously so env vars are ready before deploy.
+    env_key_map = {
+        Addon.Type.POSTGRES: 'DATABASE_URL',
+        Addon.Type.REDIS: 'REDIS_URL',
+        Addon.Type.MYSQL: 'MYSQL_URL',
+        Addon.Type.MONGODB: 'MONGODB_URI',
+    }
+
+    for addon_type in required_addons:
+        if addon_type not in (a[0] for a in Addon.Type.choices):
+            logger.warning("Skipping unsupported addon type %s for service %s", addon_type, service.id)
+            continue
+
+        addon = Addon.objects.create(
+            service=service,
+            name=f"{addon_type.lower()}-{service.name}"[:255],
+            addon_type=addon_type,
+            status=Addon.Status.PROVISIONING,
+        )
+
+        try:
+            container_id, connection_url = addon_provisioner.provision(addon)
+            addon.connection_url = connection_url
+            addon.status = Addon.Status.ACTIVE
+            addon.coolify_uuid = container_id
+            addon.save()
+
+            env_key = env_key_map.get(addon.addon_type, f"{addon.addon_type}_URL")
+            EnvironmentVariable.objects.update_or_create(
+                service=service,
+                key=env_key,
+                defaults={'value': connection_url, 'is_secret': True},
+            )
+        except Exception as e:
+            addon.status = Addon.Status.FAILED
+            addon.save()
+            logger.error("Addon provisioning failed (%s) for service %s: %s", addon_type, service.id, e)
+            # Fail-closed: do not deploy a template that is missing required deps.
+            return None
+
+    # Trigger deployment after deps are ready.
+    provider = service.provider if service.provider and service.provider.is_active else None
+    if not provider:
+        provider = CloudProvider.objects.filter(is_active=True).first()
+    if not provider:
+        logger.error("one_click_deploy_template_task: no active provider configured for service %s", service.id)
+        return None
+
+    deployment = Deployment.objects.create(
+        service=service,
+        status=Deployment.Status.QUEUED,
+        commit_hash='template',
+        commit_message=f"Template Deploy: {template_id}",
+    )
+    smart_deploy_task.delay(str(deployment.id), str(provider.id))
+    return str(deployment.id)
+
+# ==============================================================================
 # LEGACY: Addon Provisioning (Docker-native)
 # ==============================================================================
 

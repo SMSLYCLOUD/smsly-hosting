@@ -63,13 +63,9 @@ export default function MarketplacePage() {
     const [services, setServices] = React.useState<Service[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     
-    // Provision Modal State
-    const [isProvisionOpen, setIsProvisionOpen] = React.useState(false)
-    const [selectedType, setSelectedType] = React.useState<AddonType | null>(null)
-    const [selectedService, setSelectedService] = React.useState<string | null>(null)
-    const [addonName, setAddonName] = React.useState("")
-    const [isProvisioning, setIsProvisioning] = React.useState(false)
-    const [selectedCatalogItem, setSelectedCatalogItem] = React.useState<(typeof ADDON_CATALOG)[number] | null>(null)
+    // One-click provisioning target (default to most recent service).
+    const [targetServiceId, setTargetServiceId] = React.useState<string | null>(null)
+    const [isProvisioning, setIsProvisioning] = React.useState<string | null>(null) // catalog id
 
     // Backups Modal State
     const [isBackupsOpen, setIsBackupsOpen] = React.useState(false)
@@ -105,7 +101,12 @@ export default function MarketplacePage() {
                 if (servicesRes.ok) {
                     const data = await servicesRes.json()
                     const list = Array.isArray(data) ? data : (data?.results || [])
-                    setServices(Array.isArray(list) ? list : [])
+                    const svcList = Array.isArray(list) ? list : []
+                    setServices(svcList)
+                    // Auto-select the most recently created service (API is ordered by -created_at).
+                    if (svcList.length > 0) {
+                        setTargetServiceId((prev) => prev || svcList[0].id)
+                    }
                 }
             } catch (err) {
                 console.error(err)
@@ -116,11 +117,27 @@ export default function MarketplacePage() {
         loadData()
     }, [])
 
-    const handleProvision = async () => {
-        if (!selectedType || !selectedService || !addonName) return
-        setIsProvisioning(true)
+    const randomToken = (len: number = 6) => {
+        const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+        const bytes = new Uint8Array(len)
+        crypto.getRandomValues(bytes)
+        let out = ""
+        for (let i = 0; i < bytes.length; i += 1) out += alphabet[bytes[i] % alphabet.length]
+        return out
+    }
+
+    const handleOneClickProvision = async (item: (typeof ADDON_CATALOG)[number]) => {
         const token = localStorage.getItem("auth_token")
-        
+        if (!token) {
+            toast({ title: "Login required", description: "Please login to provision addons.", variant: "destructive" })
+            return
+        }
+        if (!targetServiceId) {
+            toast({ title: "No service found", description: "Create a service first, then provision addons.", variant: "destructive" })
+            return
+        }
+
+        setIsProvisioning(item.id)
         try {
             const res = await fetch("/api/v1/addons/", {
                 method: "POST",
@@ -129,9 +146,9 @@ export default function MarketplacePage() {
                     "Authorization": `Token ${token}` 
                 },
                 body: JSON.stringify({
-                    name: addonName,
-                    addon_type: selectedType,
-                    service: selectedService
+                    name: `${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${randomToken(6)}`.slice(0, 255),
+                    addon_type: item.addon_type,
+                    service: targetServiceId
                 })
             })
             if (!res.ok) throw new Error("Provisioning failed")
@@ -139,12 +156,11 @@ export default function MarketplacePage() {
             const newAddon = await res.json()
             // Defensive: in case addons was set to a non-array by a backend shape change.
             setAddons((prev) => Array.isArray(prev) ? [...prev, newAddon] : [newAddon])
-            setIsProvisionOpen(false)
             toast({ title: "Started", description: "Provisioning initiated." })
         } catch (err) {
             toast({ title: "Error", description: "Failed to provision addon.", variant: "destructive" })
         } finally {
-            setIsProvisioning(false)
+            setIsProvisioning(null)
         }
     }
 
@@ -244,13 +260,29 @@ export default function MarketplacePage() {
             </div>
 
             {/* Catalog */}
+            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
+                <div>
+                    <h2 className="text-lg font-semibold">Addon Catalog</h2>
+                    <p className="text-xs text-muted-foreground">100 one-click presets</p>
+                </div>
+                <div className="w-full sm:w-[340px] space-y-1">
+                    <Label>Provision to service</Label>
+                    <Select value={targetServiceId || undefined} onValueChange={setTargetServiceId}>
+                        <SelectTrigger>
+                            <SelectValue placeholder="Select a service" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {services.map(s => (
+                                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {ADDON_CATALOG.map((item) => (
                     <Card key={item.id} className="hover:border-primary/50 transition-colors cursor-pointer" onClick={() => {
-                        setSelectedType(item.addon_type)
-                        setAddonName(item.name)
-                        setSelectedCatalogItem(item)
-                        setIsProvisionOpen(true)
+                        handleOneClickProvision(item)
                     }}>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle className="text-sm font-medium">{item.name}</CardTitle>
@@ -259,6 +291,11 @@ export default function MarketplacePage() {
                         <CardContent>
                             <div className="text-xs text-muted-foreground">{item.desc}</div>
                         </CardContent>
+                        <CardFooter>
+                            <Button size="sm" className="w-full" disabled={isProvisioning === item.id || !targetServiceId}>
+                                {isProvisioning === item.id ? "Provisioning..." : "1-Click Provision"}
+                            </Button>
+                        </CardFooter>
                     </Card>
                 ))}
             </div>
@@ -358,46 +395,6 @@ export default function MarketplacePage() {
                 </DialogContent>
             </Dialog>
 
-            {/* Provision Dialog */}
-            <Dialog open={isProvisionOpen} onOpenChange={setIsProvisionOpen}>
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>Provision {selectedCatalogItem?.name || (selectedType ? ADDON_TYPES[selectedType]?.name : "Addon")}</DialogTitle>
-                        <DialogDescription>Add a managed database to your service.</DialogDescription>
-                    </DialogHeader>
-                    
-                    <div className="space-y-4 py-4">
-                        <div className="space-y-2">
-                            <Label>Name</Label>
-                            <Input 
-                                placeholder="my-read-replica" 
-                                value={addonName}
-                                onChange={(e) => setAddonName(e.target.value)}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Attach to Service</Label>
-                            <Select onValueChange={setSelectedService}>
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Select a service" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {services.map(s => (
-                                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-
-                    <DialogFooter>
-                        <Button onClick={handleProvision} disabled={isProvisioning}>
-                            {isProvisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Provision Database
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
         </div>
         </DashboardShell>
     )
