@@ -74,7 +74,12 @@ export default function MarketplacePage() {
                 const addonsRes = await fetch("/api/v1/addons/", {
                     headers: { "Authorization": `Token ${token}` }
                 })
-                if (addonsRes.ok) setAddons(await addonsRes.json())
+                if (addonsRes.ok) {
+                    const data = await addonsRes.json()
+                    // DRF pagination returns { results: [...] }. Support both shapes.
+                    const list = Array.isArray(data) ? data : (data?.results || [])
+                    setAddons(Array.isArray(list) ? list : [])
+                }
 
                 // Fetch Services (for provisioning)
                 const servicesRes = await fetch("/api/v1/services/", {
@@ -114,7 +119,8 @@ export default function MarketplacePage() {
             if (!res.ok) throw new Error("Provisioning failed")
             
             const newAddon = await res.json()
-            setAddons([...addons, newAddon])
+            // Defensive: in case addons was set to a non-array by a backend shape change.
+            setAddons((prev) => Array.isArray(prev) ? [...prev, newAddon] : [newAddon])
             setIsProvisionOpen(false)
             toast({ title: "Started", description: "Provisioning initiated." })
         } catch (err) {
@@ -134,7 +140,11 @@ export default function MarketplacePage() {
             const res = await fetch(`/api/v1/addons/${addon.id}/backups/`, {
                 headers: { "Authorization": `Token ${token}` }
             })
-            if (res.ok) setBackups(await res.json())
+            if (res.ok) {
+                const data = await res.json()
+                const list = Array.isArray(data) ? data : (data?.results || [])
+                setBackups(Array.isArray(list) ? list : [])
+            }
         } catch (err) {
             console.error(err)
         } finally {
