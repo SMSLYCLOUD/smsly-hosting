@@ -1,40 +1,104 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export function middleware(request: NextRequest) {
-  // Check for any auth indicator: Django session cookie OR DRF token cookie
-  const session = request.cookies.get("sessionid");
-  const authToken = request.cookies.get("auth_token");
-  const isAuthenticated = !!(session || authToken);
+const AUTH_VALIDATE_PATH = "/api/v1/auth/user/";
 
-  // Allow the callback page through so it can parse the token from the URL
-  const isCallbackPage = request.nextUrl.pathname.startsWith("/auth/callback");
+const PROTECTED_PREFIXES = [
+  "/dashboard",
+  "/new",
+  "/services",
+  "/deployments",
+  "/topology",
+  "/billing",
+  "/admin-dashboard",
+  "/project",
+  "/store",
+  "/marketplace",
+  "/settings",
+];
 
-  const isAuthPage =
-    request.nextUrl.pathname === "/login" ||
-    request.nextUrl.pathname === "/register";
+function isProtectedPath(pathname: string): boolean {
+  return PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
+}
 
-  const isProtectedPage =
-    request.nextUrl.pathname.startsWith("/dashboard") ||
-    request.nextUrl.pathname.startsWith("/new") ||
-    request.nextUrl.pathname.startsWith("/services") ||
-    request.nextUrl.pathname.startsWith("/deployments") ||
-    request.nextUrl.pathname.startsWith("/topology") ||
-    request.nextUrl.pathname.startsWith("/billing") ||
-    request.nextUrl.pathname.startsWith("/admin-dashboard") ||
-    request.nextUrl.pathname.startsWith("/project") ||
-    request.nextUrl.pathname.startsWith("/store") ||
-    request.nextUrl.pathname.startsWith("/marketplace") ||
-    request.nextUrl.pathname.startsWith("/settings");
+function isAuthPage(pathname: string): boolean {
+  return pathname === "/login" || pathname === "/register";
+}
 
-  // Protect dashboard routes — redirect to login if not authenticated
-  if (isProtectedPage && !isAuthenticated) {
-    return NextResponse.redirect(new URL("/login", request.url));
+function isCallbackPage(pathname: string): boolean {
+  return pathname.startsWith("/auth/callback");
+}
+
+async function validateAuth(request: NextRequest): Promise<boolean> {
+  // localStorage isn't accessible from middleware. We rely on cookies, but we
+  // *validate* them against the backend to avoid stale/forged cookie access.
+  const authToken = request.cookies.get("auth_token")?.value;
+  const session = request.cookies.get("sessionid")?.value;
+
+  if (!authToken && !session) {
+    return false;
   }
 
-  // If already logged in and visiting login/register, redirect to dashboard
-  // But never redirect from the callback page
-  if (isAuthPage && isAuthenticated && !isCallbackPage) {
+  const headers: HeadersInit = { Accept: "application/json" };
+
+  // Forward cookies so Django session auth works.
+  const cookieHeader = request.headers.get("cookie");
+  if (cookieHeader) {
+    headers.cookie = cookieHeader;
+  }
+
+  // Prefer DRF Token auth when present.
+  if (authToken) {
+    headers.authorization = `Token ${decodeURIComponent(authToken)}`;
+  }
+
+  try {
+    const res = await fetch(new URL(AUTH_VALIDATE_PATH, request.url), {
+      method: "GET",
+      headers,
+      redirect: "manual",
+      cache: "no-store",
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function redirectToLogin(request: NextRequest): NextResponse {
+  const res = NextResponse.redirect(new URL("/login", request.url));
+
+  // Clear stale cookies to prevent auth redirect loops.
+  res.cookies.set("auth_token", "", { path: "/", maxAge: 0 });
+  res.cookies.set("sessionid", "", { path: "/", maxAge: 0 });
+
+  return res;
+}
+
+export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // Allow the callback page through so it can complete auth.
+  if (isCallbackPage(pathname)) {
+    return NextResponse.next();
+  }
+
+  const protectedPage = isProtectedPath(pathname);
+  const authPage = isAuthPage(pathname);
+
+  if (!protectedPage && !authPage) {
+    return NextResponse.next();
+  }
+
+  const isAuthenticated = await validateAuth(request);
+
+  // Protect dashboard routes - redirect to login if not authenticated.
+  if (protectedPage && !isAuthenticated) {
+    return redirectToLogin(request);
+  }
+
+  // If already logged in and visiting login/register, redirect to dashboard.
+  if (authPage && isAuthenticated) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -59,3 +123,4 @@ export const config = {
     "/auth/:path*",
   ],
 };
+

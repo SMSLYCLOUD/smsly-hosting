@@ -66,6 +66,17 @@ export default function AppStorePage() {
         loadTemplates();
     }, []);
 
+    const normalizeCategory = (app: any): string => {
+        const raw = app?.category;
+        if (typeof raw === "string") return raw;
+        if (raw && typeof raw === "object") {
+            if (typeof raw.id === "string") return raw.id;
+            if (typeof raw.slug === "string") return raw.slug;
+            if (typeof raw.name === "string") return raw.name;
+        }
+        return "";
+    };
+
     const handleOneClickDeploy = async (tpl: any) => {
         if (!tpl?.id) {
             toast({ title: "Template missing fields", description: "This template can't be deployed.", variant: "destructive" });
@@ -108,10 +119,14 @@ export default function AppStorePage() {
         }
     };
 
-    const filteredApps = apps.filter(app =>
-        (activeCategory === 'all' || app.category === activeCategory) &&
-        app.name.toLowerCase().includes(search.toLowerCase())
-    );
+    const filteredApps = apps.filter((app) => {
+        const category = normalizeCategory(app);
+        const name = String(app?.name || "");
+        return (
+            (activeCategory === "all" || category === activeCategory) &&
+            name.toLowerCase().includes(search.toLowerCase())
+        );
+    });
 
     return (
         <DashboardShell>
@@ -158,8 +173,9 @@ export default function AppStorePage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {filteredApps.map((app) => {
-                            const Icon = getIconForCategory(app.category);
-                            const color = getColorForCategory(app.category);
+                            const category = normalizeCategory(app);
+                            const Icon = getIconForCategory(category);
+                            const color = getColorForCategory(category);
                             const isDeploying = deployingId === String(app.id);
 
                             return (
@@ -170,7 +186,7 @@ export default function AppStorePage() {
                                         </div>
                                         <div className="flex-1">
                                             <CardTitle className="text-lg group-hover:text-primary transition-colors">{app.name}</CardTitle>
-                                            <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{app.category}</span>
+                                            <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{category}</span>
                                         </div>
                                     </CardHeader>
                                     <CardContent>
