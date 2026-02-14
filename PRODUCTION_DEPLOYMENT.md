@@ -9,6 +9,23 @@ Before deploying to production, ensure you have:
 - [ ] Docker & Docker Compose installed
 - [ ] Ports 80, 443, 8090 open in firewall
 
+## DNS Configuration
+
+1. Create an `A` record in your DNS provider (example for `cloud.smsly.cloud`):
+
+```text
+Type: A
+Name: cloud
+Value: <YOUR_SERVER_IP>
+TTL: 300
+```
+
+2. Wait for propagation and verify:
+
+```bash
+dig +short cloud.smsly.cloud
+```
+
 ## 1. Environment Configuration
 
 ### Generate Required Secrets
@@ -48,11 +65,13 @@ POSTGRES_PASSWORD=<generated-db-password>
 REDIS_PASSWORD=<generated-redis-password>
 GITHUB_WEBHOOK_SECRET=<generated-webhook-secret>
 
-# Domain
-DOMAIN=smsly.cloud
+# Domain (set to the dashboard hostname)
+DOMAIN=cloud.smsly.cloud
+# Optional: override if your frontend origin differs from https://DOMAIN
+# SITE_URL=https://cloud.smsly.cloud
 ACME_EMAIL=admin@smsly.cloud
 
-# Hosts
+# Hosts (keep these in sync with DOMAIN/SITE_URL)
 ALLOWED_HOSTS=cloud.smsly.cloud
 CSRF_TRUSTED_ORIGINS=https://cloud.smsly.cloud
 CORS_ALLOWED_ORIGINS=https://cloud.smsly.cloud
