@@ -197,8 +197,8 @@ services:
 
 networks:
   smsly-net:
+    external: true
     name: smsly-net
-    driver: bridge
 
 volumes:
   postgres_data:

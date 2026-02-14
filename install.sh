@@ -514,6 +514,11 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
+
+    # Ensure shared networks exist (prod stack uses external networks)
+    docker network create smsly-net 2>/dev/null || true
+    docker network create smsly-proxy 2>/dev/null || true
+
     case "$UPDATE_MODE" in
         frontend)
             echo -e "${BLUE}  → Rebuilding frontend container only...${NC}"
