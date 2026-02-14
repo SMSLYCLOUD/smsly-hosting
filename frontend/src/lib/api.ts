@@ -198,4 +198,58 @@ export const systemApi = {
   }
 };
 
+export interface AIProviderBalance {
+  balance: string;
+  currency: string;
+  raw: Record<string, any>;
+}
+
+export interface AIProviderInfo {
+  id: string;
+  name: string;
+  configured: boolean;
+  model: string;
+  balance?: AIProviderBalance;
+}
+
+export interface AIProvidersResponse {
+  providers: AIProviderInfo[];
+  mode: 'mock' | 'solo' | 'senate_committee';
+  mode_label: string;
+  active_count: number;
+  total_available: number;
+}
+
+export interface AITestResponse {
+  response: string;
+  provider: string;
+  mode: string;
+  active_count: number;
+}
+
+export const aiApi = {
+  /** Get all AI providers with config status. Pass includeBalance=true for credit info. */
+  getProviders: async (includeBalance: boolean = false): Promise<AIProvidersResponse> => {
+    const response = await api.get('/ai/providers/', {
+      params: includeBalance ? { include_balance: 'true' } : {},
+    });
+    return response.data;
+  },
+
+  /** Update AI provider settings (admin only). */
+  updateProviders: async (data: Record<string, string>): Promise<any> => {
+    const response = await api.post('/ai/providers/update/', data);
+    return response.data;
+  },
+
+  /** Test AI with a prompt. Returns response + which provider/mode was used. */
+  testPrompt: async (prompt: string, systemPrompt?: string): Promise<AITestResponse> => {
+    const response = await api.post('/ai/test/', {
+      prompt,
+      system_prompt: systemPrompt,
+    });
+    return response.data;
+  },
+};
+
 export default api;

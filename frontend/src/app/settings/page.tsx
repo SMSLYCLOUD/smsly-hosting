@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
 import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import api, { systemApi } from "@/lib/api";
+import api, { systemApi, aiApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -39,13 +39,9 @@ export default function SettingsPage() {
   const [email, setEmail] = useState("");
 
   // AI Config State
-  const [aiProvider, setAiProvider] = useState("mock");
-  const [aiKeys, setAiKeys] = useState({ openai: "", grok: "", gemini: "" });
-  const [aiProviders, setAiProviders] = useState<{id: string; name: string; configured: boolean; active: boolean}[]>([]);
+  const [aiData, setAiData] = useState<any>(null);
   const [loadingAI, setLoadingAI] = useState(true);
-  const [savingAI, setSavingAI] = useState(false);
   const [testingAI, setTestingAI] = useState(false);
-  const [showKey, setShowKey] = useState(false);
   const [systemConfig, setSystemConfig] = useState<any>(null);
 
   useEffect(() => {
@@ -77,9 +73,8 @@ export default function SettingsPage() {
 
   const fetchAIConfig = async () => {
     try {
-      const res = await api.get("/cloud/intelligence/ai_config/");
-      setAiProvider(res.data.active_provider === "Mock AI" ? "mock" : res.data.active_provider?.toLowerCase() || "mock");
-      setAiProviders(res.data.providers || []);
+      const result = await aiApi.getProviders(true);
+      setAiData(result);
     } catch (err) {
       console.error("Failed to fetch AI config", err);
     } finally {
@@ -87,27 +82,11 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSaveAI = async () => {
-    setSavingAI(true);
-    try {
-      await api.post("/cloud/intelligence/update_ai_config/", {
-        provider: aiProvider,
-        api_key: aiKeys[aiProvider as keyof typeof aiKeys] || "",
-      });
-      toast({ title: "AI Configuration saved", description: `Provider set to ${aiProvider}.` });
-      fetchAIConfig();
-    } catch (err) {
-      toast({ title: "Error", description: "Failed to save AI config.", variant: "destructive" });
-    } finally {
-      setSavingAI(false);
-    }
-  };
-
   const handleTestAI = async () => {
     setTestingAI(true);
     try {
-      const res = await api.post("/cloud/intelligence/ask/", { message: "Hello, confirm you are working." });
-      toast({ title: `${res.data.provider} responded`, description: res.data.response?.substring(0, 100) + "..." });
+      const result = await aiApi.testPrompt("Hello, confirm you are working.");
+      toast({ title: `${result.provider} responded`, description: result.response?.substring(0, 100) + "..." });
     } catch (err) {
       toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
     } finally {
@@ -401,75 +380,83 @@ export default function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* AI Configuration Tab */}
+        {/* AI Engine Tab */}
         <TabsContent value="ai">
           <div className="space-y-6">
+            {/* Mode & Status */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-emerald-500" /> AI Provider
+                  <Sparkles className="h-5 w-5 text-emerald-500" /> AI Engine
                 </CardTitle>
-                <CardDescription>Choose your AI provider for the deployment assistant.</CardDescription>
+                <CardDescription>
+                  {aiData?.mode_label || 'Loading...'}
+                  {aiData?.mode === 'senate_committee' && ' — Providers debate and vote on each answer.'}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-3">
-                  {[{id: 'openai', name: 'OpenAI', desc: 'GPT-4o'}, {id: 'grok', name: 'Grok', desc: 'xAI'}, {id: 'gemini', name: 'Gemini', desc: 'Google'}].map(p => (
-                    <button
+                {/* Mode Badge */}
+                <div className="flex items-center gap-3">
+                  <Badge variant={aiData?.mode === 'senate_committee' ? 'default' : aiData?.mode === 'solo' ? 'secondary' : 'outline'}>
+                    {aiData?.mode === 'senate_committee' ? '🏛️ Senate Committee' : aiData?.mode === 'solo' ? '⚡ Solo Mode' : '🤖 Mock Mode'}
+                  </Badge>
+                  <span className="text-sm text-muted-foreground">
+                    {aiData?.active_count || 0} of {aiData?.total_available || 0} active
+                  </span>
+                </div>
+
+                {/* Provider Grid */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {aiData?.providers?.map((p: any) => (
+                    <div
                       key={p.id}
-                      onClick={() => setAiProvider(p.id)}
-                      className={`p-4 rounded-lg border-2 text-left transition-all ${
-                        aiProvider === p.id
-                          ? 'border-emerald-500 bg-emerald-500/10'
-                          : 'border-border hover:border-muted-foreground/30'
+                      className={`p-4 rounded-lg border-2 transition-all ${
+                        p.configured
+                          ? 'border-emerald-500/50 bg-emerald-500/5'
+                          : 'border-border opacity-60'
                       }`}
                     >
                       <div className="font-semibold text-sm">{p.name}</div>
-                      <div className="text-xs text-muted-foreground">{p.desc}</div>
-                      {aiProviders.find(ap => ap.id === p.id)?.configured && (
-                        <Badge variant="outline" className="mt-2 text-[10px] bg-green-500/10 text-green-500 border-green-500/30">Key Set</Badge>
+                      <div className="text-xs text-muted-foreground mt-1">Model: <code className="text-[10px]">{p.model || 'N/A'}</code></div>
+                      <div className="flex items-center gap-1 mt-2">
+                        {p.configured ? (
+                          <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-500 border-green-500/30">
+                            <Check className="h-3 w-3 mr-1" /> Active
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">Not Set</Badge>
+                        )}
+                      </div>
+                      {p.balance && (
+                        <div className="text-xs text-yellow-500 mt-2 font-medium">
+                          💰 {p.balance.balance}
+                        </div>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
-              </CardContent>
-            </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>API Key</CardTitle>
-                <CardDescription>Enter the API key for your selected provider. Keys are encrypted at rest.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="ai-key">{aiProvider === 'openai' ? 'OpenAI' : aiProvider === 'grok' ? 'Grok (xAI)' : 'Gemini'} API Key</Label>
-                  <div className="relative">
-                    <Input
-                      id="ai-key"
-                      type={showKey ? 'text' : 'password'}
-                      placeholder={aiProvider === 'openai' ? 'sk-...' : aiProvider === 'grok' ? 'xai-...' : 'AI...'}
-                      value={aiKeys[aiProvider as keyof typeof aiKeys] || ''}
-                      onChange={(e) => setAiKeys(prev => ({ ...prev, [aiProvider]: e.target.value }))}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-
+                {/* Actions */}
                 <div className="flex gap-3">
-                  <Button onClick={handleSaveAI} disabled={savingAI}>
-                    {savingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
-                    Save Configuration
-                  </Button>
                   <Button variant="outline" onClick={handleTestAI} disabled={testingAI}>
                     {testingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                    Test Connection
+                    Test AI
                   </Button>
+                  <Button variant="outline" onClick={fetchAIConfig} disabled={loadingAI}>
+                    <Loader2 className={`mr-2 h-4 w-4 ${loadingAI ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </Button>
+                  <Link href="/settings/ai">
+                    <Button variant="default">
+                      <Sparkles className="mr-2 h-4 w-4" /> Full AI Dashboard
+                    </Button>
+                  </Link>
                 </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Configure keys via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY) or admin panel.
+                  Models set via OPENAI_MODEL, GROK_MODEL, etc.
+                </p>
               </CardContent>
             </Card>
           </div>
