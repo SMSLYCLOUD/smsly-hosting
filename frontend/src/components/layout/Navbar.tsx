@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store, Sparkles } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -72,6 +72,7 @@ export function Navbar() {
     { href: '/dashboard', label: 'Dashboard', icon: Home },
     { href: '/services', label: 'Services', icon: Layout },
     { href: '/deployments', label: 'Deployments', icon: Rocket },
+    { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles },
     { href: '/topology', label: 'Topology', icon: Globe },
     { href: '/store', label: 'Templates', icon: Store },
     { href: '/marketplace', label: 'Addons', icon: Box },
