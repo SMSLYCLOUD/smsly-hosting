@@ -38,11 +38,23 @@ export default function SettingsPage() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
 
+  // Password state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  // Notification state
+  const [emailNotifs, setEmailNotifs] = useState(false);
+  const [slackConnected, setSlackConnected] = useState(false);
+
   // AI Config State
   const [aiData, setAiData] = useState<any>(null);
   const [loadingAI, setLoadingAI] = useState(true);
   const [testingAI, setTestingAI] = useState(false);
   const [systemConfig, setSystemConfig] = useState<any>(null);
+  const [aiKeys, setAiKeys] = useState<Record<string, string>>({});
+  const [aiModels, setAiModels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetchProviders();
@@ -91,6 +103,38 @@ export default function SettingsPage() {
       toast({ title: "Test failed", description: "Could not reach AI provider.", variant: "destructive" });
     } finally {
       setTestingAI(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast({ title: "Error", description: "Please fill all password fields.", variant: "destructive" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast({ title: "Error", description: "New passwords do not match.", variant: "destructive" });
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast({ title: "Error", description: "Password must be at least 8 characters.", variant: "destructive" });
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await api.post('/auth/password/change/', {
+        old_password: currentPassword,
+        new_password1: newPassword,
+        new_password2: confirmPassword,
+      });
+      toast({ title: "Password changed", description: "Your password has been updated." });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      const detail = err?.response?.data?.old_password?.[0] || err?.response?.data?.new_password2?.[0] || "Failed to change password.";
+      toast({ title: "Error", description: detail, variant: "destructive" });
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -162,7 +206,7 @@ export default function SettingsPage() {
       />
 
       <Tabs defaultValue="profile" className="space-y-6">
-        <TabsList className="grid grid-cols-4 md:grid-cols-8 w-full">
+        <TabsList className="flex flex-wrap w-full gap-1">
           <TabsTrigger value="profile" className="flex items-center gap-2">
             <User className="h-4 w-4" /> Profile
           </TabsTrigger>
@@ -234,14 +278,32 @@ export default function SettingsPage() {
                   <p className="font-medium">Email Notifications</p>
                   <p className="text-sm text-muted-foreground">Receive deployment updates via email</p>
                 </div>
-                <Button variant="outline" size="sm">Enable</Button>
+                <Button
+                  variant={emailNotifs ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setEmailNotifs(!emailNotifs);
+                    toast({ title: emailNotifs ? "Disabled" : "Enabled", description: `Email notifications ${emailNotifs ? 'disabled' : 'enabled'}.` });
+                  }}
+                >
+                  {emailNotifs ? <><Check className="h-3 w-3 mr-1" /> Enabled</> : "Enable"}
+                </Button>
               </div>
               <div className="flex items-center justify-between p-4 border rounded-lg">
                 <div>
                   <p className="font-medium">Slack Integration</p>
                   <p className="text-sm text-muted-foreground">Get alerts in your Slack channel</p>
                 </div>
-                <Button variant="outline" size="sm">Connect</Button>
+                <Button
+                  variant={slackConnected ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setSlackConnected(!slackConnected);
+                    toast({ title: slackConnected ? "Disconnected" : "Connected", description: `Slack integration ${slackConnected ? 'disconnected' : 'connected'}.` });
+                  }}
+                >
+                  {slackConnected ? <><Check className="h-3 w-3 mr-1" /> Connected</> : "Connect"}
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -256,18 +318,20 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label>Current Password</Label>
-                <Input type="password" placeholder="••••••••" />
+                <Input type="password" placeholder="••••••••" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>New Password</Label>
-                <Input type="password" placeholder="••••••••" />
+                <Input type="password" placeholder="••••••••" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>Confirm New Password</Label>
-                <Input type="password" placeholder="••••••••" />
+                <Input type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
               </div>
               <div className="flex gap-2">
-                <Button variant="outline">Change Password</Button>
+                <Button onClick={handleChangePassword} disabled={changingPassword}>
+                  {changingPassword ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Changing...</> : "Change Password"}
+                </Button>
                 <Link href="/dashboard">
                   <Button variant="ghost">Cancel</Button>
                 </Link>
@@ -441,7 +505,8 @@ export default function SettingsPage() {
                             type="password"
                             placeholder={p.configured ? '••••••••' : 'Enter API key'}
                             className="h-8 text-xs"
-                            id={`ai-key-${p.id}`}
+                            value={aiKeys[p.id] || ''}
+                            onChange={(e) => setAiKeys(prev => ({ ...prev, [p.id]: e.target.value }))}
                           />
                         </div>
 
@@ -450,8 +515,8 @@ export default function SettingsPage() {
                           <Label className="text-xs text-muted-foreground">Model</Label>
                           <select
                             className="w-full h-8 px-2 text-xs border rounded-md bg-background"
-                            defaultValue={p.model || ''}
-                            id={`ai-model-${p.id}`}
+                            value={aiModels[p.id] || p.model || ''}
+                            onChange={(e) => setAiModels(prev => ({ ...prev, [p.id]: e.target.value }))}
                           >
                             {(modelOptions[p.id] || []).map((m: string) => (
                               <option key={m} value={m}>{m}</option>
@@ -478,10 +543,8 @@ export default function SettingsPage() {
                       try {
                         const data: Record<string, string> = {};
                         ['openai', 'grok', 'gemini', 'claude'].forEach((id) => {
-                          const keyInput = document.getElementById(`ai-key-${id}`) as HTMLInputElement;
-                          const modelSelect = document.getElementById(`ai-model-${id}`) as HTMLSelectElement;
-                          if (keyInput?.value) data[`${id}_api_key`] = keyInput.value;
-                          if (modelSelect?.value) data[`${id}_model`] = modelSelect.value;
+                          if (aiKeys[id]) data[`${id}_api_key`] = aiKeys[id];
+                          if (aiModels[id]) data[`${id}_model`] = aiModels[id];
                         });
                         await aiApi.updateProviders(data);
                         toast({ title: "AI Config Saved", description: "Provider settings updated." });
