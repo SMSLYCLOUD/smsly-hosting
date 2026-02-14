@@ -33,6 +33,11 @@ export default function SettingsPage() {
   const [newProvider, setNewProvider] = useState({ name: "", api_key: "", provider_type: "hetzner" });
   const [addingProvider, setAddingProvider] = useState(false);
 
+  // Profile state
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+
   // AI Config State
   const [aiProvider, setAiProvider] = useState("mock");
   const [aiKeys, setAiKeys] = useState({ openai: "", grok: "", gemini: "" });
@@ -47,7 +52,19 @@ export default function SettingsPage() {
     fetchProviders();
     fetchAIConfig();
     fetchSystemConfig();
+    fetchProfile();
   }, []);
+
+  const fetchProfile = async () => {
+    try {
+      const res = await api.get('/auth/user/');
+      setFirstName(res.data.first_name || '');
+      setLastName(res.data.last_name || '');
+      setEmail(res.data.email || '');
+    } catch (err) {
+      console.error('Failed to fetch profile', err);
+    }
+  };
 
   const fetchSystemConfig = async () => {
     try {
@@ -112,9 +129,18 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     setSaving(true);
-    await new Promise(r => setTimeout(r, 1000));
-    setSaving(false);
-    toast({ title: "Settings saved", description: "Your preferences have been updated." });
+    try {
+      await api.patch('/auth/user/', {
+        first_name: firstName,
+        last_name: lastName,
+        email: email,
+      });
+      toast({ title: "Profile saved", description: "Your profile has been updated." });
+    } catch (err) {
+      toast({ title: "Error", description: "Failed to save profile.", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleAddProvider = async () => {
@@ -194,16 +220,16 @@ export default function SettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>First Name</Label>
-                  <Input placeholder="John" />
+                  <Input placeholder="John" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
                 </div>
                 <div className="space-y-2">
                   <Label>Last Name</Label>
-                  <Input placeholder="Doe" />
+                  <Input placeholder="Doe" value={lastName} onChange={(e) => setLastName(e.target.value)} />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label>Email</Label>
-                <Input type="email" placeholder="john@example.com" />
+                <Input type="email" placeholder="john@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
               </div>
               <div className="flex gap-2">
                 <Button onClick={handleSave} disabled={saving}>

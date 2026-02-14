@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2 } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor"
 import { useToast } from "@/components/ui/use-toast"
+import api from "@/lib/api"
+import { templatesApi } from "@/lib/api"
 
 // Mock templates for now (replace with API call later)
 const TEMPLATES = [
@@ -35,6 +37,33 @@ export default function NewServicePage() {
   const [region, setRegion] = React.useState("us-east-1")
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)
+
+  // GitHub repos state
+  const [ghRepos, setGhRepos] = React.useState<any[]>([])
+  const [ghLoading, setGhLoading] = React.useState(false)
+  const [ghSearch, setGhSearch] = React.useState("")
+  const [ghConnected, setGhConnected] = React.useState(false)
+
+  // Templates from API
+  const [templates, setTemplates] = React.useState<any[]>([])
+
+  React.useEffect(() => {
+    // Fetch templates
+    templatesApi.list().then(setTemplates).catch(() => {})
+    // Fetch GitHub repos
+    setGhLoading(true)
+    api.get('/integrations/github/repos/')
+      .then(res => {
+        setGhRepos(res.data?.repos || [])
+        setGhConnected(true)
+      })
+      .catch(() => setGhConnected(false))
+      .finally(() => setGhLoading(false))
+  }, [])
+
+  const filteredRepos = ghRepos.filter(r =>
+    !ghSearch || r.full_name?.toLowerCase().includes(ghSearch.toLowerCase())
+  )
 
   const handleNext = () => {
     if (step === 1) {
@@ -66,7 +95,7 @@ export default function NewServicePage() {
 
         // 1. Create Service
         const finalRepo = sourceType === "template" 
-            ? TEMPLATES.find(t => t.id === selectedTemplate)?.repo 
+            ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
             : repoUrl
 
         const deployType =
@@ -193,37 +222,100 @@ export default function NewServicePage() {
                     </div>
 
                     {sourceType === "git" && (
-                        <div className="space-y-2">
-                            <Label>Repository URL</Label>
-                            <Input 
-                                placeholder="https://github.com/username/repo" 
-                                value={repoUrl} 
-                                onChange={(e) => setRepoUrl(e.target.value)} 
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                Private GitHub repositories require linking your GitHub account in{" "}
-                                <a className="underline hover:text-foreground" href="/settings">
-                                    Settings
-                                </a>.
-                            </p>
+                        <div className="space-y-4">
+                            {/* GitHub Repo Picker */}
+                            {ghConnected && (
+                              <div className="space-y-2">
+                                <Label>Your GitHub Repositories</Label>
+                                <div className="relative">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                  <Input
+                                    placeholder="Search repositories..."
+                                    className="pl-10"
+                                    value={ghSearch}
+                                    onChange={(e) => setGhSearch(e.target.value)}
+                                  />
+                                </div>
+                                {ghLoading ? (
+                                  <div className="flex items-center justify-center py-6">
+                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                                  </div>
+                                ) : (
+                                  <div className="max-h-48 overflow-y-auto border rounded-lg divide-y">
+                                    {filteredRepos.slice(0, 20).map((repo: any) => (
+                                      <button
+                                        key={repo.id}
+                                        type="button"
+                                        className={cn(
+                                          "w-full flex items-center gap-3 px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors",
+                                          repoUrl === repo.clone_url && "bg-primary/5 border-l-2 border-primary"
+                                        )}
+                                        onClick={() => setRepoUrl(repo.clone_url)}
+                                      >
+                                        <Github className="h-4 w-4 flex-shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                          <p className="font-medium truncate">{repo.full_name}</p>
+                                          <p className="text-xs text-muted-foreground truncate">{repo.description || 'No description'}</p>
+                                        </div>
+                                        {repo.private && (
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600">Private</span>
+                                        )}
+                                      </button>
+                                    ))}
+                                    {filteredRepos.length === 0 && (
+                                      <p className="text-sm text-muted-foreground text-center py-4">No repositories found</p>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-2 py-1">
+                                  <div className="flex-1 h-px bg-border" />
+                                  <span className="text-xs text-muted-foreground">or enter URL manually</span>
+                                  <div className="flex-1 h-px bg-border" />
+                                </div>
+                              </div>
+                            )}
+                            <div className="space-y-2">
+                                <Label>Repository URL</Label>
+                                <Input 
+                                    placeholder="https://github.com/username/repo" 
+                                    value={repoUrl} 
+                                    onChange={(e) => setRepoUrl(e.target.value)} 
+                                />
+                                {!ghConnected && (
+                                  <p className="text-xs text-muted-foreground">
+                                      Connect your GitHub account in{" "}
+                                      <a className="underline hover:text-foreground" href="/settings">
+                                          Settings
+                                      </a>{" "}
+                                      to browse your repositories.
+                                  </p>
+                                )}
+                            </div>
                         </div>
                     )}
 
                     {sourceType === "template" && (
                         <div className="grid grid-cols-2 gap-4">
-                            {TEMPLATES.map(t => (
+                            {templates.length > 0 ? templates.map((t: any) => (
                                 <div 
-                                    key={t.id}
+                                    key={t.id || t.slug}
                                     className={cn(
                                         "flex items-center gap-3 p-4 rounded-lg border cursor-pointer hover:bg-muted",
-                                        selectedTemplate === t.id && "border-primary bg-primary/5"
+                                        selectedTemplate === (t.slug || t.id) && "border-primary bg-primary/5"
                                     )}
-                                    onClick={() => setSelectedTemplate(t.id)}
+                                    onClick={() => setSelectedTemplate(t.slug || t.id)}
                                 >
-                                    <span className="text-2xl">{t.icon}</span>
-                                    <div className="font-medium">{t.name}</div>
+                                    <span className="text-2xl">{t.icon || '📦'}</span>
+                                    <div>
+                                        <p className="font-medium">{t.name}</p>
+                                        <p className="text-xs text-muted-foreground">{t.description || t.framework || 'Template'}</p>
+                                    </div>
                                 </div>
-                            ))}
+                            )) : (
+                                <p className="col-span-2 text-center text-sm text-muted-foreground py-8">
+                                    No templates available. Use a Git repository or Docker image instead.
+                                </p>
+                            )}
                         </div>
                     )}
 

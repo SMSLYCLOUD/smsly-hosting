@@ -42,6 +42,18 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     }
   };
 
+  const handleStop = async (serviceId: string) => {
+    setActionLoading(serviceId);
+    try {
+      await api.post(`/services/${serviceId}/stop/`);
+      window.location.reload();
+    } catch (err) {
+      console.error('Stop failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   if (!services || services.length === 0) {
     return <EmptyServicesState />;
   }
@@ -141,6 +153,18 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               >
                 <Play size={12} fill="currentColor" />
               </Button>
+              {service.latest_deployment?.status === 'ACTIVE' && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                  title="Stop"
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleStop(service.id)}
+                >
+                  <Square size={12} fill="currentColor" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
