@@ -163,7 +163,7 @@ export default function NewServicePage() {
 
   return (
     <DashboardShell>
-    <div className="container max-w-4xl py-10 relative z-10">
+    <div className="container max-w-5xl py-10 relative z-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
         <p className="text-muted-foreground">Deploy your application in seconds.</p>
@@ -185,7 +185,7 @@ export default function NewServicePage() {
             </div>
         </nav>
 
-        <div className="space-y-8">
+        <div className="space-y-8 min-w-0 overflow-hidden">
             {step === 1 && (
                 <div className="space-y-6 animate-in slide-in-from-right-4">
                     <div className="grid grid-cols-3 gap-4">
