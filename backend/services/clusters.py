@@ -196,7 +196,7 @@ class ClusterManager:
                         namespace, deployment_manifest)
                     self._log("Created new deployment.")
                 else:
-                    raise e
+                    raise
 
             # Ensure Service exists
             self._ensure_service(
@@ -238,7 +238,7 @@ class ClusterManager:
 
         except Exception as e:
             self._log(f"K8s Error: {str(e)}")
-            raise e
+            raise
 
     def _ensure_service(self, name, namespace, target_app_label=None):
         """Ensure a K8s Service exists for the deployment."""
@@ -269,7 +269,7 @@ class ClusterManager:
                     namespace, service_manifest)
                 self._log(f"Created Service {name}.")
             else:
-                raise e
+                raise
 
     def _ensure_namespace(self, namespace):
         """Ensure the target namespace exists."""
@@ -285,7 +285,7 @@ class ClusterManager:
                 self.core_v1.create_namespace(ns_manifest)
                 self._log(f"Created Namespace {namespace}.")
             else:
-                raise e
+                raise
 
     def _ensure_hpa(self, name, namespace):
         """Ensure HorizontalPodAutoscaler exists."""
@@ -325,7 +325,7 @@ class ClusterManager:
                     namespace, hpa_manifest)
                 self._log("Created HPA configuration.")
             else:
-                raise e
+                raise
 
     def _ensure_vpa(self, name, namespace):
         """
@@ -368,12 +368,12 @@ class ClusterManager:
                     self._log(f"Created VPA {vpa_name}.")
                 else:
                     # If CRD not found, log warning but don't crash
-                    if e.status == 404: 
-                         self._log("VPA CRD not found in cluster. Skipping VPA.")
+                    if e.status == 404:
+                        self._log("VPA CRD not found in cluster. Skipping VPA.")
                     else:
-                         # Log but don't fail deployment for VPA
-                         logger.warning(f"VPA error: {e}")
-                         self._log(f"Warning: Failed to configure VPA: {e}")
+                        # Log but don't fail deployment for VPA
+                        logger.warning(f"VPA error: {e}")
+                        self._log(f"Warning: Failed to configure VPA: {e}")
         except Exception as e:
             logger.error(f"VPA configuration failed: {e}")
             self._log(f"Warning: VPA configuration failed: {e}")
@@ -411,7 +411,7 @@ class ClusterManager:
                     namespace, manifest)
                 self._log(f"Created PVC {name}.")
             else:
-                raise e
+                raise
 
     def _ensure_cronjob(self, cron, namespace):
         """Ensure a Kubernetes CronJob exists."""
@@ -447,7 +447,7 @@ class ClusterManager:
                 self.batch_v1.create_namespaced_cron_job(namespace, manifest)
                 self._log(f"Created CronJob {name}.")
             else:
-                raise e
+                raise
 
     def _ensure_ingress(self, name, namespace, region=None):
         """Ensure a K8s Ingress exists for the domain."""
@@ -509,7 +509,7 @@ class ClusterManager:
                 self._log(
                     f"Created new Ingress for {hostname}.")
             else:
-                raise e
+                raise
 
     def _sanitize_name(self, name):
         """K8s resource names must be lowercase alphanumeric or -"""
