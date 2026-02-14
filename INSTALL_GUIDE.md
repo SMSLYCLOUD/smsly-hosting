@@ -53,7 +53,7 @@ If you're automating installation (CI or one-line SSH), you can run SSL mode non
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && \
-sudo USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@smsly.cloud SKIP_SCREEN=1 bash /tmp/install.sh
+sudo USE_SSL=true DOMAIN=your-domain.com ACME_EMAIL=admin@your-domain.com SKIP_SCREEN=1 bash /tmp/install.sh
 ```
 
 ### What Happens During Installation

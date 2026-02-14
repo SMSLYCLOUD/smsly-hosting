@@ -42,9 +42,34 @@ if DEBUG:
 else:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # No default = crash if missing
 # SECURITY: No wildcard default - prevents host header injection
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
+DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
+_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 
-DOMAIN = config('DOMAIN', default='localhost')
+SITE_URL = config(
+    'SITE_URL',
+    # NOTE: Used for OAuth/billing redirects. Override in env if you terminate TLS elsewhere.
+    default=(f'http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
+)
+
+# Stripe Billing (optional but required for paid plans)
+STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
+STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
+STRIPE_PRICE_PRO = config('STRIPE_PRICE_PRO', default='')
+
+# Billing (non-Stripe providers use one-time "period" activations)
+BILLING_CURRENCY = config('BILLING_CURRENCY', default='USD')
+BILLING_PRO_AMOUNT = config('BILLING_PRO_AMOUNT', default='29.00')
+BILLING_PRO_PERIOD_DAYS = config('BILLING_PRO_PERIOD_DAYS', default=30, cast=int)
+
+# Flutterwave (optional)
+FLUTTERWAVE_SECRET_KEY = config('FLUTTERWAVE_SECRET_KEY', default='')
+FLUTTERWAVE_PUBLIC_KEY = config('FLUTTERWAVE_PUBLIC_KEY', default='')
+FLUTTERWAVE_WEBHOOK_SECRET_HASH = config('FLUTTERWAVE_WEBHOOK_SECRET_HASH', default='')
+
+# Cryptomus (optional)
+CRYPTOMUS_MERCHANT_ID = config('CRYPTOMUS_MERCHANT_ID', default='')
+CRYPTOMUS_API_KEY = config('CRYPTOMUS_API_KEY', default='')
 
 
 INSTALLED_APPS = [
@@ -263,12 +288,12 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,https://smsly-hosting.com,https://cloud.smsly.cloud',
+    default=f'http://localhost:3000,{SITE_URL}',
     cast=Csv())
 # ZH-007 FIX: No wildcard subdomains — explicit trusted origins only
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='https://smsly-hosting.com,https://cloud.smsly.cloud',
+    default=f'{SITE_URL}',
     cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',

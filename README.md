@@ -78,7 +78,7 @@ sudo bash /tmp/install.sh
 
 The installer prompts you to choose:
 1. **IP Mode** — Quick start at `http://YOUR_IP` (no domain needed)
-2. **SSL Mode** — Production-ready at `https://cloud.smsly.cloud` (requires DNS A record)
+2. **SSL Mode** — Production-ready at `https://your-domain.com` (requires DNS A record; set `DOMAIN=your-domain.com`)
 
 > **Note:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input unless you pre-seed SSL env vars.
 
