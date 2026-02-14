@@ -16,7 +16,7 @@ export function DomainsTab({ service }: { service: Service }) {
     const [loading, setLoading] = useState(true);
     const [envVarId, setEnvVarId] = useState<number | null>(null);
 
-    const defaultDomain = service.public_domain || `${service.name}.localhost`;
+    const defaultDomain = service.public_domain || `${service.name}.cloud.smsly.cloud`;
 
     const loadDomains = useCallback(async () => {
         try {
