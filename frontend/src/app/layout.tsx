@@ -18,6 +18,7 @@ export const metadata: Metadata = {
 
 import { FloatingAI } from "@/components/ai/FloatingAI";
 import { GlobalBackground } from "@/components/effects/GlobalBackground";
+import { Navbar } from "@/components/layout/Navbar";
 
 export default function RootLayout({
   children,
@@ -35,6 +36,7 @@ export default function RootLayout({
           >
             <AuthProvider>
                 <GlobalBackground />
+                <Navbar />
                 {children}
                 <FloatingAI />
                 <Toaster />

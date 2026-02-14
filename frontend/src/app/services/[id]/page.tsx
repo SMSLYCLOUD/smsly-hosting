@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner } from 'lucide-react';
 import Editor from "@monaco-editor/react";
 import dynamic from 'next/dynamic';
 import { LogsTab } from '@/components/logs/LogsTab';
@@ -15,6 +15,7 @@ import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
 import { MetricsTab } from '@/components/metrics/MetricsTab';
 import { CronTab } from '@/components/cron/CronTab';
 import { StorageTab } from '@/components/storage/StorageTab';
+import { toast } from '@/components/ui/use-toast';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 
@@ -26,7 +27,33 @@ export default function ServiceDetailPage() {
     const [deployment, setDeployment] = useState<Deployment | null>(null);
     const [activeTab, setActiveTab] = useState('overview');
     const [aiKey, setAiKey] = useState('');
+    const [redeploying, setRedeploying] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
+
+    const handleRedeploy = async () => {
+        if (!service) return;
+        try {
+            setRedeploying(true);
+            await servicesApi.deploy(service.id);
+            toast({ title: 'Redeployment triggered', description: 'A new deployment has started.' });
+            // Refresh service data after a short delay
+            setTimeout(async () => {
+                try {
+                    const s = await servicesApi.get(service.id);
+                    setService(s);
+                    if (s.latest_deployment) {
+                        const d = await servicesApi.getDeployment(s.latest_deployment.id);
+                        setDeployment(d);
+                    }
+                } catch (e) { console.error(e); }
+                setRedeploying(false);
+            }, 2000);
+        } catch (err) {
+            console.error(err);
+            toast({ title: 'Redeploy failed', description: 'Could not trigger redeployment.', variant: 'destructive' });
+            setRedeploying(false);
+        }
+    };
 
     useEffect(() => {
         const key = localStorage.getItem('smsly_ai_key');
@@ -131,12 +158,20 @@ export default function ServiceDetailPage() {
                                     <span className={`font-bold px-2 py-1 rounded text-xs uppercase ${deployment.status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-500'
                                         }`}>{deployment.status}</span>
                                 </div>
-                                <div className="pt-2">
+                                <div className="pt-2 flex gap-2">
                                     <button
-                                        className="w-full border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
+                                        className="flex-1 border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
                                         onClick={() => setActiveTab('logs')}
                                     >
                                         View Logs
+                                    </button>
+                                    <button
+                                        className="flex-1 bg-primary hover:bg-primary/90 text-white font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                        onClick={handleRedeploy}
+                                        disabled={redeploying}
+                                    >
+                                        {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                                        {redeploying ? 'Deploying...' : 'Redeploy'}
                                     </button>
                                 </div>
                             </div>

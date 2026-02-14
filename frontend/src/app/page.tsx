@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { Navbar } from '@/components/layout/Navbar';
+
 import { Button } from '@/components/ui/button';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
@@ -208,7 +208,7 @@ const platformApps = [
 export default function Home() {
     return (
         <main className="min-h-screen relative overflow-x-hidden">
-            <Navbar />
+
 
             {/* HERO SECTION */}
             <section className="relative pt-32 pb-24 lg:pt-48 lg:pb-32 overflow-hidden" style={{ background: 'linear-gradient(to bottom, #87CEEB, #56CCF2 30%, #B8E8F5 60%, #ffffff)' }}>

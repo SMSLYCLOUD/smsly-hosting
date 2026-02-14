@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Github, Chrome } from "lucide-react";
-import { Navbar } from "@/components/layout/Navbar";
+
 
 export default function RegisterPage() {
     // Use backend base URL (without /api/v1) for OAuth endpoints
@@ -13,7 +13,7 @@ export default function RegisterPage() {
 
     return (
         <div className="min-h-screen flex flex-col relative overflow-x-hidden">
-            <Navbar />
+
             <div className="flex-1 flex items-center justify-center p-4 relative z-10">
 
             <Card className="w-full max-w-md card-premium rounded-2xl">

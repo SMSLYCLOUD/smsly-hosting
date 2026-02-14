@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Check, X, Zap, Shield, Users, Building2, ChevronDown } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+
 
 const tiers = [
   {
@@ -140,7 +140,7 @@ export default function PricingPage() {
 
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
-      <Navbar />
+
 
       {/* Hero */}
       <section className="pt-32 pb-12 px-4 text-center">
