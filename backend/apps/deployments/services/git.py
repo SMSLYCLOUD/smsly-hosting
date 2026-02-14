@@ -71,4 +71,4 @@ class GitManager:
             if token:
                 msg = msg.replace(token, "<redacted>")
             logger.error("Git Clone Failed: %s", msg)
-            raise RuntimeError(f"Failed to clone repository: {msg}")
+            raise RuntimeError(f"Failed to clone repository: {msg}") from e
