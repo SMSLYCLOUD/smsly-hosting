@@ -17,6 +17,8 @@ from .views_tunnels import TunnelViewSet
 from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import github_connection
 from .views_github import github_repos
+from .views_tokens import list_tokens, create_token, revoke_token
+from .views_servers import ManagedServerViewSet
 
 # Create main router
 router = DefaultRouter()
@@ -32,6 +34,7 @@ router.register(r'blueprints', BlueprintViewSet, basename='blueprint')
 router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'tunnels', TunnelViewSet, basename='tunnel')
 router.register(r'audit-logs', AuditLogViewSet, basename='auditlog')
+router.register(r'servers', ManagedServerViewSet, basename='server')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
@@ -58,4 +61,9 @@ urlpatterns = router.urls + [
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/github/', github_connection, name='github-connection'),
     path('integrations/github/repos/', github_repos, name='github-repos'),
+    # API Token management (for CLI)
+    path('tokens/', list_tokens, name='token-list'),
+    path('tokens/create/', create_token, name='token-create'),
+    path('tokens/<uuid:token_id>/revoke/', revoke_token, name='token-revoke'),
 ]
+
