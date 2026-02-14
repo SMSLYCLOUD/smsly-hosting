@@ -15,6 +15,13 @@ from apps.cloud.models import CloudProvider
 
 logger = logging.getLogger(__name__)
 
+# AI diagnosis task — imported at top level to avoid circular import issues
+# Called asynchronously on deployment failures to provide AI-assisted debugging
+try:
+    from apps.deployments.tasks_ai import analyze_failure_task
+except ImportError:
+    analyze_failure_task = None
+
 
 def _get_github_oauth_token_for_user(user):
     """
@@ -207,11 +214,22 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 }
 
                 # Build the image
-                NixpacksBuilder.build_image(
+                build_result = NixpacksBuilder.build_image(
                     source_dir=source_dir,
                     image_name=local_tag,
                     env_vars=build_env_vars
                 )
+
+                # Capture build output for debugging
+                build_stdout = build_result.get("stdout", "") if isinstance(build_result, dict) else ""
+                build_stderr = build_result.get("stderr", "") if isinstance(build_result, dict) else ""
+
+                if build_stdout:
+                    # Show last 3000 chars of build output
+                    log_line = f"\n--- Nixpacks Build Output ---\n{build_stdout[-3000:]}\n"
+                    deployment.build_logs += log_line
+                    deployment.save()
+                    _broadcast_log(deployment, log_line)
 
                 log_line = f"✓ Successfully built {local_tag}\n"
                 deployment.build_logs += log_line
@@ -253,6 +271,17 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.save()
                 _broadcast_log(deployment, log_line)
                 _broadcast_status(deployment)
+
+                # Trigger AI diagnosis on failure
+                if analyze_failure_task:
+                    try:
+                        analyze_failure_task.delay(str(deployment.id))
+                        ai_log = "\n🤖 AI diagnosis requested...\n"
+                        deployment.build_logs += ai_log
+                        deployment.save()
+                        _broadcast_log(deployment, ai_log)
+                    except Exception:
+                        pass
 
                 # Cleanup on build failure
                 if source_dir and os.path.exists(source_dir):
@@ -334,8 +363,22 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         if deployment is not None:
             deployment.status = Deployment.Status.FAILED
             deployment.finished_at = timezone.now()
+            log_line = f"\n✗ Deployment failed: {str(e)}\n"
+            deployment.build_logs += log_line
             deployment.save()
+            _broadcast_log(deployment, log_line)
             _broadcast_status(deployment)
+
+            # Trigger AI diagnosis on failure
+            if analyze_failure_task:
+                try:
+                    analyze_failure_task.delay(str(deployment.id))
+                    ai_log = "\n🤖 AI diagnosis requested...\n"
+                    deployment.build_logs += ai_log
+                    deployment.save()
+                    _broadcast_log(deployment, ai_log)
+                except Exception:
+                    pass
 
         # Cleanup on failure
         if source_dir and os.path.exists(source_dir):
