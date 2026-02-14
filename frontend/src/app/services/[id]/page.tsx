@@ -106,13 +106,13 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Public Domain</span>
                                 <a
-                                    href={`https://${service.public_domain || `${service.name}.localhost`}`}
+                                    href={`https://${service.public_domain || `${service.name}.cloud.smsly.cloud`}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="font-mono text-primary hover:underline flex items-center gap-1"
                                 >
                                     <Globe className="w-3 h-3" />
-                                    {service.public_domain || `${service.name}.localhost`}
+                                    {service.public_domain || `${service.name}.cloud.smsly.cloud`}
                                 </a>
                             </div>
                         </div>

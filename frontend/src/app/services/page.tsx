@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import { Plus, LayoutGrid, Network } from 'lucide-react';
+import { Plus, LayoutGrid, Network, Store } from 'lucide-react';
 import { Navbar } from '@/components/layout/Navbar';
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -52,6 +52,9 @@ export default function ServicesPage() {
                 <Network size={16} /> Canvas
             </Button>
         </div>
+        <Button onClick={() => router.push('/store')} variant="outline" className="font-bold rounded-full px-6 h-8 text-xs gap-2">
+            <Store className="h-3 w-3" /> Templates
+        </Button>
         <Button onClick={() => router.push('/new')} className="shadow-lg bg-primary hover:bg-primary/90 text-white font-bold rounded-full px-6 h-8 text-xs">
             <Plus className="mr-2 h-3 w-3" /> New Service
         </Button>

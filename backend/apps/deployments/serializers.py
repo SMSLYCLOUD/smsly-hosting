@@ -34,6 +34,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     primary_region = serializers.PrimaryKeyRelatedField(
         queryset=Region.objects.all(), required=False)
     latest_deployment = serializers.SerializerMethodField()
+    service_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -44,6 +45,13 @@ class ServiceSerializer(serializers.ModelSerializer):
             'updated_at',
             'owner',
             'verification_token']
+
+    def get_service_url(self, obj):
+        """Railway-style auto-generated URL."""
+        if obj.public_domain:
+            return f"https://{obj.public_domain}"
+        slug = obj.name.lower().replace(' ', '-')
+        return f"https://{slug}.cloud.smsly.cloud"
 
     def get_latest_deployment(self, obj):
         dep = obj.deployments.order_by('-created_at').first()

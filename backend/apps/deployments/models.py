@@ -167,9 +167,22 @@ class Service(TimeStampedModel):
                 'max_replicas': 'max_replicas must be greater than or equal to min_replicas.'
             })
 
+    @property
+    def service_url(self):
+        """Railway-style auto-generated URL for the service."""
+        return f"https://{self.public_domain}" if self.public_domain else None
+
     def save(self, *args, **kwargs):
+        import re
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
+
+        # Auto-generate Railway-style subdomain if not set
+        if not self.public_domain:
+            slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
+            short_id = str(self.id)[:6] if self.id else uuid.uuid4().hex[:6]
+            self.public_domain = f"{slug}-{short_id}.cloud.smsly.cloud"
+
         self.full_clean()  # Enforce validation (e.g. max_length)
         super().save(*args, **kwargs)
 

@@ -75,7 +75,6 @@ export function Navbar() {
     { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles },
     { href: '/servers', label: 'Servers', icon: Monitor },
     { href: '/topology', label: 'Topology', icon: Globe },
-    { href: '/store', label: 'Templates', icon: Store },
     { href: '/marketplace', label: 'Addons', icon: Box },
     { href: '/billing', label: 'Billing', icon: CreditCard },
     { href: '/settings', label: 'Settings', icon: Settings },
