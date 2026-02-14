@@ -7,7 +7,7 @@ from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer,
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.remediator import RemediationEngine
 from apps.intelligence.cost import CostAdvisor
-from apps.intelligence.providers import get_provider, get_available_providers, SYSTEM_PROMPT
+from apps.intelligence.providers import get_provider, get_available_providers, ask_with_fallback, SYSTEM_PROMPT
 
 
 class CloudProviderViewSet(viewsets.ModelViewSet):
@@ -100,11 +100,10 @@ class IntelligenceViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        provider = get_provider()
-        response_text = provider.ask(message, system_prompt=SYSTEM_PROMPT)
+        response_text, provider_name = ask_with_fallback(message, system_prompt=SYSTEM_PROMPT)
         return Response({
             'response': response_text,
-            'provider': provider.name(),
+            'provider': provider_name,
         })
 
     @action(detail=False, methods=['post'])
@@ -127,7 +126,6 @@ class IntelligenceViewSet(viewsets.ViewSet):
         issues = analyzer.analyze_logs(logs)
 
         # Then ask AI for deeper analysis
-        provider = get_provider()
         ai_prompt = (
             f"Analyze these deployment logs and provide a diagnosis with fix suggestions.\n"
             f"Deployment ID: {deployment_id}\n\n"
@@ -135,12 +133,12 @@ class IntelligenceViewSet(viewsets.ViewSet):
             f"Known issues found by pattern matching: {issues if issues else 'None'}\n\n"
             f"Provide: 1) Root cause, 2) Fix steps, 3) Prevention tips."
         )
-        ai_diagnosis = provider.ask(ai_prompt, system_prompt=SYSTEM_PROMPT)
+        ai_diagnosis, provider_name = ask_with_fallback(ai_prompt, system_prompt=SYSTEM_PROMPT)
 
         return Response({
             'pattern_issues': issues,
             'ai_diagnosis': ai_diagnosis,
-            'provider': provider.name(),
+            'provider': provider_name,
         })
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAdminUser])

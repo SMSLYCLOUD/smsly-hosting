@@ -62,6 +62,7 @@ export interface Deployment {
   status: string;
   build_logs?: string;
   ai_diagnosis?: string;
+  duration_seconds?: number;
   created_at: string;
   finished_at?: string;
 }

@@ -290,3 +290,53 @@ def get_available_providers() -> list:
             "active": provider_name == key,
         })
     return result
+
+
+def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None) -> tuple[str, str]:
+    """
+    Try the active provider first, then cascade through all providers with keys.
+
+    Returns (response_text, provider_name).
+    """
+    cfg = _get_db_settings()
+    active_name = _effective_provider_name()
+
+    # Build ordered list: active provider first, then others with configured keys
+    env_key_map = {"openai": "OPENAI_API_KEY", "grok": "GROK_API_KEY", "gemini": "GEMINI_API_KEY"}
+    db_key_map = {
+        "openai": getattr(cfg, "openai_api_key", None) if cfg else None,
+        "grok": getattr(cfg, "grok_api_key", None) if cfg else None,
+        "gemini": getattr(cfg, "gemini_api_key", None) if cfg else None,
+    }
+
+    def _has_key(name: str) -> bool:
+        return bool(db_key_map.get(name)) or bool(os.environ.get(env_key_map.get(name, ""), ""))
+
+    # Order: active first, then others with keys, mock last
+    ordered = [active_name]
+    for name in PROVIDERS:
+        if name != active_name and name != "mock" and _has_key(name):
+            ordered.append(name)
+    ordered.append("mock")
+
+    last_error = ""
+    for name in ordered:
+        provider_cls = PROVIDERS.get(name)
+        if not provider_cls:
+            continue
+        provider = provider_cls()
+        try:
+            response = provider.ask(prompt, system_prompt=system_prompt)
+            # Check for error-style responses (providers return error strings, not exceptions)
+            if response and not response.startswith("["):
+                return response, provider.name()
+            last_error = response
+            logger.warning("Provider %s returned error-style response, trying next: %s", name, response[:100])
+        except Exception as e:
+            last_error = str(e)
+            logger.warning("Provider %s raised exception, trying next: %s", name, e)
+
+    # If all failed, return the last error with mock fallback
+    mock = MockProvider()
+    return mock.ask(prompt, system_prompt=system_prompt), f"Mock AI (all providers failed)"
+

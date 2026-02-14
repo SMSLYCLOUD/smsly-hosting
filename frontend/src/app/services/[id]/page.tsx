@@ -63,14 +63,20 @@ export default function ServiceDetailPage() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
                     {/* Stats Cards */}
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Uptime</h4>
-                        <p className="text-3xl font-bold text-foreground">99.9%</p>
-                        <p className="text-xs text-emerald-500 mt-2 font-medium">+0.1% vs last week</p>
+                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Status</h4>
+                        <p className={`text-3xl font-bold ${deployment?.status === 'ACTIVE' ? 'text-emerald-500' : deployment?.status === 'FAILED' ? 'text-red-500' : 'text-foreground'}`}>
+                            {deployment?.status || 'No Deploy'}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-2 font-medium">
+                            {deployment?.finished_at ? `Since ${new Date(deployment.finished_at).toLocaleDateString()}` : 'Awaiting deployment'}
+                        </p>
                     </div>
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Avg Latency</h4>
-                        <p className="text-3xl font-bold text-foreground">45ms</p>
-                        <p className="text-xs text-muted-foreground mt-2 font-medium">Global CDN</p>
+                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Build Time</h4>
+                        <p className="text-3xl font-bold text-foreground">
+                            {deployment?.duration_seconds ? `${deployment.duration_seconds.toFixed(1)}s` : '—'}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-2 font-medium">Latest deployment</p>
                     </div>
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
                         <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Est. Cost</h4>
