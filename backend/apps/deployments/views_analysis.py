@@ -8,6 +8,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
+import base64
+import json
 import re
 import requests
 import logging
@@ -103,7 +105,7 @@ class RepoAnalysisView(APIView):
                 repo_url)
             if match:
                 owner, repo = match.groups()
-                analysis = self._analyze_github_repo(owner, repo)
+                analysis = self._analyze_github_repo(owner, repo, request.user)
             else:
                 # Fallback for non-GitHub or complex URLs
                 analysis = self._fallback_analysis(repo_url)
@@ -119,16 +121,21 @@ class RepoAnalysisView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def _analyze_github_repo(self, owner: str, repo: str) -> dict:
+    def _analyze_github_repo(self, owner: str, repo: str, user) -> dict:
         """Analyze a GitHub repository using the API."""
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents"
+        token = self._get_github_access_token(user)
 
         try:
             # Fetch root directory
-            response = requests.get(api_url, timeout=10, headers={
+            headers = {
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'SMSLY-Hosting-Analyzer'
-            })
+            }
+            if token:
+                headers['Authorization'] = f"token {token}"
+
+            response = requests.get(api_url, timeout=10, headers=headers)
 
             if response.status_code == 404:
                 return self._build_response(
@@ -142,8 +149,7 @@ class RepoAnalysisView(APIView):
             file_names = [f['name'] for f in files if isinstance(f, dict)]
 
             # Detect framework from files
-            framework, confidence = self._detect_framework(
-                file_names, owner, repo)
+            framework, confidence = self._detect_framework(file_names, owner, repo, token)
 
             return self._build_response(framework, confidence, file_names)
 
@@ -155,7 +161,7 @@ class RepoAnalysisView(APIView):
             return self._fallback_analysis(
                 f"https://github.com/{owner}/{repo}")
 
-    def _detect_framework(self, files: list, owner: str, repo: str) -> tuple:
+    def _detect_framework(self, files: list, owner: str, repo: str, token: str | None) -> tuple:
         """Detect framework from file list and package.json."""
         detected = 'unknown'
         confidence = 0.3
@@ -173,9 +179,9 @@ class RepoAnalysisView(APIView):
         # If still unknown, check package.json/requirements.txt
         if detected == 'unknown' or confidence < 0.8:
             if 'package.json' in files:
-                detected, confidence = self._check_package_json(owner, repo)
+                detected, confidence = self._check_package_json(owner, repo, token)
             elif 'requirements.txt' in files:
-                detected, confidence = self._check_requirements(owner, repo)
+                detected, confidence = self._check_requirements(owner, repo, token)
             elif 'go.mod' in files:
                 detected, confidence = 'go', 0.95
             elif 'Cargo.toml' in files:
@@ -183,18 +189,15 @@ class RepoAnalysisView(APIView):
 
         return detected, confidence
 
-    def _check_package_json(self, owner: str, repo: str) -> tuple:
+    def _check_package_json(self, owner: str, repo: str, token: str | None) -> tuple:
         """Check package.json for framework dependencies."""
         try:
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/package.json"
-            response = requests.get(url, timeout=5)
-            if response.status_code != 200:
-                # Try master branch
-                url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/package.json"
-                response = requests.get(url, timeout=5)
+            content = self._fetch_github_file(owner, repo, "package.json", token, ref="main")
+            if content is None:
+                content = self._fetch_github_file(owner, repo, "package.json", token, ref="master")
 
-            if response.status_code == 200:
-                pkg = response.json()
+            if content is not None:
+                pkg = json.loads(content)
                 all_deps = {**pkg.get('dependencies', {}),
                             **pkg.get('devDependencies', {})}
 
@@ -212,17 +215,15 @@ class RepoAnalysisView(APIView):
 
         return 'node', 0.5
 
-    def _check_requirements(self, owner: str, repo: str) -> tuple:
+    def _check_requirements(self, owner: str, repo: str, token: str | None) -> tuple:
         """Check requirements.txt for Python framework."""
         try:
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/main/requirements.txt"
-            response = requests.get(url, timeout=5)
-            if response.status_code != 200:
-                url = f"https://raw.githubusercontent.com/{owner}/{repo}/master/requirements.txt"
-                response = requests.get(url, timeout=5)
+            content = self._fetch_github_file(owner, repo, "requirements.txt", token, ref="main")
+            if content is None:
+                content = self._fetch_github_file(owner, repo, "requirements.txt", token, ref="master")
 
-            if response.status_code == 200:
-                content = response.text.lower()
+            if content is not None:
+                content = content.lower()
                 if 'django' in content:
                     return 'django', 0.95
                 elif 'fastapi' in content:
@@ -234,6 +235,59 @@ class RepoAnalysisView(APIView):
             logger.debug(f"Could not parse requirements.txt: {e}")
 
         return 'python', 0.5
+
+    def _get_github_access_token(self, user) -> str | None:
+        """Return the linked GitHub OAuth access token for the user, if available."""
+        try:
+            from allauth.socialaccount.models import SocialAccount, SocialToken
+        except Exception:
+            return None
+
+        account = (
+            SocialAccount.objects.filter(user=user, provider="github")
+            .order_by("-id")
+            .first()
+        )
+        if not account:
+            return None
+
+        token = (
+            SocialToken.objects.filter(account=account)
+            .order_by("-id")
+            .first()
+        )
+        return getattr(token, "token", None) or None
+
+    def _fetch_github_file(self, owner: str, repo: str, path: str, token: str | None, ref: str) -> str | None:
+        """Fetch a file via the GitHub Contents API (works for private repos with token)."""
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}"
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "SMSLY-Hosting-Analyzer",
+        }
+        if token:
+            headers["Authorization"] = f"token {token}"
+
+        try:
+            response = requests.get(url, timeout=10, headers=headers, params={"ref": ref})
+        except requests.Timeout:
+            return None
+        except Exception:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        if not isinstance(data, dict):
+            return None
+        if data.get("encoding") != "base64" or "content" not in data:
+            return None
+
+        try:
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        except Exception:
+            return None
 
     def _build_response(self, framework: str, confidence: float,
                         files: list = None, error: str = None) -> dict:

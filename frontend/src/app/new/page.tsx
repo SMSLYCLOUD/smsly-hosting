@@ -200,6 +200,12 @@ export default function NewServicePage() {
                                 value={repoUrl} 
                                 onChange={(e) => setRepoUrl(e.target.value)} 
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Private GitHub repositories require linking your GitHub account in{" "}
+                                <a className="underline hover:text-foreground" href="/settings">
+                                    Settings
+                                </a>.
+                            </p>
                         </div>
                     )}
 

@@ -104,6 +104,10 @@ SITE_ID = 1
 ACCOUNT_LOGIN_METHODS = {'username', 'email'}
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'username*', 'password1*', 'password2*']
 
+# Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
+# Explicitly set to avoid relying on allauth defaults.
+SOCIALACCOUNT_STORE_TOKENS = True
+
 # Redirect to frontend callback after login
 LOGIN_REDIRECT_URL = '/auth/callback'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
@@ -202,8 +206,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
         'rest_framework.authentication.TokenAuthentication',
+        # Keep session auth as a fallback (used by /api/v1/auth/session-token/ after OAuth redirects),
+        # but prefer token auth to avoid CSRF failures when both session cookies and Authorization
+        # headers are present.
+        'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

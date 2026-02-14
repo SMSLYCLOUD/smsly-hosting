@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OAuthTab } from "@/components/settings/OAuthTab";
+import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
 
 interface CloudProvider {
   id: string;
@@ -449,7 +450,10 @@ export default function SettingsPage() {
         </TabsContent>
         {/* OAuth Configuration Tab */}
         <TabsContent value="oauth">
-          <OAuthTab />
+          <div className="space-y-6">
+            <GitHubIntegrationCard />
+            <OAuthTab />
+          </div>
         </TabsContent>
 
         {/* Infrastructure Tab */}

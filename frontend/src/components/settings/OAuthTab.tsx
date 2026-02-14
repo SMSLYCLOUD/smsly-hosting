@@ -30,6 +30,7 @@ export function OAuthTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showSecrets, setShowSecrets] = useState({ github: false, google: false });
+  const [isAdmin, setIsAdmin] = useState(true);
 
   // Form state
   const [githubClientId, setGithubClientId] = useState("");
@@ -47,6 +48,8 @@ export function OAuthTab() {
       const res = await api.get("/oauth/status/");
       setStatus(res.data);
     } catch (err) {
+      const statusCode = (err as any)?.response?.status;
+      if (statusCode === 403) setIsAdmin(false);
       console.error("Failed to fetch OAuth status", err);
     }
   };
@@ -55,6 +58,7 @@ export function OAuthTab() {
     try {
       const res = await api.get("/oauth/credentials/");
       setCreds(res.data);
+      setIsAdmin(true);
       if (res.data.github?.client_id) setGithubClientId(res.data.github.client_id);
       if (res.data.google?.client_id) setGoogleClientId(res.data.google.client_id);
     } catch (err) {
@@ -66,6 +70,15 @@ export function OAuthTab() {
   };
 
   const handleSave = async (provider: "github" | "google") => {
+    if (!isAdmin) {
+      toast({
+        title: "Forbidden",
+        description: "Admin access required.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {};
@@ -86,11 +99,15 @@ export function OAuthTab() {
       if (provider === "github") setGithubSecret("");
       else setGoogleSecret("");
     } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to save OAuth credentials. Admin access required.",
-        variant: "destructive",
-      });
+      const statusCode = (err as any)?.response?.status;
+      const apiDetail = (err as any)?.response?.data?.detail || (err as any)?.response?.data?.error;
+
+      let description = "Failed to save OAuth credentials.";
+      if (statusCode === 401) description = "Unauthorized. Please log in again.";
+      else if (statusCode === 403) description = apiDetail || "Forbidden. Admin access required.";
+      else if (apiDetail) description = apiDetail;
+
+      toast({ title: "Error", description, variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -101,6 +118,22 @@ export function OAuthTab() {
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">OAuth (Admin Only)</CardTitle>
+          <CardDescription>Only admins can configure OAuth providers for the platform.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Log in with an admin account to manage GitHub/Google OAuth credentials.
+          </p>
+        </CardContent>
+      </Card>
     );
   }
 
