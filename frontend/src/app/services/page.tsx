@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Network, Store } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 import { ServicesGrid } from '@/components/dashboard/ServicesGrid';
@@ -30,7 +30,7 @@ export default function ServicesPage() {
 
   return (
     <main className="h-screen flex flex-col premium-bg transition-colors duration-500">
-      <Navbar />
+
 
       {/* View Toggle Bar */}
       <div className="border-b border-border bg-card/50 backdrop-blur px-6 py-3 flex justify-between items-center z-20">

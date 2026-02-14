@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Search, BookOpen, Rocket, Settings, Code, Shield, Database, Terminal, ArrowRight, FileText, Server, Globe, Download, RefreshCw, HardDrive, Key, Wrench } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+
 
 const categories = [
   {
@@ -108,7 +108,7 @@ export default function DocsPage() {
 
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
-      <Navbar />
+
 
       {/* Hero */}
       <section className="pt-32 pb-12 px-4 text-center bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">

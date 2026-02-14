@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, BookOpen, Download, RefreshCw, Server, Database, Shield, Key, Terminal, Globe, Wrench, Copy, Check, ChevronRight, ExternalLink } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+
 
 // ────────────────────────────────────────────────────────────────
 // CodeBlock — inline copy button for quick terminal commands
@@ -66,7 +66,7 @@ export default function InstallGuidePage() {
 
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
-      <Navbar />
+
 
       {/* Hero */}
       <section className="pt-28 pb-10 px-4 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-950/20 dark:to-slate-950 border-b border-slate-200 dark:border-slate-800">

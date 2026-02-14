@@ -1,6 +1,6 @@
 import { ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, Clock, Globe, Database, List, Timer, HardDrive } from 'lucide-react';
 import Link from 'next/link';
-import { Navbar } from '@/components/layout/Navbar';
+
 import { Service } from '@/lib/api';
 
 interface ServiceLayoutProps {
@@ -27,7 +27,6 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
 
     return (
         <main className="min-h-screen flex flex-col text-foreground relative">
-            <Navbar />
 
             <div className="border-b border-border bg-card/60 backdrop-blur-md">
                 <div className="container mx-auto py-6">

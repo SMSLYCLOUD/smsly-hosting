@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Mail, MessageCircle, Calendar, Building2, Send, ArrowRight } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+
 
 export default function ContactPage() {
   const [form, setForm] = useState({ name: '', email: '', company: '', message: '' });
@@ -16,7 +16,7 @@ export default function ContactPage() {
 
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
-      <Navbar />
+
 
       {/* Hero */}
       <section className="pt-32 pb-12 px-4 text-center">

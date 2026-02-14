@@ -1,6 +1,26 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Terminal, Zap } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Terminal, Zap, Clock } from 'lucide-react';
 import { Deployment } from '@/lib/api';
+
+/**
+ * Generate pseudo-timestamps for log lines based on deployment start time.
+ * Since backend stores logs as a single text blob, we approximate
+ * timestamps by spreading lines over the deployment duration.
+ */
+function addTimestamps(logs: string, startTime: string | null, durationSeconds: number | null): string[] {
+    const lines = logs.split('\n');
+    if (!startTime) return lines.map(l => l);
+
+    const start = new Date(startTime).getTime();
+    const totalDuration = (durationSeconds || 60) * 1000; // default to 60s if unknown
+
+    return lines.map((line, i) => {
+        const offset = lines.length > 1 ? (i / (lines.length - 1)) * totalDuration : 0;
+        const ts = new Date(start + offset);
+        const timeStr = ts.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return `${timeStr}  ${line}`;
+    });
+}
 
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
@@ -9,6 +29,15 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [deployment?.build_logs]);
+
+    const timestampedLogs = useMemo(() => {
+        if (!deployment?.build_logs) return [];
+        return addTimestamps(
+            deployment.build_logs,
+            deployment.created_at || null,
+            deployment.duration_seconds || null
+        );
+    }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds]);
 
     return (
         <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
@@ -38,6 +67,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     </button>
                 </div>
                 <div className="text-zinc-500 font-sans text-xs flex items-center gap-2">
+                    {deployment?.created_at && (
+                        <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            {new Date(deployment.created_at).toLocaleString()}
+                        </span>
+                    )}
                     {logType === 'BUILD' && deployment?.build_logs && (
                         <>
                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -46,6 +81,15 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     )}
                 </div>
             </div>
+
+            {/* Deployment Info Bar */}
+            {deployment && (
+                <div className="bg-white/[0.02] px-6 py-2 border-b border-white/5 flex items-center gap-4 text-[10px] text-zinc-500 font-sans uppercase tracking-wider">
+                    <span>Commit: <span className="text-zinc-300 font-mono">{deployment.commit_hash?.substring(0, 7)}</span></span>
+                    <span>Status: <span className={deployment.status === 'ACTIVE' ? 'text-emerald-400' : deployment.status === 'FAILED' ? 'text-red-400' : 'text-zinc-300'}>{deployment.status}</span></span>
+                    {deployment.duration_seconds && <span>Duration: <span className="text-zinc-300">{deployment.duration_seconds.toFixed(1)}s</span></span>}
+                </div>
+            )}
 
             {/* Content */}
             <div className="flex-1 p-6 overflow-y-auto text-zinc-300 leading-relaxed custom-scrollbar">
@@ -59,9 +103,14 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 {deployment.ai_diagnosis}
                             </div>
                         )}
-                        <pre className="whitespace-pre-wrap font-mono text-zinc-400">
-                            {deployment?.build_logs || 'Waiting for build logs...'}
-                        </pre>
+                        <div className="whitespace-pre-wrap font-mono">
+                            {timestampedLogs.length > 0 ? timestampedLogs.map((line, i) => (
+                                <div key={i} className="hover:bg-white/[0.02] py-px">
+                                    <span className="text-zinc-600 select-none">{line.substring(0, 10)}</span>
+                                    <span className="text-zinc-400">{line.substring(10)}</span>
+                                </div>
+                            )) : <span className="text-zinc-600">Waiting for build logs...</span>}
+                        </div>
                     </>
                 )}
 
@@ -80,3 +129,4 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         </div>
     );
 }
+

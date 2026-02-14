@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
-import { Navbar } from "@/components/layout/Navbar";
+
 
 const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
@@ -102,7 +102,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-x-hidden">
-      <Navbar />
+
       <div className="flex-1 flex items-center justify-center p-4 relative z-10">
 
       <Card className="w-full max-w-md card-premium rounded-2xl">
