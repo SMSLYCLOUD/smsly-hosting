@@ -134,9 +134,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     resolved_env[key] = value
 
             # Save env vars to the service
-            from apps.deployments.models import EnvVar
+            from apps.deployments.models import EnvironmentVariable
             for k, v in resolved_env.items():
-                EnvVar.objects.update_or_create(
+                EnvironmentVariable.objects.update_or_create(
                     service=service,
                     key=k,
                     defaults={"value": v, "is_secret": "KEY" in k or "SECRET" in k or "PASSWORD" in k},
