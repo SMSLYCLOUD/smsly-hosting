@@ -3,6 +3,9 @@ from celery import shared_task
 from django.utils import timezone
 from django.conf import settings
 import logging
+
+# Register ecosystem tasks with Celery autodiscovery
+from . import tasks_ecosystem  # noqa: F401
 import os
 import tempfile
 import shutil
@@ -195,6 +198,53 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     f"Commit: {deployment.commit_hash[:7]}\n")
                 deployment.build_logs += log_line
                 deployment.save()
+
+                # ── AI Intelligent Pre-Deploy Analysis ──
+                try:
+                    from apps.intelligence.providers import ask_with_fallback
+
+                    # Gather repo context for AI
+                    repo_files = []
+                    for root, dirs, files in os.walk(source_dir):
+                        dirs[:] = [d for d in dirs if d not in ('.git', 'node_modules', 'venv', '__pycache__', '.next')]
+                        for f in files:
+                            if f in ('Dockerfile', 'docker-compose.yml', 'package.json', 'requirements.txt',
+                                     'Pipfile', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Gemfile',
+                                     '.env.example', 'nixpacks.toml', 'Procfile', 'next.config.js',
+                                     'next.config.mjs', 'tsconfig.json', 'vite.config.ts'):
+                                rel = os.path.relpath(os.path.join(root, f), source_dir)
+                                try:
+                                    content = open(os.path.join(root, f), 'r', errors='ignore').read()[:2000]
+                                    repo_files.append(f"--- {rel} ---\n{content}")
+                                except Exception:
+                                    pass
+
+                    if repo_files:
+                        ai_prompt = (
+                            f"You are a DevOps AI assistant. Analyze this repo for deployment.\n"
+                            f"Service: {service.name}\n"
+                            f"Branch: {service.branch or 'main'}\n"
+                            f"Commit: {deployment.commit_hash[:7]}\n\n"
+                            f"Files:\n{''.join(repo_files[:8])}\n\n"
+                            f"Respond in 3-5 bullet points:\n"
+                            f"1. Detected stack and runtime\n"
+                            f"2. Any missing configs or potential issues\n"
+                            f"3. Resource/performance suggestions\n"
+                            f"Keep it concise — max 150 words."
+                        )
+                        ai_response, ai_provider = ask_with_fallback(ai_prompt)
+                        ai_log = f"\n🤖 AI Pre-Deploy Analysis (via {ai_provider}):\n{ai_response}\n\n"
+                        deployment.build_logs += ai_log
+                        deployment.ai_diagnosis = ai_response  # Store for UI display
+                        deployment.save()
+                        _broadcast_log(deployment, ai_log)
+                        logger.info("AI pre-deploy analysis complete for %s via %s", deployment_id, ai_provider)
+                except Exception as ai_err:
+                    logger.warning("AI pre-deploy analysis failed (non-fatal): %s", ai_err)
+                    ai_log = "\n🤖 AI analysis skipped (no provider available)\n\n"
+                    deployment.build_logs += ai_log
+                    deployment.save()
+                    _broadcast_log(deployment, ai_log)
                 _broadcast_log(deployment, log_line)
 
                 # B. Build with Nixpacks

@@ -56,7 +56,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <h3 className="font-bold">CPU Usage (%)</h3>
                 </div>
                 <div className="h-[250px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                         <LineChart data={data.cpu}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.2} />
                             <XAxis
@@ -82,7 +82,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <h3 className="font-bold">Memory Usage (MB)</h3>
                 </div>
                 <div className="h-[250px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                         <LineChart data={data.memory}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.2} />
                             <XAxis
@@ -108,7 +108,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <h3 className="font-bold">Network I/O (KB/s)</h3>
                 </div>
                 <div className="h-[250px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                         <LineChart data={data.network}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.2} />
                             <XAxis
