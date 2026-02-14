@@ -336,5 +336,101 @@ export const tokensApi = {
   },
 };
 
+// ─── Tunnels API ────────────────────────────────────────────────────────────
+
+export interface Tunnel {
+  id: string;
+  subdomain: string;
+  public_url: string;
+  local_port: number;
+  protocol: 'http' | 'tcp';
+  status: 'active' | 'inactive';
+  created_at: string;
+  expires_at: string | null;
+  request_count: number;
+  bandwidth_used: number;
+  shared_with: string[];
+}
+
+export interface TunnelRequest {
+  id: string;
+  method: string;
+  path: string;
+  status: number;
+  duration: number;
+  timestamp: string;
+  headers: Record<string, string>;
+  body?: string;
+  response_body?: string;
+}
+
+export interface ReservedSubdomain {
+  subdomain: string;
+  created_at: string;
+}
+
+export const tunnelsApi = {
+  /** List active tunnels for the current user */
+  list: async (): Promise<Tunnel[]> => {
+    const res = await api.get('/tunnels/');
+    return res.data?.tunnels || res.data || [];
+  },
+
+  /** Create a new tunnel */
+  create: async (data: { port: number; subdomain?: string; protocol?: string }): Promise<Tunnel> => {
+    const res = await api.post('/tunnels/', data);
+    return res.data;
+  },
+
+  /** Get detail of a specific tunnel */
+  get: async (id: string): Promise<Tunnel> => {
+    const res = await api.get(`/tunnels/${id}/`);
+    return res.data;
+  },
+
+  /** Delete / close a tunnel */
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/tunnels/${id}/`);
+  },
+
+  /** Get request logs for a tunnel */
+  requests: async (id: string): Promise<TunnelRequest[]> => {
+    const res = await api.get(`/tunnels/${id}/requests/`);
+    return res.data?.requests || [];
+  },
+
+  /** Replay a request */
+  replay: async (tunnelId: string, requestId: string): Promise<any> => {
+    const res = await api.post(`/tunnels/${tunnelId}/requests/${requestId}/replay/`);
+    return res.data;
+  },
+
+  /** Share tunnel with team member */
+  share: async (tunnelId: string, email: string): Promise<any> => {
+    const res = await api.post(`/tunnels/${tunnelId}/share/`, { email });
+    return res.data;
+  },
+
+  // ─── Subdomain management ─────────────────────────────────────────────
+
+  /** List reserved subdomains */
+  subdomains: async (): Promise<{ subdomains: ReservedSubdomain[]; limit: number }> => {
+    const res = await api.get('/tunnels/subdomains/');
+    return res.data;
+  },
+
+  /** Reserve a subdomain */
+  reserveSubdomain: async (subdomain: string): Promise<ReservedSubdomain> => {
+    const res = await api.post('/tunnels/subdomains/', { subdomain });
+    return res.data;
+  },
+
+  /** Release a reserved subdomain */
+  releaseSubdomain: async (subdomain: string): Promise<void> => {
+    await api.delete(`/tunnels/subdomains/${subdomain}/`);
+  },
+};
+
 export default api;
+
 
