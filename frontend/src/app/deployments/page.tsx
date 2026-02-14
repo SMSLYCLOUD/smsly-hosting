@@ -14,7 +14,7 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 interface Deployment {
   id: string;
   service_name?: string;
-  service?: { name: string; id: string };
+  service?: string;  // FK UUID from backend
   status: string;
   created_at: string;
   commit_hash?: string;
@@ -134,13 +134,13 @@ export default function DeploymentsPage() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.05 }}
             >
-              <Link href={deploy.service?.id ? `/services/${deploy.service.id}` : '#'} className="block">
+              <Link href={deploy.service ? `/services/${deploy.service}` : `/deployments`} className="block">
                 <Card className="hover:border-primary/30 transition-colors cursor-pointer hover:shadow-lg hover:shadow-primary/5">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-lg flex items-center gap-2">
                         {getStatusIcon(deploy.status)}
-                        {deploy.service?.name || deploy.service_name || `Deployment ${deploy.id.slice(0, 8)}`}
+                        {deploy.service_name || `Deployment ${deploy.id.slice(0, 8)}`}
                       </CardTitle>
                       <div className="flex items-center gap-2">
                         <Badge className={getStatusBadge(deploy.status)}>
