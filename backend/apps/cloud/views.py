@@ -274,3 +274,68 @@ class EcosystemViewSet(viewsets.ViewSet):
                 response['error'] = str(result.result)
         return Response(response)
 
+    @action(detail=False, methods=['post'])
+    def analyze(self, request):
+        """
+        Analyze a single repository and return deploy configuration.
+        POST /api/v1/cloud/ecosystem/analyze/
+        Body: { "repo_url": "https://github.com/user/repo" }
+        Returns stack, languages, port, build strategy, addons, suggested env vars.
+        """
+        import tempfile, subprocess, os
+        from services.ecosystem import heuristic_analysis
+
+        repo_url = request.data.get('repo_url')
+        if not repo_url:
+            return Response(
+                {'error': 'repo_url is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Extract repo name
+        repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+
+        try:
+            # Shallow clone to temp dir
+            with tempfile.TemporaryDirectory() as tmp:
+                clone_dir = os.path.join(tmp, repo_name)
+                subprocess.run(
+                    ['git', 'clone', '--depth', '1', repo_url, clone_dir],
+                    check=True, capture_output=True, text=True, timeout=30,
+                )
+
+                # List all files relative to clone root
+                files = []
+                for root, dirs, filenames in os.walk(clone_dir):
+                    # Skip .git
+                    dirs[:] = [d for d in dirs if d != '.git']
+                    for f in filenames:
+                        rel = os.path.relpath(
+                            os.path.join(root, f), clone_dir
+                        ).replace('\\', '/')
+                        files.append(rel)
+
+                analysis = heuristic_analysis(files)
+
+            return Response({
+                'repo': repo_url,
+                'name': repo_name,
+                **analysis,
+            })
+
+        except subprocess.TimeoutExpired:
+            return Response(
+                {'error': 'Repository clone timed out.'},
+                status=status.HTTP_408_REQUEST_TIMEOUT
+            )
+        except subprocess.CalledProcessError as e:
+            return Response(
+                {'error': f'Failed to clone repository: {e.stderr[:500]}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Analysis failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
