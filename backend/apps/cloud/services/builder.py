@@ -16,7 +16,7 @@ class NixpacksBuilder:
     """
 
     # Default cache directory for Nixpacks builds
-    CACHE_DIR = "/var/smsly/build-cache"
+    CACHE_DIR = "/tmp/smsly/build-cache"
 
     @staticmethod
     def build_image(
@@ -24,7 +24,7 @@ class NixpacksBuilder:
         image_name: str,
         env_vars: Optional[dict] = None,
         cache_dir: Optional[str] = None
-    ) -> str:
+    ) -> dict:
         """
         Builds a Docker image using Nixpacks.
 
@@ -34,7 +34,7 @@ class NixpacksBuilder:
             env_vars: Environment variables for build
             cache_dir: Optional cache directory (defaults to CACHE_DIR)
 
-        Returns the image tag upon success.
+        Returns dict with 'image_name', 'stdout', 'stderr' upon success.
         """
         if not os.path.exists(source_dir):
             raise FileNotFoundError(f"Source directory {source_dir} not found")
@@ -73,12 +73,26 @@ class NixpacksBuilder:
                 text=True,
                 env={**os.environ, "NIXPACKS_CACHE_DIR": effective_cache_dir}
             )
-            logger.info(f"Build successful: {process.stdout}")
-            return image_name
+            # Log build output for debugging
+            if process.stdout:
+                logger.info(f"Nixpacks stdout:\n{process.stdout[-2000:]}")
+            if process.stderr:
+                logger.info(f"Nixpacks stderr:\n{process.stderr[-2000:]}")
+            return {
+                "image_name": image_name,
+                "stdout": process.stdout or "",
+                "stderr": process.stderr or "",
+            }
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"Build failed: {e.stderr}")
-            raise RuntimeError(f"Nixpacks build failed: {e.stderr}") from e
+            # Capture full output for debugging
+            error_detail = ""
+            if e.stdout:
+                error_detail += f"\n--- Build Output ---\n{e.stdout[-3000:]}"
+            if e.stderr:
+                error_detail += f"\n--- Build Errors ---\n{e.stderr[-3000:]}"
+            logger.error(f"Build failed for {image_name}:{error_detail}")
+            raise RuntimeError(f"Nixpacks build failed:\n{error_detail or e.stderr}") from e
 
     @staticmethod
     def push_image(image_name: str, registry_url: str) -> str:
