@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_github_token(user):
-    """Retrieve the stored GitHub OAuth token for *user*, or None."""
+    """Retrieve the stored GitHub OAuth token for *user*, refreshing if expired."""
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
 
@@ -25,14 +25,79 @@ def _get_github_token(user):
         )
         if not account:
             return None
-        token = (
+        token_obj = (
             SocialToken.objects.filter(account=account)
             .order_by("-id")
             .first()
         )
-        return getattr(token, "token", None)
+        if not token_obj:
+            return None
+
+        # Check if token is expired and attempt refresh
+        if token_obj.expires_at:
+            from django.utils import timezone
+            if token_obj.expires_at <= timezone.now():
+                refreshed = _refresh_github_token(token_obj)
+                if not refreshed:
+                    return None
+
+        return token_obj.token
     except Exception:
+        logger.exception("Failed to get GitHub token")
         return None
+
+
+def _refresh_github_token(token_obj):
+    """Use the refresh token to obtain a new GitHub access token.
+
+    Returns True if refresh succeeded, False otherwise.
+    Updates token_obj in-place and saves to DB.
+    """
+    # token_secret stores the refresh token in allauth
+    refresh_token = getattr(token_obj, "token_secret", None)
+    if not refresh_token:
+        logger.warning("No refresh token stored — user must reconnect GitHub")
+        return False
+
+    try:
+        from allauth.socialaccount.models import SocialApp
+        app = SocialApp.objects.filter(provider="github").first()
+        if not app:
+            logger.error("No GitHub SocialApp configured")
+            return False
+
+        resp = requests.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": app.client_id,
+                "client_secret": app.secret,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+            },
+            timeout=10,
+        )
+        data = resp.json()
+
+        if "access_token" not in data:
+            logger.error("GitHub token refresh failed: %s", data.get("error_description", data))
+            return False
+
+        # Update stored token
+        from django.utils import timezone
+        from datetime import timedelta
+        token_obj.token = data["access_token"]
+        if data.get("refresh_token"):
+            token_obj.token_secret = data["refresh_token"]
+        expires_in = data.get("expires_in", 28800)  # default 8h
+        token_obj.expires_at = timezone.now() + timedelta(seconds=int(expires_in))
+        token_obj.save()
+        logger.info("GitHub token refreshed successfully for account %s", token_obj.account)
+        return True
+
+    except Exception as exc:
+        logger.exception("GitHub token refresh error: %s", exc)
+        return False
 
 
 @api_view(["GET"])
