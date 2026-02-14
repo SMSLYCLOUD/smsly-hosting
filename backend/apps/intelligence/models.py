@@ -26,13 +26,13 @@ class AIProviderSettings(models.Model):
         default=Provider.MOCK,
     )
 
-    openai_api_key = EncryptedCharField(blank=True, null=True)
+    openai_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     openai_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)
 
-    grok_api_key = EncryptedCharField(blank=True, null=True)
+    grok_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     grok_model = models.CharField(max_length=100, default="grok-3-mini", blank=True)
 
-    gemini_api_key = EncryptedCharField(blank=True, null=True)
+    gemini_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     gemini_model = models.CharField(max_length=100, default="gemini-2.0-flash", blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)

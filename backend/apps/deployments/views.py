@@ -44,9 +44,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """ZH-001 FIX: Only return services owned by the requesting user."""
+        qs = Service.objects.prefetch_related('deployments')
         if self.request.user.is_superuser:
-            return Service.objects.all().order_by('-created_at')
-        return Service.objects.filter(owner=self.request.user).order_by('-created_at')
+            return qs.all().order_by('-created_at')
+        return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -62,6 +63,90 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         serializer = DeploymentSerializer(deployments, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def stop(self, request, pk=None):
+        """
+        Stop a running service.
+        POST /api/v1/services/{id}/stop/
+        Cancels any active deployments and marks the service as stopped.
+        """
+        service = self.get_object()
+
+        # Cancel any active/building deployments
+        active_deployments = service.deployments.filter(
+            status__in=[
+                Deployment.Status.ACTIVE,
+                Deployment.Status.BUILDING,
+                Deployment.Status.DEPLOYING,
+                Deployment.Status.HEALTH_CHECK,
+                Deployment.Status.QUEUED,
+            ]
+        )
+        count = active_deployments.update(
+            status=Deployment.Status.CANCELLED,
+            finished_at=timezone.now(),
+        )
+
+        # Log the stop action
+        AuditLog(
+            actor=request.user.get_username(),
+            action='SERVICE_STOP',
+            target=f'Service: {service.name}',
+            metadata={'service_id': str(service.id), 'deployments_cancelled': count},
+        ).save()
+
+        return Response({
+            'message': f'Service {service.name} stopped',
+            'deployments_cancelled': count,
+        })
+
+    @action(detail=True, methods=['post'])
+    def restart(self, request, pk=None):
+        """
+        Restart a service by stopping it and triggering a new deployment.
+        POST /api/v1/services/{id}/restart/
+        """
+        service = self.get_object()
+
+        # Stop active deployments first
+        service.deployments.filter(
+            status__in=[
+                Deployment.Status.ACTIVE,
+                Deployment.Status.BUILDING,
+                Deployment.Status.DEPLOYING,
+            ]
+        ).update(
+            status=Deployment.Status.CANCELLED,
+            finished_at=timezone.now(),
+        )
+
+        # Create a new deployment
+        provider = _resolve_provider_for_service(service)
+        if not provider:
+            return Response({'error': 'No active cloud provider configured'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash='latest',
+            commit_message='Service restart',
+        )
+
+        smart_deploy_task.delay(str(deployment.id), str(provider.id))
+
+        AuditLog(
+            actor=request.user.get_username(),
+            action='SERVICE_RESTART',
+            target=f'Service: {service.name}',
+            metadata={'service_id': str(service.id), 'deployment_id': str(deployment.id)},
+        ).save()
+
+        return Response({
+            'message': f'Service {service.name} restarting',
+            'deployment': DeploymentSerializer(deployment).data,
+        }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
     def deploy(self, request, pk=None):
@@ -494,10 +579,20 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
         if self.request.user.is_superuser:
-            return AuditLog.objects.all()
+            qs = AuditLog.objects.all()
+        else:
+            username = self.request.user.get_username()
+            qs = AuditLog.objects.filter(actor=username)
 
-        username = self.request.user.get_username()
-        return AuditLog.objects.filter(actor=username)
+        # Search filter
+        search = self.request.query_params.get('search', '').strip()
+        if search:
+            qs = qs.filter(
+                Q(action__icontains=search) |
+                Q(actor__icontains=search) |
+                Q(target__icontains=search)
+            )
+        return qs
 
 
 class SessionTokenView(APIView):

@@ -2,7 +2,7 @@
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from rest_framework_nested import routers
-from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView
+from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
 from .views_cron import CronJobViewSet
@@ -31,6 +31,7 @@ router.register(r'templates', TemplateViewSet, basename='template')
 router.register(r'blueprints', BlueprintViewSet, basename='blueprint')
 router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'tunnels', TunnelViewSet, basename='tunnel')
+router.register(r'audit-logs', AuditLogViewSet, basename='auditlog')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
