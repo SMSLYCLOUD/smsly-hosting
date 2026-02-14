@@ -80,22 +80,23 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        command = text_data
+        # The frontend buffers a full line and sends it on Enter.
+        command = (text_data or "").strip()
 
-        if command == '\r':
-            response = '\r\n$ '
+        if not command:
+            response = "\r\n$ "
+        elif command == "help":
+            response = "\r\nAvailable commands: ls, whoami, help\r\n$ "
+        elif command == "ls":
+            response = (
+                "\r\nbin  boot  dev  etc  home  lib  media  mnt  "
+                "opt  proc  root  run  sbin  srv  sys  tmp  usr  var"
+                "\r\n$ "
+            )
+        elif command == "whoami":
+            response = f"\r\n{self.user.username}\r\n$ "
         else:
-            # Echo back
-            response = command
-
-            # Simple simulation
-            if command.strip() == 'ls':
-                response = (
-                    '\r\nbin  boot  dev  etc  home  lib  media  mnt  '
-                    'opt  proc  root  run  sbin  srv  sys  tmp  usr  var'
-                    '\r\n$ ')
-            elif command.strip() == 'whoami':
-                response = f'\r\n{self.user.username}\r\n$ '
+            response = f"\r\nbash: {command}: command not found\r\n$ "
 
         await self.send(text_data=json.dumps({'message': response}))
 

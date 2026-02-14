@@ -41,4 +41,5 @@ USER smsly
 # Use Entrypoint (handles migrations + static files)
 ENTRYPOINT ["./entrypoint.sh"]
 # Default CMD: gunicorn for backend. Celery/celery-beat override via docker-compose command:
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.wsgi:application", "--workers", "2", "--timeout", "120"]
+# Use ASGI so Django Channels WebSockets work consistently (dev + prod).
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "config.asgi:application", "--workers", "2", "--worker-class", "uvicorn.workers.UvicornWorker", "--timeout", "120"]

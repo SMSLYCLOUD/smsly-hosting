@@ -236,6 +236,20 @@ if REDIS_PASSWORD:
     CELERY_BROKER_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
 else:
     CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+
+# Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
+CHANNEL_REDIS_URL = CELERY_BROKER_URL
+if isinstance(CHANNEL_REDIS_URL, str) and CHANNEL_REDIS_URL.endswith('/0'):
+    CHANNEL_REDIS_URL = CHANNEL_REDIS_URL[:-2] + '/1'
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [CHANNEL_REDIS_URL],
+        },
+    },
+}
 CELERY_RESULT_BACKEND = 'django-db'
 CELERY_BEAT_SCHEDULE = {
     'collect-metrics-every-5-minutes': {

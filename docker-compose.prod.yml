@@ -52,7 +52,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
+    # Use ASGI so Django Channels WebSockets (`/ws/...`) work in production.
+    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 120
     restart: unless-stopped
     env_file: .env
     environment:
@@ -178,6 +179,11 @@ services:
       NETWORKS: 1
       VOLUMES: 1
       BUILD: 1
+      # Required for provisioning/deployments (create/start containers, create networks/volumes, etc.)
+      POST: 1
+      PUT: 1
+      DELETE: 1
+      EXEC: 1
       # Deny dangerous operations
       SERVICES: 0
       SWARM: 0
@@ -191,6 +197,7 @@ services:
 
 networks:
   smsly-net:
+    name: smsly-net
     driver: bridge
 
 volumes:

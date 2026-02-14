@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe } from 'lucide-react';
 import Editor from "@monaco-editor/react";
@@ -20,6 +20,7 @@ const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'),
 
 export default function ServiceDetailPage() {
     const params = useParams();
+    const searchParams = useSearchParams();
     const id = params.id as string;
     const [service, setService] = useState<Service | null>(null);
     const [deployment, setDeployment] = useState<Deployment | null>(null);
@@ -43,6 +44,12 @@ export default function ServiceDetailPage() {
         };
         fetchData();
     }, [id]);
+
+    // Support deep-links like `/services/:id?tab=logs`
+    const tabParam = searchParams.get('tab');
+    useEffect(() => {
+        if (tabParam) setActiveTab(tabParam);
+    }, [tabParam]);
 
     if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
@@ -119,7 +126,10 @@ export default function ServiceDetailPage() {
                                         }`}>{deployment.status}</span>
                                 </div>
                                 <div className="pt-2">
-                                    <button className="w-full border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm">
+                                    <button
+                                        className="w-full border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
+                                        onClick={() => setActiveTab('logs')}
+                                    >
                                         View Logs
                                     </button>
                                 </div>
@@ -180,11 +190,38 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'console' && (
                 <div className="h-[600px] bg-zinc-950 rounded-xl overflow-hidden border border-border shadow-2xl">
-                    <XtermConsole
-                        wsUrl={(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1')
-                            .replace('http', 'ws')
-                            .replace('/api/v1', `/ws/terminal/${service.id}/`)}
-                    />
+                    {(() => {
+                        const deploymentId = deployment?.id || service.latest_deployment?.id;
+                        if (!deploymentId) {
+                            return (
+                                <div className="h-full w-full flex items-center justify-center text-zinc-400 text-sm">
+                                    Deploy this service first to enable the console.
+                                </div>
+                            );
+                        }
+
+                        const token =
+                            typeof window !== 'undefined'
+                                ? localStorage.getItem('auth_token')
+                                : null;
+
+                        if (!token) {
+                            return (
+                                <div className="h-full w-full flex items-center justify-center text-zinc-400 text-sm">
+                                    Login required to open the console.
+                                </div>
+                            );
+                        }
+
+                        const proto =
+                            typeof window !== 'undefined' && window.location.protocol === 'https:'
+                                ? 'wss'
+                                : 'ws';
+                        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+                        const wsUrl = `${proto}://${host}/ws/terminal/${deploymentId}/?token=${encodeURIComponent(token)}`;
+
+                        return <XtermConsole wsUrl={wsUrl} />;
+                    })()}
                 </div>
             )}
         </ServiceLayout>

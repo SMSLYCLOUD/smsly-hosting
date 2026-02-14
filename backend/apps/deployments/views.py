@@ -216,21 +216,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
         })
 
     # --- Nested Resources: Environment Variables ---
-    @action(detail=True, methods=['get'], url_path='env_vars')
-    def list_env_vars(self, request, pk=None):
+    # NOTE: Keep GET and POST on a single @action. DRF collects actions via
+    # `inspect.getmembers()` (sorted by name), which can register duplicate
+    # url_path patterns in an unexpected order and cause 405s for valid methods.
+    @action(detail=True, methods=['get', 'post'], url_path='env_vars')
+    def env_vars(self, request, pk=None):
         service = self.get_object()
-        vars = service.env_vars.all()
-        serializer = EnvVarSerializer(vars, many=True)
-        return Response(serializer.data)
 
-    @action(detail=True, methods=['post'], url_path='env_vars')
-    def create_env_var(self, request, pk=None):
-        service = self.get_object()
+        if request.method.upper() == 'GET':
+            vars = service.env_vars.all().order_by('key')
+            serializer = EnvVarSerializer(vars, many=True)
+            return Response(serializer.data)
+
         serializer = EnvVarSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(service=service)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+
+        key = str(serializer.validated_data.get('key') or '').strip()
+        value = serializer.validated_data.get('value', '')
+        is_secret = bool(serializer.validated_data.get('is_secret', False))
+
+        env_var, created = EnvironmentVariable.objects.update_or_create(
+            service=service,
+            key=key,
+            defaults={'value': value, 'is_secret': is_secret},
+        )
+        out = EnvVarSerializer(env_var).data
+        return Response(
+            out,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
 
     @action(detail=True, methods=['delete'],
             url_path='env_vars/(?P<var_id>\\d+)')
