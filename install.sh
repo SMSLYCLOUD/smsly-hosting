@@ -530,8 +530,10 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" build --no-cache backend
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
-            echo -e "${BLUE}  → Running migrations...${NC}"
+            echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
             sleep 10  # Wait for backend to start
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>&1 || \
+                echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
@@ -548,8 +550,10 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" build --no-cache frontend backend
             docker compose -f "$COMPOSE_FILE" up -d
 
-            echo -e "${BLUE}  → Running migrations...${NC}"
+            echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
             sleep 10
+            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>&1 || \
+                echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
