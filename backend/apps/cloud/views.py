@@ -206,3 +206,71 @@ class IntelligenceViewSet(viewsets.ViewSet):
             'provider': provider_name,
             'key_set': bool(api_key),
         })
+
+
+class EcosystemViewSet(viewsets.ViewSet):
+    """Zero-config AI ecosystem deployment endpoints."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @action(detail=False, methods=['post'])
+    def scan(self, request):
+        """
+        Scan all GitHub repos and return an AI-generated deploy plan.
+        POST /api/v1/cloud/ecosystem/scan/
+        """
+        from apps.deployments.tasks_ecosystem import ecosystem_scan_task
+        result = ecosystem_scan_task.delay(str(request.user.id))
+        return Response({
+            'task_id': result.id,
+            'status': 'scanning',
+            'message': 'Scanning your GitHub repositories...',
+        })
+
+    @action(detail=False, methods=['post'])
+    def deploy(self, request):
+        """
+        Deploy all services from a scan plan.
+        POST /api/v1/cloud/ecosystem/deploy/
+        Body: { "plan": { ... } }
+        """
+        plan = request.data.get('plan')
+        if not plan:
+            return Response(
+                {'error': 'Deploy plan is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
+        result = ecosystem_deploy_task.delay(str(request.user.id), plan)
+        return Response({
+            'task_id': result.id,
+            'status': 'deploying',
+            'message': 'Deploying your ecosystem...',
+        })
+
+    @action(detail=False, methods=['get'])
+    def task_status(self, request):
+        """
+        Check the status of a scan or deploy task.
+        GET /api/v1/cloud/ecosystem/task_status/?task_id=xxx
+        """
+        from celery.result import AsyncResult
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response(
+                {'error': 'task_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = AsyncResult(task_id)
+        response = {
+            'task_id': task_id,
+            'status': result.status,  # PENDING, STARTED, SUCCESS, FAILURE
+        }
+        if result.ready():
+            if result.successful():
+                response['result'] = result.result
+            else:
+                response['error'] = str(result.result)
+        return Response(response)
+
