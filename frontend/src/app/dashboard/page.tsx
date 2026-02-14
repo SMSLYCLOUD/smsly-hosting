@@ -53,7 +53,7 @@ export default function DashboardPage() {
     fetchData();
   }, []);
 
-  const activeDeployments = services.filter(s => s.latest_deployment?.status === 'RUNNING').length;
+  const activeDeployments = services.filter(s => s.latest_deployment?.status === 'ACTIVE').length;
   const totalServices = services.length;
   const failedServices = services.filter(s => s.latest_deployment?.status === 'FAILED').length;
 
@@ -313,18 +313,23 @@ export default function DashboardPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const styles = {
-    RUNNING: 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30',
+  const styles: Record<string, string> = {
     ACTIVE: 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30',
+    RUNNING: 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30',
     FAILED: 'bg-red-500/20 text-red-500 border-red-500/30',
     PENDING: 'bg-yellow-500/20 text-yellow-500 border-yellow-500/30',
     BUILDING: 'bg-blue-500/20 text-blue-500 border-blue-500/30',
+    DEPLOYING: 'bg-indigo-500/20 text-indigo-500 border-indigo-500/30',
+    HEALTH_CHECK: 'bg-cyan-500/20 text-cyan-500 border-cyan-500/30',
     QUEUED: 'bg-gray-500/20 text-gray-500 border-gray-500/30',
+    CANCELLED: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   };
 
+  const label = status === 'HEALTH_CHECK' ? 'Health Check' : status;
+
   return (
-    <span className={`px-3 py-1 rounded-full text-xs font-medium border ${styles[status as keyof typeof styles] || styles.PENDING}`}>
-      {status}
+    <span className={`px-3 py-1 rounded-full text-xs font-medium border ${styles[status] || styles.PENDING}`}>
+      {label}
     </span>
   );
 }

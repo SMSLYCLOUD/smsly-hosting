@@ -6,27 +6,9 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
     const logsEndRef = useRef<HTMLDivElement>(null);
 
-    // Mock Runtime Logs
-    const [runtimeLogs, setRuntimeLogs] = useState<string>("");
-    useEffect(() => {
-        if (logType === 'RUNTIME') {
-            const interval = setInterval(() => {
-                const now = new Date().toISOString();
-                const msgs = [
-                    `[INFO] ${now} GET /health 200 4ms`,
-                    `[INFO] ${now} Worker processing job...`,
-                    `[WARN] ${now} Cache miss key=user:123`,
-                    `[INFO] ${now} GET /api/v1/services 200 12ms`
-                ];
-                setRuntimeLogs(prev => prev + msgs[Math.floor(Math.random() * msgs.length)] + '\n');
-            }, 1000);
-            return () => clearInterval(interval);
-        }
-    }, [logType]);
-
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [deployment?.build_logs, runtimeLogs]);
+    }, [deployment?.build_logs]);
 
     return (
         <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
@@ -56,8 +38,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     </button>
                 </div>
                 <div className="text-zinc-500 font-sans text-xs flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                    Live Tail
+                    {logType === 'BUILD' && deployment?.build_logs && (
+                        <>
+                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            Build Logs
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -80,9 +66,14 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                 )}
 
                 {logType === 'RUNTIME' && (
-                    <pre className="whitespace-pre-wrap font-mono text-emerald-100/90">
-                        {runtimeLogs || 'Stream connected. Waiting for output...'}
-                    </pre>
+                    <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+                        <Terminal className="h-8 w-8 text-zinc-600" />
+                        <p className="text-zinc-500 font-sans text-sm">Runtime log streaming coming soon</p>
+                        <p className="text-zinc-600 font-sans text-xs max-w-sm">
+                            Container stdout/stderr streaming requires WebSocket infrastructure.
+                            Build logs above show the full deployment output.
+                        </p>
+                    </div>
                 )}
                 <div ref={logsEndRef} />
             </div>

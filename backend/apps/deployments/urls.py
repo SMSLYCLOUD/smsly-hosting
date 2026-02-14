@@ -16,6 +16,7 @@ from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
 from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import github_connection
+from .views_github import github_repos
 
 # Create main router
 router = DefaultRouter()
@@ -55,4 +56,5 @@ urlpatterns = router.urls + [
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/github/', github_connection, name='github-connection'),
+    path('integrations/github/repos/', github_repos, name='github-repos'),
 ]

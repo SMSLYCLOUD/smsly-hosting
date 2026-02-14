@@ -10,7 +10,7 @@ import { Save, AlertTriangle } from 'lucide-react';
 
 export function AdvancedTab({ service }: { service: Service }) {
     const [config, setConfig] = useState({
-        image: 'postgres:16', // Mock default
+        image: service.docker_image || `registry.smsly.cloud/${service.name}`,
         restart: 'always',
         cmd: service.start_command || '',
     });
@@ -64,7 +64,7 @@ export function AdvancedTab({ service }: { service: Service }) {
                 <div className="grid grid-cols-2 gap-6">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Docker Image</label>
-                        <Input defaultValue={`registry.smsly.cloud/${service.name}`} />
+                        <Input defaultValue={config.image} />
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Image Tag</label>

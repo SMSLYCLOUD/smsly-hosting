@@ -1,166 +1,154 @@
 'use client';
 
-import { Activity, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Clock } from 'lucide-react';
-import { Navbar } from '@/components/layout/Navbar';
+import React, { useEffect, useState } from 'react';
+import { DashboardShell } from '@/components/layout/DashboardShell';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { CheckCircle2, XCircle, Loader2, Activity, Server, Database, Globe, Wifi } from 'lucide-react';
+import api from '@/lib/api';
 
-const services = [
-  { name: 'API Gateway', status: 'operational', uptime: '99.99%', responseTime: '42ms' },
-  { name: 'Frontend CDN', status: 'operational', uptime: '100%', responseTime: '12ms' },
-  { name: 'Build System', status: 'operational', uptime: '99.97%', responseTime: '890ms' },
-  { name: 'Container Orchestrator', status: 'operational', uptime: '99.99%', responseTime: '28ms' },
-  { name: 'Database Cluster', status: 'operational', uptime: '99.99%', responseTime: '3ms' },
-  { name: 'Redis Cache', status: 'operational', uptime: '100%', responseTime: '1ms' },
-  { name: 'Object Storage', status: 'operational', uptime: '99.99%', responseTime: '45ms' },
-  { name: 'SSL Certificate Manager', status: 'operational', uptime: '100%', responseTime: '120ms' },
-];
-
-const incidents = [
-  {
-    date: 'Feb 8, 2026',
-    title: 'Build System Degraded Performance',
-    status: 'resolved',
-    description: 'Build queue experienced elevated latency due to high demand. Additional build workers were provisioned. No deployments were affected.',
-    duration: '23 minutes',
-  },
-  {
-    date: 'Feb 1, 2026',
-    title: 'Scheduled Maintenance — Database Cluster',
-    status: 'resolved',
-    description: 'Planned maintenance window for PostgreSQL version upgrade. Zero downtime achieved via rolling restart.',
-    duration: '45 minutes',
-  },
-  {
-    date: 'Jan 25, 2026',
-    title: 'API Gateway — Elevated Error Rate',
-    status: 'resolved',
-    description: 'Brief spike in 502 errors due to upstream certificate renewal. Automated failover kicked in within 90 seconds.',
-    duration: '4 minutes',
-  },
-];
-
-const uptimeData = Array.from({ length: 90 }, (_, i) => ({
-  day: i,
-  status: i === 45 ? 'degraded' : i === 67 ? 'degraded' : 'operational',
-}));
-
-const statusConfig = {
-  operational: { icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500', label: 'Operational' },
-  degraded: { icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-500', label: 'Degraded' },
-  outage: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-500', label: 'Major Outage' },
-  resolved: { icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-500', label: 'Resolved' },
-};
+interface ServiceHealth {
+  name: string;
+  status: 'operational' | 'degraded' | 'down' | 'unknown';
+  latency_ms?: number;
+}
 
 export default function StatusPage() {
-  const allOperational = services.every(s => s.status === 'operational');
+  const [checks, setChecks] = useState<ServiceHealth[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [overallStatus, setOverallStatus] = useState<string>('Checking...');
+
+  useEffect(() => {
+    const checkHealth = async () => {
+      const results: ServiceHealth[] = [];
+
+      // Check API health
+      try {
+        const start = Date.now();
+        await api.get('/health/');
+        results.push({ name: 'API Server', status: 'operational', latency_ms: Date.now() - start });
+      } catch {
+        try {
+          const start = Date.now();
+          await api.get('/services/');
+          results.push({ name: 'API Server', status: 'operational', latency_ms: Date.now() - start });
+        } catch {
+          results.push({ name: 'API Server', status: 'down' });
+        }
+      }
+
+      // Check billing
+      try {
+        const start = Date.now();
+        await api.get('/billing/summary/');
+        results.push({ name: 'Billing Service', status: 'operational', latency_ms: Date.now() - start });
+      } catch (err: any) {
+        results.push({
+          name: 'Billing Service',
+          status: err?.response?.status ? 'operational' : 'down',
+          latency_ms: undefined,
+        });
+      }
+
+      // Check templates
+      try {
+        const start = Date.now();
+        await api.get('/templates/');
+        results.push({ name: 'Template Registry', status: 'operational', latency_ms: Date.now() - start });
+      } catch {
+        results.push({ name: 'Template Registry', status: 'degraded' });
+      }
+
+      setChecks(results);
+      const anyDown = results.some(r => r.status === 'down');
+      const anyDegraded = results.some(r => r.status === 'degraded');
+      setOverallStatus(anyDown ? 'Partial Outage' : anyDegraded ? 'Degraded Performance' : 'All Systems Operational');
+      setLoading(false);
+    };
+
+    checkHealth();
+    const interval = setInterval(checkHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const statusIcon = (s: string) => {
+    if (s === 'operational') return <CheckCircle2 className="h-5 w-5 text-emerald-500" />;
+    if (s === 'degraded') return <Activity className="h-5 w-5 text-yellow-500" />;
+    if (s === 'down') return <XCircle className="h-5 w-5 text-red-500" />;
+    return <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />;
+  };
+
+  const statusColor = (s: string) => {
+    if (s === 'operational') return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+    if (s === 'degraded') return 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20';
+    if (s === 'down') return 'bg-red-500/10 text-red-500 border-red-500/20';
+    return 'bg-muted text-muted-foreground';
+  };
 
   return (
-    <main className="min-h-screen bg-white dark:bg-slate-950">
-      <Navbar />
+    <DashboardShell>
+      <div className="container max-w-4xl mx-auto p-6 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">System Status</h1>
+          <p className="text-muted-foreground">Real-time health checks for SMSLY Hosting services.</p>
+        </div>
 
-      {/* Hero */}
-      <section className="pt-32 pb-12 px-4 text-center">
-        <div className="max-w-4xl mx-auto">
-          <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold mb-6 ${
-            allOperational
-              ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300'
-              : 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300'
-          }`}>
-            {allOperational ? (
-              <><CheckCircle2 className="w-4 h-4" /> All Systems Operational</>
+        <Card className={loading ? '' : overallStatus.includes('Operational') ? 'border-emerald-500/30' : 'border-yellow-500/30'}>
+          <CardContent className="py-6 text-center">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-muted-foreground">Running health checks...</span>
+              </div>
             ) : (
-              <><AlertTriangle className="w-4 h-4" /> Some Systems Degraded</>
+              <div className="flex items-center justify-center gap-3">
+                {overallStatus.includes('Operational') ? (
+                  <CheckCircle2 className="h-6 w-6 text-emerald-500" />
+                ) : (
+                  <Activity className="h-6 w-6 text-yellow-500" />
+                )}
+                <span className="text-lg font-semibold">{overallStatus}</span>
+              </div>
             )}
-          </div>
-          <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 dark:text-white mb-4">
-            System Status
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 flex items-center justify-center gap-2">
-            <RefreshCw className="w-4 h-4" /> Updated every 60 seconds
-          </p>
-        </div>
-      </section>
+          </CardContent>
+        </Card>
 
-      {/* 90-Day Uptime Bar */}
-      <section className="px-4 pb-12">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">90-Day Uptime</span>
-            <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">99.98%</span>
-          </div>
-          <div className="flex gap-[2px] h-8 rounded-lg overflow-hidden">
-            {uptimeData.map((day, i) => (
-              <div
-                key={i}
-                className={`flex-1 ${day.status === 'operational' ? 'bg-emerald-500' : day.status === 'degraded' ? 'bg-amber-500' : 'bg-red-500'} hover:opacity-80 transition-opacity`}
-                title={`Day ${90 - i}: ${day.status}`}
-              />
-            ))}
-          </div>
-          <div className="flex justify-between mt-2 text-xs text-slate-400">
-            <span>90 days ago</span>
-            <span>Today</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Service Status */}
-      <section className="px-4 pb-24">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6">Services</h2>
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden bg-white dark:bg-slate-900">
-            {services.map((service) => {
-              const config = statusConfig[service.status as keyof typeof statusConfig];
-              const Icon = config.icon;
-              return (
-                <div key={service.name} className="flex items-center justify-between px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+        <div className="space-y-3">
+          {loading ? (
+            Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i}>
+                <CardContent className="py-4 flex items-center justify-between">
+                  <div className="h-4 w-32 bg-muted animate-pulse rounded" />
+                  <div className="h-4 w-20 bg-muted animate-pulse rounded" />
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            checks.map((check) => (
+              <Card key={check.name}>
+                <CardContent className="py-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Icon className={`w-5 h-5 ${config.color}`} />
-                    <span className="font-medium text-slate-900 dark:text-white">{service.name}</span>
+                    {statusIcon(check.status)}
+                    <span className="font-medium">{check.name}</span>
                   </div>
-                  <div className="flex items-center gap-6">
-                    <span className="text-xs text-slate-400 hidden sm:block">
-                      <Clock className="w-3 h-3 inline mr-1" />{service.responseTime}
-                    </span>
-                    <span className="text-xs text-slate-400 hidden sm:block">{service.uptime} uptime</span>
-                    <span className={`text-xs font-semibold ${config.color}`}>{config.label}</span>
+                  <div className="flex items-center gap-3">
+                    {check.latency_ms !== undefined && (
+                      <span className="text-xs text-muted-foreground font-mono">{check.latency_ms}ms</span>
+                    )}
+                    <Badge variant="outline" className={statusColor(check.status)}>
+                      {check.status}
+                    </Badge>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
         </div>
-      </section>
 
-      {/* Incident History */}
-      <section className="py-24 px-4 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-8">Recent Incidents</h2>
-          <div className="space-y-4">
-            {incidents.map((incident, i) => {
-              const config = statusConfig[incident.status as keyof typeof statusConfig];
-              return (
-                <div key={i} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800/50 p-6">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h3 className="font-bold text-slate-900 dark:text-white">{incident.title}</h3>
-                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">{incident.date} · {incident.duration}</p>
-                    </div>
-                    <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full ${
-                      incident.status === 'resolved'
-                        ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300'
-                        : 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300'
-                    }`}>
-                      <Activity className="w-3 h-3" />
-                      {config.label}
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-400">{incident.description}</p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-    </main>
+        <p className="text-xs text-muted-foreground text-center">
+          Auto-refreshes every 30 seconds.
+        </p>
+      </div>
+    </DashboardShell>
   );
 }
