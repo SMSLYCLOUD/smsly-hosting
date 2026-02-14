@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -13,30 +13,52 @@ import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor
 import { useToast } from "@/components/ui/use-toast"
 import api from "@/lib/api"
 import { templatesApi } from "@/lib/api"
+import { motion, AnimatePresence } from "framer-motion"
 
-// Mock templates for now (replace with API call later)
-const TEMPLATES = [
-  { id: "node", name: "Node.js Express", icon: "🟢", repo: "https://github.com/smsly/template-node" },
-  { id: "python", name: "Python Django", icon: "🐍", repo: "https://github.com/smsly/template-django" },
-  { id: "go", name: "Go Gin", icon: "🐹", repo: "https://github.com/smsly/template-go" },
-  { id: "rust", name: "Rust Axum", icon: "🦀", repo: "https://github.com/smsly/template-rust" },
+const STACK_ICONS: Record<string, string> = {
+  node: "🟢", python: "🐍", go: "🐹", rust: "🦀", ruby: "💎",
+  java: "☕", php: "🐘", dotnet: "🔷", static: "📄", unknown: "📦",
+}
+
+interface Analysis {
+  repo: string
+  name: string
+  stack: string
+  languages?: string[]
+  port: number
+  build: string
+  addons: string[]
+  env_vars: Record<string, string>
+}
+
+// ── Steps ──────────────────────────────────────────────────────────────────
+const STEPS = [
+  { id: 1, label: "Select Source", icon: Github },
+  { id: 2, label: "AI Analysis", icon: Sparkles },
+  { id: 3, label: "Configure", icon: Settings2 },
+  { id: 4, label: "Deploy", icon: Rocket },
 ]
 
 export default function NewServicePage() {
   const router = useRouter()
   const { toast } = useToast()
-  
+
   const [step, setStep] = React.useState(1)
   const [sourceType, setSourceType] = React.useState<"git" | "template" | "docker">("git")
   const [repoUrl, setRepoUrl] = React.useState("")
   const [selectedTemplate, setSelectedTemplate] = React.useState<string | null>(null)
   const [dockerImage, setDockerImage] = React.useState("")
-  
+
   // Config state
   const [name, setName] = React.useState("")
   const [region, setRegion] = React.useState("us-east-1")
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)
+
+  // AI analysis state
+  const [analyzing, setAnalyzing] = React.useState(false)
+  const [analysis, setAnalysis] = React.useState<Analysis | null>(null)
+  const [deployMode, setDeployMode] = React.useState<"auto" | "manual" | null>(null)
 
   // GitHub repos state
   const [ghRepos, setGhRepos] = React.useState<any[]>([])
@@ -48,9 +70,7 @@ export default function NewServicePage() {
   const [templates, setTemplates] = React.useState<any[]>([])
 
   React.useEffect(() => {
-    // Fetch templates
     templatesApi.list().then(setTemplates).catch(() => {})
-    // Fetch GitHub repos
     setGhLoading(true)
     api.get('/integrations/github/repos/')
       .then(res => {
@@ -65,352 +85,651 @@ export default function NewServicePage() {
     !ghSearch || r.full_name?.toLowerCase().includes(ghSearch.toLowerCase())
   )
 
+  // ── AI Analysis ────────────────────────────────────────────────────────
+  const runAnalysis = async (url: string) => {
+    setAnalyzing(true)
+    setAnalysis(null)
+    try {
+      const res = await api.post('/cloud/ecosystem/analyze/', { repo_url: url })
+      const data = res.data as Analysis
+      setAnalysis(data)
+      // Pre-fill config from analysis
+      setName(data.name || "")
+      if (data.env_vars && Object.keys(data.env_vars).length > 0) {
+        setEnvVars(
+          Object.entries(data.env_vars).map(([key, value]) => ({
+            key, value, isSecret: key.toLowerCase().includes("secret") || key.toLowerCase().includes("key"),
+          }))
+        )
+      }
+    } catch (err: any) {
+      toast({
+        title: "Analysis Failed",
+        description: err?.response?.data?.error || "Could not analyze repository.",
+        variant: "destructive",
+      })
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  // ── Navigation ─────────────────────────────────────────────────────────
   const handleNext = () => {
     if (step === 1) {
       if (sourceType === "git" && !repoUrl) return
       if (sourceType === "template" && !selectedTemplate) return
       if (sourceType === "docker" && !dockerImage) return
-      
-      // Auto-generate name from repo/template if empty
+
+      // Auto-generate name
       if (!name) {
-          if (sourceType === "git") {
-              const parts = repoUrl.split("/")
-              setName(parts[parts.length - 1]?.replace(".git", "") || "my-service")
-          } else if (sourceType === "template") {
-              setName(`my-${selectedTemplate}-app`)
-          } else if (sourceType === "docker") {
-              const imageName = dockerImage.split("/").pop()?.split(":")[0]
-              setName((imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-"))
-          }
+        if (sourceType === "git") {
+          const parts = repoUrl.split("/")
+          setName(parts[parts.length - 1]?.replace(".git", "") || "my-service")
+        } else if (sourceType === "template") {
+          setName(`my-${selectedTemplate}-app`)
+        } else if (sourceType === "docker") {
+          const imageName = dockerImage.split("/").pop()?.split(":")[0]
+          setName((imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-"))
+        }
       }
+
+      // For git repos, go to AI analysis step
+      if (sourceType === "git") {
+        setStep(2)
+        runAnalysis(repoUrl)
+        return
+      }
+      // For templates/docker, skip analysis and go straight to config
+      setStep(3)
+      return
     }
+
+    if (step === 2) {
+      if (deployMode === "auto") {
+        // Skip config, go straight to deploy
+        setStep(4)
+      } else {
+        // Manual — go to config (pre-filled)
+        setStep(3)
+      }
+      return
+    }
+
     setStep(step + 1)
   }
 
-  const handleDeploy = async () => {
-    setIsDeploying(true)
-    try {
-        const token = localStorage.getItem("auth_token")
-        if (!token) throw new Error("Not authenticated")
-
-        // 1. Create Service
-        const finalRepo = sourceType === "template" 
-            ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
-            : repoUrl
-
-        const deployType =
-          sourceType === "docker"
-            ? "DOCKER"
-            : "GIT" // Templates are backed by git repositories
-
-        const createRes = await fetch("/api/v1/services/", {
-            method: "POST",
-            headers: { 
-                "Content-Type": "application/json",
-                "Authorization": `Token ${token}`
-            },
-            body: JSON.stringify({
-                name,
-                deploy_type: deployType,
-                repository_url: sourceType === "docker" ? null : finalRepo,
-                docker_image: sourceType === "docker" ? dockerImage : null,
-                branch: "main",
-                cpu_cores: 0.5,
-                memory_mb: 512,
-                regions: [] // Default region logic handles this
-            })
-        })
-        
-        if (!createRes.ok) throw new Error("Failed to create service")
-        const service = await createRes.json()
-
-        // 2. Set Env Vars
-        if (envVars.length > 0) {
-            for (const v of envVars) {
-                await fetch(`/api/v1/services/${service.id}/env_vars/`, {
-                    method: "POST",
-                    headers: { 
-                        "Content-Type": "application/json", 
-                        "Authorization": `Token ${token}`
-                    },
-                    body: JSON.stringify({ key: v.key, value: v.value, is_secret: v.isSecret })
-                })
-            }
-        }
-
-        // 3. Trigger Deployment
-        const deployRes = await fetch(`/api/v1/services/${service.id}/deploy/`, {
-            method: "POST",
-            headers: { 
-                "Content-Type": "application/json",
-                "Authorization": `Token ${token}`
-            },
-            body: JSON.stringify({ ref: "main" })
-        })
-
-        if (!deployRes.ok) throw new Error("Failed to trigger deployment")
-        
-        toast({ title: "Success", description: "Service created and deployment started." })
-        router.push(`/services/${service.id}`)
-
-    } catch (err) {
-        console.error(err)
-        toast({ title: "Error", description: "Deployment failed. Check console.", variant: "destructive" })
-    } finally {
-        setIsDeploying(false)
+  const handleBack = () => {
+    if (step === 4 && deployMode === "auto") {
+      setStep(2) // Skip config going back
+    } else if (step === 3 && sourceType !== "git") {
+      setStep(1) // Skip analysis for non-git
+    } else {
+      setStep(step - 1)
     }
   }
 
+  // ── Deploy ─────────────────────────────────────────────────────────────
+  const handleDeploy = async () => {
+    setIsDeploying(true)
+    try {
+      const token = localStorage.getItem("auth_token")
+      if (!token) throw new Error("Not authenticated")
+
+      const finalRepo = sourceType === "template"
+        ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
+        : repoUrl
+
+      const deployType = sourceType === "docker" ? "DOCKER" : "GIT"
+
+      const createRes = await fetch("/api/v1/services/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Token ${token}`
+        },
+        body: JSON.stringify({
+          name,
+          deploy_type: deployType,
+          repository_url: sourceType === "docker" ? null : finalRepo,
+          docker_image: sourceType === "docker" ? dockerImage : null,
+          branch: "main",
+          cpu_cores: 0.5,
+          memory_mb: 512,
+          regions: []
+        })
+      })
+
+      if (!createRes.ok) throw new Error("Failed to create service")
+      const service = await createRes.json()
+
+      // Set Env Vars
+      if (envVars.length > 0) {
+        for (const v of envVars) {
+          await fetch(`/api/v1/services/${service.id}/env_vars/`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Token ${token}`
+            },
+            body: JSON.stringify({ key: v.key, value: v.value, is_secret: v.isSecret })
+          })
+        }
+      }
+
+      // Trigger Deployment
+      const deployRes = await fetch(`/api/v1/services/${service.id}/deploy/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Token ${token}`
+        },
+        body: JSON.stringify({ ref: "main" })
+      })
+
+      if (!deployRes.ok) throw new Error("Failed to trigger deployment")
+
+      toast({ title: "🚀 Deploying!", description: "Service created — AI is handling the rest." })
+      router.push(`/services/${service.id}`)
+    } catch (err) {
+      console.error(err)
+      toast({ title: "Error", description: "Deployment failed. Check console.", variant: "destructive" })
+    } finally {
+      setIsDeploying(false)
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <DashboardShell>
     <div className="container max-w-5xl py-10 relative z-10">
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Create New Service</h1>
-        <p className="text-muted-foreground">Deploy your application in seconds.</p>
+        <p className="text-muted-foreground">AI-powered deployment — select a repo and let SMSLY handle the rest.</p>
       </div>
 
       <div className="grid gap-8 md:grid-cols-[250px_1fr]">
+        {/* ── Step Sidebar ───────────────────────────────────── */}
         <nav className="flex flex-col gap-2 text-sm text-muted-foreground">
-            <div className={cn("flex items-center gap-2 p-2 rounded-lg", step === 1 && "bg-muted text-foreground font-medium")}>
-                <div className="flex h-6 w-6 items-center justify-center rounded-full border bg-background text-xs">1</div>
-                Select Source
-            </div>
-            <div className={cn("flex items-center gap-2 p-2 rounded-lg", step === 2 && "bg-muted text-foreground font-medium")}>
-                <div className="flex h-6 w-6 items-center justify-center rounded-full border bg-background text-xs">2</div>
-                Configure
-            </div>
-            <div className={cn("flex items-center gap-2 p-2 rounded-lg", step === 3 && "bg-muted text-foreground font-medium")}>
-                <div className="flex h-6 w-6 items-center justify-center rounded-full border bg-background text-xs">3</div>
-                Deploy
-            </div>
+          {STEPS.map((s) => {
+            // Hide "Configure" step in auto mode
+            if (s.id === 3 && deployMode === "auto" && step !== 3) return null
+            // Hide "AI Analysis" for non-git sources
+            if (s.id === 2 && sourceType !== "git" && step !== 2) return null
+
+            const Icon = s.icon
+            const isActive = step === s.id
+            const isDone = step > s.id
+
+            return (
+              <div
+                key={s.id}
+                className={cn(
+                  "flex items-center gap-2 p-2 rounded-lg transition-colors",
+                  isActive && "bg-primary/10 text-primary font-medium",
+                  isDone && "text-emerald-500",
+                )}
+              >
+                <div className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full border text-xs transition-colors",
+                  isActive && "border-primary bg-primary text-primary-foreground",
+                  isDone && "border-emerald-500 bg-emerald-500 text-white",
+                )}>
+                  {isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
+                </div>
+                {s.label}
+              </div>
+            )
+          })}
         </nav>
 
+        {/* ── Step Content ──────────────────────────────────── */}
         <div className="space-y-8 min-w-0 overflow-hidden">
+          <AnimatePresence mode="wait">
+            {/* ── STEP 1: SELECT SOURCE ── */}
             {step === 1 && (
-                <div className="space-y-6 animate-in slide-in-from-right-4">
-                    <div className="grid grid-cols-3 gap-4">
-                        <Card 
-                            className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "git" && "border-primary bg-primary/5")}
-                            onClick={() => setSourceType("git")}
-                        >
-                            <CardHeader className="p-6 text-center">
-                                <Github className="h-8 w-8 mx-auto mb-2" />
-                                <CardTitle className="text-base">Git Repository</CardTitle>
-                                <CardDescription>Public or private repo</CardDescription>
-                            </CardHeader>
-                        </Card>
-                        <Card 
-                            className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "template" && "border-primary bg-primary/5")}
-                            onClick={() => setSourceType("template")}
-                        >
-                            <CardHeader className="p-6 text-center">
-                                <Layers className="h-8 w-8 mx-auto mb-2" />
-                                <CardTitle className="text-base">Template</CardTitle>
-                                <CardDescription>Start from scratch</CardDescription>
-                            </CardHeader>
-                        </Card>
-                        <Card 
-                            className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "docker" && "border-primary bg-primary/5")}
-                            onClick={() => setSourceType("docker")}
-                        >
-                            <CardHeader className="p-6 text-center">
-                                <Box className="h-8 w-8 mx-auto mb-2" />
-                                <CardTitle className="text-base">Docker Image</CardTitle>
-                                <CardDescription>Registry image</CardDescription>
-                            </CardHeader>
-                        </Card>
-                    </div>
+              <motion.div
+                key="step1"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <div className="grid grid-cols-3 gap-4">
+                  <Card
+                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "git" && "border-primary bg-primary/5")}
+                    onClick={() => setSourceType("git")}
+                  >
+                    <CardHeader className="p-6 text-center">
+                      <Github className="h-8 w-8 mx-auto mb-2" />
+                      <CardTitle className="text-base">Git Repository</CardTitle>
+                      <CardDescription>Public or private repo</CardDescription>
+                    </CardHeader>
+                  </Card>
+                  <Card
+                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "template" && "border-primary bg-primary/5")}
+                    onClick={() => setSourceType("template")}
+                  >
+                    <CardHeader className="p-6 text-center">
+                      <Layers className="h-8 w-8 mx-auto mb-2" />
+                      <CardTitle className="text-base">Template</CardTitle>
+                      <CardDescription>Start from scratch</CardDescription>
+                    </CardHeader>
+                  </Card>
+                  <Card
+                    className={cn("cursor-pointer hover:border-primary transition-all", sourceType === "docker" && "border-primary bg-primary/5")}
+                    onClick={() => setSourceType("docker")}
+                  >
+                    <CardHeader className="p-6 text-center">
+                      <Box className="h-8 w-8 mx-auto mb-2" />
+                      <CardTitle className="text-base">Docker Image</CardTitle>
+                      <CardDescription>Registry image</CardDescription>
+                    </CardHeader>
+                  </Card>
+                </div>
 
-                    {sourceType === "git" && (
-                        <div className="space-y-4">
-                            {/* GitHub Repo Picker */}
-                            {ghConnected && (
-                              <div className="space-y-2">
-                                <Label>Your GitHub Repositories</Label>
-                                <div className="relative">
-                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                  <Input
-                                    placeholder="Search repositories..."
-                                    className="pl-10"
-                                    value={ghSearch}
-                                    onChange={(e) => setGhSearch(e.target.value)}
-                                  />
-                                </div>
-                                {ghLoading ? (
-                                  <div className="flex items-center justify-center py-6">
-                                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                                  </div>
-                                ) : (
-                                  <div className="max-h-48 overflow-y-auto border rounded-lg divide-y">
-                                    {filteredRepos.slice(0, 20).map((repo: any) => (
-                                      <button
-                                        key={repo.id}
-                                        type="button"
-                                        className={cn(
-                                          "w-full flex items-center gap-3 px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors",
-                                          repoUrl === repo.clone_url && "bg-primary/5 border-l-2 border-primary"
-                                        )}
-                                        onClick={() => setRepoUrl(repo.clone_url)}
-                                      >
-                                        <Github className="h-4 w-4 flex-shrink-0" />
-                                        <div className="flex-1 min-w-0">
-                                          <p className="font-medium truncate">{repo.full_name}</p>
-                                          <p className="text-xs text-muted-foreground truncate">{repo.description || 'No description'}</p>
-                                        </div>
-                                        {repo.private && (
-                                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600">Private</span>
-                                        )}
-                                      </button>
-                                    ))}
-                                    {filteredRepos.length === 0 && (
-                                      <p className="text-sm text-muted-foreground text-center py-4">No repositories found</p>
-                                    )}
-                                  </div>
+                {sourceType === "git" && (
+                  <div className="space-y-4">
+                    {ghConnected && (
+                      <div className="space-y-2">
+                        <Label>Your GitHub Repositories</Label>
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Search repositories..."
+                            className="pl-10"
+                            value={ghSearch}
+                            onChange={(e) => setGhSearch(e.target.value)}
+                          />
+                        </div>
+                        {ghLoading ? (
+                          <div className="flex items-center justify-center py-6">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : (
+                          <div className="max-h-48 overflow-y-auto border rounded-lg divide-y">
+                            {filteredRepos.slice(0, 20).map((repo: any) => (
+                              <button
+                                key={repo.id}
+                                type="button"
+                                className={cn(
+                                  "w-full flex items-center gap-3 px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors",
+                                  repoUrl === repo.clone_url && "bg-primary/5 border-l-2 border-primary"
                                 )}
-                                <div className="flex items-center gap-2 py-1">
-                                  <div className="flex-1 h-px bg-border" />
-                                  <span className="text-xs text-muted-foreground">or enter URL manually</span>
-                                  <div className="flex-1 h-px bg-border" />
+                                onClick={() => setRepoUrl(repo.clone_url)}
+                              >
+                                <Github className="h-4 w-4 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium truncate">{repo.full_name}</p>
+                                  <p className="text-xs text-muted-foreground truncate">{repo.description || 'No description'}</p>
                                 </div>
+                                {repo.private && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600">Private</span>
+                                )}
+                              </button>
+                            ))}
+                            {filteredRepos.length === 0 && (
+                              <p className="text-sm text-muted-foreground text-center py-4">No repositories found</p>
+                            )}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 py-1">
+                          <div className="flex-1 h-px bg-border" />
+                          <span className="text-xs text-muted-foreground">or enter URL manually</span>
+                          <div className="flex-1 h-px bg-border" />
+                        </div>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>Repository URL</Label>
+                      <Input
+                        placeholder="https://github.com/username/repo"
+                        value={repoUrl}
+                        onChange={(e) => setRepoUrl(e.target.value)}
+                      />
+                      {!ghConnected && (
+                        <p className="text-xs text-muted-foreground">
+                          Connect your GitHub account in{" "}
+                          <a className="underline hover:text-foreground" href="/settings">Settings</a>{" "}
+                          to browse your repositories.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {sourceType === "template" && (
+                  <div className="grid grid-cols-2 gap-4">
+                    {templates.length > 0 ? templates.map((t: any) => (
+                      <div
+                        key={t.id || t.slug}
+                        className={cn(
+                          "flex items-center gap-3 p-4 rounded-lg border cursor-pointer hover:bg-muted",
+                          selectedTemplate === (t.slug || t.id) && "border-primary bg-primary/5"
+                        )}
+                        onClick={() => setSelectedTemplate(t.slug || t.id)}
+                      >
+                        <span className="text-2xl">{t.icon || '📦'}</span>
+                        <div>
+                          <p className="font-medium">{t.name}</p>
+                          <p className="text-xs text-muted-foreground">{t.description || t.framework || 'Template'}</p>
+                        </div>
+                      </div>
+                    )) : (
+                      <p className="col-span-2 text-center text-sm text-muted-foreground py-8">
+                        No templates available. Use a Git repository or Docker image instead.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {sourceType === "docker" && (
+                  <div className="space-y-2">
+                    <Label>Docker Image</Label>
+                    <Input
+                      placeholder="ghcr.io/org/app:latest"
+                      value={dockerImage}
+                      onChange={(e) => setDockerImage(e.target.value)}
+                    />
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* ── STEP 2: AI ANALYSIS ── */}
+            {step === 2 && (
+              <motion.div
+                key="step2"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                {analyzing ? (
+                  <Card className="border-primary/20">
+                    <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
+                      <div className="relative">
+                        <Sparkles className="h-12 w-12 text-primary animate-pulse" />
+                        <div className="absolute inset-0 h-12 w-12 rounded-full border-2 border-primary/30 animate-ping" />
+                      </div>
+                      <div className="text-center space-y-2">
+                        <h3 className="text-lg font-semibold">AI is analyzing your repository...</h3>
+                        <p className="text-sm text-muted-foreground">
+                          Detecting stack, frameworks, ports, dependencies, and optimal config.
+                        </p>
+                      </div>
+                      <div className="flex gap-2 mt-4">
+                        {["Cloning", "Scanning files", "Detecting stack", "Building config"].map((label, i) => (
+                          <span key={label} className="text-[10px] px-2 py-1 rounded-full bg-primary/10 text-primary animate-pulse" style={{ animationDelay: `${i * 0.3}s` }}>
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : analysis ? (
+                  <>
+                    {/* Analysis Results */}
+                    <Card className="border-emerald-500/30 bg-emerald-500/5">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                          <CardTitle className="text-lg">Analysis Complete</CardTitle>
+                        </div>
+                        <CardDescription>SMSLY AI has analyzed your repository and detected the following:</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="p-3 rounded-lg bg-background border space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Code2 className="h-3 w-3" /> Stack
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">{STACK_ICONS[analysis.stack] || "📦"}</span>
+                              <span className="font-semibold capitalize">{analysis.stack}</span>
+                            </div>
+                            {analysis.languages && analysis.languages.length > 1 && (
+                              <div className="flex gap-1 flex-wrap mt-1">
+                                {analysis.languages.map(l => (
+                                  <span key={l} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary capitalize">{l}</span>
+                                ))}
                               </div>
                             )}
-                            <div className="space-y-2">
-                                <Label>Repository URL</Label>
-                                <Input 
-                                    placeholder="https://github.com/username/repo" 
-                                    value={repoUrl} 
-                                    onChange={(e) => setRepoUrl(e.target.value)} 
-                                />
-                                {!ghConnected && (
-                                  <p className="text-xs text-muted-foreground">
-                                      Connect your GitHub account in{" "}
-                                      <a className="underline hover:text-foreground" href="/settings">
-                                          Settings
-                                      </a>{" "}
-                                      to browse your repositories.
-                                  </p>
-                                )}
+                          </div>
+                          <div className="p-3 rounded-lg bg-background border space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Globe className="h-3 w-3" /> Port
                             </div>
-                        </div>
-                    )}
-
-                    {sourceType === "template" && (
-                        <div className="grid grid-cols-2 gap-4">
-                            {templates.length > 0 ? templates.map((t: any) => (
-                                <div 
-                                    key={t.id || t.slug}
-                                    className={cn(
-                                        "flex items-center gap-3 p-4 rounded-lg border cursor-pointer hover:bg-muted",
-                                        selectedTemplate === (t.slug || t.id) && "border-primary bg-primary/5"
-                                    )}
-                                    onClick={() => setSelectedTemplate(t.slug || t.id)}
-                                >
-                                    <span className="text-2xl">{t.icon || '📦'}</span>
-                                    <div>
-                                        <p className="font-medium">{t.name}</p>
-                                        <p className="text-xs text-muted-foreground">{t.description || t.framework || 'Template'}</p>
-                                    </div>
-                                </div>
-                            )) : (
-                                <p className="col-span-2 text-center text-sm text-muted-foreground py-8">
-                                    No templates available. Use a Git repository or Docker image instead.
-                                </p>
+                            <p className="font-semibold text-lg">{analysis.port}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background border space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Box className="h-3 w-3" /> Build
+                            </div>
+                            <p className="font-semibold capitalize">{analysis.build}</p>
+                          </div>
+                          <div className="p-3 rounded-lg bg-background border space-y-1">
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Database className="h-3 w-3" /> Addons
+                            </div>
+                            {analysis.addons.length > 0 ? (
+                              <div className="flex gap-1 flex-wrap">
+                                {analysis.addons.map(a => (
+                                  <span key={a} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">{a}</span>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">None</p>
                             )}
+                          </div>
                         </div>
-                    )}
-
-                    {sourceType === "docker" && (
-                        <div className="space-y-2">
-                            <Label>Docker Image</Label>
-                            <Input
-                                placeholder="ghcr.io/org/app:latest"
-                                value={dockerImage}
-                                onChange={(e) => setDockerImage(e.target.value)}
-                            />
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {step === 2 && (
-                <div className="space-y-6 animate-in slide-in-from-right-4">
-                    <div className="space-y-4">
-                        <div className="grid gap-2">
-                            <Label>Service Name</Label>
-                            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-awesome-service" />
-                        </div>
-                        <div className="grid gap-2">
-                            <Label>Region</Label>
-                            <Select value={region} onValueChange={setRegion}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="us-east-1">🇺🇸 US East (N. Virginia)</SelectItem>
-                                    <SelectItem value="eu-west-1">🇪🇺 EU West (Ireland)</SelectItem>
-                                    <SelectItem value="ap-southeast-1">🇸🇬 Asia Pacific (Singapore)</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="pt-4">
-                            <EnvVarEditor 
-                                initialVars={envVars} 
-                                onSave={async (v) => setEnvVars(v)} 
-                            />
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {step === 3 && (
-                <div className="space-y-6 animate-in slide-in-from-right-4">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Review & Deploy</CardTitle>
-                            <CardDescription>Ready to launch your service?</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="grid grid-cols-2 gap-4 text-sm">
-                                <div className="text-muted-foreground">Source</div>
-                                <div className="font-medium truncate">
-                                  {sourceType === "template"
-                                    ? `Template: ${selectedTemplate}`
-                                    : sourceType === "docker"
-                                      ? `Docker: ${dockerImage}`
-                                      : repoUrl}
-                                </div>
-                                
-                                <div className="text-muted-foreground">Name</div>
-                                <div className="font-medium">{name}</div>
-                                
-                                <div className="text-muted-foreground">Region</div>
-                                <div className="font-medium">{region}</div>
-                                
-                                <div className="text-muted-foreground">Env Vars</div>
-                                <div className="font-medium">{envVars.length} variables defined</div>
-                            </div>
-                        </CardContent>
+                      </CardContent>
                     </Card>
-                </div>
+
+                    {/* Auto vs Manual Choice */}
+                    <div className="space-y-3">
+                      <h3 className="font-semibold text-lg">How would you like to deploy?</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Card
+                          className={cn(
+                            "cursor-pointer transition-all hover:shadow-lg",
+                            deployMode === "auto"
+                              ? "border-primary bg-primary/5 shadow-primary/10"
+                              : "hover:border-primary/50"
+                          )}
+                          onClick={() => setDeployMode("auto")}
+                        >
+                          <CardHeader className="text-center pb-2">
+                            <Zap className={cn("h-10 w-10 mx-auto mb-2", deployMode === "auto" ? "text-primary" : "text-muted-foreground")} />
+                            <CardTitle className="text-lg">🚀 Auto Deploy</CardTitle>
+                            <CardDescription className="text-xs">
+                              Zero-config — AI handles everything. One click and you're live.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="text-center">
+                            <div className="space-y-1 text-xs text-muted-foreground">
+                              <p>✓ Auto-detect port, build, env</p>
+                              <p>✓ Provisions databases if needed</p>
+                              <p>✓ Deploys in ~60 seconds</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card
+                          className={cn(
+                            "cursor-pointer transition-all hover:shadow-lg",
+                            deployMode === "manual"
+                              ? "border-primary bg-primary/5 shadow-primary/10"
+                              : "hover:border-primary/50"
+                          )}
+                          onClick={() => setDeployMode("manual")}
+                        >
+                          <CardHeader className="text-center pb-2">
+                            <Settings2 className={cn("h-10 w-10 mx-auto mb-2", deployMode === "manual" ? "text-primary" : "text-muted-foreground")} />
+                            <CardTitle className="text-lg">⚙️ Manual Config</CardTitle>
+                            <CardDescription className="text-xs">
+                              Review and customize before deploying. AI pre-fills everything.
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="text-center">
+                            <div className="space-y-1 text-xs text-muted-foreground">
+                              <p>✓ Edit name, region, env vars</p>
+                              <p>✓ AI suggestions pre-filled</p>
+                              <p>✓ Full control over config</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <Card>
+                    <CardContent className="flex flex-col items-center py-12 gap-3">
+                      <Sparkles className="h-10 w-10 text-muted-foreground" />
+                      <p className="text-muted-foreground">Analysis could not be completed. You can still configure manually.</p>
+                      <Button variant="outline" onClick={() => { setDeployMode("manual"); setStep(3) }}>
+                        Configure Manually
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
+              </motion.div>
             )}
 
-            <div className="flex justify-end gap-4 pt-4">
-                {step > 1 && (
-                    <Button variant="outline" onClick={() => setStep(step - 1)} disabled={isDeploying}>
-                        Back
-                    </Button>
+            {/* ── STEP 3: CONFIGURE (Manual mode or non-git) ── */}
+            {step === 3 && (
+              <motion.div
+                key="step3"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                {analysis && (
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
+                    <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
+                    <span>AI has pre-filled the config below based on your repo analysis. Edit anything you need.</span>
+                  </div>
                 )}
-                {step < 3 ? (
-                    <Button onClick={handleNext}>
-                        Next <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
+                <div className="space-y-4">
+                  <div className="grid gap-2">
+                    <Label>Service Name</Label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-awesome-service" />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>Region</Label>
+                    <Select value={region} onValueChange={setRegion}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="us-east-1">🇺🇸 US East (N. Virginia)</SelectItem>
+                        <SelectItem value="eu-west-1">🇪🇺 EU West (Ireland)</SelectItem>
+                        <SelectItem value="ap-southeast-1">🇸🇬 Asia Pacific (Singapore)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="pt-4">
+                    <EnvVarEditor
+                      initialVars={envVars}
+                      onSave={async (v) => setEnvVars(v)}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* ── STEP 4: REVIEW & DEPLOY ── */}
+            {step === 4 && (
+              <motion.div
+                key="step4"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <Card className="border-primary/20">
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <Rocket className="h-5 w-5 text-primary" />
+                      <CardTitle>Review & Deploy</CardTitle>
+                    </div>
+                    <CardDescription>
+                      {deployMode === "auto"
+                        ? "AI has configured everything. Ready to launch!"
+                        : "Review your configuration below."}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="text-muted-foreground">Source</div>
+                      <div className="font-medium truncate">
+                        {sourceType === "template"
+                          ? `Template: ${selectedTemplate}`
+                          : sourceType === "docker"
+                            ? `Docker: ${dockerImage}`
+                            : repoUrl}
+                      </div>
+                      <div className="text-muted-foreground">Name</div>
+                      <div className="font-medium">{name}</div>
+                      <div className="text-muted-foreground">Region</div>
+                      <div className="font-medium">{region}</div>
+                      {analysis && (
+                        <>
+                          <div className="text-muted-foreground">Stack</div>
+                          <div className="font-medium capitalize flex items-center gap-2">
+                            <span>{STACK_ICONS[analysis.stack] || "📦"}</span>
+                            {analysis.stack}
+                            {analysis.languages && analysis.languages.length > 1 && (
+                              <span className="text-xs text-muted-foreground">(+{analysis.languages.length - 1} more)</span>
+                            )}
+                          </div>
+                          <div className="text-muted-foreground">Build</div>
+                          <div className="font-medium capitalize">{analysis.build}</div>
+                          <div className="text-muted-foreground">Port</div>
+                          <div className="font-medium">{analysis.port}</div>
+                        </>
+                      )}
+                      <div className="text-muted-foreground">Env Vars</div>
+                      <div className="font-medium">{envVars.length} variables defined</div>
+                      <div className="text-muted-foreground">Deploy Mode</div>
+                      <div className="font-medium flex items-center gap-1.5">
+                        {deployMode === "auto" ? (
+                          <><Zap className="h-3.5 w-3.5 text-primary" /> Auto (AI-managed)</>
+                        ) : (
+                          <><Settings2 className="h-3.5 w-3.5" /> Manual</>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ── Navigation Buttons ──────────────────────────── */}
+          <div className="flex justify-end gap-4 pt-4">
+            {step > 1 && (
+              <Button variant="outline" onClick={handleBack} disabled={isDeploying || analyzing}>
+                Back
+              </Button>
+            )}
+            {step < 4 ? (
+              <Button onClick={handleNext} disabled={analyzing || (step === 2 && !deployMode && !analyzing && !!analysis)}>
+                {analyzing ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing...</>
+                ) : step === 2 && deployMode === "auto" ? (
+                  <>Deploy Now <Rocket className="ml-2 h-4 w-4" /></>
                 ) : (
-                    <Button onClick={handleDeploy} disabled={isDeploying}>
-                        {isDeploying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        {isDeploying ? "Deploying..." : "Deploy Service"}
-                    </Button>
+                  <>Next <ArrowRight className="ml-2 h-4 w-4" /></>
                 )}
-            </div>
+              </Button>
+            ) : (
+              <Button onClick={handleDeploy} disabled={isDeploying} size="lg" className="px-8">
+                {isDeploying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Rocket className="mr-2 h-4 w-4" />}
+                {isDeploying ? "Deploying..." : "🚀 Deploy Service"}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>
