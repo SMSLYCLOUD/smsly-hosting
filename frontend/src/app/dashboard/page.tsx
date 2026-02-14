@@ -275,21 +275,31 @@ export default function DashboardPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 relative z-10">
-              <motion.div
-                whileHover={{ scale: 1.01 }}
-                className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all"
-              >
-                <p className="text-sm font-medium text-emerald-500">✓ All systems healthy</p>
-                <p className="text-xs text-muted-foreground mt-1">No critical issues detected</p>
-              </motion.div>
+              {failedServices > 0 ? (
+                <motion.div
+                  whileHover={{ scale: 1.01 }}
+                  className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 hover:border-red-500/40 transition-all"
+                >
+                  <p className="text-sm font-medium text-red-500">⚠ {failedServices} failed deployment{failedServices > 1 ? 's' : ''}</p>
+                  <p className="text-xs text-muted-foreground mt-1">Check service logs for AI-assisted diagnosis</p>
+                </motion.div>
+              ) : (
+                <motion.div
+                  whileHover={{ scale: 1.01 }}
+                  className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all"
+                >
+                  <p className="text-sm font-medium text-emerald-500">✓ All systems healthy</p>
+                  <p className="text-xs text-muted-foreground mt-1">{activeDeployments} active deployment{activeDeployments !== 1 ? 's' : ''} running</p>
+                </motion.div>
+              )}
 
               <motion.div
                 whileHover={{ scale: 1.01 }}
                 className="p-4 rounded-xl bg-primary/10 border border-primary/20 hover:border-primary/40 transition-all"
               >
-                <p className="text-sm font-medium text-primary">💡 Cost Optimization</p>
+                <p className="text-sm font-medium text-primary">📊 Infrastructure</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Your &apos;worker-node&apos; is using only 10% CPU. Consider downsizing to save <span className="text-emerald-500 font-medium">$15/mo</span>.
+                  {totalServices} service{totalServices !== 1 ? 's' : ''} deployed{databaseServices > 0 ? `, ${databaseServices} database${databaseServices > 1 ? 's' : ''}` : ''}
                 </p>
               </motion.div>
 
@@ -297,9 +307,9 @@ export default function DashboardPage() {
                 whileHover={{ scale: 1.01 }}
                 className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 hover:border-cyan-500/40 transition-all"
               >
-                <p className="text-sm font-medium text-cyan-500">🚀 Performance Tip</p>
+                <p className="text-sm font-medium text-cyan-500">🚀 Quick Actions</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Enable edge caching for your API to reduce latency by up to 40%.
+                  {totalServices === 0 ? 'Deploy your first service to see AI insights' : 'Click any service to view logs, metrics, and AI analysis'}
                 </p>
               </motion.div>
             </CardContent>
