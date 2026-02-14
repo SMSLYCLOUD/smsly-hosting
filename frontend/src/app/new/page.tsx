@@ -542,7 +542,7 @@ export default function NewServicePage() {
                             <Zap className={cn("h-10 w-10 mx-auto mb-2", deployMode === "auto" ? "text-primary" : "text-muted-foreground")} />
                             <CardTitle className="text-lg">🚀 Auto Deploy</CardTitle>
                             <CardDescription className="text-xs">
-                              Zero-config — AI handles everything. One click and you're live.
+                              Zero-config — AI handles everything. One click and you&apos;re live.
                             </CardDescription>
                           </CardHeader>
                           <CardContent className="text-center">

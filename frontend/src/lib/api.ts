@@ -252,4 +252,89 @@ export const aiApi = {
   },
 };
 
+// ─── Servers API ────────────────────────────────────────────────────────────
+
+export interface ManagedServer {
+  id: string;
+  name: string;
+  host: string;
+  api_url: string;
+  api_token?: string;
+  ssh_port: number;
+  is_primary: boolean;
+  status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+  last_health_check: string | null;
+  server_version: string;
+  services_count: number;
+  created_at: string;
+}
+
+export const serversApi = {
+  list: async (): Promise<ManagedServer[]> => {
+    const res = await api.get('/servers/');
+    return res.data?.results || res.data || [];
+  },
+  get: async (id: string): Promise<ManagedServer> => {
+    const res = await api.get(`/servers/${id}/`);
+    return res.data;
+  },
+  create: async (data: Partial<ManagedServer>): Promise<ManagedServer> => {
+    const res = await api.post('/servers/', data);
+    return res.data;
+  },
+  update: async (id: string, data: Partial<ManagedServer>): Promise<ManagedServer> => {
+    const res = await api.patch(`/servers/${id}/`, data);
+    return res.data;
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/servers/${id}/`);
+  },
+  healthCheck: async (id: string): Promise<ManagedServer> => {
+    const res = await api.post(`/servers/${id}/health_check/`);
+    return res.data;
+  },
+  checkAll: async (): Promise<{ servers: ManagedServer[] }> => {
+    const res = await api.post('/servers/check_all/');
+    return res.data;
+  },
+  proxy: async (id: string, method: string, path: string, body?: any): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, { method, path, body });
+    return res.data;
+  },
+  remoteServices: async (id: string): Promise<any> => {
+    const res = await api.get(`/servers/${id}/services/`);
+    return res.data;
+  },
+  remoteDeployments: async (id: string): Promise<any> => {
+    const res = await api.get(`/servers/${id}/deployments/`);
+    return res.data;
+  },
+};
+
+// ─── Tokens API ─────────────────────────────────────────────────────────────
+
+export interface APIToken {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  is_active: boolean;
+}
+
+export const tokensApi = {
+  list: async (): Promise<APIToken[]> => {
+    const res = await api.get('/tokens/');
+    return res.data?.tokens || [];
+  },
+  create: async (name: string = 'CLI Token'): Promise<{ token: string; id: string; name: string; prefix: string }> => {
+    const res = await api.post('/tokens/create/', { name });
+    return res.data;
+  },
+  revoke: async (id: string): Promise<void> => {
+    await api.delete(`/tokens/${id}/revoke/`);
+  },
+};
+
 export default api;
+
