@@ -6,6 +6,8 @@ import time
 import logging
 import subprocess
 import shutil
+import os
+from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 from django.conf import settings
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -54,14 +56,26 @@ class BuildManager:
                     self._log("Login successful.")
 
             # 1. Clone
-            self._log(f"Cloning repository {self.service.repository_url}...")
+            repo_url = self.service.repository_url or ""
+            self._log(f"Cloning repository {self._sanitize_repo_url(repo_url)}...")
             if self.work_dir.exists():
                 shutil.rmtree(self.work_dir)
+            self.work_dir.parent.mkdir(parents=True, exist_ok=True)
 
-            self._run_command(
-                ["git", "clone", "--branch", self.service.branch,
-                    self.service.repository_url, str(self.work_dir)]
-            )
+            github_token = self._get_github_access_token()
+            if github_token and self._is_github_https(repo_url):
+                try:
+                    self._clone_github_repo_with_token(repo_url, self.service.branch, github_token)
+                except subprocess.CalledProcessError:
+                    # Token might be expired/revoked; retry public clone for public repos.
+                    self._log("GitHub-auth clone failed; retrying without token...")
+                    self._run_command(
+                        ["git", "clone", "--branch", self.service.branch, repo_url, str(self.work_dir)]
+                    )
+            else:
+                self._run_command(
+                    ["git", "clone", "--branch", self.service.branch, repo_url, str(self.work_dir)]
+                )
 
             # 2. Build
             dockerfile_path = self.work_dir / \
@@ -183,13 +197,14 @@ class BuildManager:
         except Exception as e:
             self._log(f"Security scan error: {str(e)}")
 
-    def _run_command(self, cmd, cwd=None):
+    def _run_command(self, cmd, cwd=None, env=None):
         """Run command and stream output to logs."""
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # Merge stderr into stdout
             cwd=cwd,
+            env=env,
             universal_newlines=True,
             bufsize=1  # Line buffered
         )
@@ -201,6 +216,96 @@ class BuildManager:
 
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, cmd)
+
+    @staticmethod
+    def _sanitize_repo_url(repo_url: str) -> str:
+        """Remove userinfo from clone URLs to avoid leaking credentials in logs."""
+        try:
+            parsed = urlparse(repo_url)
+            if not parsed.scheme or not parsed.netloc:
+                return repo_url
+
+            # Strip username/password while keeping host:port.
+            host = parsed.hostname or ""
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
+            sanitized = parsed._replace(netloc=host)
+            return urlunparse(sanitized)
+        except Exception:
+            return repo_url
+
+    @staticmethod
+    def _is_github_https(repo_url: str) -> bool:
+        try:
+            parsed = urlparse(repo_url)
+            if parsed.scheme not in ("http", "https"):
+                return False
+            return (parsed.hostname or "").lower().endswith("github.com")
+        except Exception:
+            return False
+
+    def _get_github_access_token(self) -> str | None:
+        """
+        Get the GitHub OAuth access token for the service owner (if linked).
+
+        This relies on django-allauth storing social tokens.
+        """
+        user = getattr(self.service, "owner", None)
+        if not user:
+            return None
+
+        try:
+            from allauth.socialaccount.models import SocialAccount, SocialToken
+        except Exception:
+            return None
+
+        account = (
+            SocialAccount.objects.filter(user=user, provider="github")
+            .order_by("-id")
+            .first()
+        )
+        if not account:
+            return None
+
+        token = (
+            SocialToken.objects.filter(account=account)
+            .order_by("-id")
+            .first()
+        )
+        return getattr(token, "token", None) or None
+
+    def _clone_github_repo_with_token(self, repo_url: str, branch: str, token: str) -> None:
+        """
+        Clone a GitHub repo over HTTPS using a linked OAuth token without putting
+        the token in the clone URL or logs.
+        """
+        parsed = urlparse(repo_url)
+        host = parsed.hostname or parsed.netloc
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+
+        # Inject a username so git only asks for a password (the token).
+        clone_url = urlunparse(parsed._replace(netloc=f"x-access-token@{host}"))
+
+        askpass_path = self.work_dir.parent / f"askpass-{self.deployment.id}.sh"
+        try:
+            askpass_path.write_text('#!/bin/sh\nprintf \"%s\" \"$SMSLY_GIT_PASSWORD\" \n', encoding="utf-8")
+            os.chmod(askpass_path, 0o700)
+
+            env = os.environ.copy()
+            env["GIT_ASKPASS"] = str(askpass_path)
+            env["SMSLY_GIT_PASSWORD"] = token
+            env["GIT_TERMINAL_PROMPT"] = "0"
+
+            self._run_command(
+                ["git", "clone", "--branch", branch, clone_url, str(self.work_dir)],
+                env=env,
+            )
+        finally:
+            try:
+                askpass_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def _log(self, message, timestamp=True):
         """Append logs to the deployment atomically to avoid race conditions."""

@@ -7,12 +7,44 @@ import os
 import tempfile
 import shutil
 import git
+from urllib.parse import urlparse
 from apps.cloud.services.compute import ComputeService
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.services.git import GitManager
 from apps.cloud.models import CloudProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _get_github_oauth_token_for_user(user):
+    """
+    Return the linked GitHub OAuth token for the given user (if connected).
+
+    Used for private repo clones via HTTPS. This depends on django-allauth
+    storing tokens (SOCIALACCOUNT_STORE_TOKENS=True).
+    """
+    if not user:
+        return None
+
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+    except Exception:
+        return None
+
+    account = (
+        SocialAccount.objects.filter(user=user, provider="github")
+        .order_by("-id")
+        .first()
+    )
+    if not account:
+        return None
+
+    token = (
+        SocialToken.objects.filter(account=account)
+        .order_by("-id")
+        .first()
+    )
+    return getattr(token, "token", None) or None
 
 
 # ==============================================================================
@@ -125,10 +157,24 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.save()
                 _broadcast_log(deployment, log_line)
 
+                repo_token = None
+                try:
+                    parsed = urlparse(service.repository_url or "")
+                    if parsed.scheme in ("http", "https") and (parsed.hostname or "").lower().endswith("github.com"):
+                        repo_token = _get_github_oauth_token_for_user(getattr(service, "owner", None))
+                        if repo_token:
+                            log_line = "Using linked GitHub account for private repo access...\n"
+                            deployment.build_logs += log_line
+                            deployment.save()
+                            _broadcast_log(deployment, log_line)
+                except Exception:
+                    repo_token = None
+
                 source_dir = GitManager.clone_repo(
                     repo_url=service.repository_url,
                     branch=service.branch or 'main',
-                    destination=build_dir
+                    destination=build_dir,
+                    token=repo_token,
                 )
 
                 # Get commit hash from cloned repo

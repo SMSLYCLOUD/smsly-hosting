@@ -13,9 +13,17 @@ const api = axios.create({
   withCredentials: true,
 });
 
+function getAuthTokenFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\\s*)auth_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 // Interceptor to add auth token
 api.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  const token = typeof window !== 'undefined'
+    ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie())
+    : null;
   if (token) {
     config.headers.Authorization = `Token ${token}`;
   }
