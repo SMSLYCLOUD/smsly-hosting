@@ -11,6 +11,8 @@ from apps.cloud.models import CloudProvider
 from .models_audit import AuditLog
 from .models_cron import CronJob
 from .models_storage import Volume  # Add this
+from .api_token_auth import APIToken  # CLI token auth
+from .models_servers import ManagedServer  # Multi-server management
 
 
 class TimeStampedModel(models.Model):
