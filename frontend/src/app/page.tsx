@@ -119,14 +119,45 @@ const features = [
 ];
 
 // ============================================
-// DATA: COMPARISON
+// DATA: BATTLE CARDS (COMPARISON)
 // ============================================
-const comparisonFeatures = [
-    { feature: 'Deployment Setup', legacy: 'Complex YAML / Terraform', sovereign: 'Zero Config / Auto-detect' },
-    { feature: 'Scaling Logic', legacy: 'Reactive (Laggy)', sovereign: 'Predictive AI (Proactive)' },
-    { feature: 'Infrastructure', legacy: 'Single Provider Lock-in', sovereign: 'Multi-Cloud / Hybrid' },
-    { feature: 'Preview Environments', legacy: 'Manual Setup', sovereign: 'Automatic per PR' },
-    { feature: 'Pricing Model', legacy: 'Opaque / Surprise Bills', sovereign: 'Transparent Usage-Based' }
+const battleCards = [
+    {
+        name: "CloudNeuron",
+        logo: Cloud,
+        description: "The Sovereign PaaS",
+        price: "$5/mo",
+        priceDetail: "Self-hosted flat rate",
+        features: ["Multi-Cloud Deployment", "Zero Vendor Lock-in", "AI Observability", "100% Open Source"],
+        color: "bg-emerald-500",
+        textColor: "text-emerald-500",
+        borderColor: "border-emerald-500",
+        highlight: true
+    },
+    {
+        name: "AWS Fargate",
+        logo: Server,
+        description: "The Cloud Giant",
+        price: "$36/mo",
+        priceDetail: "per 1 vCPU / 2GB",
+        features: ["High Vendor Lock-in", "Complex IAM & VPC", "Opaque Billing", "Proprietary Runtime"],
+        color: "bg-slate-500",
+        textColor: "text-slate-500",
+        borderColor: "border-slate-200",
+        highlight: false
+    },
+    {
+        name: "Vercel / Railway",
+        logo: Zap,
+        description: "The Managed PaaS",
+        price: "$20+",
+        priceDetail: "per seat + usage fees",
+        features: ["Platform Lock-in", "Expensive at Scale", "Black Box Runtime", "Open Core Only"],
+        color: "bg-slate-500",
+        textColor: "text-slate-500",
+        borderColor: "border-slate-200",
+        highlight: false
+    }
 ];
 
 // ============================================
@@ -357,6 +388,73 @@ export default function Home() {
                                 <p className="text-slate-400 leading-relaxed relative z-10">
                                     {feature.description}
                                 </p>
+                            </motion.div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* BATTLE CARDS COMPARISON */}
+            <section className="py-24 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="text-center mb-16">
+                        <h2 className="text-3xl md:text-5xl font-extrabold text-slate-900 dark:text-white mb-6">Stop Paying the &quot;Cloud Tax&quot;</h2>
+                        <p className="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
+                            CloudNeuron runs on <strong>your infrastructure</strong>, saving you up to 90% on compute costs compared to managed services.
+                        </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-8">
+                        {battleCards.map((card, i) => (
+                            <motion.div
+                                key={i}
+                                initial={{ opacity: 0, y: 20 }}
+                                whileInView={{ opacity: 1, y: 0 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: i * 0.1 }}
+                                className={`relative p-8 rounded-3xl bg-white dark:bg-slate-800 border-2 ${card.highlight ? 'border-emerald-500 shadow-2xl shadow-emerald-500/10' : 'border-slate-100 dark:border-slate-700'} flex flex-col`}
+                            >
+                                {card.highlight && (
+                                    <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest rounded-full shadow-lg">
+                                        Best Value
+                                    </div>
+                                )}
+
+                                <div className="mb-6 flex items-center justify-between">
+                                    <div className={`p-3 rounded-2xl ${card.highlight ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-slate-100 dark:bg-slate-700/50'}`}>
+                                        <card.logo className={`w-8 h-8 ${card.textColor}`} />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-slate-900 dark:text-white">{card.name}</h3>
+                                </div>
+
+                                <div className="mb-8">
+                                    <span className="text-4xl font-extrabold text-slate-900 dark:text-white">{card.price}</span>
+                                    <span className="block text-sm text-slate-500 dark:text-slate-400 mt-1">{card.priceDetail}</span>
+                                </div>
+
+                                <ul className="space-y-4 mb-8 flex-1">
+                                    {card.features.map((feat, j) => (
+                                        <li key={j} className="flex items-center gap-3 text-sm font-medium text-slate-600 dark:text-slate-300">
+                                            {card.highlight ? (
+                                                <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                                <XCircle className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                                            )}
+                                            {feat}
+                                        </li>
+                                    ))}
+                                </ul>
+
+                                <Link
+                                    href={card.highlight ? "/register" : "#"}
+                                    className={`w-full py-3 rounded-xl font-bold text-center transition-all ${
+                                        card.highlight
+                                        ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg hover:shadow-emerald-500/20'
+                                        : 'bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300'
+                                    }`}
+                                >
+                                    {card.highlight ? 'Start Free Trial' : 'Compare Docs'}
+                                </Link>
                             </motion.div>
                         ))}
                     </div>
