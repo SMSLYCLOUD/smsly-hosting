@@ -52,6 +52,27 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    def perform_destroy(self, instance):
+        """Stop all deployments and audit-log before deleting the service."""
+        # Cancel any active deployments
+        instance.deployments.filter(
+            status__in=[
+                Deployment.Status.ACTIVE,
+                Deployment.Status.BUILDING,
+                Deployment.Status.DEPLOYING,
+                Deployment.Status.QUEUED,
+            ]
+        ).update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
+
+        AuditLog(
+            actor=self.request.user.get_username(),
+            action='SERVICE_DELETE',
+            target=f'Service: {instance.name}',
+            metadata={'service_id': str(instance.id), 'service_name': instance.name},
+        ).save()
+
+        instance.delete()
+
     # --- Nested Resources: Deployments ---
     @action(detail=True, methods=['get'])
     def deployments(self, request, pk=None):

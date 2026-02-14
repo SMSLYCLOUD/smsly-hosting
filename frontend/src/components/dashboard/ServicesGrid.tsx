@@ -11,6 +11,7 @@ import {
   MoreVertical,
   Play,
   Square,
+  Trash2,
   Rocket,
   GitBranch,
   Cloud
@@ -49,6 +50,19 @@ export function ServicesGrid({ services }: ServicesGridProps) {
       window.location.reload();
     } catch (err) {
       console.error('Stop failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDelete = async (service: Service) => {
+    if (!confirm(`Are you sure you want to delete "${service.name}"? This cannot be undone.`)) return;
+    setActionLoading(service.id);
+    try {
+      await api.delete(`/services/${service.id}/`);
+      window.location.reload();
+    } catch (err) {
+      console.error('Delete failed:', err);
     } finally {
       setActionLoading(null);
     }
@@ -173,6 +187,16 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 onClick={() => router.push(`/services/${service.id}`)}
               >
                 <ExternalLink size={12} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                title="Delete Service"
+                disabled={actionLoading === service.id}
+                onClick={() => handleDelete(service)}
+              >
+                <Trash2 size={12} />
               </Button>
             </div>
           </div>
