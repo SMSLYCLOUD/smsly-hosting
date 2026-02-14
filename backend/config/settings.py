@@ -16,7 +16,7 @@ try:
     from cryptography.fernet import Fernet
     Fernet(FIELD_ENCRYPTION_KEY.encode() if isinstance(FIELD_ENCRYPTION_KEY, str) else FIELD_ENCRYPTION_KEY)
 except Exception as e:
-    raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'")
+    raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'") from e
 DEBUG = config('DEBUG', default=False, cast=bool)
 SMSLY_DISABLE_SIGNATURE_CHECK = config('SMSLY_DISABLE_SIGNATURE_CHECK', default=False, cast=bool)
 
@@ -49,7 +49,7 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv
 SITE_URL = config(
     'SITE_URL',
     # NOTE: Used for OAuth/billing redirects. Override in env if you terminate TLS elsewhere.
-    default=(f'http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
+    default=('http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
 )
 
 # Stripe Billing (optional but required for paid plans)
