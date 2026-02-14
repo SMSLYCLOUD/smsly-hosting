@@ -238,28 +238,89 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     _broadcast_log(deployment, ai_log)
                 _broadcast_log(deployment, log_line)
 
-                # B. Build with Nixpacks
+                # B. Build image — Dockerfile preferred, Nixpacks fallback
                 local_tag = (
                     f"smsly/{service.name}:"
                     f"{deployment.commit_hash[:7]}")
-                log_line = f"\nBuilding image {local_tag}...\n"
-                logger.info("Building image with Nixpacks: %s", local_tag)
-                deployment.build_logs += log_line
-                deployment.save()
-                _broadcast_log(deployment, log_line)
 
-                # Prepare environment variables for build
-                build_env_vars = {
-                    env.key: env.value
-                    for env in service.env_vars.all()
-                }
+                # Detect best build strategy — check root first, then subdirs
+                dockerfile_path = os.path.join(source_dir, "Dockerfile")
+                has_dockerfile = os.path.isfile(dockerfile_path)
 
-                # Build the image
-                build_result = NixpacksBuilder.build_image(
-                    source_dir=source_dir,
-                    image_name=local_tag,
-                    env_vars=build_env_vars
-                )
+                # If no root Dockerfile, search one level deep
+                if not has_dockerfile:
+                    for entry in os.listdir(source_dir):
+                        candidate = os.path.join(source_dir, entry, "Dockerfile")
+                        if os.path.isdir(os.path.join(source_dir, entry)) and os.path.isfile(candidate):
+                            dockerfile_path = candidate
+                            has_dockerfile = True
+                            logger.info("Found Dockerfile in subdirectory: %s", candidate)
+                            break
+
+                if has_dockerfile:
+                    log_line = f"\nDockerfile detected — building image {local_tag} via Docker...\n"
+                    logger.info("Building image with Docker: %s", local_tag)
+                    deployment.build_logs += log_line
+                    deployment.save()
+                    _broadcast_log(deployment, log_line)
+
+                    # Prepare build args from env vars
+                    build_env_vars = {
+                        env.key: env.value
+                        for env in service.env_vars.all()
+                    }
+                    build_args = []
+                    for k, v in build_env_vars.items():
+                        build_args.extend(["--build-arg", f"{k}={v}"])
+
+                    import subprocess
+                    docker_cmd = [
+                        "docker", "build",
+                        "-t", local_tag,
+                        "-f", dockerfile_path,
+                        *build_args,
+                        source_dir,
+                    ]
+
+                    try:
+                        process = subprocess.run(
+                            docker_cmd, check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True, timeout=600,
+                        )
+                        build_result = {
+                            "image_name": local_tag,
+                            "stdout": process.stdout or "",
+                            "stderr": process.stderr or "",
+                        }
+                    except subprocess.CalledProcessError as e:
+                        error_detail = ""
+                        if e.stdout:
+                            error_detail += f"\n--- Build Output ---\n{e.stdout[-3000:]}"
+                        if e.stderr:
+                            error_detail += f"\n--- Build Errors ---\n{e.stderr[-3000:]}"
+                        raise RuntimeError(f"Docker build failed:{error_detail}") from e
+
+                else:
+                    log_line = f"\nNo Dockerfile found — building image {local_tag} via Nixpacks...\n"
+                    logger.info("Building image with Nixpacks: %s", local_tag)
+                    deployment.build_logs += log_line
+                    deployment.save()
+                    _broadcast_log(deployment, log_line)
+
+                    # Prepare environment variables for build
+                    build_env_vars = {
+                        env.key: env.value
+                        for env in service.env_vars.all()
+                    }
+
+                    # Build the image
+                    build_result = NixpacksBuilder.build_image(
+                        source_dir=source_dir,
+                        image_name=local_tag,
+                        env_vars=build_env_vars
+                    )
 
                 # Capture build output for debugging
                 build_stdout = build_result.get("stdout", "") if isinstance(build_result, dict) else ""

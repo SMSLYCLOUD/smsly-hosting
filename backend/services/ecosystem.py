@@ -124,22 +124,33 @@ BUILD_STRATEGY = {
 
 def heuristic_analysis(files: List[str]) -> dict:
     """Fast local analysis without AI calls."""
-    stack = "unknown"
+    languages = []
     port = 3000
     addons = set()
     build = "nixpacks"
+    seen_stacks = set()
 
-    # Detect stack
+    # Detect ALL stacks/languages present
     for filename, (s, p) in STACK_SIGNALS.items():
         if any(f.endswith(filename) or f == filename for f in files):
-            stack = s
-            port = p
+            if s not in seen_stacks:
+                languages.append(s)
+                seen_stacks.add(s)
+                port = p  # Use port of last detected stack
 
-    # Detect build strategy
+    # Detect build strategy (check subdirectories too)
     for filename, strategy in BUILD_STRATEGY.items():
         if filename in files or any(f.endswith(filename) for f in files):
             build = strategy
             break
+
+    # If a repo has a subdirectory Dockerfile (e.g., backend/Dockerfile),
+    # detect it for the build strategy
+    if build != "dockerfile":
+        for f in files:
+            if f.endswith("/Dockerfile") or f == "Dockerfile":
+                build = "dockerfile"
+                break
 
     # Detect database requirements from file names
     for f in files:
@@ -151,8 +162,12 @@ def heuristic_analysis(files: List[str]) -> dict:
         if "mongo" in f_lower:
             addons.add("MONGODB")
 
+    # Primary stack is the first detected, but expose all languages
+    stack = languages[0] if languages else "unknown"
+
     return {
         "stack": stack,
+        "languages": languages,
         "port": port,
         "build": build,
         "addons": list(addons),

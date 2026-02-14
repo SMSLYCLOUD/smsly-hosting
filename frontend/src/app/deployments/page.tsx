@@ -134,39 +134,35 @@ export default function DeploymentsPage() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.05 }}
             >
-              <Card className="hover:border-primary/30 transition-colors">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      {getStatusIcon(deploy.status)}
-                      {deploy.service?.name || deploy.service_name || `Deployment ${deploy.id.slice(0, 8)}`}
-                    </CardTitle>
-                    <div className="flex items-center gap-2">
-                      <Badge className={getStatusBadge(deploy.status)}>
-                        {deploy.status}
-                      </Badge>
-                      {deploy.service?.id && (
-                        <Link href={`/services/${deploy.service.id}`}>
-                          <Button variant="ghost" size="sm">
-                            <ExternalLink className="h-4 w-4" />
-                          </Button>
-                        </Link>
-                      )}
+              <Link href={deploy.service?.id ? `/services/${deploy.service.id}` : '#'} className="block">
+                <Card className="hover:border-primary/30 transition-colors cursor-pointer hover:shadow-lg hover:shadow-primary/5">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        {getStatusIcon(deploy.status)}
+                        {deploy.service?.name || deploy.service_name || `Deployment ${deploy.id.slice(0, 8)}`}
+                      </CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Badge className={getStatusBadge(deploy.status)}>
+                          {deploy.status}
+                        </Badge>
+                        <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                      </div>
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    <span>ID: {deploy.id.slice(0, 12)}...</span>
-                    {deploy.commit_hash && (
-                      <span className="font-mono bg-muted px-2 py-0.5 rounded">
-                        {deploy.commit_hash.slice(0, 7)}
-                      </span>
-                    )}
-                    <span>{new Date(deploy.created_at).toLocaleString()}</span>
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                      <span>ID: {deploy.id.slice(0, 12)}...</span>
+                      {deploy.commit_hash && (
+                        <span className="font-mono bg-muted px-2 py-0.5 rounded">
+                          {deploy.commit_hash.slice(0, 7)}
+                        </span>
+                      )}
+                      <span>{new Date(deploy.created_at).toLocaleString()}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
             </motion.div>
           ))}
         </div>
