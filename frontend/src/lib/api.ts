@@ -339,17 +339,19 @@ export const tokensApi = {
 // ─── Tunnels API ────────────────────────────────────────────────────────────
 
 export interface Tunnel {
-  id: string;
+  tunnel_id: string;
   subdomain: string;
   public_url: string;
   local_port: number;
-  protocol: 'http' | 'tcp';
-  status: 'active' | 'inactive';
+  type: 'http' | 'tcp';
+  is_active: boolean;
   created_at: string;
   expires_at: string | null;
   request_count: number;
-  bandwidth_used: number;
-  shared_with: string[];
+  bandwidth_used?: number;
+  shared_with?: string[];
+  user_id: string;
+  tier: string;
 }
 
 export interface TunnelRequest {
@@ -377,7 +379,7 @@ export const tunnelsApi = {
   },
 
   /** Create a new tunnel */
-  create: async (data: { port: number; subdomain?: string; protocol?: string }): Promise<Tunnel> => {
+  create: async (data: { local_port: number; subdomain?: string; type?: string }): Promise<Tunnel> => {
     const res = await api.post('/tunnels/', data);
     return res.data;
   },
@@ -415,19 +417,19 @@ export const tunnelsApi = {
 
   /** List reserved subdomains */
   subdomains: async (): Promise<{ subdomains: ReservedSubdomain[]; limit: number }> => {
-    const res = await api.get('/tunnels/subdomains/');
+    const res = await api.get('/subdomains/');
     return res.data;
   },
 
   /** Reserve a subdomain */
   reserveSubdomain: async (subdomain: string): Promise<ReservedSubdomain> => {
-    const res = await api.post('/tunnels/subdomains/', { subdomain });
+    const res = await api.post('/subdomains/', { subdomain });
     return res.data;
   },
 
   /** Release a reserved subdomain */
   releaseSubdomain: async (subdomain: string): Promise<void> => {
-    await api.delete(`/tunnels/subdomains/${subdomain}/`);
+    await api.delete(`/subdomains/${subdomain}/`);
   },
 };
 

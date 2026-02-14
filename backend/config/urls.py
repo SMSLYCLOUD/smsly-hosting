@@ -26,3 +26,10 @@ urlpatterns = [
         include('dj_rest_auth.registration.urls')),
     path('accounts/', include('allauth.urls')),
 ]
+
+# ─── Tunnel API (function-based views, not DRF router) ────────────────────
+try:
+    from services.tunnels.api import get_urlpatterns as tunnel_urls
+    urlpatterns += [path('api/v1/', include(tunnel_urls()))]
+except ImportError:
+    pass  # tunnels module not installed

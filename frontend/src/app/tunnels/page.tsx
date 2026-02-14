@@ -54,7 +54,7 @@ export default function TunnelsPage() {
     setCreating(true);
     try {
       await tunnelsApi.create({
-        port: parseInt(newPort),
+        local_port: parseInt(newPort),
         subdomain: newSubdomain || undefined,
       });
       setShowCreate(false);
@@ -197,11 +197,11 @@ export default function TunnelsPage() {
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {[
-              { icon: <Wifi size={18} />, label: 'Active', value: tunnels.filter(t => t.status === 'active').length, color: 'text-emerald-500 bg-emerald-500/10' },
+              { icon: <Wifi size={18} />, label: 'Active', value: tunnels.filter(t => t.is_active).length, color: 'text-emerald-500 bg-emerald-500/10' },
               { icon: <ArrowUpDown size={18} />, label: 'Total Requests', value: tunnels.reduce((s, t) => s + t.request_count, 0), color: 'text-blue-500 bg-blue-500/10' },
-              { icon: <BarChart3 size={18} />, label: 'Bandwidth', value: formatBytes(tunnels.reduce((s, t) => s + t.bandwidth_used, 0)), color: 'text-amber-500 bg-amber-500/10' },
+              { icon: <BarChart3 size={18} />, label: 'Bandwidth', value: formatBytes(tunnels.reduce((s, t) => s + (t.bandwidth_used || 0), 0)), color: 'text-amber-500 bg-amber-500/10' },
               { icon: <Globe2 size={18} />, label: 'Subdomains', value: `${subdomains.length}${subdomainLimit !== -1 ? `/${subdomainLimit}` : ''}`, color: 'text-purple-500 bg-purple-500/10' },
             ].map((stat, i) => (
               <motion.div
@@ -290,7 +290,7 @@ export default function TunnelsPage() {
             ) : (
               tunnels.map(tunnel => (
                 <motion.div
-                  key={tunnel.id}
+                  key={tunnel.tunnel_id}
                   layout
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -299,9 +299,9 @@ export default function TunnelsPage() {
                   <div className="p-4 flex items-center gap-4">
                     {/* Status */}
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                      tunnel.status === 'active' ? 'bg-emerald-500/10' : 'bg-zinc-500/10'
+                      tunnel.is_active ? 'bg-emerald-500/10' : 'bg-zinc-500/10'
                     }`}>
-                      {tunnel.status === 'active'
+                      {tunnel.is_active
                         ? <Wifi size={18} className="text-emerald-500" />
                         : <WifiOff size={18} className="text-zinc-500" />
                       }
@@ -312,10 +312,10 @@ export default function TunnelsPage() {
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-sm truncate">{tunnel.public_url}</span>
                         <button
-                          onClick={() => copyToClipboard(tunnel.public_url, tunnel.id)}
+                          onClick={() => copyToClipboard(tunnel.public_url, tunnel.tunnel_id)}
                           className="text-muted-foreground hover:text-foreground transition"
                         >
-                          {copied === tunnel.id ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                          {copied === tunnel.tunnel_id ? <CheckCircle2 size={12} className="text-emerald-500" /> : <Copy size={12} />}
                         </button>
                         <a href={tunnel.public_url} target="_blank" className="text-muted-foreground hover:text-foreground transition">
                           <ExternalLink size={12} />
@@ -324,10 +324,10 @@ export default function TunnelsPage() {
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1"><Hash size={10} /> :{tunnel.local_port}</span>
                         <span className="flex items-center gap-1"><ArrowUpDown size={10} /> {tunnel.request_count} reqs</span>
-                        <span className="flex items-center gap-1"><BarChart3 size={10} /> {formatBytes(tunnel.bandwidth_used)}</span>
+                        <span className="flex items-center gap-1"><BarChart3 size={10} /> {formatBytes(tunnel.bandwidth_used || 0)}</span>
                         <span className="flex items-center gap-1"><Clock size={10} /> {new Date(tunnel.created_at).toLocaleTimeString()}</span>
-                        {tunnel.shared_with.length > 0 && (
-                          <span className="flex items-center gap-1"><Users size={10} /> {tunnel.shared_with.length} shared</span>
+                        {(tunnel.shared_with || []).length > 0 && (
+                          <span className="flex items-center gap-1"><Users size={10} /> {(tunnel.shared_with || []).length} shared</span>
                         )}
                       </div>
                     </div>
@@ -335,9 +335,9 @@ export default function TunnelsPage() {
                     {/* Actions */}
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => handleViewRequests(tunnel.id)}
+                        onClick={() => handleViewRequests(tunnel.tunnel_id)}
                         className={`px-3 py-1.5 rounded text-xs font-semibold transition ${
-                          selectedTunnel === tunnel.id
+                          selectedTunnel === tunnel.tunnel_id
                             ? 'bg-cyan-500/10 text-cyan-500'
                             : 'hover:bg-muted/50 text-muted-foreground'
                         }`}
@@ -345,7 +345,7 @@ export default function TunnelsPage() {
                         Requests
                       </button>
                       <button
-                        onClick={() => handleDelete(tunnel.id)}
+                        onClick={() => handleDelete(tunnel.tunnel_id)}
                         className="p-1.5 rounded text-red-400 hover:bg-red-500/10 transition"
                       >
                         <Trash2 size={14} />
@@ -355,7 +355,7 @@ export default function TunnelsPage() {
 
                   {/* Request Logs */}
                   <AnimatePresence>
-                    {selectedTunnel === tunnel.id && (
+                    {selectedTunnel === tunnel.tunnel_id && (
                       <motion.div
                         initial={{ height: 0 }}
                         animate={{ height: 'auto' }}
@@ -378,7 +378,7 @@ export default function TunnelsPage() {
                                   <span className={`font-bold ${req.status < 400 ? 'text-emerald-500' : 'text-red-500'}`}>{req.status}</span>
                                   <span className="text-muted-foreground w-12 text-right">{req.duration}ms</span>
                                   <button
-                                    onClick={() => handleReplay(tunnel.id, req.id)}
+                                    onClick={() => handleReplay(tunnel.tunnel_id, req.id)}
                                     className="p-1 rounded hover:bg-cyan-500/10 text-muted-foreground hover:text-cyan-500 transition"
                                     title="Replay request"
                                   >
