@@ -49,7 +49,7 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv
 SITE_URL = config(
     'SITE_URL',
     # NOTE: Used for OAuth/billing redirects. Override in env if you terminate TLS elsewhere.
-    default=(f'http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
+    default=('http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
 )
 
 # Stripe Billing (optional but required for paid plans)

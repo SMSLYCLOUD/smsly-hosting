@@ -368,12 +368,12 @@ class ClusterManager:
                     self._log(f"Created VPA {vpa_name}.")
                 else:
                     # If CRD not found, log warning but don't crash
-                    if e.status == 404: 
-                         self._log("VPA CRD not found in cluster. Skipping VPA.")
+                    if e.status == 404:
+                        self._log("VPA CRD not found in cluster. Skipping VPA.")
                     else:
-                         # Log but don't fail deployment for VPA
-                         logger.warning(f"VPA error: {e}")
-                         self._log(f"Warning: Failed to configure VPA: {e}")
+                        # Log but don't fail deployment for VPA
+                        logger.warning(f"VPA error: {e}")
+                        self._log(f"Warning: Failed to configure VPA: {e}")
         except Exception as e:
             logger.error(f"VPA configuration failed: {e}")
             self._log(f"Warning: VPA configuration failed: {e}")
