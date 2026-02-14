@@ -75,10 +75,13 @@ export default function LoginPage() {
           }
         }
 
-        if (token) {
-          localStorage.setItem("auth_token", token);
-          setAuthTokenCookie(token);
+        if (!token) {
+          setError("Login succeeded but no auth token was returned. Please try again.");
+          return;
         }
+
+        localStorage.setItem("auth_token", token);
+        setAuthTokenCookie(token);
 
         // Full reload avoids Next.js route-cache edge cases around auth redirects.
         window.location.assign("/dashboard");

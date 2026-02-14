@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const AUTH_VALIDATE_PATH = "/api/v1/auth/user/";
-
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/new",
@@ -29,50 +27,13 @@ function isCallbackPage(pathname: string): boolean {
   return pathname.startsWith("/auth/callback");
 }
 
-async function validateAuth(request: NextRequest): Promise<boolean> {
-  // localStorage isn't accessible from middleware. We rely on cookies, but we
-  // *validate* them against the backend to avoid stale/forged cookie access.
+function hasAuthCookies(request: NextRequest): boolean {
+  // Keep middleware logic fast and robust: only gate by presence of auth
+  // cookies. The client AuthProvider will validate the token with the backend
+  // and clear cookies/localStorage if invalid.
   const authToken = request.cookies.get("auth_token")?.value;
   const session = request.cookies.get("sessionid")?.value;
-
-  if (!authToken && !session) {
-    return false;
-  }
-
-  const headers: HeadersInit = { Accept: "application/json" };
-
-  // Forward cookies so Django session auth works.
-  const cookieHeader = request.headers.get("cookie");
-  if (cookieHeader) {
-    headers.cookie = cookieHeader;
-  }
-
-  // Prefer DRF Token auth when present.
-  if (authToken) {
-    headers.authorization = `Token ${decodeURIComponent(authToken)}`;
-  }
-
-  try {
-    const res = await fetch(new URL(AUTH_VALIDATE_PATH, request.url), {
-      method: "GET",
-      headers,
-      redirect: "manual",
-      cache: "no-store",
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-function redirectToLogin(request: NextRequest): NextResponse {
-  const res = NextResponse.redirect(new URL("/login", request.url));
-
-  // Clear stale cookies to prevent auth redirect loops.
-  res.cookies.set("auth_token", "", { path: "/", maxAge: 0 });
-  res.cookies.set("sessionid", "", { path: "/", maxAge: 0 });
-
-  return res;
+  return Boolean((authToken && authToken.trim()) || (session && session.trim()));
 }
 
 export async function middleware(request: NextRequest) {
@@ -90,11 +51,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const isAuthenticated = await validateAuth(request);
+  const isAuthenticated = hasAuthCookies(request);
 
   // Protect dashboard routes - redirect to login if not authenticated.
   if (protectedPage && !isAuthenticated) {
-    return redirectToLogin(request);
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   // If already logged in and visiting login/register, redirect to dashboard.
@@ -123,4 +84,3 @@ export const config = {
     "/auth/:path*",
   ],
 };
-
