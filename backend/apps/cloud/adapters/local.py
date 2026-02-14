@@ -56,7 +56,7 @@ class LocalAdapter(BaseCloudAdapter):
     def _deploy_docker(self, name: str, image: str,
                        env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
         # Ensure shared network exists
-        network_name = 'smsly-net'
+        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
             self.docker_client.networks.get(network_name)
         except docker.errors.NotFound:
@@ -279,7 +279,7 @@ EOF
                                 volumes: List[Dict], entrypoint: List[str], code_path: str) -> str:
         """Deploy function as a Docker container with code mount."""
         try:
-            network_name = 'smsly-net'
+            network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
             try:
                 self.docker_client.networks.get(network_name)
             except docker.errors.NotFound:
@@ -319,7 +319,7 @@ EOF
     def provision_database(self, db_name: str, engine: str,
                            version: str) -> str:
         if self.docker_client:
-            network_name = 'smsly-net'
+            network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
             try:
                 self.docker_client.networks.get(network_name)
             except docker.errors.NotFound:

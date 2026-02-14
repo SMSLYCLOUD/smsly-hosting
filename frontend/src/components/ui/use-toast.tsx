@@ -56,6 +56,14 @@ const addToRemoveQueue = (toastId: string) => {
     toastTimeouts.set(toastId, timeout)
 }
 
+const clearFromRemoveQueue = (toastId: string) => {
+    const timeout = toastTimeouts.get(toastId)
+    if (timeout) {
+        clearTimeout(timeout)
+        toastTimeouts.delete(toastId)
+    }
+}
+
 export const reducer = (state: State, action: Action): State => {
     switch (action.type) {
         case "ADD_TOAST":
@@ -123,12 +131,18 @@ function toast({ ...props }: Toast) {
     const update = (props: ToasterToast) =>
         dispatch({ type: "UPDATE_TOAST", toast: { ...props, id } })
 
-    const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+    const dismiss = () => {
+        clearFromRemoveQueue(id)
+        dispatch({ type: "REMOVE_TOAST", toastId: id })
+    }
 
     dispatch({
         type: "ADD_TOAST",
         toast: { ...props, id },
     })
+
+    // Auto-remove after delay by default (can still be dismissed manually via X button).
+    addToRemoveQueue(id)
 
     return { id, dismiss, update }
 }
@@ -149,7 +163,18 @@ function useToast() {
     return {
         ...state,
         toast,
-        dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+        dismiss: (toastId?: string) => {
+            if (toastId) {
+                clearFromRemoveQueue(toastId)
+                dispatch({ type: "REMOVE_TOAST", toastId })
+                return
+            }
+
+            // Clear all pending removals and remove all toasts immediately.
+            toastTimeouts.forEach((t) => clearTimeout(t))
+            toastTimeouts.clear()
+            dispatch({ type: "REMOVE_TOAST" })
+        },
     }
 }
 

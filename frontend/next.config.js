@@ -7,7 +7,9 @@ const nextConfig = {
       {
         protocol: 'https',
         hostname: 'ui-avatars.com',
-        pathname: '/api/**',
+        // Some providers use `/api` and `/api/` with query params.
+        // Allow all paths on this host to avoid 400s from `_next/image`.
+        pathname: '/**',
       },
       {
         protocol: 'https',
