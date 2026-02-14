@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, PlusCircle, Settings, Box, Activity } from "lucide-react";
+import { LayoutDashboard, PlusCircle, Settings, Box, Activity, Server, Rocket, Globe } from "lucide-react";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -20,6 +20,24 @@ export function Sidebar() {
       icon: Box,
       href: "/services",
       active: pathname?.startsWith("/services"),
+    },
+    {
+      label: "Deployments",
+      icon: Rocket,
+      href: "/deployments",
+      active: pathname === "/deployments",
+    },
+    {
+      label: "Servers",
+      icon: Server,
+      href: "/servers",
+      active: pathname === "/servers",
+    },
+    {
+      label: "Ecosystem",
+      icon: Globe,
+      href: "/ecosystem",
+      active: pathname === "/ecosystem",
     },
     {
       label: "New Project",
