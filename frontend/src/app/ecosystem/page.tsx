@@ -14,6 +14,7 @@ interface ServicePlan {
     repo: string;
     name: string;
     stack: string;
+    languages?: string[];
     port: number;
     build: string;
     addons: string[];
@@ -368,10 +369,12 @@ export default function EcosystemPage() {
                                                         <GitBranch size={14} className="text-muted-foreground" />
                                                         {svc.repo}
                                                     </p>
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                        <span className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STACK_COLORS[svc.stack] || STACK_COLORS.unknown}`}>
-                                                            {svc.stack}
-                                                        </span>
+                                                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                        {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang) => (
+                                                            <span key={lang} className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STACK_COLORS[lang] || STACK_COLORS.unknown}`}>
+                                                                {lang}
+                                                            </span>
+                                                        ))}
                                                         <span className="text-xs text-muted-foreground">
                                                             :{svc.port}
                                                         </span>

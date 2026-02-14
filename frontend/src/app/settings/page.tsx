@@ -405,39 +405,97 @@ export default function SettingsPage() {
                   </span>
                 </div>
 
-                {/* Provider Grid */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {aiData?.providers?.map((p: any) => (
-                    <div
-                      key={p.id}
-                      className={`p-4 rounded-lg border-2 transition-all ${
-                        p.configured
-                          ? 'border-emerald-500/50 bg-emerald-500/5'
-                          : 'border-border opacity-60'
-                      }`}
-                    >
-                      <div className="font-semibold text-sm">{p.name}</div>
-                      <div className="text-xs text-muted-foreground mt-1">Model: <code className="text-[10px]">{p.model || 'N/A'}</code></div>
-                      <div className="flex items-center gap-1 mt-2">
-                        {p.configured ? (
-                          <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-500 border-green-500/30">
-                            <Check className="h-3 w-3 mr-1" /> Active
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-[10px]">Not Set</Badge>
+                {/* Provider Grid — Editable */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {aiData?.providers?.map((p: any) => {
+                    const modelOptions: Record<string, string[]> = {
+                      openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-mini', 'o1-preview'],
+                      grok: ['grok-3-mini', 'grok-3', 'grok-2', 'grok-beta'],
+                      gemini: ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+                      claude: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+                    };
+                    return (
+                      <div
+                        key={p.id}
+                        className={`p-4 rounded-lg border-2 transition-all ${
+                          p.configured
+                            ? 'border-emerald-500/50 bg-emerald-500/5'
+                            : 'border-border'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="font-semibold text-sm">{p.name}</div>
+                          {p.configured ? (
+                            <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-500 border-green-500/30">
+                              <Check className="h-3 w-3 mr-1" /> Active
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px]">Not Set</Badge>
+                          )}
+                        </div>
+
+                        {/* API Key Input */}
+                        <div className="space-y-2 mb-2">
+                          <Label className="text-xs text-muted-foreground">API Key</Label>
+                          <Input
+                            type="password"
+                            placeholder={p.configured ? '••••••••' : 'Enter API key'}
+                            className="h-8 text-xs"
+                            id={`ai-key-${p.id}`}
+                          />
+                        </div>
+
+                        {/* Model Selector */}
+                        <div className="space-y-2 mb-3">
+                          <Label className="text-xs text-muted-foreground">Model</Label>
+                          <select
+                            className="w-full h-8 px-2 text-xs border rounded-md bg-background"
+                            defaultValue={p.model || ''}
+                            id={`ai-model-${p.id}`}
+                          >
+                            {(modelOptions[p.id] || []).map((m: string) => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {p.balance && (
+                          <div className="text-xs text-yellow-500 font-medium">
+                            💰 {p.balance.balance}
+                          </div>
                         )}
                       </div>
-                      {p.balance && (
-                        <div className="text-xs text-yellow-500 mt-2 font-medium">
-                          💰 {p.balance.balance}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
-                {/* Actions */}
-                <div className="flex gap-3">
+                {/* Save + Actions */}
+                <div className="flex gap-3 flex-wrap">
+                  <Button
+                    variant="default"
+                    onClick={async () => {
+                      setSaving(true);
+                      try {
+                        const data: Record<string, string> = {};
+                        ['openai', 'grok', 'gemini', 'claude'].forEach((id) => {
+                          const keyInput = document.getElementById(`ai-key-${id}`) as HTMLInputElement;
+                          const modelSelect = document.getElementById(`ai-model-${id}`) as HTMLSelectElement;
+                          if (keyInput?.value) data[`${id}_api_key`] = keyInput.value;
+                          if (modelSelect?.value) data[`${id}_model`] = modelSelect.value;
+                        });
+                        await aiApi.updateProviders(data);
+                        toast({ title: "AI Config Saved", description: "Provider settings updated." });
+                        fetchAIConfig();
+                      } catch (err) {
+                        toast({ title: "Error", description: "Failed to save AI config.", variant: "destructive" });
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    disabled={saving}
+                  >
+                    {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : 'Save AI Config'}
+                  </Button>
                   <Button variant="outline" onClick={handleTestAI} disabled={testingAI}>
                     {testingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
                     Test AI
@@ -447,15 +505,14 @@ export default function SettingsPage() {
                     Refresh
                   </Button>
                   <Link href="/settings/ai">
-                    <Button variant="default">
+                    <Button variant="secondary">
                       <Sparkles className="mr-2 h-4 w-4" /> Full AI Dashboard
                     </Button>
                   </Link>
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  Configure keys via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY) or admin panel.
-                  Models set via OPENAI_MODEL, GROK_MODEL, etc.
+                  Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, etc.), or admin panel.
                 </p>
               </CardContent>
             </Card>

@@ -389,6 +389,8 @@ def _get_db_settings():
     """
     Best-effort DB-backed settings lookup.
     Fails open because it can be called early during boot/migrations.
+    If the table exists but has missing columns (e.g. unmigrated claude fields),
+    we still try to read known-good fields via raw SQL fallback.
     """
     try:
         from django.apps import apps
@@ -399,9 +401,58 @@ def _get_db_settings():
             return None
         try:
             return model.get_solo()
-        except (OperationalError, ProgrammingError):
-            return None
-    except Exception:
+        except (OperationalError, ProgrammingError) as e:
+            # Table or column missing — try raw SQL for the fields we know exist
+            logger.warning("AIProviderSettings query failed (migration pending?): %s", e)
+            try:
+                from django.db import connection
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = 'intelligence_aiprovidersettings'"
+                    )
+                    columns = {row[0] for row in cursor.fetchall()}
+
+                if not columns:
+                    return None
+
+                # Build a dynamic SELECT with only existing columns
+                known_fields = [
+                    "openai_api_key", "openai_model",
+                    "grok_api_key", "grok_model",
+                    "gemini_api_key", "gemini_model",
+                    "claude_api_key", "claude_model",
+                ]
+                available = [f for f in known_fields if f in columns]
+                if not available:
+                    return None
+
+                cols_sql = ", ".join(available)
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"SELECT {cols_sql} FROM intelligence_aiprovidersettings LIMIT 1"
+                    )
+                    row = cursor.fetchone()
+
+                if row is None:
+                    return None
+
+                # Return a simple namespace object with the available fields
+                class _PartialSettings:
+                    pass
+                obj = _PartialSettings()
+                for i, field_name in enumerate(available):
+                    setattr(obj, field_name, row[i])
+                # Set missing fields to None
+                for f in known_fields:
+                    if f not in columns:
+                        setattr(obj, f, None)
+                return obj
+            except Exception as inner_e:
+                logger.debug("Raw SQL fallback also failed: %s", inner_e)
+                return None
+    except Exception as e:
+        logger.debug("_get_db_settings outer exception: %s", e)
         return None
 
 
