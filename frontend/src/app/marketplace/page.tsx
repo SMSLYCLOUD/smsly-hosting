@@ -43,19 +43,32 @@ const ADDON_TYPES = {
     MONGODB: { name: "MongoDB", icon: "MG", desc: "NoSQL Database" },
 } as const satisfies Record<AddonType, { name: string; icon: string; desc: string }>
 
-const ADDON_CATALOG = (Object.keys(ADDON_TYPES) as AddonType[]).flatMap((type) => {
-    const base = ADDON_TYPES[type]
-    return Array.from({ length: 25 }, (_, i) => {
-        const n = String(i + 1).padStart(2, "0")
-        return {
-            id: `${type.toLowerCase()}-preset-${n}`,
-            addon_type: type,
-            name: `${base.name} Preset ${n}`,
-            desc: `One-click ${base.name} preset (${n}).`,
-            icon: base.icon,
-        }
-    })
-})
+const ADDON_CATALOG = [
+    // Databases
+    { id: "postgres-16", addon_type: "POSTGRES" as AddonType, name: "PostgreSQL 16", desc: "Latest stable Postgres with JSONB, full-text search, and pgvector support.", icon: "PG" },
+    { id: "postgres-timescale", addon_type: "POSTGRES" as AddonType, name: "TimescaleDB", desc: "Time-series extension for PostgreSQL. Ideal for IoT and analytics.", icon: "TS" },
+    { id: "pgbouncer", addon_type: "POSTGRES" as AddonType, name: "PgBouncer", desc: "Lightweight connection pooler for PostgreSQL. Reduces connection overhead.", icon: "PB" },
+    { id: "mysql-8", addon_type: "MYSQL" as AddonType, name: "MySQL 8.0", desc: "Reliable relational database with InnoDB and window functions.", icon: "MY" },
+    { id: "mariadb-11", addon_type: "MYSQL" as AddonType, name: "MariaDB 11", desc: "MySQL-compatible with columnar storage and enhanced performance.", icon: "MA" },
+    { id: "mongodb-7", addon_type: "MONGODB" as AddonType, name: "MongoDB 7", desc: "Document database with aggregation pipelines and change streams.", icon: "MG" },
+    // Caching & Queues
+    { id: "redis-7", addon_type: "REDIS" as AddonType, name: "Redis 7", desc: "In-memory data store for caching, sessions, and pub/sub.", icon: "RD" },
+    { id: "redis-stack", addon_type: "REDIS" as AddonType, name: "Redis Stack", desc: "Redis with Search, JSON, Graph, and TimeSeries modules built-in.", icon: "RS" },
+    { id: "memcached", addon_type: "REDIS" as AddonType, name: "Memcached", desc: "High-performance distributed memory cache. Simple key-value.", icon: "MC" },
+    { id: "rabbitmq", addon_type: "REDIS" as AddonType, name: "RabbitMQ", desc: "Robust message broker with AMQP. Queues, routing, and dead-letter.", icon: "RQ" },
+    { id: "nats", addon_type: "REDIS" as AddonType, name: "NATS", desc: "Lightweight, high-performance messaging for microservices.", icon: "NT" },
+    // Search & Analytics
+    { id: "elasticsearch", addon_type: "REDIS" as AddonType, name: "Elasticsearch", desc: "Full-text search and analytics engine. Log aggregation and APM.", icon: "ES" },
+    { id: "meilisearch", addon_type: "REDIS" as AddonType, name: "Meilisearch", desc: "Lightning-fast, typo-tolerant search engine. Easy to set up.", icon: "MS" },
+    { id: "clickhouse", addon_type: "POSTGRES" as AddonType, name: "ClickHouse", desc: "Column-oriented OLAP database for real-time analytics at scale.", icon: "CH" },
+    // Storage & Other
+    { id: "minio", addon_type: "REDIS" as AddonType, name: "MinIO", desc: "S3-compatible object storage. Store blobs, backups, and assets.", icon: "MN" },
+    { id: "influxdb", addon_type: "POSTGRES" as AddonType, name: "InfluxDB", desc: "Purpose-built time-series database for metrics and monitoring.", icon: "IF" },
+    { id: "valkey", addon_type: "REDIS" as AddonType, name: "Valkey", desc: "Open-source Redis fork. Drop-in compatible, community-driven.", icon: "VK" },
+    { id: "dragonfly", addon_type: "REDIS" as AddonType, name: "Dragonfly", desc: "Modern in-memory store. 25x faster than Redis on a single node.", icon: "DF" },
+    { id: "neo4j", addon_type: "MONGODB" as AddonType, name: "Neo4j", desc: "Graph database for relationship-heavy data. Cypher query language.", icon: "N4" },
+    { id: "cassandra", addon_type: "MONGODB" as AddonType, name: "Cassandra", desc: "Distributed wide-column store. Massively scalable writes.", icon: "CS" },
+]
 
 export default function MarketplacePage() {
     const { toast } = useToast()
@@ -263,7 +276,7 @@ export default function MarketplacePage() {
             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
                 <div>
                     <h2 className="text-lg font-semibold">Addon Catalog</h2>
-                    <p className="text-xs text-muted-foreground">100 one-click presets</p>
+                    <p className="text-xs text-muted-foreground">20 production-ready addons</p>
                 </div>
                 <div className="w-full sm:w-[340px] space-y-1">
                     <Label>Provision to service</Label>

@@ -33,6 +33,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         many=True, queryset=Region.objects.all(), required=False)
     primary_region = serializers.PrimaryKeyRelatedField(
         queryset=Region.objects.all(), required=False)
+    latest_deployment = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -43,6 +44,17 @@ class ServiceSerializer(serializers.ModelSerializer):
             'updated_at',
             'owner',
             'verification_token']
+
+    def get_latest_deployment(self, obj):
+        dep = obj.deployments.order_by('-created_at').first()
+        if not dep:
+            return None
+        return {
+            'id': str(dep.id),
+            'status': dep.status,
+            'commit_hash': dep.commit_hash or '',
+            'created_at': dep.created_at.isoformat() if dep.created_at else None,
+        }
 
     def create(self, validated_data):
         env_vars_data = validated_data.pop('env_vars', [])

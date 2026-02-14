@@ -1,63 +1,53 @@
 'use client';
 
+import React from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Users, DollarSign, Activity, Settings } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Users, DollarSign, Activity, Palette, Lock, Clock } from 'lucide-react';
 
 export default function ResellerPage() {
-    return (
-        <DashboardShell>
-            <div className="container mx-auto py-10">
-                <div className="flex justify-between items-center mb-8">
-                    <div>
-                        <h1 className="text-3xl font-bold tracking-tight">Partner Console</h1>
-                        <p className="text-muted-foreground">Manage your white-labeled hosting platform.</p>
-                    </div>
-                </div>
+  return (
+    <DashboardShell>
+      <div className="container max-w-4xl mx-auto p-6 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Partner Console</h1>
+          <p className="text-muted-foreground">White-label and reseller management.</p>
+        </div>
 
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Total Managed Teams</CardTitle>
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">12</div>
-                            <p className="text-xs text-muted-foreground">+2 from last month</p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Monthly Revenue</CardTitle>
-                            <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold">$1,240.00</div>
-                            <p className="text-xs text-muted-foreground">+10% from last month</p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Platform Health</CardTitle>
-                            <Activity className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold text-emerald-500">99.99%</div>
-                            <p className="text-xs text-muted-foreground">All systems operational</p>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Branding</CardTitle>
-                            <Settings className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-sm font-medium">Acme Corp</div>
-                            <p className="text-xs text-muted-foreground">Theme: Dark / Blue</p>
-                        </CardContent>
-                    </Card>
-                </div>
+        <Card className="border-dashed">
+          <CardContent className="py-16 text-center space-y-4">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
+              <Palette className="h-8 w-8 text-primary" />
             </div>
-        </DashboardShell>
-    );
+            <div>
+              <h3 className="text-xl font-semibold">Partner Program — Coming Soon</h3>
+              <p className="text-muted-foreground mt-2 max-w-md mx-auto">
+                The partner console with white-label branding, reseller analytics, and team management
+                is being developed. Apply for early access when it launches.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-xl mx-auto pt-4">
+              <div className="p-3 rounded-xl bg-muted/40 text-center">
+                <Users className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+                <p className="text-xs font-medium">Team Mgmt</p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 text-center">
+                <DollarSign className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+                <p className="text-xs font-medium">Revenue</p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 text-center">
+                <Activity className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+                <p className="text-xs font-medium">Health</p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 text-center">
+                <Palette className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+                <p className="text-xs font-medium">Branding</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </DashboardShell>
+  );
 }

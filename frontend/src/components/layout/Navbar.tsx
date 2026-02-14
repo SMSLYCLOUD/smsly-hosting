@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -27,8 +27,13 @@ export function Navbar() {
     // Check auth
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (token) {
-        // Mock user data since we don't have a /me endpoint wired yet in this component
-        setUser({ email: 'user@smsly.io' });
+        // Fetch real user data
+        fetch(`${window.location.origin}/api/v1/auth/user/`, {
+          headers: { 'Authorization': `Token ${token}` },
+        })
+          .then(res => res.ok ? res.json() : Promise.reject())
+          .then(data => setUser({ email: data.email || data.username || 'User' }))
+          .catch(() => setUser({ email: 'User' }));
     }
 
     const handleClickOutside = (event: MouseEvent) => {
@@ -68,6 +73,7 @@ export function Navbar() {
     { href: '/services', label: 'Services', icon: Layout },
     { href: '/deployments', label: 'Deployments', icon: Rocket },
     { href: '/topology', label: 'Topology', icon: Globe },
+    { href: '/store', label: 'Templates', icon: Store },
     { href: '/marketplace', label: 'Addons', icon: Box },
     { href: '/billing', label: 'Billing', icon: CreditCard },
     { href: '/settings', label: 'Settings', icon: Settings },

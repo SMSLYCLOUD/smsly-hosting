@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Service } from '@/lib/api';
+import { Service, servicesApi } from '@/lib/api';
+import api from '@/lib/api';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 
@@ -27,6 +28,19 @@ interface ServicesGridProps {
 
 export function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
+  const [actionLoading, setActionLoading] = React.useState<string | null>(null);
+
+  const handleDeploy = async (serviceId: string) => {
+    setActionLoading(serviceId);
+    try {
+      await api.post(`/services/${serviceId}/deploy/`, { ref: 'HEAD' });
+      window.location.reload();
+    } catch (err) {
+      console.error('Deploy failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   if (!services || services.length === 0) {
     return <EmptyServicesState />;
@@ -63,9 +77,11 @@ export function ServicesGrid({ services }: ServicesGridProps) {
 
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' :
-                service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' : 'bg-yellow-500'
+                service.latest_deployment?.status === 'FAILED' ? 'bg-red-500' :
+                service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500 animate-pulse' :
+                'bg-yellow-500'
                 }`} />
-              <Button variant="ghost" size="icon" className="h-6 w-6">
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => router.push(`/services/${service.id}`)}>
                 <MoreVertical size={14} />
               </Button>
             </div>
@@ -115,11 +131,24 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               )}
             </div>
             <div className="flex gap-1">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-red-500">
-                <Square size={12} fill="currentColor" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-emerald-500">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-emerald-500"
+                title="Redeploy"
+                disabled={actionLoading === service.id}
+                onClick={() => handleDeploy(service.id)}
+              >
                 <Play size={12} fill="currentColor" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                title="Service Details"
+                onClick={() => router.push(`/services/${service.id}`)}
+              >
+                <ExternalLink size={12} />
               </Button>
             </div>
           </div>
