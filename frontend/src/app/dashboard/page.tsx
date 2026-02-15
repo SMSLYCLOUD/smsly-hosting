@@ -51,6 +51,8 @@ export default function DashboardPage() {
       }
     };
     fetchData();
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const activeDeployments = services.filter(s => s.latest_deployment?.status === 'ACTIVE').length;

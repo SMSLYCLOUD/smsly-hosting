@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import ReactMarkdown from 'react-markdown';
-import axios from 'axios';
+import api from '@/lib/api';
 
 interface Message {
     role: 'AI' | 'USER';
@@ -37,7 +37,7 @@ export default function LivingOnboarding() {
         setLoading(true);
 
         try {
-            const res = await axios.post(process.env.NEXT_PUBLIC_API_URL + '/ai/chat/', { message: userMsg });
+            const res = await api.post('/ai/chat/', { message: userMsg });
             setMessages(prev => [...prev, { role: 'AI', content: res.data.text }]);
         } catch (e) {
             setMessages(prev => [...prev, { role: 'AI', content: "Sorry, I encountered an error processing that request." }]);
@@ -51,18 +51,23 @@ export default function LivingOnboarding() {
 
             <div className="flex-1 flex flex-col items-center justify-center p-6 relative overflow-hidden">
 
-                <div className="max-w-3xl w-full z-10 space-y-8">
+                <div className="max-w-3xl w-full z-10 space-y-4 flex-1 overflow-y-auto">
+
+                    {messages.map((msg, i) => (
+                        <Card key={i} className={`p-4 ${msg.role === 'AI' ? 'bg-card' : 'bg-primary/5 border-primary/20'}`}>
+                            <div className="flex items-start gap-3">
+                                {msg.role === 'AI' ? <Bot size={20} className="text-emerald-500 mt-0.5 shrink-0" /> : <User size={20} className="text-primary mt-0.5 shrink-0" />}
+                                <div className="prose prose-sm dark:prose-invert max-w-none">
+                                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                                </div>
+                            </div>
+                        </Card>
+                    ))}
 
                     {loading && (
-                        <div className="text-center animate-in fade-in zoom-in duration-500">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold uppercase tracking-wider mb-6 border border-emerald-200">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                                Powered by Jules AI
-                            </div>
-                            <Card className="p-4 bg-card flex items-center gap-2 text-muted-foreground">
-                                <Loader2 size={16} className="animate-spin" /> Thinking...
-                            </Card>
-                        </div>
+                        <Card className="p-4 bg-card flex items-center gap-2 text-muted-foreground">
+                            <Loader2 size={16} className="animate-spin" /> Thinking...
+                        </Card>
                     )}
                     <div ref={scrollRef} />
                 </div>

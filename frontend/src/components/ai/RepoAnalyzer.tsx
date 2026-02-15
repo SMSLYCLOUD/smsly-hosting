@@ -71,11 +71,9 @@ export function RepoAnalyzer({ onAnalysisComplete, initialUrl = '' }: RepoAnalyz
         setError('');
 
         try {
-            const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
             const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-
             const response = await axios.post(
-                `${API_URL}/analyze-repo/`,
+                '/api/v1/analyze-repo/',
                 { repo_url: url },
                 { headers: token ? { Authorization: `Token ${token}` } : {} }
             );

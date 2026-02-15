@@ -8,8 +8,10 @@ import { Github, Chrome } from "lucide-react";
 
 
 export default function RegisterPage() {
-    // Use backend base URL (without /api/v1) for OAuth endpoints
-    const BACKEND_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace('/api/v1', '');
+    // Use dynamic origin detection — same approach as login page
+    const BACKEND_URL = typeof window !== 'undefined'
+        ? window.location.origin
+        : process.env.NEXT_PUBLIC_API_URL || 'https://cloud.smsly.cloud';
 
     return (
         <div className="min-h-screen flex flex-col relative overflow-x-hidden">
