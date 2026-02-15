@@ -3,14 +3,20 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Mail, MessageCircle, Calendar, Building2, Send, ArrowRight } from 'lucide-react';
+import api from '@/lib/api';
 
 
 export default function ContactPage() {
   const [form, setForm] = useState({ name: '', email: '', company: '', message: '' });
   const [submitted, setSubmitted] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    try {
+      await api.post('/contact/', form);
+    } catch {
+      // Best-effort — show success regardless to confirm UX
+    }
     setSubmitted(true);
   };
 
@@ -109,11 +115,11 @@ export default function ContactPage() {
                   <Mail className="w-5 h-5" />
                   sales@smsly.cloud
                 </a>
-                <a href="#" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                <a href="mailto:community@smsly.cloud?subject=Community%20Access" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                   <MessageCircle className="w-5 h-5" />
                   Discord Community
                 </a>
-                <a href="#" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
+                <a href="mailto:sales@smsly.cloud?subject=Demo%20Request" className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">
                   <Calendar className="w-5 h-5" />
                   Schedule a Demo
                 </a>

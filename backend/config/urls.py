@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/v1/teams/', include('apps.teams.urls')),
     path('api/v1/billing/', include('apps.billing.urls')),
     path('api/v1/ai/', include('apps.intelligence.urls')),
+    path('api/v1/', include('apps.core.urls')),
 
     # Auth
     path('api/v1/auth/', include('dj_rest_auth.urls')),
