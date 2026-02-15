@@ -35,13 +35,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: smsly_hosting
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -72,11 +72,14 @@ services:
       - ./backend:/app
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly_hosting
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -105,11 +108,14 @@ services:
     build: ./backend
     restart: unless-stopped
     command: celery -A config worker -l info
+    env_file:
+      - .env
     environment:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly_hosting
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -137,11 +143,14 @@ services:
     build: ./backend
     restart: unless-stopped
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
+    env_file:
+      - .env
     environment:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly_hosting
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
     depends_on:
