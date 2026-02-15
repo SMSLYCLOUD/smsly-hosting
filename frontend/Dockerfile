@@ -35,5 +35,7 @@ USER nextjs
 
 EXPOSE 3000
 
-# Use standalone server directly (supports middleware, SSR, rewrites)
-CMD ["node", "server.js"]
+# Wrapper adds resilience against client-abort ECONNRESET/EPIPE errors.
+COPY --chown=nextjs:nodejs start.js ./start.js
+
+CMD ["node", "start.js"]
