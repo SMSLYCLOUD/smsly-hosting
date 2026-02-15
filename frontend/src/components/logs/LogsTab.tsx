@@ -1,18 +1,16 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Terminal, Zap, Clock, RefreshCw } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { Terminal, Zap, Clock, RefreshCw, Radio } from 'lucide-react';
 import { Deployment } from '@/lib/api';
 
 /**
  * Generate pseudo-timestamps for log lines based on deployment start time.
- * Since backend stores logs as a single text blob, we approximate
- * timestamps by spreading lines over the deployment duration.
  */
 function addTimestamps(logs: string, startTime: string | null, durationSeconds: number | null): string[] {
     const lines = logs.split('\n');
     if (!startTime) return lines.map(l => l);
 
     const start = new Date(startTime).getTime();
-    const totalDuration = (durationSeconds || 60) * 1000; // default to 60s if unknown
+    const totalDuration = (durationSeconds || 60) * 1000;
 
     return lines.map((line, i) => {
         const offset = lines.length > 1 ? (i / (lines.length - 1)) * totalDuration : 0;
@@ -27,20 +25,139 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [runtimeLogs, setRuntimeLogs] = useState<string>('');
     const [runtimeLoading, setRuntimeLoading] = useState(false);
     const [runtimeMessage, setRuntimeMessage] = useState('');
+    const [liveBuildLogs, setLiveBuildLogs] = useState<string>('');
+    const [wsConnected, setWsConnected] = useState(false);
+    const [isLive, setIsLive] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
+    // Auto-scroll on new logs
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [deployment?.build_logs, runtimeLogs]);
+    }, [deployment?.build_logs, runtimeLogs, liveBuildLogs]);
+
+    // Determine if build is still in progress
+    const isBuilding = deployment?.status === 'BUILDING' || deployment?.status === 'QUEUED' || deployment?.status === 'PENDING';
+
+    // WebSocket connection for live build logs
+    const connectWebSocket = useCallback(() => {
+        if (!deployment?.id) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        if (!token) return;
+
+        const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+        const wsUrl = `${proto}://${host}/ws/build-logs/${deployment.id}/?token=${encodeURIComponent(token)}`;
+
+        try {
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                setWsConnected(true);
+                setIsLive(true);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'initial_state') {
+                        if (data.build_logs) {
+                            setLiveBuildLogs(data.build_logs);
+                        }
+                    } else if (data.type === 'build_log') {
+                        setLiveBuildLogs(prev => prev + (data.log || ''));
+                    } else if (data.type === 'status_change') {
+                        // Build finished, stop live streaming
+                        if (data.status === 'ACTIVE' || data.status === 'FAILED') {
+                            setIsLive(false);
+                        }
+                    }
+                } catch {
+                    // Non-JSON message
+                }
+            };
+
+            ws.onclose = () => {
+                setWsConnected(false);
+                // Reconnect if still building
+                if (isBuilding) {
+                    reconnectTimer.current = setTimeout(connectWebSocket, 3000);
+                }
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+
+            wsRef.current = ws;
+        } catch {
+            // WebSocket not supported or connection failed
+        }
+    }, [deployment?.id, isBuilding]);
+
+    // Connect WebSocket when viewing build logs during active build
+    useEffect(() => {
+        if (logType === 'BUILD' && isBuilding && deployment?.id) {
+            connectWebSocket();
+        }
+
+        return () => {
+            if (reconnectTimer.current) {
+                clearTimeout(reconnectTimer.current);
+            }
+        };
+    }, [logType, isBuilding, deployment?.id, connectWebSocket]);
+
+    // Clean up WebSocket on unmount
+    useEffect(() => {
+        return () => {
+            wsRef.current?.close();
+            if (reconnectTimer.current) {
+                clearTimeout(reconnectTimer.current);
+            }
+        };
+    }, []);
+
+    // Poll build logs during active build (fallback for when WS isn't available)
+    useEffect(() => {
+        if (logType !== 'BUILD' || !isBuilding || !deployment?.id) return;
+        if (wsConnected) return; // Don't poll if WS is connected
+
+        const fetchBuildLogs = async () => {
+            try {
+                const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+                const res = await fetch(`${apiUrl}/api/v1/deployments/${deployment.id}/`, {
+                    headers: token ? { 'Authorization': `Token ${token}` } : {},
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.build_logs) {
+                        setLiveBuildLogs(data.build_logs);
+                    }
+                }
+            } catch {
+                // Silently fail
+            }
+        };
+
+        fetchBuildLogs();
+        const interval = setInterval(fetchBuildLogs, 3000);
+        return () => clearInterval(interval);
+    }, [logType, isBuilding, deployment?.id, wsConnected]);
 
     const timestampedLogs = useMemo(() => {
-        if (!deployment?.build_logs) return [];
+        const logs = (isBuilding && liveBuildLogs) ? liveBuildLogs : (deployment?.build_logs || '');
+        if (!logs) return [];
         return addTimestamps(
-            deployment.build_logs,
-            deployment.created_at || null,
-            deployment.duration_seconds || null
+            logs,
+            deployment?.created_at || null,
+            deployment?.duration_seconds || null
         );
-    }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds]);
+    }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds, liveBuildLogs, isBuilding]);
 
     // Fetch runtime logs when tab is active
     useEffect(() => {
@@ -49,10 +166,10 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         const fetchRuntimeLogs = async () => {
             setRuntimeLoading(true);
             try {
-                const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+                const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
                 const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
                 const res = await fetch(`${apiUrl}/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
-                    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                    headers: token ? { 'Authorization': `Token ${token}` } : {},
                 });
                 if (res.ok) {
                     const data = await res.json();
@@ -69,7 +186,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         };
 
         fetchRuntimeLogs();
-        const interval = setInterval(fetchRuntimeLogs, 5000);
+        const interval = setInterval(fetchRuntimeLogs, 3000);
         return () => clearInterval(interval);
     }, [logType, deployment?.id]);
 
@@ -109,16 +226,24 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             {new Date(deployment.created_at).toLocaleString()}
                         </span>
                     )}
-                    {logType === 'BUILD' && deployment?.build_logs && (
+                    {logType === 'BUILD' && isBuilding && (
                         <>
                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            <span className="text-green-400 font-bold">LIVE</span>
+                            {wsConnected && <Radio size={10} className="text-green-500" />}
+                        </>
+                    )}
+                    {logType === 'BUILD' && !isBuilding && deployment?.build_logs && (
+                        <>
+                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
                             Build Logs
                         </>
                     )}
-                    {logType === 'RUNTIME' && runtimeLogs && (
+                    {logType === 'RUNTIME' && (
                         <>
-                            <RefreshCw size={10} className="animate-spin" />
-                            Live
+                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                            <span className="text-blue-400 font-bold">LIVE</span>
+                            <RefreshCw size={10} className="animate-spin text-blue-400" />
                         </>
                     )}
                 </div>
@@ -128,7 +253,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             {deployment && (
                 <div className="bg-white/[0.02] px-6 py-2 border-b border-white/5 flex items-center gap-4 text-[10px] text-zinc-500 font-sans uppercase tracking-wider">
                     <span>Commit: <span className="text-zinc-300 font-mono">{deployment.commit_hash?.substring(0, 7)}</span></span>
-                    <span>Status: <span className={deployment.status === 'ACTIVE' ? 'text-emerald-400' : deployment.status === 'FAILED' ? 'text-red-400' : 'text-zinc-300'}>{deployment.status}</span></span>
+                    <span>Status: <span className={
+                        deployment.status === 'ACTIVE' ? 'text-emerald-400' :
+                        deployment.status === 'FAILED' ? 'text-red-400' :
+                        deployment.status === 'BUILDING' ? 'text-yellow-400 animate-pulse' :
+                        'text-zinc-300'
+                    }>{deployment.status}</span></span>
                     {deployment.duration_seconds && <span>Duration: <span className="text-zinc-300">{deployment.duration_seconds.toFixed(1)}s</span></span>}
                 </div>
             )}
@@ -153,6 +283,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 </div>
                             )) : <span className="text-zinc-600">Waiting for build logs...</span>}
                         </div>
+                        {isBuilding && (
+                            <div className="flex items-center gap-2 mt-4 text-yellow-500/80">
+                                <RefreshCw size={12} className="animate-spin" />
+                                <span className="text-xs font-sans">Build in progress... logs updating live</span>
+                            </div>
+                        )}
                     </>
                 )}
 
@@ -179,6 +315,10 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 ))}
                             </div>
                         )}
+                        <div className="flex items-center gap-2 mt-4 text-blue-500/80">
+                            <RefreshCw size={12} className="animate-spin" />
+                            <span className="text-xs font-sans">Auto-refreshing every 3s</span>
+                        </div>
                     </>
                 )}
                 <div ref={logsEndRef} />
