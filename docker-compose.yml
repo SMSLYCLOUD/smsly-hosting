@@ -27,6 +27,7 @@ services:
     read_only: true
     tmpfs:
       - /run
+      - /tmp
 
   # ============================================================
   # Database
