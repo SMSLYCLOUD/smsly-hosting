@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server } from 'lucide-react';
+import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers } from 'lucide-react';
 
 interface Addon {
     id: string;
     service: string;
     name: string;
-    addon_type: 'POSTGRES' | 'REDIS' | 'MYSQL' | 'MONGODB';
+    addon_type: string;
     status: 'PROVISIONING' | 'ACTIVE' | 'FAILED' | 'DELETED';
     created_at: string;
 }
@@ -23,10 +23,16 @@ interface Backup {
 }
 
 const ADDON_TYPES = [
-    { value: 'POSTGRES', label: 'PostgreSQL', icon: '🐘', color: 'text-blue-400' },
-    { value: 'REDIS', label: 'Redis', icon: '🔴', color: 'text-red-400' },
-    { value: 'MYSQL', label: 'MySQL', icon: '🐬', color: 'text-cyan-400' },
-    { value: 'MONGODB', label: 'MongoDB', icon: '🍃', color: 'text-green-400' },
+    { value: 'POSTGRES', label: 'PostgreSQL', icon: '🐘', color: 'text-blue-400', description: 'Relational database' },
+    { value: 'REDIS', label: 'Redis', icon: '🔴', color: 'text-red-400', description: 'In-memory cache & store' },
+    { value: 'MYSQL', label: 'MySQL', icon: '🐬', color: 'text-cyan-400', description: 'Relational database' },
+    { value: 'MONGODB', label: 'MongoDB', icon: '🍃', color: 'text-green-400', description: 'Document database' },
+    { value: 'ELASTICSEARCH', label: 'Elasticsearch', icon: '🔍', color: 'text-yellow-400', description: 'Search & analytics' },
+    { value: 'RABBITMQ', label: 'RabbitMQ', icon: '🐇', color: 'text-orange-400', description: 'Message broker' },
+    { value: 'MEMCACHED', label: 'Memcached', icon: '⚡', color: 'text-purple-400', description: 'Distributed cache' },
+    { value: 'CLICKHOUSE', label: 'ClickHouse', icon: '📊', color: 'text-amber-400', description: 'Analytics database' },
+    { value: 'MARIADB', label: 'MariaDB', icon: '🦭', color: 'text-teal-400', description: 'MySQL-compatible DB' },
+    { value: 'MINIO', label: 'MinIO', icon: '📦', color: 'text-pink-400', description: 'S3-compatible storage' },
 ];
 
 function getHeaders(): Record<string, string> {
@@ -39,13 +45,14 @@ function apiUrl(path: string) {
     return `${base}${path}`;
 }
 
-export function AddonsTab({ serviceId }: { serviceId: string }) {
+export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const [addons, setAddons] = useState<Addon[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [showCreate, setShowCreate] = useState(false);
     const [newType, setNewType] = useState('POSTGRES');
     const [newName, setNewName] = useState('');
+    const [newServiceId, setNewServiceId] = useState(serviceId || '');
     const [backups, setBackups] = useState<Record<string, Backup[]>>({});
     const [expandedAddon, setExpandedAddon] = useState<string | null>(null);
 
@@ -55,8 +62,8 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
             if (res.ok) {
                 const data = await res.json();
                 const list = Array.isArray(data) ? data : (data?.results || []);
-                // Filter to only this service's addons
-                setAddons(list.filter((a: Addon) => a.service === serviceId));
+                // Filter to service if serviceId is provided
+                setAddons(serviceId ? list.filter((a: Addon) => a.service === serviceId) : list);
             }
         } catch (e) {
             console.error('Failed to fetch addons:', e);
@@ -70,11 +77,13 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
     const handleCreate = async () => {
         setCreating(true);
         try {
+            const svcId = serviceId || newServiceId;
+            if (!svcId) { alert('Select a service first'); setCreating(false); return; }
             const name = newName || `${newType.toLowerCase()}-${Date.now().toString(36)}`;
             const res = await fetch(apiUrl('/addons/'), {
                 method: 'POST',
                 headers: getHeaders(),
-                body: JSON.stringify({ service: serviceId, addon_type: newType, name }),
+                body: JSON.stringify({ service: svcId, addon_type: newType, name }),
             });
             if (res.ok) {
                 setShowCreate(false);
@@ -107,7 +116,6 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
                 method: 'POST',
                 headers: getHeaders(),
             });
-            // Refresh backups
             fetchBackups(addonId);
         } catch (e) {
             console.error('Failed to trigger backup:', e);
@@ -160,7 +168,9 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
             <div className="flex items-center justify-between">
                 <div>
                     <h2 className="text-xl font-bold text-foreground">Infrastructure Addons</h2>
-                    <p className="text-sm text-muted-foreground mt-1">Databases and caches attached to this service</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                        {serviceId ? 'Databases and caches attached to this service' : 'All addons across your services'}
+                    </p>
                 </div>
                 <button
                     onClick={() => setShowCreate(!showCreate)}
@@ -174,7 +184,7 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
             {showCreate && (
                 <div className="bg-card border border-border rounded-xl p-6 space-y-4">
                     <h3 className="font-semibold text-foreground">Provision New Addon</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                         {ADDON_TYPES.map(type => (
                             <button
                                 key={type.value}
@@ -187,6 +197,7 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
                             >
                                 <span className="text-2xl">{type.icon}</span>
                                 <p className={`font-semibold mt-2 ${type.color}`}>{type.label}</p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">{type.description}</p>
                             </button>
                         ))}
                     </div>
@@ -216,7 +227,7 @@ export function AddonsTab({ serviceId }: { serviceId: string }) {
                     <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                     <h3 className="font-semibold text-foreground mb-2">No Addons Yet</h3>
                     <p className="text-sm text-muted-foreground mb-4">
-                        Add a PostgreSQL, Redis, MySQL, or MongoDB database to this service.
+                        Add databases, caches, search engines, and message brokers to your services.
                     </p>
                     <button
                         onClick={() => setShowCreate(true)}
