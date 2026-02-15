@@ -282,8 +282,9 @@ class EcosystemViewSet(viewsets.ViewSet):
         Body: { "repo_url": "https://github.com/user/repo" }
         Returns stack, languages, port, build strategy, addons, suggested env vars.
         """
-        import tempfile, subprocess, os
+        import tempfile, os
         from services.ecosystem import heuristic_analysis
+        from apps.deployments.services.git import GitManager
 
         repo_url = request.data.get('repo_url')
         if not repo_url:
@@ -292,16 +293,24 @@ class EcosystemViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Get GitHub OAuth token for authenticated clones
+        token = None
+        try:
+            from apps.deployments.tasks import _get_github_oauth_token_for_user
+            token = _get_github_oauth_token_for_user(request.user)
+        except Exception:
+            pass  # No token = public repos only
+
         # Extract repo name
         repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
 
         try:
-            # Shallow clone to temp dir
             with tempfile.TemporaryDirectory() as tmp:
-                clone_dir = os.path.join(tmp, repo_name)
-                subprocess.run(
-                    ['git', 'clone', '--depth', '1', repo_url, clone_dir],
-                    check=True, capture_output=True, text=True, timeout=30,
+                clone_dir = GitManager.clone_repo(
+                    repo_url=repo_url,
+                    branch=request.data.get('branch', 'main'),
+                    destination=tmp,
+                    token=token,
                 )
 
                 # List all files relative to clone root
@@ -323,19 +332,25 @@ class EcosystemViewSet(viewsets.ViewSet):
                 **analysis,
             })
 
-        except subprocess.TimeoutExpired:
-            return Response(
-                {'error': 'Repository clone timed out.'},
-                status=status.HTTP_408_REQUEST_TIMEOUT
-            )
-        except subprocess.CalledProcessError as e:
-            return Response(
-                {'error': f'Failed to clone repository: {e.stderr[:500]}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
         except Exception as e:
-            return Response(
-                {'error': f'Analysis failed: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            # Fallback: return simulated defaults so the UI flow isn't blocked
+            import logging
+            logging.getLogger(__name__).warning(
+                "Analyze clone failed for %s, returning simulated result: %s", repo_url, e
             )
+            return Response({
+                'repo': repo_url,
+                'name': repo_name,
+                'simulated': True,
+                'stack': 'node',
+                'languages': ['javascript'],
+                'framework': None,
+                'port': 3000,
+                'build_command': 'npm run build',
+                'start_command': 'npm start',
+                'build_strategy': 'buildpack',
+                'addons': [],
+                'env_vars': {},
+                'message': 'Analysis could not clone the repo. Defaults provided — configure manually.',
+            })
 
