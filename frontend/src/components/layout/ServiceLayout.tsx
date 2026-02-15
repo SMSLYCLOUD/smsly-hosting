@@ -1,5 +1,6 @@
-import { ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, Clock, Globe, Database, List, Timer, HardDrive } from 'lucide-react';
+import { ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 import { Service } from '@/lib/api';
 
@@ -11,15 +12,19 @@ interface ServiceLayoutProps {
 }
 
 export function ServiceLayout({ service, activeTab, setActiveTab, children }: ServiceLayoutProps) {
+    const router = useRouter();
+
     const tabs = [
         { id: 'overview', label: 'Overview', icon: Activity },
         { id: 'deployments', label: 'Deployments', icon: Clock },
         { id: 'logs', label: 'Logs', icon: List },
         { id: 'console', label: 'Console', icon: Terminal },
+        { id: 'addons', label: 'Addons', icon: Puzzle },
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
         { id: 'domains', label: 'Domains', icon: Globe },
         { id: 'metrics', label: 'Metrics', icon: Activity },
+        { id: 'topology', label: 'Topology', icon: Network, href: '/topology' },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'settings', label: 'Settings', icon: Settings },
         { id: 'advanced', label: 'Advanced', icon: Shield },
@@ -65,7 +70,13 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                             return (
                                 <button
                                     key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
+                                    onClick={() => {
+                                        if ('href' in tab && tab.href) {
+                                            router.push(tab.href);
+                                        } else {
+                                            setActiveTab(tab.id);
+                                        }
+                                    }}
                                     className={`
                                         flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap
                                         ${isActive
