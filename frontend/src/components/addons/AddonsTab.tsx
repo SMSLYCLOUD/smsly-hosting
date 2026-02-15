@@ -72,7 +72,11 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     }, [serviceId]);
 
-    useEffect(() => { fetchAddons(); }, [fetchAddons]);
+    useEffect(() => {
+        fetchAddons();
+        const interval = setInterval(fetchAddons, 10000);
+        return () => clearInterval(interval);
+    }, [fetchAddons]);
 
     const handleCreate = async () => {
         setCreating(true);

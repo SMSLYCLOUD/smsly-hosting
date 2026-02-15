@@ -35,7 +35,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     setActionLoading(serviceId);
     try {
       await api.post(`/services/${serviceId}/deploy/`, { ref: 'HEAD' });
-      window.location.reload();
+      // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Deploy failed:', err);
     } finally {
@@ -47,7 +47,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     setActionLoading(serviceId);
     try {
       await api.post(`/services/${serviceId}/stop/`);
-      window.location.reload();
+      // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Stop failed:', err);
     } finally {
@@ -60,7 +60,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     setActionLoading(service.id);
     try {
       await api.delete(`/services/${service.id}/`);
-      window.location.reload();
+      // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Delete failed:', err);
     } finally {

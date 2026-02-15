@@ -41,6 +41,8 @@ export default function DeploymentsPage() {
 
   useEffect(() => {
     fetchDeployments();
+    const interval = setInterval(fetchDeployments, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleRefresh = () => {

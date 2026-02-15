@@ -33,7 +33,6 @@ export function DomainsTab({ service }: { service: Service }) {
             }
         } catch (err) {
             console.error(err);
-            toast({ title: "Failed to load domains", variant: "destructive" });
         } finally {
             setLoading(false);
         }
@@ -41,6 +40,8 @@ export function DomainsTab({ service }: { service: Service }) {
 
     useEffect(() => {
         void loadDomains();
+        const interval = setInterval(loadDomains, 10000);
+        return () => clearInterval(interval);
     }, [loadDomains]);
 
     const saveDomains = useCallback(async (newDomainList: string[]) => {
