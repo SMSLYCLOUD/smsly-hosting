@@ -24,16 +24,27 @@ def alert_user_task(self, deployment_id: str, error_message: str):
 
     try:
         deployment = Deployment.objects.select_related(
-            'service').get(id=deployment_id)
+            'service', 'service__owner').get(id=deployment_id)
         service_name = deployment.service.name
+        owner = deployment.service.owner
 
-        # TODO: In production, fetch phone number from user profile
-        # For now, use configured alert phone
-        alert_phone = config('ALERT_PHONE_NUMBER', default='')
+        # Try user's profile phone first, then fall back to env var
+        alert_phone = ''
+        if owner:
+            # Check common profile fields
+            alert_phone = (
+                getattr(owner, 'phone_number', '')
+                or getattr(owner, 'phone', '')
+                or ''
+            )
+        if not alert_phone:
+            alert_phone = config('ALERT_PHONE_NUMBER', default='')
 
         if not alert_phone:
             logger.warning(
-                "No ALERT_PHONE_NUMBER configured. Skipping SMS alert.")
+                "No phone number for user %s or ALERT_PHONE_NUMBER configured. Skipping SMS alert.",
+                getattr(owner, 'email', 'unknown'),
+            )
             return {"status": "skipped", "reason": "no_phone_configured"}
 
         scheme = "https" if config("USE_SSL", default=False, cast=bool) else "http"

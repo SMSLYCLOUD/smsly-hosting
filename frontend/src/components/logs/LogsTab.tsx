@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Terminal, Zap, Clock } from 'lucide-react';
+import { Terminal, Zap, Clock, RefreshCw } from 'lucide-react';
 import { Deployment } from '@/lib/api';
 
 /**
@@ -24,11 +24,14 @@ function addTimestamps(logs: string, startTime: string | null, durationSeconds: 
 
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
+    const [runtimeLogs, setRuntimeLogs] = useState<string>('');
+    const [runtimeLoading, setRuntimeLoading] = useState(false);
+    const [runtimeMessage, setRuntimeMessage] = useState('');
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [deployment?.build_logs]);
+    }, [deployment?.build_logs, runtimeLogs]);
 
     const timestampedLogs = useMemo(() => {
         if (!deployment?.build_logs) return [];
@@ -38,6 +41,39 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             deployment.duration_seconds || null
         );
     }, [deployment?.build_logs, deployment?.created_at, deployment?.duration_seconds]);
+
+    // Fetch runtime logs when tab is active
+    useEffect(() => {
+        if (logType !== 'RUNTIME' || !deployment?.id) return;
+
+        const fetchRuntimeLogs = async () => {
+            setRuntimeLoading(true);
+            try {
+                const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+                const res = await fetch(`${apiUrl}/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
+                    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setRuntimeLogs(data.runtime_logs || '');
+                    setRuntimeMessage(data.message || '');
+                } else {
+                    setRuntimeMessage('Failed to fetch runtime logs.');
+                }
+            } catch {
+                setRuntimeMessage('Could not connect to the API.');
+            } finally {
+                setRuntimeLoading(false);
+            }
+        };
+
+        fetchRuntimeLogs();
+        const interval = setInterval(fetchRuntimeLogs, 5000);
+        return () => clearInterval(interval);
+    }, [logType, deployment?.id]);
+
+    const runtimeLines = runtimeLogs ? runtimeLogs.split('\n') : [];
 
     return (
         <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
@@ -79,6 +115,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             Build Logs
                         </>
                     )}
+                    {logType === 'RUNTIME' && runtimeLogs && (
+                        <>
+                            <RefreshCw size={10} className="animate-spin" />
+                            Live
+                        </>
+                    )}
                 </div>
             </div>
 
@@ -115,18 +157,32 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                 )}
 
                 {logType === 'RUNTIME' && (
-                    <div className="flex flex-col items-center justify-center h-full text-center gap-3">
-                        <Terminal className="h-8 w-8 text-zinc-600" />
-                        <p className="text-zinc-500 font-sans text-sm">Runtime log streaming coming soon</p>
-                        <p className="text-zinc-600 font-sans text-xs max-w-sm">
-                            Container stdout/stderr streaming requires WebSocket infrastructure.
-                            Build logs above show the full deployment output.
-                        </p>
-                    </div>
+                    <>
+                        {runtimeLoading && !runtimeLogs && (
+                            <div className="flex items-center gap-2 text-zinc-500">
+                                <RefreshCw size={14} className="animate-spin" />
+                                Fetching container logs...
+                            </div>
+                        )}
+                        {runtimeMessage && !runtimeLogs && (
+                            <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+                                <Terminal className="h-8 w-8 text-zinc-600" />
+                                <p className="text-zinc-500 font-sans text-sm">{runtimeMessage}</p>
+                            </div>
+                        )}
+                        {runtimeLines.length > 0 && (
+                            <div className="whitespace-pre-wrap font-mono">
+                                {runtimeLines.map((line, i) => (
+                                    <div key={i} className="hover:bg-white/[0.02] py-px text-zinc-400">
+                                        {line}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
                 )}
                 <div ref={logsEndRef} />
             </div>
         </div>
     );
 }
-
