@@ -29,7 +29,7 @@ const ADDON_TYPES = [
     { value: 'MONGODB', label: 'MongoDB', icon: '🍃', color: 'text-green-400' },
 ];
 
-function getHeaders() {
+function getHeaders(): Record<string, string> {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     return token ? { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
 }
