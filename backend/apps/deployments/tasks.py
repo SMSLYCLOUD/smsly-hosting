@@ -238,6 +238,67 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     _broadcast_log(deployment, ai_log)
                 _broadcast_log(deployment, log_line)
 
+                # ── Auto-Inject Detected Environment Variables ──
+                try:
+                    from apps.intelligence.scanner import RepoScanner as _RS
+                    from apps.deployments.models import EnvironmentVariable
+                    import secrets as _secrets
+
+                    _scanner = _RS(source_dir)
+                    _scan = _scanner.scan()
+                    detected_vars = _scan.get('env_vars', [])
+
+                    if detected_vars:
+                        # Smart defaults for common env vars
+                        def _default_value(key):
+                            key_upper = key.upper()
+                            if 'SECRET_KEY' in key_upper:
+                                return _secrets.token_urlsafe(50)
+                            if key_upper == 'DATABASE_URL' or key_upper == 'DB_URL':
+                                return 'postgresql://user:password@db:5432/dbname'
+                            if key_upper == 'REDIS_URL':
+                                return 'redis://redis:6379/0'
+                            if key_upper == 'MONGODB_URI':
+                                return 'mongodb://mongo:27017/dbname'
+                            if key_upper == 'PORT':
+                                stack = _scan.get('stack', '')
+                                return '8000' if 'Django' in stack or 'Python' in stack else '3000'
+                            if key_upper == 'NODE_ENV':
+                                return 'production'
+                            if key_upper == 'DEBUG':
+                                return 'false'
+                            return 'CHANGE_ME'
+
+                        injected, skipped = 0, 0
+                        for var_name in detected_vars:
+                            _, created = EnvironmentVariable.objects.get_or_create(
+                                service=service,
+                                key=var_name,
+                                defaults={
+                                    'value': _default_value(var_name),
+                                    'is_secret': True,
+                                },
+                            )
+                            if created:
+                                injected += 1
+                            else:
+                                skipped += 1
+
+                        env_log = (
+                            f"\n🔧 Auto-injected {injected} env vars "
+                            f"({skipped} already set by user)\n"
+                        )
+                        deployment.build_logs += env_log
+                        deployment.save()
+                        _broadcast_log(deployment, env_log)
+                        logger.info(
+                            "Env auto-injection for %s: %d injected, %d skipped",
+                            deployment_id, injected, skipped,
+                        )
+
+                except Exception as env_err:
+                    logger.warning("Env auto-injection failed (non-fatal): %s", env_err)
+
                 # B. Build image — Dockerfile preferred, Nixpacks fallback
                 local_tag = (
                     f"smsly/{service.name}:"
