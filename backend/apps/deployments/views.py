@@ -488,6 +488,64 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'duration_seconds': deployment.duration_seconds,
         })
 
+    @action(detail=True, methods=['get'], url_path='runtime-logs')
+    def runtime_logs(self, request, pk=None):
+        """
+        Get live runtime logs from the deployed Docker container.
+        GET /api/v1/deployments/{id}/runtime-logs/?tail=200
+        """
+        deployment = self.get_object()
+        tail = int(request.query_params.get('tail', 200))
+        tail = min(tail, 1000)  # Cap at 1000 lines
+
+        try:
+            import docker
+            client = docker.from_env()
+
+            # Find container by service name
+            service_name = deployment.service.name
+            containers = client.containers.list(
+                filters={'name': service_name},
+                limit=1,
+            )
+
+            if not containers:
+                return Response({
+                    'id': str(deployment.id),
+                    'runtime_logs': '',
+                    'message': 'No running container found for this service.',
+                })
+
+            container = containers[0]
+            logs = container.logs(
+                stdout=True,
+                stderr=True,
+                tail=tail,
+                timestamps=True,
+            )
+            log_text = logs.decode('utf-8', errors='replace')
+
+            return Response({
+                'id': str(deployment.id),
+                'container_id': container.short_id,
+                'container_status': container.status,
+                'runtime_logs': log_text,
+            })
+
+        except ImportError:
+            return Response({
+                'id': str(deployment.id),
+                'runtime_logs': '',
+                'message': 'Docker SDK not available.',
+            })
+        except Exception as e:
+            logger.warning("Failed to fetch runtime logs for %s: %s", pk, e)
+            return Response({
+                'id': str(deployment.id),
+                'runtime_logs': '',
+                'message': f'Could not fetch runtime logs: {str(e)}',
+            })
+
     @action(detail=True, methods=['post'])
     def diagnose(self, request, pk=None):
         """
