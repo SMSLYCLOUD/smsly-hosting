@@ -22,10 +22,11 @@ export default function StatusPage() {
     const checkHealth = async () => {
       const results: ServiceHealth[] = [];
 
-      // Check API health
+      // Check API health — /health lives at root, not under /api/v1/
       try {
         const start = Date.now();
-        await api.get('/health/');
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+        await fetch(`${origin}/health`);
         results.push({ name: 'API Server', status: 'operational', latency_ms: Date.now() - start });
       } catch {
         try {

@@ -129,8 +129,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         const fetchBuildLogs = async () => {
             try {
                 const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-                const res = await fetch(`${apiUrl}/api/v1/deployments/${deployment.id}/`, {
+                const res = await fetch(`/api/v1/deployments/${deployment.id}/`, {
                     headers: token ? { 'Authorization': `Token ${token}` } : {},
                 });
                 if (res.ok) {
@@ -167,8 +166,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             setRuntimeLoading(true);
             try {
                 const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-                const res = await fetch(`${apiUrl}/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
+                const res = await fetch(`/api/v1/deployments/${deployment.id}/runtime-logs/?tail=200`, {
                     headers: token ? { 'Authorization': `Token ${token}` } : {},
                 });
                 if (res.ok) {
