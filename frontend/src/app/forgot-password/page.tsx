@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, Loader2, Mail } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import api from "@/lib/api";
 
 export default function ForgotPasswordPage() {
   const { toast } = useToast();
@@ -18,16 +19,18 @@ export default function ForgotPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    
-    // Simulate API call
-    await new Promise(r => setTimeout(r, 1500));
-    
-    setLoading(false);
-    setSent(true);
-    toast({
-      title: "Reset link sent",
-      description: "If an account exists with this email, you'll receive a reset link."
-    });
+    try {
+      await api.post('/auth/password/reset/', { email });
+    } catch {
+      // Silently succeed to prevent user enumeration
+    } finally {
+      setLoading(false);
+      setSent(true);
+      toast({
+        title: "Reset link sent",
+        description: "If an account exists with this email, you'll receive a reset link."
+      });
+    }
   };
 
   return (

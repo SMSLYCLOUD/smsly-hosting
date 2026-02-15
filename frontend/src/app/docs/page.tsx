@@ -36,7 +36,7 @@ const categories = [
       { title: 'Git Push Deploys', desc: 'Automatic deploys on every push', href: '/docs/install#updating-cloudneuron' },
       { title: 'Environment Variables', desc: 'Managing secrets and configuration', href: '/docs/install#credential-locations' },
       { title: 'Custom Domains & SSL', desc: 'Set up your own domain with auto-SSL', href: '/docs/install#ssl--custom-domains' },
-      { title: 'Preview Environments', desc: 'Ephemeral environments per PR', href: '#' },
+      { title: 'Preview Environments', desc: 'Ephemeral environments per PR', href: '/docs/install#managing-services' },
     ],
   },
   {
@@ -44,8 +44,8 @@ const categories = [
     icon: Settings,
     color: 'bg-violet-100 dark:bg-violet-900/50 text-violet-700 dark:text-violet-300',
     articles: [
-      { title: 'Build Configuration', desc: 'Customize your build process', href: '#' },
-      { title: 'Scaling & Resources', desc: 'CPU, memory, and replica settings', href: '#' },
+      { title: 'Build Configuration', desc: 'Customize your build process', href: '/docs/install#fresh-installation' },
+      { title: 'Scaling & Resources', desc: 'CPU, memory, and replica settings', href: '/docs/install#system-requirements' },
       { title: 'Networking', desc: 'Ports, internal services, and routing', href: '/docs/install#container-map' },
       { title: 'Health Checks', desc: 'Configure liveness and readiness probes', href: '/docs/install#health-check' },
     ],
@@ -58,7 +58,7 @@ const categories = [
       { title: 'Database Backup', desc: 'Manual and automated backup procedures', href: '/docs/install#database-operations' },
       { title: 'Database Restore', desc: 'Restore from backup files', href: '/docs/install#restore-from-backup' },
       { title: 'Reset Admin Password', desc: 'Recover admin access via CLI', href: '/docs/install#reset-admin-password' },
-      { title: 'Connection Pooling', desc: 'PgBouncer and connection management', href: '#' },
+      { title: 'Connection Pooling', desc: 'PgBouncer and connection management', href: '/docs/install#database-operations' },
     ],
   },
   {
@@ -67,7 +67,7 @@ const categories = [
     color: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300',
     articles: [
       { title: 'Security Hardening', desc: 'Post-install checklist and UFW firewall', href: '/docs/install#security-hardening' },
-      { title: 'Zero Trust Architecture', desc: 'How CloudNeuron secures your infrastructure', href: '#' },
+      { title: 'Zero Trust Architecture', desc: 'How CloudNeuron secures your infrastructure', href: '/docs/install#security-hardening' },
       { title: 'Secret Management', desc: 'Encrypted env vars with rotation', href: '/docs/install#credential-locations' },
       { title: 'Troubleshooting', desc: 'Common issues and solutions', href: '/docs/install#troubleshooting' },
     ],
@@ -77,10 +77,10 @@ const categories = [
     icon: Code,
     color: 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300',
     articles: [
-      { title: 'REST API Overview', desc: 'Authentication, pagination, and errors', href: '#' },
-      { title: 'Services API', desc: 'Create, update, and manage services', href: '#' },
-      { title: 'Deployments API', desc: 'Trigger and monitor deployments', href: '#' },
-      { title: 'Templates API', desc: 'List and deploy from templates', href: '#' },
+      { title: 'REST API Overview', desc: 'Authentication, pagination, and errors', href: '/docs/install#credential-locations' },
+      { title: 'Services API', desc: 'Create, update, and manage services', href: '/docs/install#managing-services' },
+      { title: 'Deployments API', desc: 'Trigger and monitor deployments', href: '/docs/install#updating-cloudneuron' },
+      { title: 'Templates API', desc: 'List and deploy from templates', href: '/docs/install#fresh-installation' },
     ],
   },
 ];
@@ -229,7 +229,7 @@ export default function DocsPage() {
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-3">Can&apos;t find what you&apos;re looking for?</h2>
           <p className="text-slate-600 dark:text-slate-400 mb-6">Our support team is here to help.</p>
           <Link
-            href="/support"
+            href="/contact"
             className="inline-flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 transition-all"
           >
             Contact Support <ArrowRight className="w-4 h-4" />

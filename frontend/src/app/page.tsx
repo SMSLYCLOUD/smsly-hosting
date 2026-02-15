@@ -446,7 +446,7 @@ export default function Home() {
                                 </ul>
 
                                 <Link
-                                    href={card.highlight ? "/register" : "#"}
+                                    href={card.highlight ? "/register" : "/pricing"}
                                     className={`w-full py-3 rounded-xl font-bold text-center transition-all ${
                                         card.highlight
                                         ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-lg hover:shadow-emerald-500/20'
@@ -583,7 +583,7 @@ export default function Home() {
                                         <br />
                                         <span className="text-emerald-500">✔</span> Deployment active
                                         <br />
-                                        <span className="text-emerald-500">✔</span> Available at: <a href="#" className="text-blue-400 underline hover:text-blue-300">https://my-app.smsly.app</a>
+                                        <span className="text-emerald-500">✔</span> Available at: <a href="https://smsly.app" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">https://my-app.smsly.app</a>
                                         <br /><br />
                                         <span className="text-emerald-400">➜</span> <span className="text-blue-400">~/my-app</span> <span className="animate-pulse">_</span>
                                     </div>
