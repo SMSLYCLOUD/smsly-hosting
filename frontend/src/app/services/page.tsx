@@ -28,10 +28,15 @@ export default function ServicesPage() {
 
   useEffect(() => {
     const fetchData = async () => {
-      const svcs = await servicesApi.list();
-      setServices(svcs);
+      try {
+        const svcs = await servicesApi.list();
+        setServices(svcs);
+      } catch (e) { console.error('Failed to fetch services:', e); }
     };
     fetchData();
+    // Auto-refresh every 5 seconds
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   return (

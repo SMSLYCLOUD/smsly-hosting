@@ -66,7 +66,11 @@ export default function ServersPage() {
         setLoading(false);
     }, []);
 
-    useEffect(() => { fetchServers(); }, [fetchServers]);
+    useEffect(() => {
+        fetchServers();
+        const interval = setInterval(fetchServers, 10000);
+        return () => clearInterval(interval);
+    }, [fetchServers]);
 
     const addServer = async () => {
         try {

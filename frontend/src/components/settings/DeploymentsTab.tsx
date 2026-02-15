@@ -17,13 +17,11 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [redeploying, setRedeploying] = useState(false);
 
     const loadDeployments = useCallback(async () => {
-        setLoading(true);
         try {
             const data = await servicesApi.getDeployments(serviceId);
             setDeployments(data);
         } catch (err) {
             console.error(err);
-            toast({ title: "Failed to load deployments", variant: "destructive" });
         } finally {
             setLoading(false);
         }
@@ -31,6 +29,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         void loadDeployments();
+        const interval = setInterval(loadDeployments, 5000);
+        return () => clearInterval(interval);
     }, [loadDeployments]);
 
     const handleRedeploy = async () => {

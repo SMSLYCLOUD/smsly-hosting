@@ -17,13 +17,11 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     const [visibleValues, setVisibleValues] = useState<Record<string, boolean>>({});
 
     const loadVars = useCallback(async () => {
-        setLoading(true);
         try {
             const data = await servicesApi.getEnvVars(serviceId);
             setVars(data);
         } catch (err) {
             console.error(err);
-            toast({ title: "Failed to load variables", variant: "destructive" });
         } finally {
             setLoading(false);
         }
@@ -31,6 +29,8 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         void loadVars();
+        const interval = setInterval(loadVars, 10000);
+        return () => clearInterval(interval);
     }, [loadVars]);
 
     const handleAdd = async () => {

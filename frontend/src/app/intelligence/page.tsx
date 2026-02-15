@@ -60,7 +60,11 @@ export default function IntelligencePage() {
     }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 15000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
 
   const handleRefresh = () => {
     setRefreshing(true);

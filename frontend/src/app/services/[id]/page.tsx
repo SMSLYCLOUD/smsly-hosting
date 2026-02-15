@@ -59,7 +59,9 @@ export default function ServiceDetailPage() {
     useEffect(() => {
         const key = localStorage.getItem('smsly_ai_key');
         if (key) setAiKey(key);
+    }, []);
 
+    useEffect(() => {
         const fetchData = async () => {
             try {
                 const s = await servicesApi.get(id);
@@ -71,6 +73,9 @@ export default function ServiceDetailPage() {
             } catch (err) { console.error(err); }
         };
         fetchData();
+        // Auto-refresh every 5 seconds
+        const interval = setInterval(fetchData, 5000);
+        return () => clearInterval(interval);
     }, [id]);
 
     // Support deep-links like `/services/:id?tab=logs`

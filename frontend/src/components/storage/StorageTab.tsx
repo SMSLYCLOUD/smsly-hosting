@@ -28,7 +28,6 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
     const [loadingFiles, setLoadingFiles] = useState(false);
 
     const loadVolumes = useCallback(async () => {
-        setLoading(true);
         try {
             const data = await servicesApi.getVolumes(serviceId);
             setVolumes(data);
@@ -41,6 +40,8 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         void loadVolumes();
+        const interval = setInterval(loadVolumes, 10000);
+        return () => clearInterval(interval);
     }, [loadVolumes]);
 
     const handleAdd = async () => {

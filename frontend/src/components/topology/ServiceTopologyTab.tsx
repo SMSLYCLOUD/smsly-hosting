@@ -63,7 +63,11 @@ export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: stri
         }
     }, [serviceId]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        fetchData();
+        const interval = setInterval(fetchData, 10000);
+        return () => clearInterval(interval);
+    }, [fetchData]);
 
     if (loading) {
         return (

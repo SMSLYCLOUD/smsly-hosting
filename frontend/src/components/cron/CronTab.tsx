@@ -17,7 +17,6 @@ export function CronTab({ serviceId }: { serviceId: string }) {
     const [newCommand, setNewCommand] = useState('');
 
     const loadJobs = useCallback(async () => {
-        setLoading(true);
         try {
             const data = await servicesApi.getCronJobs(serviceId);
             setJobs(data);
@@ -30,6 +29,8 @@ export function CronTab({ serviceId }: { serviceId: string }) {
 
     useEffect(() => {
         void loadJobs();
+        const interval = setInterval(loadJobs, 10000);
+        return () => clearInterval(interval);
     }, [loadJobs]);
 
     const handleAdd = async () => {
