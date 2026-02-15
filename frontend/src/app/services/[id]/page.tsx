@@ -15,6 +15,7 @@ import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
 import { MetricsTab } from '@/components/metrics/MetricsTab';
 import { CronTab } from '@/components/cron/CronTab';
 import { StorageTab } from '@/components/storage/StorageTab';
+import { AddonsTab } from '@/components/addons/AddonsTab';
 import { toast } from '@/components/ui/use-toast';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
@@ -193,6 +194,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'cron' && <CronTab serviceId={service.id} />}
 
             {activeTab === 'storage' && <StorageTab serviceId={service.id} />}
+
+            {activeTab === 'addons' && <AddonsTab serviceId={service.id} />}
 
             {activeTab === 'settings' && (
                 <div className="space-y-6">
