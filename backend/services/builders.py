@@ -10,9 +10,46 @@ import os
 from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 from django.conf import settings
-from tenacity import retry, stop_after_attempt, wait_exponential
+from django.utils import timezone
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 logger = logging.getLogger(__name__)
+
+# BuildKit corruption error signatures — if any of these appear in the
+# error output, the build cache is corrupt and must be pruned before retry.
+BUILDKIT_CACHE_ERROR_SIGNATURES = [
+    'contenthash',
+    'checksum.go',
+    'lazyChecksum',
+    'cacheContext',
+    'cacheManager',
+]
+
+
+def _is_buildkit_cache_error(exc: Exception) -> bool:
+    """Check if an exception is caused by BuildKit cache corruption."""
+    msg = str(exc).lower()
+    return any(sig.lower() in msg for sig in BUILDKIT_CACHE_ERROR_SIGNATURES)
+
+
+def _prune_buildkit_cache():
+    """Prune Docker BuildKit cache to recover from corruption."""
+    logger.warning("Pruning BuildKit cache after cache corruption error...")
+    try:
+        subprocess.run(
+            ["docker", "builder", "prune", "-f"],
+            capture_output=True, text=True, timeout=60
+        )
+        logger.info("BuildKit cache pruned successfully.")
+    except Exception as e:
+        logger.error("Failed to prune BuildKit cache: %s", e)
+
+
+def _before_retry(retry_state):
+    """Called before each retry — prune cache if it was a BuildKit error."""
+    exc = retry_state.outcome.exception()
+    if exc and _is_buildkit_cache_error(exc):
+        _prune_buildkit_cache()
 
 
 class BuildManager:
@@ -25,8 +62,11 @@ class BuildManager:
         self.service = deployment.service
         self.work_dir = Path(f"/tmp/builds/{self.deployment.id}")
 
-    @retry(stop=stop_after_attempt(3),
-           wait=wait_exponential(multiplier=1, min=4, max=10))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        before_sleep=_before_retry,
+    )
     def build_image(self):
         """
         Builds a Docker image from the repo with real-time log streaming.
@@ -308,7 +348,7 @@ class BuildManager:
                 pass
 
     def _log(self, message, timestamp=True):
-        """Append logs to the deployment atomically to avoid race conditions."""
+        """Append logs to the deployment atomically and push to WebSocket."""
         from django.db.models import Value
         from django.db.models.functions import Concat
         from apps.deployments.models import Deployment
@@ -320,3 +360,30 @@ class BuildManager:
         Deployment.objects.filter(id=self.deployment.id).update(
             build_logs=Concat('build_logs', Value(log_line))
         )
+
+        # Push to WebSocket channel layer for live streaming
+        self._push_to_websocket(log_line)
+
+    def _push_to_websocket(self, log_line):
+        """Send a build log line to WebSocket consumers via channel layer."""
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+
+            channel_layer = get_channel_layer()
+            if channel_layer is None:
+                return
+
+            group_name = f"build_logs_{self.deployment.id}"
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    'type': 'build_log',
+                    'log': log_line,
+                    'status': self.deployment.status,
+                    'timestamp': timezone.now().isoformat(),
+                }
+            )
+        except Exception:
+            # Never let WS errors break the build pipeline
+            pass
