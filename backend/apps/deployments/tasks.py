@@ -7,6 +7,7 @@ import logging
 # Register ecosystem tasks with Celery autodiscovery
 from . import tasks_ecosystem  # noqa: F401
 import os
+import re
 import tempfile
 import shutil
 import git
@@ -24,6 +25,60 @@ try:
     from apps.deployments.tasks_ai import analyze_failure_task
 except ImportError:
     analyze_failure_task = None
+
+
+def _extract_dockerfile_arg_names(dockerfile_path: str) -> set[str]:
+    """
+    Extract build-arg names declared via `ARG ...` in a Dockerfile.
+
+    Why: passing every env var as a build-arg leaks secrets into build logs and
+    can break builds due to extremely long CLI argument lists.
+    """
+    arg_names: set[str] = set()
+    try:
+        with open(dockerfile_path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not line.upper().startswith("ARG "):
+                    continue
+                # Syntax: ARG name[=default]
+                arg_def = line[4:].strip()
+                if not arg_def:
+                    continue
+                name = arg_def.split("=", 1)[0].strip()
+                name = name.split()[0].strip()
+                if name:
+                    arg_names.add(name)
+    except Exception:
+        return set()
+    return arg_names
+
+
+def _redact_values(text: str, values: list[str]) -> str:
+    """Best-effort log redaction for secret values."""
+    if not text:
+        return text
+
+    redacted = text
+    for val in values:
+        if not val:
+            continue
+        # Avoid overly aggressive redaction for tiny tokens.
+        if len(val) < 4:
+            continue
+        redacted = redacted.replace(val, "***")
+
+    # Also redact any `--build-arg KEY=...` value portion for common secret key names.
+    # Coarse on purpose: it's better to over-redact than leak.
+    redacted = re.sub(
+        r"(--build-arg\s+(?:[A-Z0-9_]*?(?:SECRET|TOKEN|PASSWORD|KEY|DSN)[A-Z0-9_]*?)=)([^\s]+)",
+        r"\1***",
+        redacted,
+        flags=re.IGNORECASE,
+    )
+    return redacted
 
 
 def _get_github_oauth_token_for_user(user):
@@ -305,14 +360,52 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     f"{deployment.commit_hash[:7]}")
 
                 # Detect best build strategy — check root first, then subdirs
-                dockerfile_path = os.path.join(source_dir, "Dockerfile")
+                # Respect monorepo root_directory if set.
+                build_context_dir = source_dir
+                try:
+                    root_dir = (getattr(service, "root_directory", "/") or "/").strip()
+                    if root_dir not in ("", "/", ".", "./"):
+                        rel_root = root_dir.lstrip("/\\")
+                        candidate = os.path.abspath(os.path.join(source_dir, rel_root))
+                        source_abs = os.path.abspath(source_dir)
+                        if not (candidate == source_abs or candidate.startswith(source_abs + os.sep)):
+                            raise ValueError("root_directory must be inside the cloned repo")
+                        if not os.path.isdir(candidate):
+                            raise ValueError(f"Directory not found: {root_dir}")
+                        build_context_dir = candidate
+
+                        log_line = f"\nUsing root_directory: {root_dir}\n"
+                        deployment.build_logs += log_line
+                        deployment.save()
+                        _broadcast_log(deployment, log_line)
+                except Exception as root_err:
+                    log_line = f"\nWARNING: invalid root_directory; using repo root ({root_err})\n"
+                    deployment.build_logs += log_line
+                    deployment.save()
+                    _broadcast_log(deployment, log_line)
+
+                env_var_objs = list(service.env_vars.all())
+                build_env_vars = {env.key: env.value for env in env_var_objs}
+                secret_values = [
+                    env.value for env in env_var_objs
+                    if (
+                        getattr(env, "is_secret", False)
+                        or re.search(
+                            r"(SECRET|TOKEN|PASSWORD|DSN|PRIVATE_KEY|API_KEY)",
+                            str(getattr(env, "key", "") or ""),
+                            re.IGNORECASE,
+                        )
+                    )
+                ]
+
+                dockerfile_path = os.path.join(build_context_dir, "Dockerfile")
                 has_dockerfile = os.path.isfile(dockerfile_path)
 
                 # If no root Dockerfile, search one level deep
                 if not has_dockerfile:
-                    for entry in os.listdir(source_dir):
-                        candidate = os.path.join(source_dir, entry, "Dockerfile")
-                        if os.path.isdir(os.path.join(source_dir, entry)) and os.path.isfile(candidate):
+                    for entry in os.listdir(build_context_dir):
+                        candidate = os.path.join(build_context_dir, entry, "Dockerfile")
+                        if os.path.isdir(os.path.join(build_context_dir, entry)) and os.path.isfile(candidate):
                             dockerfile_path = candidate
                             has_dockerfile = True
                             logger.info("Found Dockerfile in subdirectory: %s", candidate)
@@ -325,14 +418,27 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     deployment.save()
                     _broadcast_log(deployment, log_line)
 
-                    # Prepare build args from env vars
-                    build_env_vars = {
-                        env.key: env.value
-                        for env in service.env_vars.all()
-                    }
+                    # Prepare build args from env vars:
+                    # only pass args declared in the Dockerfile (prevents leaking secrets into build logs).
+                    dockerfile_arg_names = _extract_dockerfile_arg_names(dockerfile_path)
                     build_args = []
-                    for k, v in build_env_vars.items():
-                        build_args.extend(["--build-arg", f"{k}={v}"])
+                    if dockerfile_arg_names:
+                        arg_keys = [k for k in sorted(dockerfile_arg_names) if k in build_env_vars]
+                        for k in arg_keys:
+                            build_args.extend(["--build-arg", f"{k}={build_env_vars[k]}"])
+
+                        arg_preview = ", ".join(arg_keys[:15])
+                        if len(arg_keys) > 15:
+                            arg_preview += f", ...(+{len(arg_keys) - 15})"
+                        log_line = f"Using Dockerfile ARG build-args: {arg_preview or '(none)'}\n"
+                        deployment.build_logs += log_line
+                        deployment.save()
+                        _broadcast_log(deployment, log_line)
+                    else:
+                        # Fallback: pass only common public build-time vars.
+                        for k, v in build_env_vars.items():
+                            if k.startswith(("NEXT_PUBLIC_", "PUBLIC_", "VITE_")):
+                                build_args.extend(["--build-arg", f"{k}={v}"])
 
                     import subprocess
                     docker_cmd = [
@@ -340,7 +446,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         "-t", local_tag,
                         "-f", dockerfile_path,
                         *build_args,
-                        source_dir,
+                        build_context_dir,
                     ]
 
                     try:
@@ -352,15 +458,17 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         )
                         build_result = {
                             "image_name": local_tag,
-                            "stdout": process.stdout or "",
-                            "stderr": process.stderr or "",
+                            "stdout": _redact_values(process.stdout or "", secret_values),
+                            "stderr": _redact_values(process.stderr or "", secret_values),
                         }
                     except subprocess.CalledProcessError as e:
+                        stdout = _redact_values(getattr(e, "stdout", "") or "", secret_values)
+                        stderr = _redact_values(getattr(e, "stderr", "") or "", secret_values)
                         error_detail = ""
-                        if e.stdout:
-                            error_detail += f"\n--- Build Output ---\n{e.stdout[-3000:]}"
-                        if e.stderr:
-                            error_detail += f"\n--- Build Errors ---\n{e.stderr[-3000:]}"
+                        if stdout:
+                            error_detail += f"\n--- Build Output ---\n{stdout[-3000:]}"
+                        if stderr:
+                            error_detail += f"\n--- Build Errors ---\n{stderr[-3000:]}"
                         raise RuntimeError(f"Docker build failed:{error_detail}") from e
 
                 else:
@@ -370,29 +478,32 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     deployment.save()
                     _broadcast_log(deployment, log_line)
 
-                    # Prepare environment variables for build
-                    build_env_vars = {
-                        env.key: env.value
-                        for env in service.env_vars.all()
-                    }
-
                     # Build the image
                     build_result = NixpacksBuilder.build_image(
-                        source_dir=source_dir,
+                        source_dir=build_context_dir,
                         image_name=local_tag,
                         env_vars=build_env_vars
                     )
 
-                # Capture build output for debugging
-                build_stdout = build_result.get("stdout", "") if isinstance(build_result, dict) else ""
-                build_stderr = build_result.get("stderr", "") if isinstance(build_result, dict) else ""
+                # Capture build output for debugging (redacted).
+                build_stdout = (
+                    _redact_values(build_result.get("stdout", ""), secret_values)
+                    if isinstance(build_result, dict) else ""
+                )
+                build_stderr = (
+                    _redact_values(build_result.get("stderr", ""), secret_values)
+                    if isinstance(build_result, dict) else ""
+                )
 
-                if build_stdout:
-                    # Show last 3000 chars of build output
-                    log_line = f"\n--- Nixpacks Build Output ---\n{build_stdout[-3000:]}\n"
-                    deployment.build_logs += log_line
+                if build_stdout or build_stderr:
+                    output = ""
+                    if build_stdout:
+                        output += f"\n--- Build Output ---\n{build_stdout[-3000:]}\n"
+                    if build_stderr:
+                        output += f"\n--- Build Errors ---\n{build_stderr[-3000:]}\n"
+                    deployment.build_logs += output
                     deployment.save()
-                    _broadcast_log(deployment, log_line)
+                    _broadcast_log(deployment, output)
 
                 log_line = f"✓ Successfully built {local_tag}\n"
                 deployment.build_logs += log_line

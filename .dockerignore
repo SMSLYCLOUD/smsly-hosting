@@ -1,0 +1,26 @@
+.git
+.github
+.agent
+.devcontainer
+
+# Local env/secrets (never send in build context)
+.env
+.env.*
+*.env
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+backend/venv/
+backend/.venv/
+backend/db.sqlite3
+backend/staticfiles/
+backend/media/
+
+# Node / Next.js
+**/node_modules/
+**/.next/
+**/out/
+
+# Misc
+**/*.log

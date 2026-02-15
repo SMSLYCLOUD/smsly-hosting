@@ -10,16 +10,17 @@ def color_text(text, color_code):
     return f"\033[{color_code}m{text}\033[0m"
 
 def success(msg):
-    print(f"✅ {color_text(msg, '32')}")  # Green
+    # ASCII-only prefixes so this script works on Windows consoles (cp1252) too.
+    print(f"[OK] {color_text(msg, '32')}")  # Green
 
 def error(msg):
-    print(f"❌ {color_text(msg, '31')}")  # Red
+    print(f"[ERR] {color_text(msg, '31')}")  # Red
 
 def warning(msg):
-    print(f"⚠️  {color_text(msg, '33')}")  # Yellow
+    print(f"[WARN] {color_text(msg, '33')}")  # Yellow
 
 def info(msg):
-    print(f"ℹ️  {msg}")
+    print(f"[INFO] {msg}")
 
 def check_required_env_vars():
     """Check that all required environment variables are set."""
@@ -87,6 +88,8 @@ def check_security_settings():
             from cryptography.fernet import Fernet
             Fernet(encryption_key.encode())
             success("FIELD_ENCRYPTION_KEY format is valid")
+        except ImportError:
+            warning("cryptography not installed; cannot validate FIELD_ENCRYPTION_KEY format")
         except Exception as e:
             error(f"FIELD_ENCRYPTION_KEY is invalid: {e}")
             issues.append("Invalid encryption key")
@@ -124,6 +127,11 @@ def check_file_permissions():
     
     env_file = Path('.env')
     if env_file.exists():
+        # Windows/NTFS permissions don't map to POSIX file modes in a meaningful way.
+        if os.name != 'posix':
+            info(".env file exists (permission checks skipped on non-POSIX platforms)")
+            return True
+
         mode = oct(env_file.stat().st_mode)[-3:]
         if mode in ['600', '400']:
             success(f".env file permissions are secure ({mode})")
@@ -147,7 +155,7 @@ def main():
         load_dotenv()
         info("Loaded environment from .env file")
     except ImportError:
-        warning("python-decouple not installed, using system environment only")
+        warning("python-dotenv not installed, using system environment only")
     
     checks = [
         ("Environment Variables", check_required_env_vars),
@@ -178,10 +186,10 @@ def main():
     print(f"\nOverall: {passed}/{total} checks passed")
     
     if passed == total:
-        print("\n" + color_text("✅ ALL CHECKS PASSED - READY FOR PRODUCTION", '32'))
+        print("\n" + color_text("ALL CHECKS PASSED - READY FOR PRODUCTION", '32'))
         sys.exit(0)
     else:
-        print("\n" + color_text("❌ SOME CHECKS FAILED - FIX ISSUES BEFORE DEPLOYING", '31'))
+        print("\n" + color_text("SOME CHECKS FAILED - FIX ISSUES BEFORE DEPLOYING", '31'))
         sys.exit(1)
 
 if __name__ == '__main__':

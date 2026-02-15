@@ -81,3 +81,81 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: /api/v1
         run: npm run build
+
+  dockerfile-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: smsly_hosting
+          POSTGRES_USER: smsly_admin
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smsly_admin -d smsly_hosting"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Monolithic Dockerfile
+        run: |
+          docker build -t smsly-hosting:ci -f Dockerfile .
+
+      - name: Smoke Test Container
+        run: |
+          set -euo pipefail
+
+          docker run -d --rm --name smsly-hosting-ci --network host \
+            -e ROLE=web \
+            -e PORT=18080 \
+            -e BACKEND_PORT=18000 \
+            -e FRONTEND_PORT=13000 \
+            -e DEBUG=True \
+            -e SMSLY_DISABLE_SIGNATURE_CHECK=True \
+            -e SECRET_KEY=test_secret_key \
+            -e FIELD_ENCRYPTION_KEY=6wqMiiFNfx00cUbgSF55NClcHSdKnFpGhc8XfR7E99w= \
+            -e DATABASE_URL=postgres://smsly_admin:test_password@127.0.0.1:5432/smsly_hosting \
+            -e REDIS_URL=redis://127.0.0.1:6379/0 \
+            smsly-hosting:ci
+
+          echo "Waiting for /nginx-health..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:18080/nginx-health >/dev/null; then
+              echo "nginx ok"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Waiting for /health..."
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:18080/health >/dev/null; then
+              echo "health ok"
+              exit 0
+            fi
+            echo "waiting for health..."
+            sleep 2
+          done
+
+          echo "container logs:"
+          docker logs smsly-hosting-ci || true
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f smsly-hosting-ci 2>/dev/null || true

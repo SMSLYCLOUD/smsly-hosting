@@ -1,0 +1,13 @@
+# Local env/secrets
+.env
+.env.*
+*.env
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# Misc
+*.log
+build_output.txt

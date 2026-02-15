@@ -1,0 +1,19 @@
+# Local env/secrets
+.env
+.env.*
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# Local DB/artifacts
+db.sqlite3
+staticfiles/
+media/
+*.log
+check_output.txt
+migrate_output.txt

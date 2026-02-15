@@ -177,7 +177,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - INTERNAL_API_URL=http://backend:8000/api/v1
+      # Base URL only (Next rewrites append /api/* and /accounts/* paths)
+      - INTERNAL_API_URL=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
@@ -207,7 +208,7 @@ services:
       frontend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost/nginx-health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
