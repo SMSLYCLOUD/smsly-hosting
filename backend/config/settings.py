@@ -259,9 +259,25 @@ REDIS_HOST = config('REDIS_HOST', default='redis')
 REDIS_PORT = config('REDIS_PORT', default='6379')
 
 if REDIS_PASSWORD:
-    CELERY_BROKER_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+    _REDIS_BASE_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+    CELERY_BROKER_URL = f"{_REDIS_BASE_URL}/0"
 else:
     CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+
+# Django cache: use Redis (needed for accurate /health cache checks + rate limits).
+# Use a dedicated DB index to avoid colliding with Celery/Channels.
+REDIS_CACHE_URL = (
+    f"{_REDIS_BASE_URL}/2" if REDIS_PASSWORD else (
+        CELERY_BROKER_URL[:-2] + "/2" if isinstance(CELERY_BROKER_URL, str) and CELERY_BROKER_URL.endswith("/0")
+        else CELERY_BROKER_URL
+    )
+)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_CACHE_URL,
+    }
+}
 
 # Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
 CHANNEL_REDIS_URL = CELERY_BROKER_URL
@@ -347,3 +363,32 @@ LOGGING = {
         },
     },
 }
+
+# =============================================================================
+# Sentry (optional)
+# =============================================================================
+SENTRY_DSN = config('SENTRY_DSN', default='')
+SENTRY_TRACES_SAMPLE_RATE = config('SENTRY_TRACES_SAMPLE_RATE', default=0.0, cast=float)
+SENTRY_PROFILES_SAMPLE_RATE = config('SENTRY_PROFILES_SAMPLE_RATE', default=0.0, cast=float)
+SENTRY_ENVIRONMENT = config('SENTRY_ENVIRONMENT', default=('development' if DEBUG else 'production'))
+SENTRY_RELEASE = config('SENTRY_RELEASE', default='')
+
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.celery import CeleryIntegration
+        from sentry_sdk.integrations.django import DjangoIntegration
+        from sentry_sdk.integrations.redis import RedisIntegration
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
+            environment=SENTRY_ENVIRONMENT,
+            release=SENTRY_RELEASE or None,
+            send_default_pii=False,
+            traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+            profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
+        )
+    except Exception as e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Sentry init failed: %s", e)

@@ -59,6 +59,9 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         self.base_domain = base_domain
         self.tunnels: Dict[str, TunnelConnection] = {}  # subdomain -> tunnel
         self.request_logs: Dict[str, list] = {}  # tunnel_id -> [RequestLog]
+        # tunnel_id -> request_id -> Future[dict]
+        # Only the WS handler reads from the socket and resolves these futures.
+        self.pending_responses: Dict[str, Dict[str, asyncio.Future]] = {}
         self.app = web.Application()
         self._setup_routes()
 
@@ -108,6 +111,7 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
 
         self.tunnels[subdomain] = tunnel
         self.request_logs[tunnel_id] = []
+        self.pending_responses[tunnel_id] = {}
 
         logger.info("Tunnel connected: %s (id: %s)", subdomain, tunnel_id)
 
@@ -125,11 +129,24 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
                 if msg.type == WSMsgType.TEXT:
                     data = json.loads(msg.data)
                     if data.get('type') == 'response':
-                        # Response from local server, handled separately
-                        pass
+                        req_id = data.get('request_id')
+                        if not req_id:
+                            continue
+
+                        fut = self.pending_responses.get(tunnel_id, {}).pop(req_id, None)
+                        if fut is None:
+                            continue
+                        if not fut.done():
+                            fut.set_result(data)
                 elif msg.type == WSMsgType.ERROR:
                     logger.error("Tunnel error: %s", ws.exception())
         finally:
+            # Fail any in-flight requests so callers don't hang.
+            pending = self.pending_responses.pop(tunnel_id, {})
+            for fut in pending.values():
+                if not fut.done():
+                    fut.set_result({'status': 502, 'body': 'Connection closed'})
+
             # Cleanup on disconnect
             if subdomain in self.tunnels:
                 del self.tunnels[subdomain]
@@ -173,7 +190,16 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
         self.request_logs[tunnel.tunnel_id].append(log_entry)
 
         # Forward to tunnel client
-        start_time = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        start_time = loop.time()
+
+        pending = self.pending_responses.get(tunnel.tunnel_id)
+        if pending is None:
+            pending = {}
+            self.pending_responses[tunnel.tunnel_id] = pending
+
+        fut = loop.create_future()
+        pending[request_id] = fut
 
         await tunnel.websocket.send_json({
             'type': 'request',
@@ -188,35 +214,31 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
 
         # Wait for response from client (with timeout)
         try:
-            response_data = await asyncio.wait_for(
-                self._wait_for_response(tunnel.websocket, request_id),
-                timeout=30.0
-            )
+            response_data = await asyncio.wait_for(fut, timeout=30.0)
         except asyncio.TimeoutError:
+            pending.pop(request_id, None)
             log_entry.response_status = 504
             return web.Response(status=504, text="Tunnel timeout")
+        finally:
+            pending.pop(request_id, None)
 
         # Calculate response time
         response_time_ms = int(
-            (asyncio.get_event_loop().time() - start_time) * 1000)
+            (loop.time() - start_time) * 1000)
         log_entry.response_status = response_data.get('status', 502)
         log_entry.response_time_ms = response_time_ms
+
+        response_body = response_data.get('body', b'')
+        if response_body is None:
+            response_body = b''
+        elif isinstance(response_body, str):
+            response_body = response_body.encode('utf-8', errors='replace')
 
         return web.Response(
             status=response_data.get('status', 502),
             headers=response_data.get('headers', {}),
-            body=response_data.get('body', b''),
+            body=response_body,
         )
-
-    async def _wait_for_response(self, ws: web.WebSocketResponse, request_id: str) -> Dict:
-        """Wait for response message matching request_id."""
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                data = json.loads(msg.data)
-                if data.get('type') == 'response' and data.get(
-                        'request_id') == request_id:
-                    return data
-        return {'status': 502, 'body': b'Connection closed'}
 
     async def list_tunnels(self, request: web.Request) -> web.Response: # pylint: disable=unused-argument
         """List all active tunnels (for dashboard)."""

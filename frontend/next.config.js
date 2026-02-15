@@ -30,13 +30,13 @@ const nextConfig = {
         source: '/api/:path*',
         destination: process.env.INTERNAL_API_URL
           ? `${process.env.INTERNAL_API_URL}/api/:path*`
-          : 'http://localhost:8001/api/:path*',
+          : 'http://localhost:8000/api/:path*',
       },
       {
         source: '/accounts/:path*',
         destination: process.env.INTERNAL_API_URL
             ? `${process.env.INTERNAL_API_URL}/accounts/:path*`
-            : 'http://localhost:8001/accounts/:path*',
+            : 'http://localhost:8000/accounts/:path*',
       },
     ]
   },
