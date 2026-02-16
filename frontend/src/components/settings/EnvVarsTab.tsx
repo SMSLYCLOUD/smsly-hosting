@@ -5,7 +5,7 @@ import { servicesApi, EnvVar } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Plus, Trash2, Eye, EyeOff, Lock, Save, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, Lock, RotateCcw, Pencil, Check, X, Rocket, Loader2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 
 export function EnvVarsTab({ serviceId }: { serviceId: string }) {
@@ -15,6 +15,11 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     const [newValue, setNewValue] = useState('');
     const [newIsSecret, setNewIsSecret] = useState(false);
     const [visibleValues, setVisibleValues] = useState<Record<string, boolean>>({});
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const [editValue, setEditValue] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [hasChanges, setHasChanges] = useState(false);
+    const [deploying, setDeploying] = useState(false);
 
     const loadVars = useCallback(async () => {
         try {
@@ -45,6 +50,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             setNewValue('');
             setNewIsSecret(false);
             await loadVars();
+            setHasChanges(true);
             toast({ title: "Variable added" });
         } catch (err) {
             toast({ title: "Failed to add variable", variant: "destructive" });
@@ -56,9 +62,61 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
         try {
             await servicesApi.deleteEnvVar(serviceId, id);
             await loadVars();
+            setHasChanges(true);
             toast({ title: "Variable deleted" });
         } catch (err) {
             toast({ title: "Failed to delete variable", variant: "destructive" });
+        }
+    };
+
+    const startEdit = (v: EnvVar) => {
+        setEditingId(v.id);
+        setEditValue(v.value);
+        // Make sure the value is visible while editing
+        setVisibleValues(prev => ({ ...prev, [v.id]: true }));
+    };
+
+    const cancelEdit = () => {
+        setEditingId(null);
+        setEditValue('');
+    };
+
+    const handleSaveEdit = async (v: EnvVar) => {
+        if (editValue === v.value) {
+            cancelEdit();
+            return;
+        }
+        setSaving(true);
+        try {
+            // Delete old, create new with same key (no PATCH endpoint)
+            await servicesApi.deleteEnvVar(serviceId, v.id);
+            await servicesApi.createEnvVar(serviceId, {
+                key: v.key,
+                value: editValue,
+                is_secret: v.is_secret
+            });
+            await loadVars();
+            setEditingId(null);
+            setEditValue('');
+            setHasChanges(true);
+            toast({ title: "Variable updated" });
+        } catch (err) {
+            toast({ title: "Failed to update variable", variant: "destructive" });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleRedeploy = async () => {
+        setDeploying(true);
+        try {
+            await servicesApi.deploy(serviceId, 'HEAD');
+            setHasChanges(false);
+            toast({ title: "🚀 Deployment started", description: "Your service is redeploying with the updated variables." });
+        } catch (err) {
+            toast({ title: "Failed to deploy", variant: "destructive" });
+        } finally {
+            setDeploying(false);
         }
     };
 
@@ -70,6 +128,33 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+            {/* Redeploy Banner */}
+            {hasChanges && (
+                <div className="sticky top-0 z-50 animate-in slide-in-from-top-2 fade-in">
+                    <div className="flex items-center justify-between p-4 bg-gradient-to-r from-violet-600/90 to-indigo-600/90 backdrop-blur rounded-xl border border-white/10 shadow-lg shadow-violet-500/20">
+                        <div className="flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                            <p className="text-sm font-medium text-white">
+                                Variables changed — redeploy to apply
+                            </p>
+                        </div>
+                        <Button
+                            onClick={handleRedeploy}
+                            disabled={deploying}
+                            className="bg-white text-violet-700 hover:bg-white/90 font-semibold shadow-sm"
+                            size="sm"
+                        >
+                            {deploying ? (
+                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                                <Rocket className="w-4 h-4 mr-2" />
+                            )}
+                            {deploying ? 'Deploying...' : 'Redeploy'}
+                        </Button>
+                    </div>
+                </div>
+            )}
+
             <Card className="p-6 border-border shadow-md">
                 <div className="flex items-center justify-between mb-6">
                     <div>
@@ -99,6 +184,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                             type={newIsSecret ? "password" : "text"}
                             value={newValue}
                             onChange={(e) => setNewValue(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                         />
                     </div>
                     <div className="flex items-center gap-2">
@@ -125,38 +211,92 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                     ) : (
                         vars.map((v) => (
                             <div key={v.id} className="flex items-center gap-4 p-3 bg-card border border-border rounded-lg group hover:border-primary/50 transition-colors">
-                                <div className="flex-1 font-mono font-bold text-sm text-primary">
+                                <div className="flex-1 font-mono font-bold text-sm text-primary min-w-[120px]">
                                     {v.key}
                                 </div>
-                                <div className="flex-1 font-mono text-sm relative">
-                                    {v.is_secret && !visibleValues[v.id] ? (
-                                        <span className="text-muted-foreground flex items-center gap-2">
-                                            <Lock className="w-3 h-3" /> ••••••••••••••••
-                                        </span>
+
+                                {/* Value: display or edit mode */}
+                                <div className="flex-[2] font-mono text-sm relative">
+                                    {editingId === v.id ? (
+                                        <div className="flex items-center gap-2">
+                                            <Input
+                                                value={editValue}
+                                                onChange={(e) => setEditValue(e.target.value)}
+                                                className="font-mono text-sm h-8"
+                                                autoFocus
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleSaveEdit(v);
+                                                    if (e.key === 'Escape') cancelEdit();
+                                                }}
+                                            />
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                                                onClick={() => handleSaveEdit(v)}
+                                                disabled={saving}
+                                            >
+                                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-muted-foreground"
+                                                onClick={cancelEdit}
+                                            >
+                                                <X className="w-4 h-4" />
+                                            </Button>
+                                        </div>
                                     ) : (
-                                        <span className="break-all">{v.value}</span>
+                                        <>
+                                            {v.is_secret && !visibleValues[v.id] ? (
+                                                <span className="text-muted-foreground flex items-center gap-2">
+                                                    <Lock className="w-3 h-3" /> ••••••••••••••••
+                                                </span>
+                                            ) : (
+                                                <span className="break-all">{v.value}</span>
+                                            )}
+                                        </>
                                     )}
                                 </div>
-                                <div className="flex items-center gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                                    {v.is_secret && (
+
+                                {/* Actions */}
+                                {editingId !== v.id && (
+                                    <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                                        {/* Edit Button */}
                                         <Button
                                             variant="ghost"
                                             size="icon"
-                                            className="h-8 w-8"
-                                            onClick={() => toggleVisibility(v.id)}
+                                            className="h-8 w-8 text-muted-foreground hover:text-primary"
+                                            onClick={() => startEdit(v)}
+                                            title="Edit value"
                                         >
-                                            {visibleValues[v.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            <Pencil className="w-4 h-4" />
                                         </Button>
-                                    )}
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                                        onClick={() => handleDelete(v.id)}
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </Button>
-                                </div>
+
+                                        {/* Show/Hide Secret */}
+                                        {v.is_secret && (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                onClick={() => toggleVisibility(v.id)}
+                                            >
+                                                {visibleValues[v.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </Button>
+                                        )}
+
+                                        {/* Delete */}
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                            onClick={() => handleDelete(v.id)}
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         ))
                     )}
