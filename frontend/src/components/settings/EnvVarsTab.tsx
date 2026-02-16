@@ -210,9 +210,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                         </div>
                     ) : (
                         vars.map((v) => (
-                            <div key={v.id} className="flex items-center gap-4 p-3 bg-card border border-border rounded-lg group hover:border-primary/50 transition-colors">
-                                <div className="flex-1 font-mono font-bold text-sm text-primary min-w-[120px]">
+                            <div key={v.id} className={`flex items-center gap-4 p-3 bg-card border rounded-lg group transition-colors ${v.value?.startsWith('CHANGE_ME') ? 'border-red-500/50 bg-red-500/5' : 'border-border hover:border-primary/50'}`}>
+                                <div className={`flex-1 font-mono font-bold text-sm min-w-[120px] ${v.value?.startsWith('CHANGE_ME') ? 'text-red-500' : 'text-primary'}`}>
                                     {v.key}
+                                    {v.value?.startsWith('CHANGE_ME') && (
+                                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-medium normal-case">needs value</span>
+                                    )}
                                 </div>
 
                                 {/* Value: display or edit mode */}
