@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -51,6 +51,7 @@ export default function NewServicePage() {
 
   // Config state
   const [name, setName] = React.useState("")
+  const [branch, setBranch] = React.useState("main")
   const [region, setRegion] = React.useState("us-east-1")
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)
@@ -192,7 +193,7 @@ export default function NewServicePage() {
           deploy_type: deployType,
           repository_url: sourceType === "docker" ? null : finalRepo,
           docker_image: sourceType === "docker" ? dockerImage : null,
-          branch: "main",
+          branch: branch || "main",
           cpu_cores: 0.5,
           memory_mb: 512,
           regions: []
@@ -223,7 +224,7 @@ export default function NewServicePage() {
           "Content-Type": "application/json",
           "Authorization": `Token ${token}`
         },
-        body: JSON.stringify({ ref: "main" })
+        body: JSON.stringify({ ref: branch || "main" })
       })
 
       if (!deployRes.ok) throw new Error("Failed to trigger deployment")
@@ -393,6 +394,15 @@ export default function NewServicePage() {
                           to browse your repositories.
                         </p>
                       )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
+                      <Input
+                        placeholder="main"
+                        value={branch}
+                        onChange={(e) => setBranch(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">Branch, tag, or commit to deploy from. Defaults to <code>main</code>.</p>
                     </div>
                   </div>
                 )}
@@ -615,6 +625,12 @@ export default function NewServicePage() {
                     <Label>Service Name</Label>
                     <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-awesome-service" />
                   </div>
+                  {sourceType === "git" && (
+                  <div className="grid gap-2">
+                    <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
+                    <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
+                  </div>
+                  )}
                   <div className="grid gap-2">
                     <Label>Region</Label>
                     <Select value={region} onValueChange={setRegion}>
@@ -673,6 +689,12 @@ export default function NewServicePage() {
                       <div className="font-medium">{name}</div>
                       <div className="text-muted-foreground">Region</div>
                       <div className="font-medium">{region}</div>
+                      {sourceType === "git" && (
+                        <>
+                          <div className="text-muted-foreground">Branch</div>
+                          <div className="font-medium flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" />{branch || "main"}</div>
+                        </>
+                      )}
                       {analysis && (
                         <>
                           <div className="text-muted-foreground">Stack</div>
