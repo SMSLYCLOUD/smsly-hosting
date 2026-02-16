@@ -13,6 +13,12 @@ const PROTECTED_PREFIXES = [
   "/store",
   "/marketplace",
   "/settings",
+  "/ecosystem",
+  "/intelligence",
+  "/servers",
+  "/tunnels",
+  "/templates",
+  "/reseller",
 ];
 
 function isProtectedPath(pathname: string): boolean {
@@ -79,6 +85,12 @@ export const config = {
     "/store/:path*",
     "/marketplace/:path*",
     "/settings/:path*",
+    "/ecosystem/:path*",
+    "/intelligence/:path*",
+    "/servers/:path*",
+    "/tunnels/:path*",
+    "/templates/:path*",
+    "/reseller/:path*",
     "/login",
     "/register",
     "/auth/:path*",

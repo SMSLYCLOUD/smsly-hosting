@@ -69,6 +69,7 @@ services:
     volumes:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
+      - caddy_config:/caddy-config
       # SECURITY: Use socket-proxy instead of direct socket mount
       # - /var/run/docker.sock:/var/run/docker.sock  # REMOVED - security risk
     healthcheck:
@@ -231,3 +232,9 @@ volumes:
   registry_data:
   static_volume:
   media_volume:
+  caddy_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/smsly-hosting/caddy-config

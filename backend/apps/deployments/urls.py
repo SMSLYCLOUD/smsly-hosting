@@ -2,7 +2,7 @@
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from rest_framework_nested import routers
-from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet
+from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
 from .views_cron import CronJobViewSet
@@ -57,6 +57,7 @@ urlpatterns = router.urls + [
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
+    path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/github/', github_connection, name='github-connection'),

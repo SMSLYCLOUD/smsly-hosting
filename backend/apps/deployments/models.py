@@ -289,3 +289,48 @@ class Deployment(TimeStampedModel):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class PlatformConfig(models.Model):
+    """
+    Singleton model for platform-wide domain & SSL configuration.
+    Only one row (pk=1) exists. Stores domain, SSL mode, Cloudflare
+    API token, and wildcard subdomain settings.
+    """
+    domain = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Primary domain (e.g. cloud.smsly.cloud)")
+    use_ssl = models.BooleanField(
+        default=False,
+        help_text="Enable HTTPS via Let's Encrypt")
+    cloudflare_api_token = EncryptedCharField(
+        max_length=255, blank=True, default='',
+        help_text="Cloudflare API Token for DNS challenge (Edit zone DNS)")
+    wildcard_subdomains = models.BooleanField(
+        default=True,
+        help_text="Enable wildcard SSL for *.domain deployed services")
+    server_ip = models.GenericIPAddressField(
+        blank=True, null=True,
+        help_text="Server public IP (auto-detected or manual)")
+    caddy_status = models.CharField(
+        max_length=20, default='unknown',
+        help_text="Last known Caddy status")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform Configuration"
+        verbose_name_plural = "Platform Configuration"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1  # Enforce singleton
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        """Get or create the singleton config."""
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        mode = "SSL" if self.use_ssl else "HTTP"
+        return f"Platform Config ({self.domain or 'IP-only'} / {mode})"

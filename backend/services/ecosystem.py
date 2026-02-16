@@ -122,8 +122,8 @@ BUILD_STRATEGY = {
 }
 
 
-def heuristic_analysis(files: List[str]) -> dict:
-    """Fast local analysis without AI calls."""
+def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
+    """Fast local analysis without AI calls. Optionally scans cloned files for env vars."""
     languages = []
     port = 3000
     addons = set()
@@ -165,14 +165,144 @@ def heuristic_analysis(files: List[str]) -> dict:
     # Primary stack is the first detected, but expose all languages
     stack = languages[0] if languages else "unknown"
 
+    # ── Env Var Detection ──
+    env_vars = _detect_env_vars(files, stack, port, clone_dir)
+
     return {
         "stack": stack,
         "languages": languages,
         "port": port,
         "build": build,
         "addons": list(addons),
-        "env_vars": {},
+        "env_vars": env_vars,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Env Var Intelligence
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Per-stack default env vars
+_STACK_ENV_DEFAULTS = {
+    'nextjs': ['NEXT_PUBLIC_API_URL', 'NEXTAUTH_SECRET', 'DATABASE_URL'],
+    'django': ['SECRET_KEY', 'DEBUG', 'DATABASE_URL', 'ALLOWED_HOSTS'],
+    'python': ['SECRET_KEY', 'DATABASE_URL'],
+    'node':   ['PORT', 'DATABASE_URL'],
+    'rust':   ['PORT', 'DATABASE_URL', 'RUST_LOG'],
+    'go':     ['PORT', 'DATABASE_URL'],
+    'ruby':   ['RAILS_ENV', 'SECRET_KEY_BASE', 'DATABASE_URL'],
+    'php':    ['APP_KEY', 'DB_CONNECTION', 'DB_HOST'],
+}
+
+# Rich hints for common env vars
+_ENV_HINTS: Dict[str, dict] = {
+    'SECRET_KEY':          {'hint': 'Random 50+ char string', 'is_secret': True,  'required': True,  'generate': True},
+    'NEXTAUTH_SECRET':     {'hint': 'Random encryption key',  'is_secret': True,  'required': True,  'generate': True},
+    'JWT_SECRET':          {'hint': 'JWT signing secret',     'is_secret': True,  'required': True,  'generate': True},
+    'SECRET_KEY_BASE':     {'hint': 'Rails secret key',       'is_secret': True,  'required': True,  'generate': True},
+    'APP_KEY':             {'hint': 'Laravel app key',        'is_secret': True,  'required': True,  'generate': True},
+    'DATABASE_URL':        {'hint': 'postgres://user:pass@host:5432/db', 'is_secret': True, 'required': True},
+    'REDIS_URL':           {'hint': 'redis://localhost:6379/0', 'required': False},
+    'API_KEY':             {'hint': 'Your API key',           'is_secret': True,  'required': True,  'user_required': True},
+    'OPENAI_API_KEY':      {'hint': 'sk-... from platform.openai.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'GEMINI_API_KEY':      {'hint': 'From aistudio.google.com',        'is_secret': True, 'required': True, 'user_required': True},
+    'ANTHROPIC_API_KEY':   {'hint': 'sk-ant-... from console.anthropic.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'STRIPE_SECRET_KEY':   {'hint': 'sk_live_... from Stripe', 'is_secret': True, 'required': True, 'user_required': True},
+    'STRIPE_PUBLISHABLE_KEY': {'hint': 'pk_live_... from Stripe', 'required': True, 'user_required': True},
+    'NEXT_PUBLIC_API_URL': {'hint': 'https://api.example.com', 'required': False},
+    'DEBUG':               {'hint': 'False for production',   'default': 'False', 'required': False},
+    'FLASK_ENV':           {'hint': 'production',             'default': 'production', 'required': False},
+    'RAILS_ENV':           {'hint': 'production',             'default': 'production', 'required': False},
+    'RUST_LOG':            {'hint': 'info, debug, or warn',   'default': 'info',  'required': False},
+    'PORT':                {'hint': 'Listening port',         'required': False},
+    'ALLOWED_HOSTS':       {'hint': 'Comma-separated or *',  'default': '*',     'required': False},
+    'AI_PROVIDER':         {'hint': 'openai | gemini | anthropic | auto', 'required': True, 'user_required': True},
+    'QDRANT_PORT':         {'hint': 'Default: 6333',         'default': '6333',  'required': True},
+    'QDRANT_HOST':         {'hint': 'Qdrant hostname',       'required': True,   'user_required': True},
+    'SENTRY_DSN':          {'hint': 'https://...@sentry.io/...', 'is_secret': True, 'required': False, 'user_required': True},
+}
+
+
+def _detect_env_vars(files: List[str], stack: str, port: int,
+                     clone_dir: str = None) -> list:
+    """Detect and enrich env vars from stack defaults + .env.example + config patterns."""
+    import re as _re
+    import secrets
+
+    # 1. Start with stack defaults
+    var_keys: List[str] = list(_STACK_ENV_DEFAULTS.get(stack, []))
+
+    # 2. Scan .env.example / .env.sample / .env.template from cloned files
+    if clone_dir:
+        env_example_files = [f for f in files
+                             if os.path.basename(f) in ('.env.example', '.env.sample', '.env.template')]
+        for ef in env_example_files:
+            try:
+                full_path = os.path.join(clone_dir, ef)
+                with open(full_path, 'r', errors='replace') as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        if '=' in line:
+                            key = line.split('=', 1)[0].strip()
+                            if key and _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+                                var_keys.append(key)
+            except Exception:
+                pass
+
+        # 3. Scan config.py / settings.py for os.environ / os.getenv patterns
+        config_candidates = [f for f in files
+                             if os.path.basename(f) in ('config.py', 'settings.py', '.env')]
+        for cf in config_candidates:
+            try:
+                full_path = os.path.join(clone_dir, cf)
+                with open(full_path, 'r', errors='replace') as fh:
+                    content = fh.read()
+                patterns = _re.findall(
+                    r"os\.(?:environ\[?['\"]|environ\.get\(['\"]|getenv\(['\"])([A-Z_][A-Z0-9_]*)",
+                    content
+                )
+                var_keys.extend(patterns)
+            except Exception:
+                pass
+
+    # 4. Deduplicate while preserving order
+    seen: set = set()
+    unique_keys: List[str] = []
+    for k in var_keys:
+        ku = k.upper()
+        if ku not in seen:
+            seen.add(ku)
+            unique_keys.append(k)
+
+    # 5. Enrich with hints
+    result = []
+    for key in unique_keys:
+        hints = _ENV_HINTS.get(key, {})
+        obj: Dict[str, Any] = {
+            'key': key,
+            'hint': hints.get('hint', ''),
+            'required': hints.get('required', True),
+            'is_secret': hints.get('is_secret',
+                                   any(w in key.lower() for w in ('key', 'secret', 'password', 'token'))),
+            'user_required': hints.get('user_required', False),
+        }
+
+        # Auto-generate secrets
+        if hints.get('generate'):
+            obj['default'] = secrets.token_urlsafe(48)
+            obj['user_required'] = False
+        elif 'default' in hints:
+            obj['default'] = hints['default']
+
+        # PORT gets detected port
+        if key == 'PORT':
+            obj['default'] = str(port)
+
+        result.append(obj)
+
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

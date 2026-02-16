@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi, aiApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -56,12 +56,57 @@ export default function SettingsPage() {
   const [aiKeys, setAiKeys] = useState<Record<string, string>>({});
   const [aiModels, setAiModels] = useState<Record<string, string>>({});
 
+  // Domain & SSL Config State
+  const [domainConfig, setDomainConfig] = useState<any>(null);
+  const [domainForm, setDomainForm] = useState({
+    domain: '',
+    use_ssl: false,
+    wildcard_subdomains: true,
+    cloudflare_api_token: '',
+    server_ip: '',
+  });
+  const [savingDomain, setSavingDomain] = useState(false);
+  const [showCfToken, setShowCfToken] = useState(false);
+
   useEffect(() => {
     fetchProviders();
     fetchAIConfig();
     fetchSystemConfig();
     fetchProfile();
+    fetchDomainConfig();
   }, []);
+
+  const fetchDomainConfig = async () => {
+    try {
+      const data = await systemApi.getDomainConfig();
+      setDomainConfig(data);
+      setDomainForm({
+        domain: data.domain || '',
+        use_ssl: data.use_ssl || false,
+        wildcard_subdomains: data.wildcard_subdomains ?? true,
+        cloudflare_api_token: '',
+        server_ip: data.server_ip || '',
+      });
+    } catch (err) {
+      console.error('Failed to fetch domain config', err);
+    }
+  };
+
+  const handleSaveDomainConfig = async () => {
+    setSavingDomain(true);
+    try {
+      const payload: any = { ...domainForm };
+      if (!payload.cloudflare_api_token) delete payload.cloudflare_api_token;
+      const result = await systemApi.updateDomainConfig(payload);
+      toast({ title: 'Domain Config Saved', description: result.message || 'Configuration applied.' });
+      fetchDomainConfig();
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || 'Failed to save domain config.';
+      toast({ title: 'Error', description: msg, variant: 'destructive' });
+    } finally {
+      setSavingDomain(false);
+    }
+  };
 
   const fetchProfile = async () => {
     try {
@@ -593,6 +638,92 @@ export default function SettingsPage() {
         <TabsContent value="infra">
           {systemConfig ? (
             <div className="space-y-6">
+              {/* Domain & SSL Configuration */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Globe className="h-5 w-5 text-cyan-500" /> Domain & SSL</CardTitle>
+                  <CardDescription>Configure your domain, SSL certificates, and wildcard subdomains for deployed services.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Domain</Label>
+                      <Input
+                        placeholder="cloud.example.com"
+                        value={domainForm.domain}
+                        onChange={(e) => setDomainForm(prev => ({ ...prev, domain: e.target.value }))}
+                      />
+                      <p className="text-xs text-muted-foreground">Leave empty for IP-only mode</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Server IP</Label>
+                      <Input
+                        placeholder="Auto-detected"
+                        value={domainForm.server_ip}
+                        onChange={(e) => setDomainForm(prev => ({ ...prev, server_ip: e.target.value }))}
+                      />
+                      <p className="text-xs text-muted-foreground">Public IPv4 of this server</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-6 py-2">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={domainForm.use_ssl ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setDomainForm(prev => ({ ...prev, use_ssl: !prev.use_ssl }))}
+                      >
+                        <Lock className="h-3 w-3 mr-1" />
+                        {domainForm.use_ssl ? "SSL Enabled" : "SSL Disabled"}
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={domainForm.wildcard_subdomains ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setDomainForm(prev => ({ ...prev, wildcard_subdomains: !prev.wildcard_subdomains }))}
+                        disabled={!domainForm.use_ssl}
+                      >
+                        {domainForm.wildcard_subdomains ? "✓ Wildcard Subdomains" : "No Wildcard"}
+                      </Button>
+                    </div>
+                    {domainConfig && (
+                      <Badge variant={domainConfig.caddy_status === 'applied' ? 'default' : domainConfig.caddy_status === 'error' ? 'destructive' : 'secondary'}>
+                        Caddy: {domainConfig.caddy_status}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {domainForm.use_ssl && domainForm.wildcard_subdomains && (
+                    <div className="space-y-2">
+                      <Label>Cloudflare API Token</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type={showCfToken ? "text" : "password"}
+                          placeholder={domainConfig?.cloudflare_api_token_set ? "••••••••  (already set)" : "Enter Cloudflare API Token"}
+                          value={domainForm.cloudflare_api_token}
+                          onChange={(e) => setDomainForm(prev => ({ ...prev, cloudflare_api_token: e.target.value }))}
+                          className="flex-1"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => setShowCfToken(!showCfToken)}>
+                          {showCfToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Required for wildcard SSL. Create at Cloudflare → API Tokens → Edit zone DNS.</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <Button onClick={handleSaveDomainConfig} disabled={savingDomain}>
+                      {savingDomain ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Applying...</> : 'Save & Apply'}
+                    </Button>
+                    <Button variant="outline" onClick={fetchDomainConfig}>
+                      Refresh
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
               {/* Redis / Celery */}
               <Card>
                 <CardHeader>

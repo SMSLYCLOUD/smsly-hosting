@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -20,6 +20,16 @@ const STACK_ICONS: Record<string, string> = {
   java: "☕", php: "🐘", dotnet: "🔷", static: "📄", unknown: "📦",
 }
 
+// Enriched env var from AI analysis
+interface AnalysisEnvVar {
+  key: string
+  hint?: string
+  required?: boolean
+  is_secret?: boolean
+  user_required?: boolean
+  default?: string
+}
+
 interface Analysis {
   repo: string
   name: string
@@ -28,7 +38,7 @@ interface Analysis {
   port: number
   build: string
   addons: string[]
-  env_vars: Record<string, string>
+  env_vars: AnalysisEnvVar[] | Record<string, string>
 }
 
 // ── Steps ──────────────────────────────────────────────────────────────────
@@ -60,6 +70,8 @@ export default function NewServicePage() {
   const [analyzing, setAnalyzing] = React.useState(false)
   const [analysis, setAnalysis] = React.useState<Analysis | null>(null)
   const [deployMode, setDeployMode] = React.useState<"auto" | "manual" | null>(null)
+  const [showEnvPrompt, setShowEnvPrompt] = React.useState(false)
+  const [userRequiredVars, setUserRequiredVars] = React.useState<Record<string, string>>({})
 
   // GitHub repos state
   const [ghRepos, setGhRepos] = React.useState<any[]>([])
@@ -96,10 +108,27 @@ export default function NewServicePage() {
       setAnalysis(data)
       // Pre-fill config from analysis
       setName(data.name || "")
-      if (data.env_vars && Object.keys(data.env_vars).length > 0) {
+
+      // Handle enriched env vars (list of objects) or legacy format (Record)
+      if (Array.isArray(data.env_vars) && data.env_vars.length > 0) {
+        setEnvVars(
+          data.env_vars.map((ev: AnalysisEnvVar) => ({
+            key: ev.key,
+            value: ev.default || '',
+            isSecret: ev.is_secret || false,
+          }))
+        )
+        // Pre-fill userRequiredVars for the prompt
+        const reqVars: Record<string, string> = {}
+        data.env_vars.forEach((ev: AnalysisEnvVar) => {
+          if (ev.user_required) reqVars[ev.key] = ''
+        })
+        setUserRequiredVars(reqVars)
+      } else if (data.env_vars && typeof data.env_vars === 'object' && !Array.isArray(data.env_vars)) {
+        // Legacy Record<string, string> format
         setEnvVars(
           Object.entries(data.env_vars).map(([key, value]) => ({
-            key, value, isSecret: key.toLowerCase().includes("secret") || key.toLowerCase().includes("key"),
+            key, value: value as string, isSecret: key.toLowerCase().includes("secret") || key.toLowerCase().includes("key"),
           }))
         )
       }
@@ -147,7 +176,13 @@ export default function NewServicePage() {
 
     if (step === 2) {
       if (deployMode === "auto") {
-        // Skip config, go straight to deploy
+        // Check if there are user-required vars (API keys, etc.)
+        const hasUserRequired = Object.keys(userRequiredVars).length > 0
+        if (hasUserRequired) {
+          setShowEnvPrompt(true)
+          return
+        }
+        // No user-required vars, go straight to deploy
         setStep(4)
       } else {
         // Manual — go to config (pre-filled)
@@ -601,6 +636,91 @@ export default function NewServicePage() {
                       </Button>
                     </CardContent>
                   </Card>
+                )}
+
+                {/* ── USER-REQUIRED ENV VAR PROMPT ── */}
+                {showEnvPrompt && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-6"
+                  >
+                    <Card className="border-amber-500/30 bg-amber-500/5">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center gap-2">
+                          <Key className="h-5 w-5 text-amber-500" />
+                          <CardTitle className="text-lg">Configure Required Variables</CardTitle>
+                        </div>
+                        <CardDescription>
+                          AI detected variables that need your input. Fill them in or skip to use placeholders.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {Object.entries(userRequiredVars).map(([key, val]) => {
+                          const envVar = Array.isArray(analysis?.env_vars)
+                            ? analysis.env_vars.find((ev: AnalysisEnvVar) => ev.key === key)
+                            : null
+                          return (
+                            <div key={key} className="space-y-1.5">
+                              <Label className="flex items-center gap-2 font-mono text-sm">
+                                <Key className="h-3 w-3 text-amber-500" />
+                                {key}
+                                {envVar?.required && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 font-medium">Required</span>}
+                              </Label>
+                              {envVar?.hint && (
+                                <p className="text-xs text-muted-foreground pl-5">{envVar.hint}</p>
+                              )}
+                              <Input
+                                type={envVar?.is_secret ? "password" : "text"}
+                                placeholder={envVar?.hint || `Enter ${key}`}
+                                value={val}
+                                onChange={(e) => setUserRequiredVars(prev => ({ ...prev, [key]: e.target.value }))}
+                                className="font-mono"
+                              />
+                            </div>
+                          )
+                        })}
+
+                        <div className="flex gap-3 pt-4 border-t">
+                          <Button
+                            onClick={() => {
+                              setEnvVars(prev => prev.map(v => {
+                                if (v.key in userRequiredVars && userRequiredVars[v.key]) {
+                                  return { ...v, value: userRequiredVars[v.key] }
+                                }
+                                return v
+                              }))
+                              setShowEnvPrompt(false)
+                              setStep(4)
+                            }}
+                            className="flex-1"
+                          >
+                            <Rocket className="h-4 w-4 mr-2" />
+                            Continue to Deploy
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setEnvVars(prev => prev.map(v => {
+                                if (v.key in userRequiredVars && !userRequiredVars[v.key] && !v.value) {
+                                  return { ...v, value: `CHANGE_ME_${Math.random().toString(36).slice(2, 10)}` }
+                                }
+                                if (v.key in userRequiredVars && userRequiredVars[v.key]) {
+                                  return { ...v, value: userRequiredVars[v.key] }
+                                }
+                                return v
+                              }))
+                              setShowEnvPrompt(false)
+                              setStep(4)
+                            }}
+                          >
+                            <SkipForward className="h-4 w-4 mr-2" />
+                            Skip (use placeholders)
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </motion.div>
                 )}
               </motion.div>
             )}
