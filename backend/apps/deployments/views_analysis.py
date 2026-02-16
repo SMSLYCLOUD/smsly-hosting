@@ -61,13 +61,43 @@ BUILD_COMMANDS = {
     'rust': {'build': 'cargo build --release', 'start': './target/release/app'},
 }
 
-# Environment variable templates
+# Environment variable templates — rich objects
 ENV_VAR_TEMPLATES = {
     'nextjs': ['NEXT_PUBLIC_API_URL', 'NEXTAUTH_SECRET', 'DATABASE_URL'],
     'django': ['SECRET_KEY', 'DEBUG', 'DATABASE_URL', 'ALLOWED_HOSTS'],
     'fastapi': ['DATABASE_URL', 'SECRET_KEY', 'API_KEY'],
+    'flask': ['SECRET_KEY', 'DATABASE_URL', 'FLASK_ENV'],
     'express': ['PORT', 'DATABASE_URL', 'JWT_SECRET'],
+    'nestjs': ['PORT', 'DATABASE_URL', 'JWT_SECRET'],
     'rails': ['RAILS_ENV', 'SECRET_KEY_BASE', 'DATABASE_URL'],
+    'laravel': ['APP_KEY', 'DB_CONNECTION', 'DB_HOST', 'DB_DATABASE'],
+}
+
+# Hints for common env vars — used to enrich analysis results
+ENV_VAR_HINTS = {
+    'SECRET_KEY': {'hint': 'Random 50+ char string for cryptographic signing', 'is_secret': True, 'required': True, 'generate': True},
+    'NEXTAUTH_SECRET': {'hint': 'Random string for NextAuth session encryption', 'is_secret': True, 'required': True, 'generate': True},
+    'JWT_SECRET': {'hint': 'Random string for JWT token signing', 'is_secret': True, 'required': True, 'generate': True},
+    'SECRET_KEY_BASE': {'hint': 'Random hex string (rails secret)', 'is_secret': True, 'required': True, 'generate': True},
+    'APP_KEY': {'hint': 'base64:... Laravel app key', 'is_secret': True, 'required': True, 'generate': True},
+    'DATABASE_URL': {'hint': 'postgres://user:pass@host:5432/dbname', 'is_secret': True, 'required': True},
+    'API_KEY': {'hint': 'API key from your provider', 'is_secret': True, 'required': True, 'user_required': True},
+    'OPENAI_API_KEY': {'hint': 'sk-... from platform.openai.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'GEMINI_API_KEY': {'hint': 'From aistudio.google.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'ANTHROPIC_API_KEY': {'hint': 'sk-ant-... from console.anthropic.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'STRIPE_SECRET_KEY': {'hint': 'sk_live_... or sk_test_... from Stripe dashboard', 'is_secret': True, 'required': True, 'user_required': True},
+    'STRIPE_PUBLISHABLE_KEY': {'hint': 'pk_live_... or pk_test_...', 'is_secret': False, 'required': True, 'user_required': True},
+    'NEXT_PUBLIC_API_URL': {'hint': 'https://api.example.com', 'is_secret': False, 'required': False},
+    'DEBUG': {'hint': 'False for production', 'default': 'False', 'required': False},
+    'FLASK_ENV': {'hint': 'production or development', 'default': 'production', 'required': False},
+    'RAILS_ENV': {'hint': 'production or development', 'default': 'production', 'required': False},
+    'PORT': {'hint': 'Integer, e.g. 8000', 'required': False},
+    'ALLOWED_HOSTS': {'hint': 'Comma-separated domains or *', 'default': '*', 'required': False},
+    'AI_PROVIDER': {'hint': 'openai | gemini | anthropic | grok | auto', 'required': True, 'user_required': True},
+    'QDRANT_PORT': {'hint': 'Integer, usually 6333', 'required': True},
+    'QDRANT_HOST': {'hint': 'Qdrant server hostname', 'required': True, 'user_required': True},
+    'REDIS_URL': {'hint': 'redis://localhost:6379/0', 'is_secret': False, 'required': False},
+    'SENTRY_DSN': {'hint': 'https://...@sentry.io/...', 'is_secret': True, 'required': False, 'user_required': True},
 }
 
 
@@ -151,7 +181,8 @@ class RepoAnalysisView(APIView):
             # Detect framework from files
             framework, confidence = self._detect_framework(file_names, owner, repo, token)
 
-            return self._build_response(framework, confidence, file_names)
+            return self._build_response(framework, confidence, file_names,
+                                        owner=owner, repo=repo, token=token)
 
         except requests.Timeout:
             return self._fallback_analysis(
@@ -289,12 +320,118 @@ class RepoAnalysisView(APIView):
         except Exception:
             return None
 
+    def _scan_env_example(self, owner: str, repo: str, token: str | None,
+                          files: list) -> list:
+        """Scan .env.example / .env.sample for app-specific env vars."""
+        env_files = ['.env.example', '.env.sample', '.env.template']
+        found_vars = []
+
+        for env_file in env_files:
+            if files and env_file not in files:
+                continue
+            for ref in ('main', 'master'):
+                content = self._fetch_github_file(owner, repo, env_file, token, ref=ref)
+                if content:
+                    for line in content.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        if '=' in line:
+                            key = line.split('=', 1)[0].strip()
+                            if key and key.isidentifier():
+                                found_vars.append(key)
+                    break  # found the file, stop trying refs
+        return found_vars
+
+    def _scan_config_patterns(self, owner: str, repo: str, token: str | None,
+                               files: list) -> list:
+        """Scan config.py / settings.py for os.environ / os.getenv patterns."""
+        import re as _re
+        config_files = ['config.py', 'settings.py', 'app/config.py',
+                        'src/config.py', 'backend/config.py']
+        found_vars = []
+
+        for cf in config_files:
+            if files and cf.split('/')[-1] not in files:
+                continue
+            for ref in ('main', 'master'):
+                content = self._fetch_github_file(owner, repo, cf, token, ref=ref)
+                if content:
+                    # Match os.environ['VAR'], os.environ.get('VAR'), os.getenv('VAR')
+                    patterns = _re.findall(
+                        r"os\.(?:environ\[?['\"]|environ\.get\(['\"]|getenv\(['\"])([A-Z_][A-Z0-9_]*)",
+                        content
+                    )
+                    found_vars.extend(patterns)
+                    # Also match pydantic Field(..., env='VAR') patterns
+                    pydantic_vars = _re.findall(
+                        r"env=['\"]([A-Z_][A-Z0-9_]*)",
+                        content
+                    )
+                    found_vars.extend(pydantic_vars)
+                    break
+        return list(set(found_vars))
+
+    def _enrich_env_vars(self, var_keys: list, port: int = None) -> list:
+        """Convert plain key names into rich env var objects with hints."""
+        import secrets
+        seen = set()
+        result = []
+
+        for key in var_keys:
+            if key in seen:
+                continue
+            seen.add(key)
+
+            hints = ENV_VAR_HINTS.get(key, {})
+            obj = {
+                'key': key,
+                'hint': hints.get('hint', ''),
+                'required': hints.get('required', True),
+                'is_secret': hints.get('is_secret', 'key' in key.lower() or 'secret' in key.lower() or 'password' in key.lower()),
+                'user_required': hints.get('user_required', False),
+            }
+
+            # Auto-generate values for generatable secrets
+            if hints.get('generate'):
+                obj['default'] = secrets.token_urlsafe(48)
+                obj['user_required'] = False
+            elif 'default' in hints:
+                obj['default'] = hints['default']
+
+            # PORT gets the detected port as default
+            if key == 'PORT' and port:
+                obj['default'] = str(port)
+
+            result.append(obj)
+
+        return result
+
     def _build_response(self, framework: str, confidence: float,
-                        files: list = None, error: str = None) -> dict:
-        """Build the analysis response."""
+                        files: list = None, error: str = None,
+                        owner: str = None, repo: str = None,
+                        token: str = None) -> dict:
+        """Build the analysis response with enriched env vars."""
         port = FRAMEWORK_PATTERNS.get(framework, {}).get('port', 8080)
         commands = BUILD_COMMANDS.get(framework, {'build': '', 'start': ''})
-        env_vars = ENV_VAR_TEMPLATES.get(framework, [])
+        template_vars = list(ENV_VAR_TEMPLATES.get(framework, []))
+
+        # Scan .env.example and config patterns for app-specific vars
+        extra_vars = []
+        if owner and repo:
+            extra_vars += self._scan_env_example(owner, repo, token, files or [])
+            extra_vars += self._scan_config_patterns(owner, repo, token, files or [])
+
+        # Merge: template vars first, then extras (deduplicated)
+        all_var_keys = template_vars[:]
+        seen = set(v.upper() for v in template_vars)
+        for v in extra_vars:
+            if v.upper() not in seen:
+                all_var_keys.append(v)
+                seen.add(v.upper())
+
+        # Enrich with hints
+        enriched_vars = self._enrich_env_vars(all_var_keys, port)
 
         # Detect if Dockerfile exists
         has_dockerfile = files and 'Dockerfile' in files if files else False
@@ -322,7 +459,7 @@ class RepoAnalysisView(APIView):
             'build_command': commands['build'],
             'start_command': commands['start'],
             'has_dockerfile': has_dockerfile,
-            'suggested_env_vars': env_vars,
+            'suggested_env_vars': enriched_vars,
             'resource_recommendation': resources,
             'detected_files': files[:10] if files else [],
         }

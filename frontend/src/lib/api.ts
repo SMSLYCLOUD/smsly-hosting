@@ -218,7 +218,21 @@ export const systemApi = {
   getConfig: async (): Promise<any> => {
     const response = await api.get('/system/config/');
     return response.data;
-  }
+  },
+  getDomainConfig: async (): Promise<any> => {
+    const response = await api.get('/system/domain-config/');
+    return response.data;
+  },
+  updateDomainConfig: async (data: {
+    domain?: string;
+    use_ssl?: boolean;
+    wildcard_subdomains?: boolean;
+    cloudflare_api_token?: string;
+    server_ip?: string;
+  }): Promise<any> => {
+    const response = await api.put('/system/domain-config/', data);
+    return response.data;
+  },
 };
 
 export interface AIProviderBalance {

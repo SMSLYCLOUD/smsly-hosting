@@ -895,6 +895,36 @@ else
         echo -e "${BLUE}  → Using IP Mode: $PUBLIC_IP${NC}"
     fi
 
+    # ─── Wildcard Subdomain & Cloudflare Setup (SSL mode only) ────────────
+    WILDCARD_SUBDOMAINS="false"
+    CLOUDFLARE_API_TOKEN=""
+    if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+        echo ""
+        echo -e "${BLUE}  Wildcard subdomains allow deployed services to get automatic SSL.${NC}"
+        echo -e "  e.g., myapp-abc123.${DOMAIN} will automatically have HTTPS."
+        echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
+
+        PRESET_WILDCARD="${WILDCARD_SUBDOMAINS:-}"
+        PRESET_CF_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+
+        if [ -n "$PRESET_WILDCARD" ] && [ -n "$PRESET_CF_TOKEN" ]; then
+            WILDCARD_SUBDOMAINS="$PRESET_WILDCARD"
+            CLOUDFLARE_API_TOKEN="$PRESET_CF_TOKEN"
+            echo -e "${BLUE}  → Preset detected: wildcard=$WILDCARD_SUBDOMAINS${NC}"
+        elif [ -t 0 ]; then
+            read -p "  Enable wildcard subdomains? (y/n) [y]: " WILDCARD_CHOICE
+            WILDCARD_CHOICE=${WILDCARD_CHOICE:-y}
+            if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
+                WILDCARD_SUBDOMAINS="true"
+                while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
+                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN
+                    echo
+                done
+                echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
+            fi
+        fi
+    fi
+
     # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
@@ -972,6 +1002,11 @@ CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http:
 # Docker networking
 # Ensure addon containers and deployed app containers share the same network for connectivity.
 DOCKER_NETWORK=smsly-net
+
+# Wildcard subdomain SSL (Cloudflare DNS challenge)
+WILDCARD_SUBDOMAINS=$WILDCARD_SUBDOMAINS
+CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+CADDY_CONFIG_DIR=/caddy-config
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"
@@ -1124,8 +1159,38 @@ fi
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
 
-if ! command -v caddy &> /dev/null; then
-    echo -e "${BLUE}  → Installing Caddy...${NC}"
+# ─── Build Caddy with Cloudflare DNS plugin if needed ─────────────────────────
+if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+    if caddy list-modules 2>/dev/null | grep -q 'dns.providers.cloudflare'; then
+        echo -e "${GREEN}  ✓ Caddy already has cloudflare DNS module${NC}"
+    else
+        echo -e "${BLUE}  → Building Caddy with Cloudflare DNS plugin (xcaddy)...${NC}"
+        if ! command -v xcaddy &> /dev/null; then
+            # Install Go if needed for xcaddy
+            if ! command -v go &> /dev/null; then
+                echo -e "${BLUE}  → Installing Go for xcaddy build...${NC}"
+                apt-get install -y golang-go >/dev/null 2>&1 || {
+                    snap install go --classic >/dev/null 2>&1
+                }
+            fi
+            go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest 2>/dev/null
+            export PATH="$PATH:$(go env GOPATH)/bin"
+        fi
+
+        # Build custom Caddy with Cloudflare DNS
+        CADDY_TMP=$(mktemp -d)
+        cd "$CADDY_TMP"
+        xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5
+        # Replace system Caddy
+        systemctl stop caddy 2>/dev/null || true
+        mv ./caddy /usr/bin/caddy
+        chmod +x /usr/bin/caddy
+        cd "$INSTALL_DIR"
+        rm -rf "$CADDY_TMP"
+        echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
+    fi
+elif ! command -v caddy &> /dev/null; then
+    echo -e "${BLUE}  → Installing Caddy (standard)...${NC}"
     apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
@@ -1133,18 +1198,53 @@ if ! command -v caddy &> /dev/null; then
     apt-get install -y caddy >/dev/null 2>&1
 fi
 
-# ─── BLINDSPOT FIX: Caddy proxies to nginx (8090), which handles all routing ─
-# nginx.conf splits traffic: /api → backend:8000, / → frontend:3000
-# Caddy's only job is public-facing :80 and optional HTTPS termination.
+# ─── Configure Caddyfile ──────────────────────────────────────────────────────
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
+mkdir -p /var/log/caddy
+
 if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
-    # ─── FIX: Include both domain AND IP catch-all ─────────────────────────
-    # Without the :80 block, the dashboard is unreachable via direct IP.
-    # Caddy auto-provisions HTTPS for the domain block.
-    cat > /etc/caddy/Caddyfile <<CADDYEOF
+    if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+        # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
+        cat > /etc/caddy/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
-# IP: $PUBLIC_IP → HTTP fallback
+# Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
+
+$DOMAIN {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+*.$DOMAIN {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+    reverse_proxy localhost:8081
+}
+
+:80 {
+    reverse_proxy localhost:8090
+}
+CADDYEOF
+
+        # Set Cloudflare token in systemd environment
+        mkdir -p /etc/systemd/system/caddy.service.d
+        cat > /etc/systemd/system/caddy.service.d/override.conf <<ENVEOF
+[Service]
+Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
+ENVEOF
+        chmod 600 /etc/systemd/system/caddy.service.d/override.conf
+        systemctl daemon-reload
+
+        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
+    else
+        # ─── Standard SSL (no wildcard) ──────────────────────────────────
+        cat > /etc/caddy/Caddyfile <<CADDYEOF
+# CloudNeuron Reverse Proxy — Auto-generated
+# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
 $DOMAIN {
     reverse_proxy localhost:8090
@@ -1158,7 +1258,8 @@ $DOMAIN {
     reverse_proxy localhost:8090
 }
 CADDYEOF
-    echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
+        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
+    fi
 else
     cat > /etc/caddy/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
@@ -1167,6 +1268,32 @@ else
 }
 CADDYEOF
     echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
+fi
+
+# ─── Create caddy-config volume directory for Settings UI writes ──────────────
+mkdir -p /opt/smsly-hosting/caddy-config
+
+# ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
+if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
+    chmod +x "$INSTALL_DIR/scripts/caddy-reload.sh"
+    cat > /etc/systemd/system/caddy-watcher.service <<WATCHEREOF
+[Unit]
+Description=Caddy Config Watcher (SMSLY)
+After=caddy.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/caddy-reload.sh /opt/smsly-hosting/caddy-config
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+WATCHEREOF
+    systemctl daemon-reload
+    systemctl enable caddy-watcher >/dev/null 2>&1
+    systemctl restart caddy-watcher
+    echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 
 # Kill anything holding port 80/443 before Caddy binds

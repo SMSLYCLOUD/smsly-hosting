@@ -7,7 +7,7 @@ from rest_framework.authtoken.models import Token
 from django.utils import timezone
 from django.conf import settings
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
-from .models import Service, Deployment, EnvironmentVariable
+from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .serializers import (
     ServiceSerializer, DeploymentSerializer,
     DeploymentTriggerSerializer, EnvVarSerializer,
@@ -777,4 +777,71 @@ class SystemConfigView(APIView):
 
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
+        })
+
+
+class DomainConfigView(APIView):
+    """
+    Manage platform domain & SSL configuration.
+    GET  /api/v1/system/domain-config/ → current config
+    PUT  /api/v1/system/domain-config/ → update + apply Caddyfile
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        config = PlatformConfig.load()
+        return Response({
+            'domain': config.domain,
+            'use_ssl': config.use_ssl,
+            'wildcard_subdomains': config.wildcard_subdomains,
+            'cloudflare_api_token_set': bool(config.cloudflare_api_token),
+            'server_ip': config.server_ip or '',
+            'caddy_status': config.caddy_status,
+            'updated_at': config.updated_at,
+        })
+
+    def put(self, request):
+        config = PlatformConfig.load()
+        data = request.data
+
+        # Update fields
+        if 'domain' in data:
+            config.domain = data['domain'].strip()
+        if 'use_ssl' in data:
+            config.use_ssl = bool(data['use_ssl'])
+        if 'wildcard_subdomains' in data:
+            config.wildcard_subdomains = bool(data['wildcard_subdomains'])
+        if 'cloudflare_api_token' in data and data['cloudflare_api_token']:
+            config.cloudflare_api_token = data['cloudflare_api_token'].strip()
+        if 'server_ip' in data:
+            config.server_ip = data['server_ip'].strip() or None
+
+        # Validate: wildcard requires Cloudflare token
+        if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
+            return Response(
+                {'error': 'Wildcard subdomains require a Cloudflare API Token.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        config.save()
+
+        # Generate and apply Caddyfile
+        try:
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            caddyfile_content = generate_caddyfile(config)
+            result = apply_caddyfile(caddyfile_content)
+            config.caddy_status = 'applied' if result['ok'] else 'error'
+            config.save(update_fields=['caddy_status'])
+        except Exception as e:
+            config.caddy_status = 'error'
+            config.save(update_fields=['caddy_status'])
+            return Response(
+                {'error': f'Config saved but Caddyfile apply failed: {e}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            'message': 'Domain configuration updated and Caddyfile applied.',
+            'caddy_status': config.caddy_status,
+            'caddyfile_preview': caddyfile_content,
         })

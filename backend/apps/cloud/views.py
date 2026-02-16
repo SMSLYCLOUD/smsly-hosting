@@ -324,7 +324,7 @@ class EcosystemViewSet(viewsets.ViewSet):
                         ).replace('\\', '/')
                         files.append(rel)
 
-                analysis = heuristic_analysis(files)
+                analysis = heuristic_analysis(files, clone_dir=clone_dir)
 
             return Response({
                 'repo': repo_url,
