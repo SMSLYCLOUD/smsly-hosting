@@ -193,6 +193,12 @@ export const servicesApi = {
   browseVolume: async (serviceId: string, volId: number, path: string): Promise<any> => {
       const response = await api.get(`/services/${serviceId}/volumes/${volId}/browse/`, { params: { path } });
       return response.data;
+  },
+
+  // Domain verification
+  verifyDomain: async (serviceId: string, domain: string): Promise<{ domain: string; verified: boolean; cname_target: string; message: string }> => {
+      const response = await api.post(`/services/${serviceId}/verify-domain/`, { domain });
+      return response.data;
   }
 };
 
