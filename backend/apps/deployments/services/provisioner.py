@@ -1,0 +1,242 @@
+"""
+Server auto-provisioning service.
+
+SSHes into a fresh VPS, uploads and runs install.sh,
+then auto-registers the server with the API credentials.
+"""
+
+import io
+import logging
+import re
+import time
+
+import paramiko
+from celery import shared_task
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
+from apps.deployments.models_servers import ManagedServer
+
+logger = logging.getLogger(__name__)
+
+
+def _broadcast_provision_log(server: ManagedServer, message: str):
+    """Push a provision log line via WebSocket."""
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"provision_{server.id}",
+            {
+                "type": "provision.log",
+                "message": message,
+            },
+        )
+    except Exception:
+        pass  # WebSocket is optional — logs are still saved to DB
+
+
+def _append_log(server: ManagedServer, line: str):
+    """Append a line to provision_logs and broadcast."""
+    server.provision_logs += line + "\n"
+    server.save(update_fields=["provision_logs"])
+    _broadcast_provision_log(server, line)
+
+
+def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
+    """Create and connect an SSH client to the target server."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    connect_kwargs = {
+        "hostname": server.host,
+        "port": server.ssh_port,
+        "username": server.ssh_user,
+        "timeout": 30,
+        "banner_timeout": 30,
+    }
+
+    if server.ssh_key:
+        # Use SSH private key
+        key_file = io.StringIO(server.ssh_key)
+        try:
+            pkey = paramiko.RSAKey.from_private_key(key_file)
+        except paramiko.SSHException:
+            key_file.seek(0)
+            pkey = paramiko.Ed25519Key.from_private_key(key_file)
+        connect_kwargs["pkey"] = pkey
+    elif server.ssh_password:
+        connect_kwargs["password"] = server.ssh_password
+    else:
+        raise ValueError("No SSH credentials provided (need password or key)")
+
+    client.connect(**connect_kwargs)
+    return client
+
+
+@shared_task(bind=True, max_retries=0, time_limit=1800)
+def provision_server(self, server_id: str):
+    """
+    Provision CloudNeuron on a remote server via SSH.
+
+    Steps:
+    1. SSH into the target server
+    2. Upload install.sh
+    3. Run it in non-interactive mode
+    4. Parse output for credentials
+    5. Update ManagedServer with api_url + api_token
+    """
+    try:
+        server = ManagedServer.objects.get(id=server_id)
+    except ManagedServer.DoesNotExist:
+        logger.error("Server %s not found", server_id)
+        return
+
+    server.provision_status = ManagedServer.ProvisionStatus.PROVISIONING
+    server.provision_logs = ""
+    server.save(update_fields=["provision_status", "provision_logs"])
+
+    _append_log(server, "🚀 Starting CloudNeuron provisioning...")
+    _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
+
+    try:
+        # ── Step 1: Connect ──
+        ssh = _get_ssh_client(server)
+        _append_log(server, "✅ SSH connection established")
+
+        # ── Step 2: Upload install script ──
+        _append_log(server, "📦 Uploading install script...")
+        sftp = ssh.open_sftp()
+
+        # Read the install script from the local filesystem
+        import os
+        install_script_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "install.sh",
+        )
+
+        if not os.path.exists(install_script_path):
+            raise FileNotFoundError(f"install.sh not found at {install_script_path}")
+
+        sftp.put(install_script_path, "/tmp/smsly-install.sh")
+        sftp.chmod("/tmp/smsly-install.sh", 0o755)
+        sftp.close()
+        _append_log(server, "✅ Install script uploaded")
+
+        # ── Step 3: Run install script ──
+        _append_log(server, "⚙️ Running CloudNeuron installer (this may take 5-15 minutes)...")
+
+        # Build non-interactive environment
+        env_vars = f"NON_INTERACTIVE=1 USE_SSL=false DOMAIN={server.host}"
+        cmd = f"{env_vars} bash /tmp/smsly-install.sh 2>&1"
+
+        # Execute with a channel for streaming output
+        transport = ssh.get_transport()
+        channel = transport.open_session()
+        channel.set_combine_stderr(True)
+        channel.settimeout(1800)  # 30 min timeout
+        channel.exec_command(cmd)
+
+        # Stream output in chunks
+        buffer = ""
+        credentials_file_content = ""
+        while True:
+            if channel.recv_ready():
+                chunk = channel.recv(4096).decode("utf-8", errors="replace")
+                buffer += chunk
+
+                # Process complete lines
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if line:
+                        _append_log(server, line)
+
+                        # Look for credentials file path
+                        if "credentials saved" in line.lower() or "/root/.smsly-credentials" in line:
+                            _append_log(server, "🔑 Credentials detected — extracting...")
+
+            if channel.exit_status_ready():
+                # Drain remaining output
+                while channel.recv_ready():
+                    chunk = channel.recv(4096).decode("utf-8", errors="replace")
+                    buffer += chunk
+                for line in buffer.strip().split("\n"):
+                    if line.strip():
+                        _append_log(server, line.strip())
+                break
+
+            time.sleep(0.5)
+
+        exit_code = channel.recv_exit_status()
+        _append_log(server, f"\n📋 Install script exited with code: {exit_code}")
+
+        if exit_code != 0:
+            raise RuntimeError(f"Install script failed with exit code {exit_code}")
+
+        # ── Step 4: Extract credentials ──
+        _append_log(server, "🔑 Reading credentials from server...")
+
+        stdin, stdout, stderr = ssh.exec_command(
+            "cat /root/.smsly-credentials 2>/dev/null || "
+            "cat /opt/smsly-hosting/.smsly-credentials 2>/dev/null || "
+            "echo 'CREDS_NOT_FOUND'"
+        )
+        credentials_file_content = stdout.read().decode("utf-8", errors="replace")
+
+        if "CREDS_NOT_FOUND" in credentials_file_content:
+            _append_log(server, "⚠️ Credentials file not found — trying API token from .env")
+            # Fallback: extract from .env file
+            stdin, stdout, stderr = ssh.exec_command(
+                "grep -E '^(ADMIN_TOKEN|API_TOKEN|AUTH_TOKEN)=' /opt/smsly-hosting/.env 2>/dev/null | head -1"
+            )
+            token_line = stdout.read().decode("utf-8").strip()
+            if "=" in token_line:
+                api_token = token_line.split("=", 1)[1].strip().strip("'\"")
+            else:
+                api_token = ""
+        else:
+            # Parse credentials file
+            api_token = ""
+            for line in credentials_file_content.split("\n"):
+                line = line.strip()
+                if "token" in line.lower() and ":" in line:
+                    api_token = line.split(":", 1)[1].strip()
+                    break
+                if line.startswith("API_TOKEN=") or line.startswith("ADMIN_TOKEN="):
+                    api_token = line.split("=", 1)[1].strip().strip("'\"")
+                    break
+
+        # ── Step 5: Determine API URL ──
+        # Check if SSL was set up (look for Caddy with domain)
+        stdin, stdout, stderr = ssh.exec_command(
+            "grep -oP 'https?://[a-zA-Z0-9._-]+' /etc/caddy/Caddyfile 2>/dev/null | head -1"
+        )
+        api_url = stdout.read().decode("utf-8").strip()
+
+        if not api_url:
+            # Fall back to http://host:8090
+            api_url = f"http://{server.host}:8090"
+
+        _append_log(server, f"🌐 API URL: {api_url}")
+        _append_log(server, f"🔑 Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
+
+        # ── Step 6: Update server record ──
+        server.api_url = api_url
+        if api_token:
+            server.api_token = api_token
+        server.provision_status = ManagedServer.ProvisionStatus.DONE
+        server.status = ManagedServer.Status.ONLINE
+        server.save(update_fields=[
+            "api_url", "api_token", "provision_status", "status",
+        ])
+
+        _append_log(server, "\n✅ CloudNeuron provisioning complete!")
+        _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
+
+        ssh.close()
+
+    except Exception as exc:
+        logger.exception("Provisioning failed for server %s", server_id)
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.save(update_fields=["provision_status"])
+        _append_log(server, f"\n❌ Provisioning failed: {exc}")
