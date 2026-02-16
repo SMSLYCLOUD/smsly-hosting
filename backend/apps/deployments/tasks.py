@@ -305,98 +305,225 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     detected_vars = _scan.get('env_vars', [])
 
                     if detected_vars:
-                        # ── Smart defaults for well-known env vars ──
-                        # Returns (value, should_inject) — if should_inject
-                        # is False, the var is user-required and should NOT
-                        # be auto-injected with a placeholder.
+                        # ── Human-smart env var intelligence ──
+                        # A DevOps engineer deploying an app would:
+                        # 1. Set sensible defaults for everything they can
+                        # 2. Only leave secrets/API keys for the user to fill
+                        # 3. Derive values from the var name pattern
+                        #
+                        # Returns (value, should_inject):
+                        #   (str, True)  → auto-set this value
+                        #   (None, False) → user must provide (API keys, secrets)
                         def _default_value(key):
                             key_upper = key.upper()
 
-                            # Secrets / Keys — generate random values
-                            if 'SECRET_KEY' in key_upper:
+                            # ─── 1. Secrets / Keys — generate random secure values ───
+                            if 'SECRET_KEY' in key_upper or key_upper == 'SECRET':
                                 return _secrets.token_urlsafe(50), True
+                            if key_upper in ('JWT_SECRET', 'SESSION_SECRET', 'COOKIE_SECRET',
+                                             'CSRF_SECRET', 'SIGNING_KEY', 'HASH_SALT'):
+                                return _secrets.token_urlsafe(32), True
 
-                            # Database URLs
-                            if key_upper in ('DATABASE_URL', 'DB_URL'):
+                            # ─── 2. Database URLs ───
+                            if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI',
+                                             'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL'):
+                                # Detect if app uses async (asyncpg) from scan
+                                stack = _scan.get('stack', '')
+                                deps = _scan.get('dependencies', [])
+                                dep_str = ' '.join(deps) if isinstance(deps, list) else str(deps)
+                                if 'asyncpg' in dep_str or 'async' in dep_str.lower():
+                                    return 'postgresql+asyncpg://user:password@db:5432/dbname', True
                                 return 'postgresql://user:password@db:5432/dbname', True
                             if key_upper == 'REDIS_URL':
                                 return 'redis://redis:6379/0', True
+                            if key_upper in ('CELERY_BROKER_URL', 'BROKER_URL'):
+                                return 'redis://redis:6379/1', True
+                            if key_upper in ('CELERY_RESULT_BACKEND', 'RESULT_BACKEND'):
+                                return 'redis://redis:6379/2', True
                             if key_upper in ('MONGODB_URI', 'MONGO_URI', 'MONGO_URL'):
                                 return 'mongodb://mongo:27017/dbname', True
 
-                            # Ports — safe integer defaults
+                            # ─── 3. Ports — safe integer defaults ───
                             if key_upper == 'PORT':
                                 stack = _scan.get('stack', '')
-                                return ('8000' if 'Django' in stack or 'Python' in stack else '3000'), True
+                                if 'Django' in stack or 'Python' in stack or 'FastAPI' in stack or 'Flask' in stack:
+                                    return '8000', True
+                                if 'Rails' in stack or 'Ruby' in stack:
+                                    return '3000', True
+                                if 'Go' in stack or 'Rust' in stack:
+                                    return '8080', True
+                                return '3000', True
                             if key_upper.endswith('_PORT'):
-                                # Common service ports
                                 port_defaults = {
                                     'REDIS_PORT': '6379',
-                                    'POSTGRES_PORT': '5432',
-                                    'DB_PORT': '5432',
-                                    'MONGO_PORT': '27017',
-                                    'QDRANT_PORT': '6333',
-                                    'ELASTICSEARCH_PORT': '9200',
-                                    'RABBITMQ_PORT': '5672',
+                                    'POSTGRES_PORT': '5432', 'DB_PORT': '5432',
+                                    'MONGO_PORT': '27017', 'QDRANT_PORT': '6333',
+                                    'ELASTICSEARCH_PORT': '9200', 'ES_PORT': '9200',
+                                    'RABBITMQ_PORT': '5672', 'AMQP_PORT': '5672',
                                     'MEMCACHED_PORT': '11211',
+                                    'MINIO_PORT': '9000', 'S3_PORT': '9000',
+                                    'GRPC_PORT': '50051',
+                                    'METRICS_PORT': '9090',
+                                    'HEALTH_PORT': '8081',
+                                    'WEBSOCKET_PORT': '8765',
                                 }
                                 return port_defaults.get(key_upper, '8080'), True
 
-                            # Hostnames
-                            if key_upper.endswith('_HOST'):
+                            # ─── 4. Hostnames ───
+                            if key_upper.endswith('_HOST') or key_upper.endswith('_HOSTNAME'):
                                 host_defaults = {
                                     'REDIS_HOST': 'redis',
-                                    'DB_HOST': 'db',
-                                    'POSTGRES_HOST': 'db',
+                                    'DB_HOST': 'db', 'POSTGRES_HOST': 'db',
                                     'QDRANT_HOST': 'qdrant',
-                                    'MONGO_HOST': 'mongo',
+                                    'MONGO_HOST': 'mongo', 'MONGODB_HOST': 'mongo',
+                                    'ELASTICSEARCH_HOST': 'elasticsearch', 'ES_HOST': 'elasticsearch',
+                                    'RABBITMQ_HOST': 'rabbitmq', 'AMQP_HOST': 'rabbitmq',
+                                    'MEMCACHED_HOST': 'memcached',
+                                    'MINIO_HOST': 'minio',
+                                    'HOSTNAME': '0.0.0.0',
                                 }
                                 return host_defaults.get(key_upper, 'localhost'), True
 
-                            # Boolean-like vars
-                            if key_upper in ('DEBUG', 'TESTING'):
+                            # ─── 5. Database credentials & names ───
+                            if key_upper in ('POSTGRES_USER', 'DB_USER', 'DB_USERNAME',
+                                             'MYSQL_USER', 'MONGO_USER'):
+                                return 'appuser', True
+                            if key_upper in ('POSTGRES_DB', 'DB_NAME', 'DB_DATABASE',
+                                             'MYSQL_DATABASE', 'MONGO_DB'):
+                                return service.name.replace('-', '_').replace(' ', '_')[:30] or 'app_db', True
+                            if key_upper in ('POSTGRES_PASSWORD', 'DB_PASSWORD', 'MYSQL_PASSWORD',
+                                             'MYSQL_ROOT_PASSWORD', 'MONGO_PASSWORD'):
+                                return _secrets.token_urlsafe(24), True
+
+                            # ─── 6. Boolean / environment flags ───
+                            if key_upper in ('DEBUG', 'TESTING', 'TEST', 'DEV',
+                                             'ENABLE_DEBUG', 'VERBOSE'):
                                 return 'false', True
-                            if key_upper in ('NODE_ENV', 'ENVIRONMENT', 'ENV'):
+                            if key_upper in ('NODE_ENV', 'ENVIRONMENT', 'ENV',
+                                             'FLASK_ENV', 'RAILS_ENV', 'APP_ENV',
+                                             'MIX_ENV', 'RUST_ENV'):
                                 return 'production', True
+                            if key_upper in ('PYTHONDONTWRITEBYTECODE',):
+                                return '1', True
+                            if key_upper in ('PYTHONUNBUFFERED',):
+                                return '1', True
 
-                            # Allowed hosts / origins — safe defaults
-                            if key_upper == 'ALLOWED_HOSTS':
+                            # ─── 7. CORS / Allowed hosts ───
+                            if key_upper in ('ALLOWED_HOSTS', 'ALLOWED_ORIGINS',
+                                             'TRUSTED_HOSTS', 'VIRTUAL_HOST'):
                                 return '*', True
-                            if 'CORS' in key_upper and 'ORIGIN' in key_upper:
+                            if 'CORS' in key_upper and ('ORIGIN' in key_upper or 'ALLOW' in key_upper):
+                                return '*', True
+                            if key_upper in ('CSRF_TRUSTED_ORIGINS',):
                                 return '*', True
 
-                            # Log level
-                            if key_upper in ('LOG_LEVEL', 'LOGLEVEL'):
+                            # ─── 8. Logging ───
+                            if key_upper in ('LOG_LEVEL', 'LOGLEVEL', 'LOGGING_LEVEL',
+                                             'RUST_LOG', 'LOG'):
                                 return 'info', True
+                            if key_upper in ('LOG_FORMAT', 'LOG_FMT'):
+                                return 'json', True
 
-                            # Worker count
-                            if key_upper in ('WORKERS', 'WEB_CONCURRENCY', 'GUNICORN_WORKERS'):
+                            # ─── 9. Workers / concurrency ───
+                            if key_upper in ('WORKERS', 'WEB_CONCURRENCY', 'GUNICORN_WORKERS',
+                                             'UVICORN_WORKERS', 'NUM_WORKERS', 'WORKER_COUNT',
+                                             'CONCURRENCY', 'MAX_WORKERS'):
                                 return '4', True
+                            if key_upper in ('THREADS', 'NUM_THREADS', 'MAX_THREADS'):
+                                return '2', True
 
-                            # ── User-required vars: API keys, tokens, passwords ──
+                            # ─── 10. Timeouts ───
+                            if key_upper.endswith('_TIMEOUT') or key_upper.endswith('_TIMEOUT_MS'):
+                                if 'MS' in key_upper:
+                                    return '30000', True  # 30 seconds in ms
+                                return '30', True
+                            if key_upper in ('KEEPALIVE', 'KEEP_ALIVE'):
+                                return '65', True
+
+                            # ─── 11. App identity ───
+                            if key_upper in ('APP_NAME', 'PROJECT_NAME', 'SERVICE_NAME',
+                                             'SITE_NAME', 'INSTANCE_NAME'):
+                                return service.name or 'my-app', True
+                            if key_upper in ('APP_URL', 'BASE_URL', 'SITE_URL',
+                                             'PUBLIC_URL', 'FRONTEND_URL', 'BACKEND_URL',
+                                             'NEXT_PUBLIC_URL', 'NEXT_PUBLIC_API_URL',
+                                             'NEXTAUTH_URL'):
+                                return f'https://{service.name}.cloud.smsly.cloud', True
+                            if key_upper == 'HOST':
+                                return '0.0.0.0', True
+                            if key_upper in ('BIND', 'BIND_ADDRESS'):
+                                return '0.0.0.0:8000', True
+
+                            # ─── 12. TZ / Locale ───
+                            if key_upper in ('TZ', 'TIMEZONE', 'TIME_ZONE'):
+                                return 'UTC', True
+                            if key_upper in ('LANG', 'LANGUAGE', 'LOCALE', 'LC_ALL'):
+                                return 'en_US.UTF-8', True
+
+                            # ─── 13. Max limits / sizes ───
+                            if key_upper in ('MAX_UPLOAD_SIZE', 'MAX_FILE_SIZE'):
+                                return '10485760', True  # 10MB
+                            if key_upper in ('MAX_BODY_SIZE', 'BODY_SIZE_LIMIT'):
+                                return '10mb', True
+                            if key_upper in ('RATE_LIMIT', 'THROTTLE_RATE'):
+                                return '100/minute', True
+
+                            # ─── 14. Feature flags ───
+                            if key_upper.startswith('ENABLE_') or key_upper.startswith('DISABLE_'):
+                                return 'true' if key_upper.startswith('ENABLE_') else 'false', True
+                            if key_upper.startswith('USE_'):
+                                return 'true', True
+
+                            # ─── 15. Sentry / monitoring (optional — safe to leave empty) ───
+                            if key_upper in ('SENTRY_DSN', 'SENTRY_URL',
+                                             'BUGSNAG_API_KEY', 'DATADOG_API_KEY',
+                                             'NEW_RELIC_LICENSE_KEY'):
+                                return '', True  # Empty = disabled, won't crash
+
+                            # ─── SKIP: User-required secrets ───
                             # These MUST NOT get placeholder values — they crash apps.
                             skip_patterns = (
                                 'API_KEY', 'API_TOKEN', 'API_SECRET',
                                 'ACCESS_KEY', 'ACCESS_TOKEN',
-                                'AUTH_TOKEN', 'AUTH_KEY',
+                                'AUTH_TOKEN', 'AUTH_KEY', 'AUTH_SECRET',
                                 'PRIVATE_KEY', 'PUBLIC_KEY',
-                                'PASSWORD', 'PASSWD',
-                                'PROVIDER',  # e.g. AI_PROVIDER — needs enum
                                 'WEBHOOK_SECRET', 'ENCRYPTION_KEY',
-                                'SMTP_', 'EMAIL_',
+                                'SMTP_', 'EMAIL_HOST', 'EMAIL_PORT',
                                 'AWS_', 'GCP_', 'AZURE_',
                                 'OPENAI_', 'ANTHROPIC_', 'GEMINI_',
+                                'GOOGLE_', 'FACEBOOK_', 'TWITTER_',
                                 'STRIPE_', 'TWILIO_', 'SENDGRID_',
                                 'GITHUB_TOKEN', 'GITLAB_TOKEN',
+                                'CLOUDFLARE_', 'DIGITALOCEAN_',
+                                'CLIENT_ID', 'CLIENT_SECRET',
+                                'CONSUMER_KEY', 'CONSUMER_SECRET',
+                                'DSN',  # Generic DSN (but not SENTRY_DSN — handled above)
                             )
+                            # Check DSN separately — SENTRY_DSN was already handled
+                            if key_upper == 'DSN':
+                                return None, False
                             for pattern in skip_patterns:
                                 if pattern in key_upper:
                                     return None, False
 
-                            # Generic fallback — also skip to avoid crashes
+                            # ─── SMART FALLBACK ───
+                            # Instead of giving up, try to derive a value:
+                            # - If it looks like a count/number, use a safe integer
+                            if any(w in key_upper for w in ('COUNT', 'SIZE', 'LIMIT', 'MAX', 'MIN',
+                                                            'RETRIES', 'RETRY', 'ATTEMPTS')):
+                                return '10', True
+                            # - If it looks like a path, use /tmp
+                            if any(w in key_upper for w in ('_DIR', '_PATH', '_DIRECTORY', '_FOLDER')):
+                                return '/tmp', True
+                            # - If it looks boolean (IS_, HAS_, SHOULD_, CAN_)
+                            if any(key_upper.startswith(p) for p in ('IS_', 'HAS_', 'SHOULD_', 'CAN_',
+                                                                      'ALLOW_', 'WITH_', 'NO_')):
+                                return 'true' if not key_upper.startswith('NO_') else 'false', True
+
+                            # Last resort — skip unknown vars (don't inject CHANGE_ME)
                             return None, False
 
-                        injected, skipped, user_required = 0, 0, 0
+                        injected, skipped, fixed, user_required = 0, 0, 0, 0
                         user_required_keys = []
                         for var_name in detected_vars:
                             default_val, should_inject = _default_value(var_name)
@@ -407,7 +534,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                                 user_required_keys.append(var_name)
                                 continue
 
-                            _, created = EnvironmentVariable.objects.get_or_create(
+                            env_obj, created = EnvironmentVariable.objects.get_or_create(
                                 service=service,
                                 key=var_name,
                                 defaults={
@@ -417,6 +544,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             )
                             if created:
                                 injected += 1
+                            elif env_obj.value == 'CHANGE_ME':
+                                # ── Auto-heal stale CHANGE_ME values ──
+                                env_obj.value = default_val
+                                env_obj.save(update_fields=['value'])
+                                fixed += 1
                             else:
                                 skipped += 1
 
@@ -424,6 +556,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             f"\n🔧 Auto-injected {injected} env vars "
                             f"({skipped} already set by user)"
                         )
+                        if fixed > 0:
+                            env_log += f"\n🔄 Auto-healed {fixed} stale CHANGE_ME values"
                         if user_required > 0:
                             env_log += (
                                 f"\n⚠️ {user_required} vars need your input in "
