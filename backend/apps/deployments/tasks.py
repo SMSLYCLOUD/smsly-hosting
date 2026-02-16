@@ -305,33 +305,113 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     detected_vars = _scan.get('env_vars', [])
 
                     if detected_vars:
-                        # Smart defaults for common env vars
+                        # ── Smart defaults for well-known env vars ──
+                        # Returns (value, should_inject) — if should_inject
+                        # is False, the var is user-required and should NOT
+                        # be auto-injected with a placeholder.
                         def _default_value(key):
                             key_upper = key.upper()
+
+                            # Secrets / Keys — generate random values
                             if 'SECRET_KEY' in key_upper:
-                                return _secrets.token_urlsafe(50)
-                            if key_upper == 'DATABASE_URL' or key_upper == 'DB_URL':
-                                return 'postgresql://user:password@db:5432/dbname'
+                                return _secrets.token_urlsafe(50), True
+
+                            # Database URLs
+                            if key_upper in ('DATABASE_URL', 'DB_URL'):
+                                return 'postgresql://user:password@db:5432/dbname', True
                             if key_upper == 'REDIS_URL':
-                                return 'redis://redis:6379/0'
-                            if key_upper == 'MONGODB_URI':
-                                return 'mongodb://mongo:27017/dbname'
+                                return 'redis://redis:6379/0', True
+                            if key_upper in ('MONGODB_URI', 'MONGO_URI', 'MONGO_URL'):
+                                return 'mongodb://mongo:27017/dbname', True
+
+                            # Ports — safe integer defaults
                             if key_upper == 'PORT':
                                 stack = _scan.get('stack', '')
-                                return '8000' if 'Django' in stack or 'Python' in stack else '3000'
-                            if key_upper == 'NODE_ENV':
-                                return 'production'
-                            if key_upper == 'DEBUG':
-                                return 'false'
-                            return 'CHANGE_ME'
+                                return ('8000' if 'Django' in stack or 'Python' in stack else '3000'), True
+                            if key_upper.endswith('_PORT'):
+                                # Common service ports
+                                port_defaults = {
+                                    'REDIS_PORT': '6379',
+                                    'POSTGRES_PORT': '5432',
+                                    'DB_PORT': '5432',
+                                    'MONGO_PORT': '27017',
+                                    'QDRANT_PORT': '6333',
+                                    'ELASTICSEARCH_PORT': '9200',
+                                    'RABBITMQ_PORT': '5672',
+                                    'MEMCACHED_PORT': '11211',
+                                }
+                                return port_defaults.get(key_upper, '8080'), True
 
-                        injected, skipped = 0, 0
+                            # Hostnames
+                            if key_upper.endswith('_HOST'):
+                                host_defaults = {
+                                    'REDIS_HOST': 'redis',
+                                    'DB_HOST': 'db',
+                                    'POSTGRES_HOST': 'db',
+                                    'QDRANT_HOST': 'qdrant',
+                                    'MONGO_HOST': 'mongo',
+                                }
+                                return host_defaults.get(key_upper, 'localhost'), True
+
+                            # Boolean-like vars
+                            if key_upper in ('DEBUG', 'TESTING'):
+                                return 'false', True
+                            if key_upper in ('NODE_ENV', 'ENVIRONMENT', 'ENV'):
+                                return 'production', True
+
+                            # Allowed hosts / origins — safe defaults
+                            if key_upper == 'ALLOWED_HOSTS':
+                                return '*', True
+                            if 'CORS' in key_upper and 'ORIGIN' in key_upper:
+                                return '*', True
+
+                            # Log level
+                            if key_upper in ('LOG_LEVEL', 'LOGLEVEL'):
+                                return 'info', True
+
+                            # Worker count
+                            if key_upper in ('WORKERS', 'WEB_CONCURRENCY', 'GUNICORN_WORKERS'):
+                                return '4', True
+
+                            # ── User-required vars: API keys, tokens, passwords ──
+                            # These MUST NOT get placeholder values — they crash apps.
+                            skip_patterns = (
+                                'API_KEY', 'API_TOKEN', 'API_SECRET',
+                                'ACCESS_KEY', 'ACCESS_TOKEN',
+                                'AUTH_TOKEN', 'AUTH_KEY',
+                                'PRIVATE_KEY', 'PUBLIC_KEY',
+                                'PASSWORD', 'PASSWD',
+                                'PROVIDER',  # e.g. AI_PROVIDER — needs enum
+                                'WEBHOOK_SECRET', 'ENCRYPTION_KEY',
+                                'SMTP_', 'EMAIL_',
+                                'AWS_', 'GCP_', 'AZURE_',
+                                'OPENAI_', 'ANTHROPIC_', 'GEMINI_',
+                                'STRIPE_', 'TWILIO_', 'SENDGRID_',
+                                'GITHUB_TOKEN', 'GITLAB_TOKEN',
+                            )
+                            for pattern in skip_patterns:
+                                if pattern in key_upper:
+                                    return None, False
+
+                            # Generic fallback — also skip to avoid crashes
+                            return None, False
+
+                        injected, skipped, user_required = 0, 0, 0
+                        user_required_keys = []
                         for var_name in detected_vars:
+                            default_val, should_inject = _default_value(var_name)
+
+                            if not should_inject:
+                                # Don't inject — this needs the user's real value
+                                user_required += 1
+                                user_required_keys.append(var_name)
+                                continue
+
                             _, created = EnvironmentVariable.objects.get_or_create(
                                 service=service,
                                 key=var_name,
                                 defaults={
-                                    'value': _default_value(var_name),
+                                    'value': default_val,
                                     'is_secret': True,
                                 },
                             )
@@ -342,14 +422,21 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
 
                         env_log = (
                             f"\n🔧 Auto-injected {injected} env vars "
-                            f"({skipped} already set by user)\n"
+                            f"({skipped} already set by user)"
                         )
+                        if user_required > 0:
+                            env_log += (
+                                f"\n⚠️ {user_required} vars need your input in "
+                                f"the Variables tab: {', '.join(user_required_keys[:5])}"
+                                f"{'...' if user_required > 5 else ''}\n"
+                            )
+                        env_log += "\n"
                         deployment.build_logs += env_log
                         deployment.save()
                         _broadcast_log(deployment, env_log)
                         logger.info(
-                            "Env auto-injection for %s: %d injected, %d skipped",
-                            deployment_id, injected, skipped,
+                            "Env auto-injection for %s: %d injected, %d skipped, %d user-required",
+                            deployment_id, injected, skipped, user_required,
                         )
 
                 except Exception as env_err:

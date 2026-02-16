@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { servicesApi, Service } from '@/lib/api';
+import { servicesApi, systemApi, Service } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -22,8 +22,16 @@ export function DomainsTab({ service }: { service: Service }) {
     const [loading, setLoading] = useState(true);
     const [envVarId, setEnvVarId] = useState<number | null>(null);
     const [adding, setAdding] = useState(false);
+    const [serverIp, setServerIp] = useState<string>('');
 
     const defaultDomain = service.public_domain || `${service.name}.cloud.smsly.cloud`;
+
+    // Fetch server IP from system config
+    useEffect(() => {
+        systemApi.getDomainConfig()
+            .then((cfg: any) => setServerIp(cfg.server_ip || ''))
+            .catch(() => {});
+    }, []);
 
     const loadDomains = useCallback(async () => {
         try {
@@ -157,13 +165,15 @@ export function DomainsTab({ service }: { service: Service }) {
                 <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Custom Domains</h4>
 
-                    {/* CNAME Setup Instructions */}
+                    {/* DNS Setup Instructions */}
                     <div className="mb-4 p-4 bg-blue-500/5 border border-blue-500/20 rounded-lg">
                         <p className="text-sm font-medium text-blue-400 mb-2">📋 DNS Setup</p>
-                        <p className="text-xs text-muted-foreground mb-3">
-                            Add a <strong>CNAME</strong> record in your DNS provider pointing to:
+                        
+                        {/* Option 1: CNAME (subdomains) */}
+                        <p className="text-xs font-semibold text-muted-foreground mb-1">
+                            Option 1: <strong>CNAME</strong> — for subdomains (e.g., app.yourdomain.com)
                         </p>
-                        <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border">
+                        <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-3">
                             <code className="text-sm font-mono text-primary flex-1">{CNAME_TARGET}</code>
                             <Button
                                 variant="ghost"
@@ -174,12 +184,37 @@ export function DomainsTab({ service }: { service: Service }) {
                                 <Copy size={14} />
                             </Button>
                         </div>
-                        <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">myapp.com</span>
+                        <div className="flex items-center gap-2 mb-4 text-xs text-muted-foreground">
+                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">app.example.com</span>
                             <ArrowRight size={12} />
                             <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
                             <ArrowRight size={12} />
                             <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{CNAME_TARGET}</span>
+                        </div>
+
+                        {/* Option 2: A Record (apex domains) */}
+                        <p className="text-xs font-semibold text-muted-foreground mb-1">
+                            Option 2: <strong>A Record</strong> — for root/apex domains (e.g., yourdomain.com)
+                        </p>
+                        <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-2">
+                            <code className="text-sm font-mono text-primary flex-1">{serverIp || '(see Settings → Infra)'}</code>
+                            {serverIp && (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={() => copyToClipboard(serverIp)}
+                                >
+                                    <Copy size={14} />
+                                </Button>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">example.com</span>
+                            <ArrowRight size={12} />
+                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">A</span>
+                            <ArrowRight size={12} />
+                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{serverIp || 'your.server.ip'}</span>
                         </div>
                     </div>
 
