@@ -8,7 +8,7 @@ class Domain(models.Model):
     service = models.ForeignKey(
         Service,
         on_delete=models.CASCADE,
-        related_name='custom_domains')
+        related_name='domain_set')
     verified = models.BooleanField(default=False)
     ssl_active = models.BooleanField(default=False)
 
