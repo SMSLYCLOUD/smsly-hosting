@@ -1,7 +1,8 @@
 """
 Multi-server management views.
 
-CRUD + health check + proxy for controlling remote SMSLY Hosting instances.
+CRUD + health check + proxy + auto-provisioning for controlling
+remote SMSLY Hosting instances.
 """
 
 import logging
@@ -18,7 +19,7 @@ from .models_servers import ManagedServer
 logger = logging.getLogger(__name__)
 
 
-# ─── Serializer ──────────────────────────────────────────────────────────────
+# ─── Serializers ─────────────────────────────────────────────────────────────
 
 class ManagedServerSerializer(serializers.ModelSerializer):
     class Meta:
@@ -27,20 +28,56 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "id", "name", "host", "api_url", "ssh_port",
             "is_primary", "status", "last_health_check",
             "server_version", "services_count", "created_at",
+            "provision_status",
         ]
-        read_only_fields = ["id", "status", "last_health_check", "server_version", "services_count", "created_at"]
+        read_only_fields = [
+            "id", "status", "last_health_check", "server_version",
+            "services_count", "created_at", "provision_status",
+        ]
 
 
 class ManagedServerCreateSerializer(serializers.ModelSerializer):
+    """For 'Connect Existing' mode — user provides api_url + api_token."""
     class Meta:
         model = ManagedServer
         fields = ["name", "host", "api_url", "api_token", "ssh_port", "is_primary"]
 
 
+class ManagedServerProvisionSerializer(serializers.ModelSerializer):
+    """For 'Provision New' mode — user provides SSH credentials."""
+    ssh_auth_method = serializers.ChoiceField(
+        choices=["password", "key"], write_only=True,
+    )
+
+    class Meta:
+        model = ManagedServer
+        fields = [
+            "name", "host", "ssh_port", "ssh_user",
+            "ssh_password", "ssh_key", "ssh_auth_method",
+            "is_primary",
+        ]
+        extra_kwargs = {
+            "ssh_password": {"write_only": True},
+            "ssh_key": {"write_only": True},
+        }
+
+    def validate(self, data):
+        method = data.get("ssh_auth_method", "password")
+        if method == "password" and not data.get("ssh_password"):
+            raise serializers.ValidationError(
+                {"ssh_password": "Password is required for password auth."}
+            )
+        if method == "key" and not data.get("ssh_key"):
+            raise serializers.ValidationError(
+                {"ssh_key": "SSH private key is required for key auth."}
+            )
+        return data
+
+
 # ─── ViewSet ─────────────────────────────────────────────────────────────────
 
 class ManagedServerViewSet(viewsets.ModelViewSet):
-    """CRUD for managed remote servers, plus health check and proxy."""
+    """CRUD for managed remote servers, plus health check, proxy, and provisioning."""
 
     permission_classes = [IsAuthenticated]
 
@@ -48,6 +85,8 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         return ManagedServer.objects.filter(owner=self.request.user)
 
     def get_serializer_class(self):
+        if self.action == "provision_new":
+            return ManagedServerProvisionSerializer
         if self.action in ["create", "update", "partial_update"]:
             return ManagedServerCreateSerializer
         return ManagedServerSerializer
@@ -55,12 +94,57 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
+    # ── Provision New Server ─────────────────────────────────────────────
+
+    @action(detail=False, methods=["post"], url_path="provision")
+    def provision_new(self, request):
+        """
+        Create a server record and kick off auto-provisioning via SSH.
+        The installer will run on the remote VPS and auto-fill api_url/api_token.
+        """
+        serializer = ManagedServerProvisionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Remove the non-model field before saving
+        validated = serializer.validated_data.copy()
+        validated.pop("ssh_auth_method", None)
+
+        server = ManagedServer.objects.create(
+            owner=request.user,
+            provision_status=ManagedServer.ProvisionStatus.PENDING,
+            **validated,
+        )
+
+        # Kick off async provisioning
+        from .services.provisioner import provision_server
+        provision_server.delay(str(server.id))
+
+        return Response(
+            ManagedServerSerializer(server).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+    @action(detail=True, methods=["get"], url_path="provision-logs")
+    def provision_logs(self, request, pk=None):
+        """Get the provisioning logs for a server."""
+        server = self.get_object()
+        return Response({
+            "provision_status": server.provision_status,
+            "provision_logs": server.provision_logs,
+        })
+
     # ── Health Check ─────────────────────────────────────────────────────
 
     @action(detail=True, methods=["post"])
     def health_check(self, request, pk=None):
         """Ping a remote server's API to check if it's online."""
         server = self.get_object()
+
+        if not server.api_url:
+            return Response(
+                {"error": "Server has no API URL yet (provisioning may still be in progress)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             resp = requests.get(
@@ -89,7 +173,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def check_all(self, request):
         """Health check all servers at once."""
-        servers = self.get_queryset()
+        servers = self.get_queryset().exclude(api_url="")
         results = []
         for server in servers:
             try:

@@ -90,6 +90,7 @@ oauthlib==3.3.1
 orjson==3.11.7
 ormsgpack==1.12.2
 packaging==26.0
+paramiko==3.5.1
 prometheus_client==0.24.1
 prompt_toolkit==3.0.52
 propcache==0.4.1
