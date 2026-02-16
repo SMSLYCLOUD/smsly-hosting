@@ -363,6 +363,42 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except EnvironmentVariable.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=True, methods=['post'], url_path='verify-domain')
+    def verify_domain(self, request, pk=None):
+        """
+        Verify that a custom domain's DNS points to cname.cloud.smsly.cloud.
+        POST /api/v1/services/{id}/verify-domain/
+        Body: { "domain": "myapp.com" }
+        """
+        import socket
+        service = self.get_object()
+        domain = request.data.get('domain', '').strip().lower()
+
+        if not domain or '.' not in domain:
+            return Response({'error': 'Invalid domain'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        cname_target = os.getenv('CNAME_TARGET', 'cname.cloud.smsly.cloud')
+        try:
+            # Check CNAME or A record
+            resolved = socket.getaddrinfo(domain, 443)
+            target_ips = socket.getaddrinfo(cname_target, 443)
+
+            domain_ips = {r[4][0] for r in resolved}
+            expected_ips = {r[4][0] for r in target_ips}
+
+            is_valid = bool(domain_ips & expected_ips)
+        except socket.gaierror:
+            is_valid = False
+
+        return Response({
+            'domain': domain,
+            'verified': is_valid,
+            'cname_target': cname_target,
+            'message': 'DNS verified! Domain points to CloudNeuron.' if is_valid
+                       else f'DNS not configured. Add a CNAME record pointing to {cname_target}',
+        })
+
 
 class DeploymentViewSet(viewsets.ModelViewSet):
     """

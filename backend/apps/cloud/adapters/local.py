@@ -89,14 +89,21 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             pass
 
-        # Traefik Labels with Let's Encrypt Support
+        # Traefik Labels — support primary domain + custom domains
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
         port = env.get('PORT', '8000')
+
+        # Build Host rule: primary domain + any custom domains
+        all_domains = [domain]
+        custom = env.get('CUSTOM_DOMAINS', '')
+        if custom:
+            all_domains.extend([d.strip() for d in custom.split(',') if d.strip()])
+        host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
         labels = {
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
-            f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
+            f'traefik.http.routers.{name}.rule': host_rule,
             f'traefik.http.routers.{name}.entrypoints': 'web',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
