@@ -30,6 +30,23 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Auto-clear stale tokens on 401 and redirect to login
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      // Don't redirect if already on login page (avoid loop)
+      if (!window.location.pathname.startsWith('/login')) {
+        localStorage.removeItem('auth_token');
+        document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+        document.cookie = 'sessionid=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export interface Service {
   id: string;
   name: string;
