@@ -153,6 +153,45 @@ class Service(TimeStampedModel):
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True, unique=True,
                                     help_text="UUID of the application in Coolify")
 
+    # Health Check Configuration
+    health_check_path = models.CharField(
+        max_length=255, default='/health', blank=True,
+        help_text="HTTP path for health checks (e.g. /health, /api/health)")
+    health_check_interval = models.IntegerField(
+        default=30, help_text="Seconds between health checks")
+    health_check_timeout = models.IntegerField(
+        default=5, help_text="Seconds to wait for health check response")
+    health_check_retries = models.IntegerField(
+        default=3, help_text="Consecutive failures before marking unhealthy")
+    auto_restart = models.BooleanField(
+        default=True, help_text="Automatically restart unhealthy containers")
+    health_status = models.CharField(
+        max_length=20, default='unknown',
+        choices=[
+            ('healthy', 'Healthy'),
+            ('unhealthy', 'Unhealthy'),
+            ('unknown', 'Unknown'),
+            ('starting', 'Starting'),
+        ],
+        help_text="Current health status of the service")
+
+    # Restart Policy
+    RESTART_POLICY_CHOICES = [
+        ('always', 'Always'),
+        ('unless-stopped', 'Unless Stopped'),
+        ('on-failure', 'On Failure'),
+        ('no', 'Never'),
+    ]
+    restart_policy = models.CharField(
+        max_length=20, choices=RESTART_POLICY_CHOICES,
+        default='unless-stopped',
+        help_text="Docker restart policy for the container")
+
+    # Custom domains
+    custom_domains = models.JSONField(
+        default=list, blank=True,
+        help_text="List of custom domains attached to this service")
+
     def __str__(self):
         return self.name
 

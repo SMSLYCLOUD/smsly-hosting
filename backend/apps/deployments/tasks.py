@@ -677,6 +677,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         "docker", "build",
                         "-t", local_tag,
                         "-f", dockerfile_path,
+                        "--cache-from", local_tag,
                         *build_args,
                         build_context_dir,
                     ]
@@ -847,6 +848,24 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             )
             replicas = 1
 
+        # Resolve service volumes from DB
+        from apps.deployments.models_storage import Volume
+        db_volumes = Volume.objects.filter(service=service)
+        volume_list = [{'name': v.name, 'mount_path': v.mount_path} for v in db_volumes]
+
+        # Health check configuration
+        healthcheck_config = None
+        if getattr(service, 'health_check_path', None):
+            healthcheck_config = {
+                'path': service.health_check_path,
+                'interval': getattr(service, 'health_check_interval', 30),
+                'timeout': getattr(service, 'health_check_timeout', 5),
+                'retries': getattr(service, 'health_check_retries', 3),
+            }
+            # Set health status to starting
+            service.health_status = 'starting'
+            service.save(update_fields=['health_status'])
+
         # Call Universal Adapter
         resource = compute.deploy_container(
             name=service.name,
@@ -854,7 +873,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             env_vars=env_vars,
             cpu=int(service.cpu_cores * 1024),
             memory=service.memory_mb,
-            replicas=replicas
+            replicas=replicas,
+            volumes=volume_list,
+            healthcheck=healthcheck_config,
+            restart_policy=getattr(service, 'restart_policy', 'unless-stopped'),
         )
 
         # Step 3: Success

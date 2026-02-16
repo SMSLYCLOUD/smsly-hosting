@@ -30,11 +30,17 @@ class MetricsViewSet(viewsets.ViewSet):
                 str(service.id), duration)
             network = metrics_adapter.get_network_history(
                 str(service.id), duration)
+            disk = metrics_adapter.get_disk_history(
+                str(service.id), duration)
+            current = metrics_adapter.get_current(str(service.id))
 
             return Response({
                 'cpu': cpu,
                 'memory': memory,
-                'network': network
+                'network': network,
+                'disk': disk,
+                'current': current,
             })
         except Service.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
+

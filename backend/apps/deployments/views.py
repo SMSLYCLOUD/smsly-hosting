@@ -399,6 +399,59 @@ class ServiceViewSet(viewsets.ModelViewSet):
                        else f'DNS not configured. Add a CNAME record pointing to {cname_target}',
         })
 
+    @action(detail=True, methods=['post'], url_path='add-domain')
+    def add_domain(self, request, pk=None):
+        """
+        Add a custom domain to the service.
+        POST /api/v1/services/{id}/add-domain/
+        Body: { "domain": "myapp.com" }
+        """
+        service = self.get_object()
+        domain = request.data.get('domain', '').strip().lower()
+
+        if not domain or '.' not in domain:
+            return Response({'error': 'Invalid domain'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        domains = service.custom_domains or []
+        if domain in domains:
+            return Response({'error': 'Domain already added'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        domains.append(domain)
+        service.custom_domains = domains
+        service.save(update_fields=['custom_domains'])
+
+        return Response({
+            'domain': domain,
+            'domains': domains,
+            'message': f'{domain} added. Configure DNS to point to your server.',
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='delete-domain')
+    def delete_domain(self, request, pk=None):
+        """
+        Remove a custom domain from the service.
+        POST /api/v1/services/{id}/delete-domain/
+        Body: { "domain": "myapp.com" }
+        """
+        service = self.get_object()
+        domain = request.data.get('domain', '').strip().lower()
+
+        domains = service.custom_domains or []
+        if domain not in domains:
+            return Response({'error': 'Domain not found'},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        domains.remove(domain)
+        service.custom_domains = domains
+        service.save(update_fields=['custom_domains'])
+
+        return Response({
+            'domains': domains,
+            'message': f'{domain} removed.',
+        })
+
 
 class DeploymentViewSet(viewsets.ModelViewSet):
     """
@@ -425,6 +478,18 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         """
         target_deployment = self.get_object()
         service = target_deployment.service
+
+        # Validate the target deployment
+        if not target_deployment.commit_hash:
+            return Response(
+                {'error': 'Cannot rollback: target deployment has no commit hash.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        if target_deployment.status not in ('ACTIVE', 'SUCCEEDED'):
+            return Response(
+                {'error': f'Cannot rollback to a {target_deployment.status} deployment. '
+                          'Only successful deployments can be rolled back to.'},
+                status=status.HTTP_400_BAD_REQUEST)
 
         # Create new deployment record for the rollback
         new_deployment = Deployment.objects.create(

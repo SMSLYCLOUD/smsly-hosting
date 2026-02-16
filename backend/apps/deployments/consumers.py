@@ -1,6 +1,8 @@
 """WebSocket consumers for deployment real-time features."""
 import json
+import asyncio
 import logging
+import os
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 
@@ -9,15 +11,20 @@ logger = logging.getLogger(__name__)
 
 class TerminalConsumer(AsyncWebsocketConsumer):
     """
-    WebSocket consumer for terminal access to deployments.
+    WebSocket consumer for interactive terminal access to containers.
 
     SECURITY: Requires authentication and ownership verification.
+    Connects to the running Docker container via `docker exec`.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.deployment_id = None
         self.user = None
+        self.container_id = None
+        self.exec_id = None
+        self.exec_socket = None
+        self._read_task = None
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -63,12 +70,43 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             "WebSocket connected: User %s to deployment %s",
             self.user.id, self.deployment_id)
         await self.accept()
+
+        # ======================================================================
+        # Find the container and start docker exec
+        # ======================================================================
+        self.container_id = await self._find_container()
+        if not self.container_id:
+            await self.send(text_data=json.dumps({
+                'message': '\x1b[31m[error] No running container found for '
+                           'this deployment.\x1b[0m\r\n'
+            }))
+            return
+
+        # Start the exec session
+        success = await self._start_exec()
+        if not success:
+            await self.send(text_data=json.dumps({
+                'message': '\x1b[31m[error] Failed to start shell in '
+                           'container.\x1b[0m\r\n'
+            }))
+            return
+
         await self.send(text_data=json.dumps({
-            'message': f'Connected to terminal for deployment '
-                       f'{self.deployment_id}...\r\n$ '
+            'message': '\x1b[32m[connected to container]\x1b[0m\r\n'
         }))
 
+        # Start background task to read container output
+        self._read_task = asyncio.ensure_future(self._read_output())
+
     async def disconnect(self, close_code):
+        if self._read_task:
+            self._read_task.cancel()
+        if self.exec_socket:
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, self.exec_socket.close)
+            except Exception:
+                pass
         if self.user:
             logger.info(
                 "WebSocket disconnected: User %s from "
@@ -80,25 +118,124 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        # The frontend buffers a full line and sends it on Enter.
-        command = (text_data or "").strip()
+        if not self.exec_socket:
+            await self.send(text_data=json.dumps({
+                'message': '\x1b[31m[error] No exec session active.\x1b[0m\r\n'
+            }))
+            return
 
-        if not command:
-            response = "\r\n$ "
-        elif command == "help":
-            response = "\r\nAvailable commands: ls, whoami, help\r\n$ "
-        elif command == "ls":
-            response = (
-                "\r\nbin  boot  dev  etc  home  lib  media  mnt  "
-                "opt  proc  root  run  sbin  srv  sys  tmp  usr  var"
-                "\r\n$ "
+        # Send raw input to the container's exec stdin
+        try:
+            data = text_data
+            # Frontend sends full commands on Enter but for interactive
+            # terminals we forward raw bytes. Add newline for command lines.
+            if not data.endswith('\n'):
+                data += '\n'
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.exec_socket._sock.sendall, data.encode('utf-8'))
+        except Exception as e:
+            logger.error("Error sending to exec: %s", e)
+            await self.send(text_data=json.dumps({
+                'message': f'\r\n\x1b[31m[error] {str(e)}\x1b[0m\r\n'
+            }))
+
+    async def _read_output(self):
+        """Background task: read from exec socket and send to WebSocket."""
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                data = await loop.run_in_executor(
+                    None, self._blocking_read)
+                if not data:
+                    await self.send(text_data=json.dumps({
+                        'message': '\r\n\x1b[31m[session ended]\x1b[0m\r\n'
+                    }))
+                    break
+                # Docker exec may prepend stream headers (8-byte prefix)
+                # For TTY mode, output is raw
+                text = data.decode('utf-8', errors='replace')
+                await self.send(text_data=json.dumps({'message': text}))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Error reading exec output: %s", e)
+
+    def _blocking_read(self):
+        """Blocking read from the exec socket. Runs in executor."""
+        try:
+            return self.exec_socket._sock.recv(4096)
+        except Exception:
+            return None
+
+    @database_sync_to_async
+    def _find_container(self):
+        """Find the Docker container ID for this deployment's service."""
+        import docker
+        from apps.deployments.models import Deployment
+        try:
+            dep = Deployment.objects.select_related('service').get(
+                id=self.deployment_id)
+            service_name = dep.service.name
+
+            client = docker.from_env()
+            # Look for a running container matching the service name
+            containers = client.containers.list(
+                filters={'name': service_name, 'status': 'running'})
+            if containers:
+                return containers[0].id
+
+            # Also try by label
+            containers = client.containers.list(
+                filters={'label': f'smsly.service={service_name}',
+                         'status': 'running'})
+            if containers:
+                return containers[0].id
+
+            return None
+        except Exception as e:
+            logger.error("Error finding container: %s", e)
+            return None
+
+    @database_sync_to_async
+    def _start_exec(self):
+        """Create a docker exec instance and attach to it."""
+        import docker
+        try:
+            client = docker.from_env()
+            container = client.containers.get(self.container_id)
+
+            # Try bash first, fall back to sh
+            shell = '/bin/bash'
+            try:
+                exit_code, _ = container.exec_run(
+                    'which bash', demux=True)
+                if exit_code != 0:
+                    shell = '/bin/sh'
+            except Exception:
+                shell = '/bin/sh'
+
+            # Create exec instance with TTY
+            exec_instance = client.api.exec_create(
+                self.container_id,
+                shell,
+                stdin=True,
+                stdout=True,
+                stderr=True,
+                tty=True,
             )
-        elif command == "whoami":
-            response = f"\r\n{self.user.username}\r\n$ "
-        else:
-            response = f"\r\nbash: {command}: command not found\r\n$ "
+            self.exec_id = exec_instance['Id']
 
-        await self.send(text_data=json.dumps({'message': response}))
+            # Attach to the exec instance (returns a socket-like object)
+            self.exec_socket = client.api.exec_start(
+                self.exec_id,
+                socket=True,
+                tty=True,
+            )
+
+            return True
+        except Exception as e:
+            logger.error("Error starting exec: %s", e)
+            return False
 
     @database_sync_to_async
     def _authenticate_token(self, token_key):

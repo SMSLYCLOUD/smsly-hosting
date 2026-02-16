@@ -2,18 +2,40 @@
 
 import React, { useState } from 'react';
 import Editor from "@monaco-editor/react";
-import { Service } from '@/lib/api';
+import { Service, servicesApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
-import { Save, AlertTriangle } from 'lucide-react';
+import { Save, AlertTriangle, Check, Loader2 } from 'lucide-react';
 
 export function AdvancedTab({ service }: { service: Service }) {
-    const [config, setConfig] = useState({
-        image: service.docker_image || `registry.smsly.cloud/${service.name}`,
-        restart: 'always',
-        cmd: service.start_command || '',
+    const [config, setConfig] = useState<{ docker_image: string; start_command: string; restart_policy: string }>({
+        docker_image: service.docker_image || `registry.smsly.cloud/${service.name}`,
+        start_command: service.start_command || '',
+        restart_policy: service.restart_policy || 'unless-stopped',
     });
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleSave = async () => {
+        setSaving(true);
+        setError('');
+        setSaved(false);
+        try {
+            await servicesApi.update(service.id, {
+                docker_image: config.docker_image,
+                start_command: config.start_command,
+                restart_policy: config.restart_policy as Service['restart_policy'],
+            });
+            setSaved(true);
+            setTimeout(() => setSaved(false), 3000);
+        } catch (err: any) {
+            setError(err?.response?.data?.detail || 'Failed to save configuration');
+        } finally {
+            setSaving(false);
+        }
+    };
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4">
@@ -38,13 +60,14 @@ export function AdvancedTab({ service }: { service: Service }) {
     "containers": [
       {
         "name": "${service.name}",
-        "image": "registry.smsly.cloud/${service.name}:latest",
+        "image": "${config.docker_image}:latest",
         "resources": {
           "limits": {
             "cpu": "${service.cpu_cores}",
             "memory": "${service.memory_mb}Mi"
           }
         },
+        "restartPolicy": "${config.restart_policy}",
         "securityContext": {
           "allowPrivilegeEscalation": false
         }
@@ -61,10 +84,25 @@ export function AdvancedTab({ service }: { service: Service }) {
             {/* Container Settings Form */}
             <Card className="p-6 border-border shadow-md">
                 <h3 className="font-bold text-lg mb-6">Container Runtime</h3>
+
+                {error && (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 mb-6 text-red-500 text-sm">
+                        {error}
+                    </div>
+                )}
+                {saved && (
+                    <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-4 py-3 mb-6 text-emerald-500 text-sm flex items-center gap-2">
+                        <Check size={16} /> Configuration saved successfully
+                    </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-6">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Docker Image</label>
-                        <Input defaultValue={config.image} />
+                        <Input
+                            value={config.docker_image}
+                            onChange={(e) => setConfig(prev => ({ ...prev, docker_image: e.target.value }))}
+                        />
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Image Tag</label>
@@ -72,19 +110,31 @@ export function AdvancedTab({ service }: { service: Service }) {
                     </div>
                     <div className="col-span-2 space-y-2">
                         <label className="text-sm font-medium">Command Override</label>
-                        <Input placeholder="/bin/sh -c '...'" defaultValue={config.cmd} />
+                        <Input
+                            placeholder="/bin/sh -c '...'"
+                            value={config.start_command}
+                            onChange={(e) => setConfig(prev => ({ ...prev, start_command: e.target.value }))}
+                        />
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Restart Policy</label>
-                        <select className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                        <select
+                            value={config.restart_policy}
+                            onChange={(e) => setConfig(prev => ({ ...prev, restart_policy: e.target.value }))}
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        >
                             <option value="always">Always</option>
+                            <option value="unless-stopped">Unless Stopped</option>
                             <option value="on-failure">On Failure</option>
-                            <option value="never">Never</option>
+                            <option value="no">Never</option>
                         </select>
                     </div>
                 </div>
                 <div className="mt-6 flex justify-end">
-                    <Button>Save Configuration</Button>
+                    <Button onClick={handleSave} disabled={saving} className="gap-2">
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Configuration'}
+                    </Button>
                 </div>
             </Card>
 

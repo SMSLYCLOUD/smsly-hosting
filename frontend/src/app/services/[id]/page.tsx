@@ -16,6 +16,8 @@ import { MetricsTab } from '@/components/metrics/MetricsTab';
 import { CronTab } from '@/components/cron/CronTab';
 import { StorageTab } from '@/components/storage/StorageTab';
 import { AddonsTab } from '@/components/addons/AddonsTab';
+import { ResourcesTab } from '@/components/settings/ResourcesTab';
+import { HealthTab } from '@/components/settings/HealthTab';
 import { toast } from '@/components/ui/use-toast';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
@@ -104,6 +106,36 @@ export default function ServiceDetailPage() {
                             {deployment?.finished_at ? `Since ${new Date(deployment.finished_at).toLocaleDateString()}` : 'Awaiting deployment'}
                         </p>
                     </div>
+
+                    {/* Health Status */}
+                    <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
+                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Health</h4>
+                        <div className="flex items-center gap-2">
+                            <span className={`w-3 h-3 rounded-full ${
+                                service.health_status === 'healthy' ? 'bg-emerald-500 animate-pulse' :
+                                service.health_status === 'unhealthy' ? 'bg-red-500 animate-pulse' :
+                                service.health_status === 'starting' ? 'bg-yellow-500 animate-pulse' :
+                                'bg-zinc-500'
+                            }`} />
+                            <p className={`text-2xl font-bold capitalize ${
+                                service.health_status === 'healthy' ? 'text-emerald-500' :
+                                service.health_status === 'unhealthy' ? 'text-red-500' :
+                                service.health_status === 'starting' ? 'text-yellow-500' :
+                                'text-muted-foreground'
+                            }`}>
+                                {service.health_status || 'Unknown'}
+                            </p>
+                        </div>
+                        <div className="flex gap-2 mt-3">
+                            <span className="text-[10px] font-bold bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                                {service.cpu_cores ?? 0.5} vCPU
+                            </span>
+                            <span className="text-[10px] font-bold bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                                {service.memory_mb ?? 512} MB
+                            </span>
+                        </div>
+                    </div>
+
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
                         <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Build Time</h4>
                         <p className="text-3xl font-bold text-foreground">
@@ -196,6 +228,10 @@ export default function ServiceDetailPage() {
 
             {activeTab === 'metrics' && <MetricsTab serviceId={service.id} />}
 
+            {activeTab === 'resources' && <ResourcesTab serviceId={service.id} service={service} />}
+
+            {activeTab === 'health' && <HealthTab serviceId={service.id} service={service} />}
+
             {activeTab === 'cron' && <CronTab serviceId={service.id} />}
 
             {activeTab === 'storage' && <StorageTab serviceId={service.id} />}
@@ -224,7 +260,7 @@ export default function ServiceDetailPage() {
                                     className="bg-primary text-primary-foreground px-4 py-2 rounded font-bold hover:opacity-90"
                                     onClick={() => {
                                         localStorage.setItem('smsly_ai_key', aiKey);
-                                        alert('AI Key saved locally!');
+                                        toast({ title: 'AI Key saved', description: 'Key stored locally in your browser.' });
                                     }}
                                 >
                                     Save
