@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Search, BookOpen, Rocket, Settings, Code, Shield, Database, Terminal, ArrowRight, FileText, Server, Globe, Download, RefreshCw, HardDrive, Key, Wrench } from 'lucide-react';
+import { Search, BookOpen, Rocket, Settings, Code, Shield, Database, Terminal, ArrowRight, FileText, Server, Globe, Download, RefreshCw, HardDrive, Key, Wrench, Monitor, RotateCcw, MapPin, Activity } from 'lucide-react';
 
 
 const categories = [
@@ -35,8 +35,19 @@ const categories = [
     articles: [
       { title: 'Git Push Deploys', desc: 'Automatic deploys on every push', href: '/docs/install#updating-cloudneuron' },
       { title: 'Environment Variables', desc: 'Managing secrets and configuration', href: '/docs/install#credential-locations' },
-      { title: 'Custom Domains & SSL', desc: 'Set up your own domain with auto-SSL', href: '/docs/install#ssl--custom-domains' },
-      { title: 'Preview Environments', desc: 'Ephemeral environments per PR', href: '/docs/install#managing-services' },
+      { title: 'Custom Domains & SSL', desc: 'Add custom domains with auto-SSL certificates', href: '/docs/install#ssl--custom-domains' },
+      { title: 'Multi-Region Deployment', desc: 'Deploy to US, EU, or Asia Pacific regions', href: '/docs/install#deployment-modes' },
+    ],
+  },
+  {
+    title: 'Advanced Features',
+    icon: Monitor,
+    color: 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300',
+    articles: [
+      { title: 'Web Console', desc: 'Interactive terminal access to running containers', href: '/docs/install#managing-services' },
+      { title: 'Instant Rollbacks', desc: 'Roll back to any successful deployment in one click', href: '/docs/install#rollback-on-failure' },
+      { title: 'Activity Feed', desc: 'Real-time deployment history on your dashboard', href: '/docs/install#managing-services' },
+      { title: 'Service Topology', desc: 'Visual map of services, addons, and volumes', href: '/docs/install#container-map' },
     ],
   },
   {
@@ -89,8 +100,8 @@ const popularArticles = [
   { title: 'Install CloudNeuron', icon: Download, href: '/docs/install' },
   { title: 'Update Software', icon: RefreshCw, href: '/docs/install#updating-cloudneuron' },
   { title: 'Custom Domains', icon: Globe, href: '/docs/install#ssl--custom-domains' },
-  { title: 'Environment Variables', icon: Terminal, href: '/docs/install#credential-locations' },
-  { title: 'Database Backups', icon: HardDrive, href: '/docs/install#database-operations' },
+  { title: 'Web Console', icon: Terminal, href: '/docs/install#managing-services' },
+  { title: 'Instant Rollbacks', icon: RotateCcw, href: '/docs/install#rollback-on-failure' },
   { title: 'Troubleshooting', icon: Wrench, href: '/docs/install#troubleshooting' },
 ];
 

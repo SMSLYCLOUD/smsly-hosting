@@ -89,16 +89,16 @@ const features = [
         bg: "bg-emerald-500/10"
     },
     {
-        icon: Globe,
-        title: "Edge Function Delivery",
-        description: "Run serverless functions at the edge, closer to your users for ultra-low latency.",
+        icon: Terminal,
+        title: "Web Console",
+        description: "Access a live interactive terminal directly in your browser — SSH into any running container instantly.",
         color: "text-blue-500",
         bg: "bg-blue-500/10"
     },
     {
-        icon: Cpu,
-        title: "Cost Optimization AI",
-        description: "Our AI suggests resource adjustments to reduce your cloud bill by up to 40%.",
+        icon: Activity,
+        title: "Real-Time Activity Feed",
+        description: "Track every deployment, rollback, and event across all services in a single live dashboard view.",
         color: "text-purple-500",
         bg: "bg-purple-500/10"
     },
