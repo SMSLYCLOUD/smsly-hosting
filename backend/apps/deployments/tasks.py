@@ -461,11 +461,17 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     ]
 
                     try:
+                        # Force legacy Docker builder to avoid buildx/buildkitd
+                        # version mismatch (contenthash.init crash).
+                        build_env = os.environ.copy()
+                        build_env["DOCKER_BUILDKIT"] = "0"
+
                         process = subprocess.run(
                             docker_cmd, check=True,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             text=True, timeout=600,
+                            env=build_env,
                         )
                         build_result = {
                             "image_name": local_tag,
