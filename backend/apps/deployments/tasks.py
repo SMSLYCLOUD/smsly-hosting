@@ -603,6 +603,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         # Prepare Env Vars
         env_vars = {env.key: env.value for env in service.env_vars.all()}
 
+        # Inject PUBLIC_DOMAIN for Traefik routing (if not already set by user)
+        if 'PUBLIC_DOMAIN' not in env_vars and service.public_domain:
+            env_vars['PUBLIC_DOMAIN'] = service.public_domain
+        if 'PORT' not in env_vars:
+            env_vars['PORT'] = '8000'
+
         # Normalize replicas to a safe value for runtime deployment.
         requested_replicas = service.min_replicas
         try:
