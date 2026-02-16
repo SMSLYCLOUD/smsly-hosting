@@ -97,8 +97,7 @@ class LocalAdapter(BaseCloudAdapter):
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
             f'traefik.http.routers.{name}.rule': f'Host(`{domain}`)',
-            f'traefik.http.routers.{name}.entrypoints': 'websecure',  # HTTPS
-            f'traefik.http.routers.{name}.tls.certresolver': 'myresolver',
+            f'traefik.http.routers.{name}.entrypoints': 'web',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
