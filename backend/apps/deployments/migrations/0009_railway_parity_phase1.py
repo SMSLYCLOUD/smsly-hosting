@@ -49,6 +49,11 @@ class Migration(migrations.Migration):
         ),
 
         # Expanded ServiceMetric fields
+        # Remove AutoField first
+        migrations.RemoveField(
+            model_name='servicemetric',
+            name='id',
+        ),
         migrations.AddField(
             model_name='servicemetric',
             name='id',
