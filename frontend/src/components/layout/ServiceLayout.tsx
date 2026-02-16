@@ -1,4 +1,8 @@
-import { ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network } from 'lucide-react';
+import { 
+    ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, 
+    Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network,
+    HeartPulse, Cpu, BarChart3
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -23,7 +27,9 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
         { id: 'domains', label: 'Domains', icon: Globe },
-        { id: 'metrics', label: 'Metrics', icon: Activity },
+        { id: 'metrics', label: 'Metrics', icon: BarChart3 },
+        { id: 'resources', label: 'Resources', icon: Cpu },
+        { id: 'health', label: 'Health', icon: HeartPulse },
         { id: 'topology', label: 'Topology', icon: Network, href: '/topology' },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
         { id: 'settings', label: 'Settings', icon: Settings },

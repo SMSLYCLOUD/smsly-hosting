@@ -15,7 +15,7 @@ const api = axios.create({
 
 function getAuthTokenFromCookie(): string | null {
   if (typeof document === "undefined") return null;
-  const match = document.cookie.match(/(?:^|;\\s*)auth_token=([^;]+)/);
+  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -63,6 +63,8 @@ export interface Service {
   template_id?: string;
   provider?: string;  // Cloud provider: 'local', 'aws', 'gcp', 'azure', 'digitalocean', etc.
   region?: string;    // Deployment region
+  health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'starting';
+  restart_policy?: 'always' | 'unless-stopped' | 'on-failure' | 'no';
   latest_deployment?: {
     id: string;
     status: string;
@@ -125,6 +127,10 @@ export const servicesApi = {
   },
   get: async (id: string): Promise<Service> => {
     const response = await api.get(`/services/${id}/`);
+    return response.data;
+  },
+  update: async (id: string, data: Partial<Service>): Promise<Service> => {
+    const response = await api.patch(`/services/${id}/`, data);
     return response.data;
   },
   deploy: async (id: string, ref: string = 'HEAD') => {

@@ -17,10 +17,15 @@ class BaseCloudAdapter(ABC):
     # --- Compute ---
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         replicas: int = 1, **kwargs) -> str:
         """
         Deploy a containerized application.
         Returns the resource ID (ARN, etc).
+
+        Optional kwargs:
+            volumes: List[Dict] - [{'name': str, 'mount_path': str}]
+            healthcheck: Dict - {'path': str, 'interval': int, 'timeout': int, 'retries': int}
         """
         pass
 

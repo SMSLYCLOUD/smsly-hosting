@@ -43,18 +43,29 @@ class LocalAdapter(BaseCloudAdapter):
         return self.docker_client is not None or self.k8s_client is not None
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         replicas: int = 1, **kwargs) -> str:
+        volumes = kwargs.get('volumes', None)
+        healthcheck = kwargs.get('healthcheck', None)
+        restart_policy = kwargs.get('restart_policy', 'unless-stopped')
         if self.k8s_client:
             return self._deploy_k8s(
                 service_name, image, env_vars, cpu, memory, replicas)
         elif self.docker_client:
-            return self._deploy_docker(service_name, image, env_vars)
+            return self._deploy_docker(
+                service_name, image, env_vars, volumes=volumes,
+                healthcheck=healthcheck, cpu=cpu, memory=memory,
+                restart_policy=restart_policy)
         else:
             raise RuntimeError("No local orchestrator available")
 
     # pylint: disable=too-many-positional-arguments, R0917
     def _deploy_docker(self, name: str, image: str,
-                       env: Dict[str, str], volumes: List[Dict] = None, project_id: str = 'default') -> str:
+                       env: Dict[str, str], volumes: List[Dict] = None,
+                       project_id: str = 'default',
+                       healthcheck: Dict = None,
+                       cpu: int = None, memory: int = None,
+                       restart_policy: str = 'unless-stopped') -> str:
         # Ensure shared network exists
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
@@ -108,6 +119,32 @@ class LocalAdapter(BaseCloudAdapter):
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
+        # Docker-native healthcheck
+        docker_healthcheck = None
+        if healthcheck:
+            hc_port = env.get('PORT', '8000')
+            hc_path = healthcheck.get('path', '/health')
+            hc_interval = healthcheck.get('interval', 30)
+            hc_timeout = healthcheck.get('timeout', 5)
+            hc_retries = healthcheck.get('retries', 3)
+            docker_healthcheck = docker.types.Healthcheck(
+                test=["CMD-SHELL", f"curl -sf http://localhost:{hc_port}{hc_path} || exit 1"],
+                interval=hc_interval * 1_000_000_000,   # nanoseconds
+                timeout=hc_timeout * 1_000_000_000,
+                retries=hc_retries,
+                start_period=10 * 1_000_000_000,        # 10s grace period
+            )
+
+        # Resource limits
+        run_kwargs = {}
+        if memory and memory > 0:
+            run_kwargs['mem_limit'] = f"{memory}m"
+        if cpu and cpu > 0:
+            # cpu is in millicores (e.g. 1024 = 1 vCPU)
+            # Docker: cpu_period=100000, cpu_quota = (cpu/1000) * 100000
+            run_kwargs['cpu_period'] = 100000
+            run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
+
         container = self.docker_client.containers.run(
             image,
             name=name,
@@ -116,7 +153,10 @@ class LocalAdapter(BaseCloudAdapter):
             network=network_name,
             labels=labels,
             volumes=docker_volumes if docker_volumes else None,
-            networking_config=networking_config
+            networking_config=networking_config,
+            healthcheck=docker_healthcheck,
+            restart_policy={"Name": restart_policy} if restart_policy != 'no' else None,
+            **run_kwargs
         )
         return container.id
 

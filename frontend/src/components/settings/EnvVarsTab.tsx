@@ -131,17 +131,17 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             {/* Redeploy Banner */}
             {hasChanges && (
                 <div className="sticky top-0 z-50 animate-in slide-in-from-top-2 fade-in">
-                    <div className="flex items-center justify-between p-4 bg-gradient-to-r from-violet-600/90 to-indigo-600/90 backdrop-blur rounded-xl border border-white/10 shadow-lg shadow-violet-500/20">
+                    <div className="flex items-center justify-between p-4 bg-gradient-to-r from-red-600/95 to-rose-600/95 backdrop-blur rounded-xl border border-red-500/30 shadow-lg shadow-red-500/20">
                         <div className="flex items-center gap-3">
-                            <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                            <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
                             <p className="text-sm font-medium text-white">
-                                Variables changed — redeploy to apply
+                                ⚠ Variables changed — redeploy to apply
                             </p>
                         </div>
                         <Button
                             onClick={handleRedeploy}
                             disabled={deploying}
-                            className="bg-white text-violet-700 hover:bg-white/90 font-semibold shadow-sm"
+                            className="bg-white text-red-700 hover:bg-white/90 font-semibold shadow-sm"
                             size="sm"
                         >
                             {deploying ? (
@@ -149,7 +149,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                             ) : (
                                 <Rocket className="w-4 h-4 mr-2" />
                             )}
-                            {deploying ? 'Deploying...' : 'Redeploy'}
+                            {deploying ? 'Deploying...' : 'Redeploy Now'}
                         </Button>
                     </div>
                 </div>

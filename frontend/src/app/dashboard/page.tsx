@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { useAuth } from "@/components/auth-provider";
+import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -264,58 +265,9 @@ export default function DashboardPage() {
           </Card>
         </motion.div>
 
-        {/* AI Insights */}
+        {/* Activity Feed */}
         <motion.div variants={fadeInUp} className="col-span-3">
-          <Card className="card-premium rounded-xl h-full" style={{ background: 'linear-gradient(135deg, hsl(var(--card) / 0.7), hsl(var(--card) / 0.5), hsl(160 84% 39% / 0.05))' }}>
-            <CardHeader className="relative z-10">
-              <CardTitle className="flex items-center gap-2">
-                <span className="relative flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-                </span>
-                AI Insights
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 relative z-10">
-              {failedServices > 0 ? (
-                <motion.div
-                  whileHover={{ scale: 1.01 }}
-                  className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 hover:border-red-500/40 transition-all"
-                >
-                  <p className="text-sm font-medium text-red-500">⚠ {failedServices} failed deployment{failedServices > 1 ? 's' : ''}</p>
-                  <p className="text-xs text-muted-foreground mt-1">Check service logs for AI-assisted diagnosis</p>
-                </motion.div>
-              ) : (
-                <motion.div
-                  whileHover={{ scale: 1.01 }}
-                  className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all"
-                >
-                  <p className="text-sm font-medium text-emerald-500">✓ All systems healthy</p>
-                  <p className="text-xs text-muted-foreground mt-1">{activeDeployments} active deployment{activeDeployments !== 1 ? 's' : ''} running</p>
-                </motion.div>
-              )}
-
-              <motion.div
-                whileHover={{ scale: 1.01 }}
-                className="p-4 rounded-xl bg-primary/10 border border-primary/20 hover:border-primary/40 transition-all"
-              >
-                <p className="text-sm font-medium text-primary">📊 Infrastructure</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {totalServices} service{totalServices !== 1 ? 's' : ''} deployed{databaseServices > 0 ? `, ${databaseServices} database${databaseServices > 1 ? 's' : ''}` : ''}
-                </p>
-              </motion.div>
-
-              <motion.div
-                whileHover={{ scale: 1.01 }}
-                className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 hover:border-cyan-500/40 transition-all"
-              >
-                <p className="text-sm font-medium text-cyan-500">🚀 Quick Actions</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {totalServices === 0 ? 'Deploy your first service to see AI insights' : 'Click any service to view logs, metrics, and AI analysis'}
-                </p>
-              </motion.div>
-            </CardContent>
-          </Card>
+          <ActivityFeed />
         </motion.div>
       </div>
     </motion.div>
