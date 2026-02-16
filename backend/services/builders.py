@@ -10,6 +10,7 @@ import os
 from urllib.parse import urlparse, urlunparse
 from pathlib import Path
 from django.conf import settings
+from typing import Union
 from django.utils import timezone
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
@@ -26,13 +27,13 @@ BUILDKIT_CACHE_ERROR_SIGNATURES = [
 ]
 
 
-def _is_buildkit_cache_error(exc: Exception) -> bool:
+def is_buildkit_cache_error(exc: Union[Exception, str]) -> bool:
     """Check if an exception is caused by BuildKit cache corruption."""
     msg = str(exc).lower()
     return any(sig.lower() in msg for sig in BUILDKIT_CACHE_ERROR_SIGNATURES)
 
 
-def _prune_buildkit_cache():
+def prune_buildkit_cache():
     """Prune Docker BuildKit cache to recover from corruption."""
     logger.warning("Pruning BuildKit cache after cache corruption error...")
     try:
@@ -48,8 +49,8 @@ def _prune_buildkit_cache():
 def _before_retry(retry_state):
     """Called before each retry — prune cache if it was a BuildKit error."""
     exc = retry_state.outcome.exception()
-    if exc and _is_buildkit_cache_error(exc):
-        _prune_buildkit_cache()
+    if exc and is_buildkit_cache_error(exc):
+        prune_buildkit_cache()
 
 
 class BuildManager:

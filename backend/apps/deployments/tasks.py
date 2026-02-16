@@ -16,6 +16,7 @@ from apps.cloud.services.compute import ComputeService
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.services.git import GitManager
 from apps.cloud.models import CloudProvider
+from services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 logger = logging.getLogger(__name__)
 
@@ -440,6 +441,16 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             if k.startswith(("NEXT_PUBLIC_", "PUBLIC_", "VITE_")):
                                 build_args.extend(["--build-arg", f"{k}={v}"])
 
+                    # Ensure .dockerignore exists to prevent large context issues
+                    dockerignore_path = os.path.join(build_context_dir, ".dockerignore")
+                    if not os.path.exists(dockerignore_path):
+                        try:
+                            with open(dockerignore_path, "w", encoding="utf-8") as f:
+                                f.write(".git\nnode_modules\nvenv\n__pycache__\n*.log\n")
+                            logger.info("Created default .dockerignore in %s", build_context_dir)
+                        except Exception as ign_err:
+                            logger.warning("Failed to create .dockerignore: %s", ign_err)
+
                     import subprocess
                     docker_cmd = [
                         "docker", "build",
@@ -462,6 +473,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             "stderr": _redact_values(process.stderr or "", secret_values),
                         }
                     except subprocess.CalledProcessError as e:
+                        # Check for BuildKit cache corruption
+                        full_error = str(e) + (getattr(e, "stdout", "") or "") + (getattr(e, "stderr", "") or "")
+                        if is_buildkit_cache_error(full_error):
+                            prune_buildkit_cache()
+
                         stdout = _redact_values(getattr(e, "stdout", "") or "", secret_values)
                         stderr = _redact_values(getattr(e, "stderr", "") or "", secret_values)
                         error_detail = ""

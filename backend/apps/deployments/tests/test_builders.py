@@ -11,6 +11,33 @@ from django.test import TestCase
 from django.contrib.auth.models import User
 from apps.deployments.models import Service, Deployment
 from apps.cloud.models import CloudProvider
+from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+
+
+class BuildKitRecoveryTests(TestCase):
+    def test_is_buildkit_cache_error(self):
+        # Test known signatures
+        signatures = [
+            'contenthash',
+            'checksum.go',
+            'lazyChecksum',
+            'cacheContext',
+            'cacheManager',
+        ]
+        for sig in signatures:
+            self.assertTrue(is_buildkit_cache_error(Exception(f"Some error with {sig} in it")))
+            self.assertTrue(is_buildkit_cache_error(f"Some string error with {sig} in it"))
+
+        # Test irrelevant error
+        self.assertFalse(is_buildkit_cache_error(Exception("Just a normal build failure")))
+
+    @patch('services.builders.subprocess.run')
+    def test_prune_buildkit_cache(self, mock_run):
+        prune_buildkit_cache()
+        mock_run.assert_called_with(
+            ["docker", "builder", "prune", "-f"],
+            capture_output=True, text=True, timeout=60
+        )
 
 
 class BuildManagerTests(TestCase):
