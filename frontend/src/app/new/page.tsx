@@ -105,7 +105,7 @@ export default function NewServicePage() {
     setAnalyzing(true)
     setAnalysis(null)
     try {
-      const res = await api.post('/cloud/ecosystem/analyze/', { repo_url: url })
+      const res = await api.post('/cloud/intelligence/analyze_repo/', { repo_url: url })
       const data = res.data as Analysis
       setAnalysis(data)
       // Pre-fill config from analysis
