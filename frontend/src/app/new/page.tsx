@@ -109,7 +109,7 @@ export default function NewServicePage() {
       const data = res.data as Analysis
       setAnalysis(data)
       // Pre-fill config from analysis
-      setName(data.name || "")
+      if (data.name) setName(data.name)
 
       // Handle enriched env vars (list of objects) or legacy format (Record)
       if (Array.isArray(data.env_vars) && data.env_vars.length > 0) {
@@ -212,7 +212,14 @@ export default function NewServicePage() {
     try {
       const token = localStorage.getItem("auth_token")
       if (!token) throw new Error("Not authenticated")
-      if (!name.trim()) throw new Error("Service name is required")
+
+      // Auto-derive name from repo URL if still empty
+      let finalName = name.trim()
+      if (!finalName && repoUrl) {
+        finalName = repoUrl.split("/").pop()?.replace(".git", "")?.replace(/[^a-zA-Z0-9-]/g, "-") || "my-service"
+        setName(finalName)
+      }
+      if (!finalName) throw new Error("Service name is required")
 
       const finalRepo = sourceType === "template"
         ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
@@ -227,7 +234,7 @@ export default function NewServicePage() {
           "Authorization": `Token ${token}`
         },
         body: JSON.stringify({
-          name,
+          name: finalName,
           deploy_type: deployType,
           buildpack: sourceType === "docker" ? "DOCKER" : buildpack,
           repository_url: sourceType === "docker" ? null : finalRepo,
