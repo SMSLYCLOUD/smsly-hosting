@@ -222,7 +222,7 @@ class PipelineManager:
 
         try:
             tag_hash = self.deployment.commit_hash[:7]
-            self.image_name = f"smsly/{self.service.name}:{tag_hash}"
+            self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
 
             # Determine build context (root dir)
             context_dir = self._get_build_context()
