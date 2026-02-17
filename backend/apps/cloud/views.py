@@ -211,7 +211,7 @@ class IntelligenceViewSet(viewsets.ViewSet):
         import tempfile
         import os
         from services.ecosystem import heuristic_analysis
-        from apps.deployments.services.git import GitManager
+        from apps.deployments.services.git_manager import GitManager
 
         repo_url = request.data.get('repo_url')
         if not repo_url:
