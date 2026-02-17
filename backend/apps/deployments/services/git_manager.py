@@ -1,10 +1,10 @@
 """Git module."""
 import os
 import shutil
-import git
 import logging
 import uuid
 import stat
+import git
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,12 @@ class GitManager:
                 return False
 
         # Clean destination
-        repo_name = repo_url.split('/')[-1].replace('.git', '')
+        cleaned_url = repo_url.rstrip('/')
+        repo_name = cleaned_url.split('/')[-1].replace('.git', '')
+        if not repo_name:
+            # Fallback for root domains or empty names
+            repo_name = f"repo-{uuid.uuid4().hex[:8]}"
+
         repo_dir = os.path.join(destination, repo_name)
         if os.path.exists(repo_dir):
             shutil.rmtree(repo_dir)
