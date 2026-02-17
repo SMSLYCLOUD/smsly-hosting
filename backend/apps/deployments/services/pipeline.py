@@ -70,6 +70,7 @@ class PipelineManager:
             self._clone_repo()
             self._run_ai_analysis()
             self._inject_env_vars()
+            self._auto_provision_addons()
             self._build_image()
             self._push_image()
             return self.image_name
@@ -213,6 +214,198 @@ class PipelineManager:
 
         except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("Env injection failed: %s", e)
+
+    # Dependency package → addon type mapping
+    _REQUIREMENTS_ADDON_MAP = {
+        # PostgreSQL
+        'psycopg2': 'POSTGRES', 'psycopg2-binary': 'POSTGRES',
+        'asyncpg': 'POSTGRES', 'django': 'POSTGRES',
+        'dj-database-url': 'POSTGRES', 'sqlalchemy': 'POSTGRES',
+        # Redis
+        'redis': 'REDIS', 'celery': 'REDIS', 'django-redis': 'REDIS',
+        'aioredis': 'REDIS', 'rq': 'REDIS',
+        # MongoDB
+        'pymongo': 'MONGODB', 'motor': 'MONGODB', 'mongoengine': 'MONGODB',
+        # Qdrant
+        'qdrant-client': 'QDRANT',
+        # MySQL
+        'mysqlclient': 'MYSQL', 'pymysql': 'MYSQL', 'aiomysql': 'MYSQL',
+    }
+
+    # Docker image prefix → addon type mapping
+    _COMPOSE_ADDON_MAP = {
+        'postgres': 'POSTGRES', 'redis': 'REDIS', 'mongo': 'MONGODB',
+        'mysql': 'MYSQL', 'mariadb': 'MYSQL', 'qdrant': 'QDRANT',
+        'elasticsearch': 'ELASTICSEARCH', 'rabbitmq': 'RABBITMQ',
+        'memcached': 'MEMCACHED', 'clickhouse': 'CLICKHOUSE',
+        'minio': 'MINIO',
+    }
+
+    def _auto_provision_addons(self):
+        """Step 1.7: Auto-detect and provision required addons."""
+        try:
+            detected_types = set()
+
+            # --- Strategy A: scan requirements.txt / Pipfile ---
+            for name in ('requirements.txt', 'requirements/base.txt',
+                         'requirements/production.txt'):
+                req_path = os.path.join(self.source_dir, name)
+                if os.path.isfile(req_path):
+                    with open(req_path, 'r', encoding='utf-8',
+                              errors='ignore') as f:
+                        for line in f:
+                            pkg = line.strip().split('==')[0].split('>=')[0] \
+                                .split('<=')[0].split('[')[0].split('#')[0] \
+                                .strip().lower()
+                            addon = self._REQUIREMENTS_ADDON_MAP.get(pkg)
+                            if addon:
+                                detected_types.add(addon)
+
+            # Also check pyproject.toml dependencies
+            pyproject = os.path.join(self.source_dir, 'pyproject.toml')
+            if os.path.isfile(pyproject):
+                with open(pyproject, 'r', encoding='utf-8',
+                          errors='ignore') as f:
+                    content = f.read()
+                    for pkg, addon in self._REQUIREMENTS_ADDON_MAP.items():
+                        if pkg in content:
+                            detected_types.add(addon)
+
+            # Check package.json for Node.js apps
+            pkg_json = os.path.join(self.source_dir, 'package.json')
+            if os.path.isfile(pkg_json):
+                import json
+                try:
+                    with open(pkg_json, 'r', encoding='utf-8') as f:
+                        pkg_data = json.load(f)
+                    all_deps = {}
+                    all_deps.update(pkg_data.get('dependencies', {}))
+                    all_deps.update(pkg_data.get('devDependencies', {}))
+                    node_map = {
+                        'pg': 'POSTGRES', 'sequelize': 'POSTGRES',
+                        'typeorm': 'POSTGRES', 'prisma': 'POSTGRES',
+                        'redis': 'REDIS', 'ioredis': 'REDIS',
+                        'bullmq': 'REDIS', 'bull': 'REDIS',
+                        'mongoose': 'MONGODB', 'mongodb': 'MONGODB',
+                        'mysql2': 'MYSQL',
+                        '@qdrant/js-client-rest': 'QDRANT',
+                    }
+                    for dep in all_deps:
+                        addon = node_map.get(dep)
+                        if addon:
+                            detected_types.add(addon)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # --- Strategy B: scan docker-compose.yml ---
+            for name in ('docker-compose.yml', 'docker-compose.yaml',
+                         'compose.yml', 'compose.yaml'):
+                compose_path = os.path.join(self.source_dir, name)
+                if os.path.isfile(compose_path):
+                    with open(compose_path, 'r', encoding='utf-8',
+                              errors='ignore') as f:
+                        content = f.read()
+                    # Match image: lines
+                    for match in re.findall(
+                        r'image:\s*[\'"]?([^\s\'"]+)', content
+                    ):
+                        img = match.lower().split('/')[  # handle org/image
+                            -1].split(':')[0]  # strip tag
+                        addon = self._COMPOSE_ADDON_MAP.get(img)
+                        if addon:
+                            detected_types.add(addon)
+
+            if not detected_types:
+                return
+
+            # --- Provision missing addons ---
+            # pylint: disable=import-outside-toplevel
+            from apps.deployments.models_addons import Addon
+            from services.addon_provisioner import addon_provisioner
+
+            existing = set(
+                Addon.objects.filter(
+                    service=self.service,
+                    status__in=['ACTIVE', 'PROVISIONING']
+                ).values_list('addon_type', flat=True)
+            )
+
+            to_provision = detected_types - existing
+            if not to_provision:
+                append_log(
+                    self.deployment,
+                    f"\n✅ All {len(detected_types)} detected addons "
+                    f"already provisioned.\n"
+                )
+                return
+
+            append_log(
+                self.deployment,
+                f"\n🔍 Auto-detected addons: "
+                f"{', '.join(sorted(detected_types))}\n"
+                f"📦 Provisioning {len(to_provision)} new: "
+                f"{', '.join(sorted(to_provision))}\n"
+            )
+
+            for addon_type in to_provision:
+                addon = Addon.objects.create(
+                    service=self.service,
+                    name=f"{addon_type.lower()}-{self.service.name}"[:255],
+                    addon_type=addon_type,
+                    status=Addon.Status.PROVISIONING,
+                )
+                try:
+                    _, url = addon_provisioner.provision(addon)
+                    addon.connection_url = url
+                    addon.status = Addon.Status.ACTIVE
+                    addon.save()
+
+                    # Inject connection URL as env var
+                    env_key = addon_provisioner.ENV_KEY_MAP.get(
+                        addon_type, f"{addon_type}_URL"
+                    )
+                    EnvironmentVariable.objects.update_or_create(
+                        service=self.service, key=env_key,
+                        defaults={'value': url, 'is_secret': True}
+                    )
+
+                    # Qdrant: also set QDRANT_HOST/QDRANT_PORT
+                    if addon_type == 'QDRANT':
+                        from urllib.parse import urlparse
+                        parsed = urlparse(url)
+                        EnvironmentVariable.objects.update_or_create(
+                            service=self.service, key='QDRANT_HOST',
+                            defaults={
+                                'value': parsed.hostname or 'localhost',
+                                'is_secret': False
+                            }
+                        )
+                        EnvironmentVariable.objects.update_or_create(
+                            service=self.service, key='QDRANT_PORT',
+                            defaults={
+                                'value': str(parsed.port or 6333),
+                                'is_secret': False
+                            }
+                        )
+
+                    append_log(
+                        self.deployment,
+                        f"  ✅ {addon_type} provisioned → {env_key}\n"
+                    )
+
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    addon.status = Addon.Status.FAILED
+                    addon.save()
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ {addon_type} provisioning failed: {e}\n"
+                    )
+                    logger.warning(
+                        "Auto-provision %s failed: %s", addon_type, e
+                    )
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("Auto-addon provisioning failed: %s", e)
 
     def _build_image(self):
         """Step 2: Build Image."""
