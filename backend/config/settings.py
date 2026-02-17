@@ -36,8 +36,11 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-# ZH-010 FIX: Webhook secret is strongly recommended in production
-GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+# ZH-010 FIX: Webhook secret MUST be set in production (fail-closed)
+if DEBUG:
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+else:
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
 # SECURITY: No wildcard default - prevents host header injection
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
