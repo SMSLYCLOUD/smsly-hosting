@@ -84,8 +84,8 @@ services:
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - DOCKER_HOST=tcp://socket-proxy:2375
     depends_on:
       db:
@@ -120,8 +120,8 @@ services:
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - DOCKER_HOST=tcp://socket-proxy:2375
     depends_on:
       backend:
@@ -155,8 +155,8 @@ services:
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY is required}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
       backend:
         condition: service_healthy
