@@ -59,7 +59,7 @@ services:
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", ${REDIS_PASSWORD:+-a ${REDIS_PASSWORD}}, "ping"]
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping"]
       interval: 5s
       timeout: 3s
       retries: 5
