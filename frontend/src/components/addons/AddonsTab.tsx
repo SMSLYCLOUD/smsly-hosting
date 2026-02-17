@@ -33,6 +33,7 @@ const ADDON_TYPES = [
     { value: 'CLICKHOUSE', label: 'ClickHouse', icon: '📊', color: 'text-amber-400', description: 'Analytics database' },
     { value: 'MARIADB', label: 'MariaDB', icon: '🦭', color: 'text-teal-400', description: 'MySQL-compatible DB' },
     { value: 'MINIO', label: 'MinIO', icon: '📦', color: 'text-pink-400', description: 'S3-compatible storage' },
+    { value: 'QDRANT', label: 'Qdrant', icon: '🧠', color: 'text-violet-400', description: 'Vector database (AI)' },
 ];
 
 function getHeaders(): Record<string, string> {
