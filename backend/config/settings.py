@@ -269,12 +269,20 @@ REDIS_CACHE_URL = (
         else CELERY_BROKER_URL
     )
 )
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": REDIS_CACHE_URL,
+
+if os.environ.get('TESTING'):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_CACHE_URL,
+        }
+    }
 
 # Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
 CHANNEL_REDIS_URL = CELERY_BROKER_URL

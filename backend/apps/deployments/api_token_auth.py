@@ -90,7 +90,7 @@ class APIToken(models.Model):
                 token_hash=token_hash, is_active=True
             )
         except cls.DoesNotExist:
-            raise AuthenticationFailed("Invalid or expired API token.")
+            raise AuthenticationFailed("Invalid or expired API token.") from None
 
         token.last_used_at = timezone.now()
         token.save(update_fields=["last_used_at"])

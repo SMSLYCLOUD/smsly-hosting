@@ -1,21 +1,26 @@
 """Models module."""
 import uuid
+import re
 from django.db import models
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from encrypted_model_fields.fields import EncryptedCharField
 from django.utils.translation import gettext_lazy as _
+from encrypted_model_fields.fields import EncryptedCharField
 from apps.cloud.models import CloudProvider
 
 # Import AuditLog explicitly to register it with the app
+# pylint: disable=unused-import
 from .models_audit import AuditLog
 from .models_cron import CronJob
 from .models_storage import Volume  # Add this
 from .api_token_auth import APIToken  # CLI token auth
 from .models_servers import ManagedServer  # Multi-server management
+# pylint: enable=unused-import
 
 
 class TimeStampedModel(models.Model):
+    """Abstract base class with created_at and updated_at fields."""
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -85,13 +90,18 @@ class Service(TimeStampedModel):
         help_text="Build strategy for source code deployments")
 
     # Serverless Function Config
-    function_code = models.TextField(blank=True, help_text="Raw source code for serverless functions")
-    function_runtime = models.CharField(max_length=50, default='nodejs18', help_text="Runtime environment (e.g. nodejs18, python3.9)")
+    function_code = models.TextField(
+        blank=True,
+        help_text="Raw source code for serverless functions")
+    function_runtime = models.CharField(
+        max_length=50,
+        default='nodejs18',
+        help_text="Runtime environment (e.g. nodejs18, python3.9)")
 
     docker_image = models.CharField(max_length=255, blank=True, null=True)
 
     owner = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -229,7 +239,6 @@ class Service(TimeStampedModel):
         return f"https://{self.public_domain}" if self.public_domain else None
 
     def save(self, *args, **kwargs):
-        import re
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
 
@@ -261,6 +270,9 @@ class ComplianceProfile(models.Model):
 
 
 class EnvironmentVariable(TimeStampedModel):
+    """
+    Environment variables for a service.
+    """
     service = models.ForeignKey(
         Service,
         on_delete=models.CASCADE,
@@ -277,7 +289,12 @@ class EnvironmentVariable(TimeStampedModel):
 
 
 class Deployment(TimeStampedModel):
+    """
+    Represents a single deployment of a service.
+    """
+    # pylint: disable=too-many-ancestors
     class Status(models.TextChoices):
+        """Deployment statuses."""
         QUEUED = 'QUEUED', _('Queued')
         BUILDING = 'BUILDING', _('Building')
         DEPLOYING = 'DEPLOYING', _('Deploying')
