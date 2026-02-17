@@ -231,9 +231,7 @@ class IntelligenceViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Clone to temp dir
-        import re
-        repo_name = re.sub(r'\.git$', '', repo_url.split('/')[-1])
+
 
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -243,11 +241,11 @@ class IntelligenceViewSet(viewsets.ViewSet):
                 from apps.deployments.utils import get_github_oauth_token_for_user
                 token = get_github_oauth_token_for_user(request.user)
 
-                # Clone
-                project_path = os.path.join(temp_dir, repo_name)
-                git_manager = GitManager(repo_path=project_path)
+                # Clone using static method (GitManager has no __init__)
                 try:
-                    git_manager.clone_repo(repo_url, token=token)
+                    project_path = GitManager.clone_repo(
+                        repo_url, destination=temp_dir, token=token
+                    )
                 except Exception as e:
                     return Response(
                         {'error': f'Failed to clone repository: {str(e)}'},
