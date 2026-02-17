@@ -343,7 +343,7 @@ export default function ServersPage() {
                                                     onChange={e => setProvisionForm({ ...provisionForm, ssh_key: e.target.value })}
                                                     placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
                                                     rows={4}
-                                                    className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono text-xs"
+                                                    className="w-full px-3 py-2 rounded-lg bg-background border border-border font-mono text-xs"
                                                 />
                                             )}
                                         </div>
