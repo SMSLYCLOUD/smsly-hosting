@@ -4,7 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.contrib.auth.models import User
 from .models import Team, TeamMember
-from .serializers import TeamSerializer, InviteMemberSerializer
+from .serializers import TeamSerializer, InviteMemberSerializer, TeamMemberSerializer
 from django.core.mail import send_mail
 from django.conf import settings
 
@@ -29,6 +29,13 @@ class TeamViewSet(viewsets.ModelViewSet):
             team=team,
             user=self.request.user,
             role=TeamMember.Role.ADMIN)
+
+    @action(detail=True, methods=['get'])
+    def members(self, request, pk=None):
+        team = self.get_object()
+        members = team.members.all()
+        serializer = TeamMemberSerializer(members, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], serializer_class=InviteMemberSerializer)
     def invite_member(self, request, pk=None):

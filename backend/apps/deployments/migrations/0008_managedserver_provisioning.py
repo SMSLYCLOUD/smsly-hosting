@@ -6,7 +6,6 @@ import django.db.models.deletion
 import encrypted_model_fields.fields
 import uuid
 
-
 class Migration(migrations.Migration):
 
     dependencies = [

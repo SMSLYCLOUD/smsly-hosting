@@ -10,6 +10,7 @@ import {
   ExternalLink, Radio
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
+import TeamSwitcher from "@/components/team-switcher";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -80,11 +81,14 @@ export function Sidebar() {
   return (
     <div className="flex flex-col h-full bg-slate-900 text-white overflow-y-auto">
       {/* Logo */}
-      <div className="px-3 pt-4 pb-4">
+      <div className="px-3 pt-4 pb-4 space-y-4">
         <Link href="/dashboard" className="flex items-center gap-2.5 px-2">
           <div className="w-7 h-7 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-sm shrink-0">S</div>
           <h1 className="text-lg font-bold tracking-tight">CloudNeuron</h1>
         </Link>
+        <div className="px-1">
+          <TeamSwitcher className="w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white" />
+        </div>
       </div>
 
       {/* Main nav */}
