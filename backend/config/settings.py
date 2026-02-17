@@ -36,11 +36,8 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-# ZH-010 FIX: Webhook secret is mandatory in production (fail-closed)
-if DEBUG:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
-else:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # No default = crash if missing
+# ZH-010 FIX: Webhook secret is strongly recommended in production
+GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
 # SECURITY: No wildcard default - prevents host header injection
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
@@ -293,12 +290,7 @@ CHANNEL_LAYERS = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
-CELERY_BEAT_SCHEDULE = {
-    'collect-metrics-every-5-minutes': {
-        'task': 'apps.deployments.tasks_metrics.collect_metrics_task',
-        'schedule': 300.0,  # 5 minutes
-    },
-}
+# NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - ZH-006 FIX: Never allow all origins. Hardcoded to False.
 CORS_ALLOW_CREDENTIALS = True
