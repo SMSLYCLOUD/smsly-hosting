@@ -170,14 +170,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _find_container(self):
         """Find the Docker container ID for this deployment's service."""
-        import docker
+        from apps.cloud.docker_client import get_docker_client
         from apps.deployments.models import Deployment
         try:
             dep = Deployment.objects.select_related('service').get(
                 id=self.deployment_id)
             service_name = dep.service.name
 
-            client = docker.from_env()
+            client = get_docker_client()
             # Look for a running container matching the service name
             containers = client.containers.list(
                 filters={'name': service_name, 'status': 'running'})
@@ -199,9 +199,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _start_exec(self):
         """Create a docker exec instance and attach to it."""
-        import docker
+        from apps.cloud.docker_client import get_docker_client
         try:
-            client = docker.from_env()
+            client = get_docker_client()
             container = client.containers.get(self.container_id)
 
             # Try bash first, fall back to sh

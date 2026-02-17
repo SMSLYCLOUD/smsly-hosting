@@ -99,7 +99,8 @@ class NixpacksBuilder:
         """
         Tags and pushes the image to the internal or external registry.
         """
-        client = docker.from_env()
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
 
         # Tag format: registry:5000/image_name
         full_tag = f"{registry_url}/{image_name}"

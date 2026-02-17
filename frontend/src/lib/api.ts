@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearAuthCookies } from '@/lib/auth-cookies';
 
 // Use dynamic origin detection - works in browser and during SSR
 const getApiUrl = () => {
@@ -38,8 +39,7 @@ api.interceptors.response.use(
       // Don't redirect if already on login page (avoid loop)
       if (!window.location.pathname.startsWith('/login')) {
         localStorage.removeItem('auth_token');
-        document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
-        document.cookie = 'sessionid=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+        clearAuthCookies();
         window.location.href = '/login';
       }
     }
