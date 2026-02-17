@@ -1,7 +1,5 @@
-# pylint: disable=broad-exception-caught
-"""Client module."""
-# pylint: disable=too-many-branches
 #!/usr/bin/env python3
+# pylint: disable=broad-exception-caught, too-many-branches
 """
 SMSLY Tunnel CLI Client
 
@@ -16,14 +14,13 @@ Examples:
     smsly-tunnel 3000 --inspect
 """
 
-import asyncio
-import logging
 import argparse
+import asyncio
 import json
-import signal
-import sys
 import logging
+import signal
 from typing import Optional
+
 import aiohttp
 
 # Rich console for pretty output (fallback to basic if not installed)
