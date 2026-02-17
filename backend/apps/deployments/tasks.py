@@ -36,8 +36,8 @@ except ImportError:
 @shared_task(
     bind=True,
     max_retries=3,
-    soft_time_limit=900,   # 15 mins
-    time_limit=1200,       # 20 mins
+    soft_time_limit=7200,  # 2 hours (heavy deps: torch, playwright, transformers)
+    time_limit=7500,       # 2h 5m hard kill
 )
 def smart_deploy_task(self, deployment_id: str, provider_id: str):
     """
