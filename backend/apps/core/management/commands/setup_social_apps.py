@@ -1,17 +1,20 @@
+"""Management command to setup social apps."""
 import os
 from django.core.management.base import BaseCommand
 from django.contrib.sites.models import Site
 from django.conf import settings
 from allauth.socialaccount.models import SocialApp
 
+
 class Command(BaseCommand):
+    """Setup GitHub and Google SocialApps for authentication."""
     help = 'Setup GitHub and Google SocialApps for authentication'
 
     def handle(self, *args, **options):
         # ensure Site domain is correct
         site = Site.objects.get(id=settings.SITE_ID)
         site.domain = settings.DOMAIN
-        site.name = 'CloudNeuron' # Updated brand name
+        site.name = 'CloudNeuron'  # Updated brand name
         site.save()
         self.stdout.write(self.style.SUCCESS(f'Updated Site: {site.domain} ({site.name})'))
 
@@ -30,9 +33,13 @@ class Command(BaseCommand):
 
         for provider_id, config in providers.items():
             if not config['client_id'] or not config['secret']:
-                self.stdout.write(self.style.WARNING(f'Skipping {config["name"]}: Missing CLIENT_ID or CLIENT_SECRET env vars'))
+                self.stdout.write(
+                    self.style.WARNING(
+                        f'Skipping {config["name"]}: Missing CLIENT_ID or CLIENT_SECRET env vars'
+                    )
+                )
                 continue
-            
+
             app, created = SocialApp.objects.update_or_create(
                 provider=provider_id,
                 defaults={

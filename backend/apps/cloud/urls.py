@@ -1,5 +1,6 @@
+"""URLs for cloud app."""
 from rest_framework.routers import DefaultRouter
-from .views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
+from apps.cloud.views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
 
 router = DefaultRouter()
 router.register(r'providers', CloudProviderViewSet, basename='providers')
