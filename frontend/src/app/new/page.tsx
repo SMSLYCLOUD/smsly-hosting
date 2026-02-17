@@ -238,7 +238,11 @@ export default function NewServicePage() {
         })
       })
 
-      if (!createRes.ok) throw new Error("Failed to create service")
+      if (!createRes.ok) {
+        const errBody = await createRes.json().catch(() => ({}))
+        const detail = Object.entries(errBody).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('; ')
+        throw new Error(detail || "Failed to create service")
+      }
       const service = await createRes.json()
 
       // Set Env Vars
