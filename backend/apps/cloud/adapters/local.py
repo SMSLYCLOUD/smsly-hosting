@@ -24,7 +24,8 @@ class LocalAdapter(BaseCloudAdapter):
         self.batch_v1 = None
 
         try:
-            self.docker_client = docker.from_env()
+            from apps.cloud.docker_client import get_docker_client
+            self.docker_client = get_docker_client()
         except Exception as e:
             logger.warning(f"Docker client not available: {e}")
 

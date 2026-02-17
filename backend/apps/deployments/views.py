@@ -603,11 +603,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         tail = min(tail, 1000)  # Cap at 1000 lines
 
         try:
-            import docker
-            import os
-            # L-3 fix: respect DOCKER_HOST (socket proxy) instead of docker.from_env()
-            docker_host = os.environ.get('DOCKER_HOST', 'unix:///var/run/docker.sock')
-            client = docker.DockerClient(base_url=docker_host)
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
 
             # Find container by service name
             service_name = deployment.service.name

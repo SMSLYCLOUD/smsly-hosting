@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def _get_docker_client():
     """Get Docker client, return None if unavailable."""
     try:
-        import docker
-        return docker.from_env(timeout=5)
+        from apps.cloud.docker_client import get_docker_client
+        return get_docker_client(timeout=5)
     except Exception as e:
         logger.debug("Docker SDK unavailable: %s", e)
         return None
