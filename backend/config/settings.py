@@ -301,6 +301,9 @@ CHANNEL_LAYERS = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
+# Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
+CELERY_TASK_SOFT_TIME_LIMIT = 7200  # 2 hours
+CELERY_TASK_TIME_LIMIT = 7500       # 2h 5m hard kill
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
 # CORS - ZH-006 FIX: Never allow all origins. Hardcoded to False.
