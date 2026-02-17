@@ -30,10 +30,10 @@ def ecosystem_scan_task(self, user_id: str) -> dict:
     from apps.deployments.views_github import _get_github_token
     from services.ecosystem import scan_and_analyze
 
-    User = get_user_model()
+    user_model = get_user_model()
     try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
+        user = user_model.objects.get(id=user_id)
+    except user_model.DoesNotExist:
         return {"error": "User not found"}
 
     token = _get_github_token(user)
@@ -58,13 +58,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     """
     from django.contrib.auth import get_user_model
     from apps.deployments.models import Service, Deployment
-    from apps.deployments.tasks import smart_deploy_task
     from apps.cloud.models import CloudProvider
 
-    User = get_user_model()
+    user_model = get_user_model()
     try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
+        user = user_model.objects.get(id=user_id)
+    except user_model.DoesNotExist:
         return {"error": "User not found"}
 
     services_plan = plan.get("services", [])
@@ -154,7 +153,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             )
 
             # Queue the actual deployment
-            smart_deploy_task.delay(str(deployment.id), str(provider.id))
+            self.app.send_task(
+                'apps.deployments.tasks.smart_deploy_task',
+                args=[str(deployment.id), str(provider.id)]
+            )
 
             results.append({
                 "repo": repo,

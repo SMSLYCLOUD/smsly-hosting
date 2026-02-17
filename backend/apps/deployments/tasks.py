@@ -1,22 +1,32 @@
 """Tasks module."""
-from celery import shared_task
-from django.utils import timezone
-from django.conf import settings
 import logging
-
-# Register ecosystem tasks with Celery autodiscovery
-from . import tasks_ecosystem  # noqa: F401
 import os
 import re
-import tempfile
 import shutil
-import git
+import tempfile
 from urllib.parse import urlparse
-from apps.cloud.services.compute import ComputeService
-from apps.cloud.services.builder import NixpacksBuilder
-from apps.deployments.services.git import GitManager
-from apps.cloud.models import CloudProvider
+
+import git
+from celery import shared_task
+from django.conf import settings
+from django.utils import timezone
+
 from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+
+from apps.cloud.models import CloudProvider
+from apps.cloud.services.builder import NixpacksBuilder
+from apps.cloud.services.compute import ComputeService
+from apps.deployments.services.git import GitManager
+from apps.deployments.utils import (
+    append_log,
+    broadcast_log,
+    broadcast_status,
+    extract_dockerfile_arg_names,
+    get_default_env_value,
+    get_github_oauth_token_for_user,
+    redact_values,
+    update_stage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,197 +35,6 @@ try:
     from apps.deployments.tasks_ai import analyze_failure_task
 except ImportError:
     analyze_failure_task = None
-
-
-def _extract_dockerfile_arg_names(dockerfile_path: str) -> set[str]:
-    """
-    Extract build-arg names declared via `ARG ...` in a Dockerfile.
-    """
-    arg_names: set[str] = set()
-    try:
-        with open(dockerfile_path, "r", encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if not line.upper().startswith("ARG "):
-                    continue
-                # Syntax: ARG name[=default]
-                arg_def = line[4:].strip()
-                if not arg_def:
-                    continue
-                name = arg_def.split("=", 1)[0].strip()
-                name = name.split()[0].strip()
-                if name:
-                    arg_names.add(name)
-    except Exception:
-        return set()
-    return arg_names
-
-
-def _redact_values(text: str, values: list[str]) -> str:
-    """Best-effort log redaction for secret values."""
-    if not text:
-        return text
-
-    redacted = text
-    for val in values:
-        if not val:
-            continue
-        if len(val) < 4:
-            continue
-        redacted = redacted.replace(val, "***")
-
-    redacted = re.sub(
-        r"(--build-arg\s+(?:[A-Z0-9_]*?(?:SECRET|TOKEN|PASSWORD|KEY|DSN)[A-Z0-9_]*?)=)([^\s]+)",
-        r"\1***",
-        redacted,
-        flags=re.IGNORECASE,
-    )
-    return redacted
-
-
-def _get_github_oauth_token_for_user(user):
-    """
-    Return the linked GitHub OAuth token for the given user (if connected).
-    """
-    if not user:
-        return None
-
-    try:
-        from allauth.socialaccount.models import SocialAccount, SocialToken
-    except Exception:
-        return None
-
-    account = (
-        SocialAccount.objects.filter(user=user, provider="github")
-        .order_by("-id")
-        .first()
-    )
-    if not account:
-        return None
-
-    token = (
-        SocialToken.objects.filter(account=account)
-        .order_by("-id")
-        .first()
-    )
-    return getattr(token, "token", None) or None
-
-
-# ==============================================================================
-# Real-time log broadcasting helper
-# ==============================================================================
-
-def _broadcast_log(deployment, log_line):
-    """
-    Append log line to deployment and broadcast via WebSocket channel layer.
-    Safe to call from sync Celery tasks.
-    """
-    try:
-        from channels.layers import get_channel_layer
-        from asgiref.sync import async_to_sync
-
-        channel_layer = get_channel_layer()
-        if channel_layer:
-            group_name = f"build_logs_{deployment.id}"
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    'type': 'build_log',
-                    'log': log_line,
-                    'status': deployment.status,
-                    'timestamp': timezone.now().isoformat(),
-                }
-            )
-    except Exception as e:
-        logger.debug("Failed to broadcast log: %s", e)
-
-
-def _broadcast_status(deployment):
-    """Broadcast deployment status change via WebSocket."""
-    try:
-        from channels.layers import get_channel_layer
-        from asgiref.sync import async_to_sync
-
-        channel_layer = get_channel_layer()
-        if channel_layer:
-            group_name = f"build_logs_{deployment.id}"
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    'type': 'status_change',
-                    'status': deployment.status,
-                    'finished_at': (
-                        deployment.finished_at.isoformat()
-                        if deployment.finished_at else ''
-                    ),
-                    'duration_seconds': deployment.duration_seconds,
-                }
-            )
-    except Exception as e:
-        logger.debug("Failed to broadcast status: %s", e)
-
-
-def _broadcast_pipeline(deployment):
-    """Broadcast pipeline stages update via WebSocket."""
-    try:
-        from channels.layers import get_channel_layer
-        from asgiref.sync import async_to_sync
-
-        channel_layer = get_channel_layer()
-        if channel_layer:
-            group_name = f"build_logs_{deployment.id}"
-            async_to_sync(channel_layer.group_send)(
-                group_name,
-                {
-                    'type': 'pipeline_update',
-                    'stages': deployment.pipeline_stages,
-                }
-            )
-    except Exception as e:
-        logger.debug("Failed to broadcast pipeline: %s", e)
-
-
-def _update_stage(deployment, name, status, duration=None):
-    """Update a pipeline stage status."""
-    # Always refresh to get latest stages state to avoid overwrites
-    deployment.refresh_from_db(fields=['pipeline_stages'])
-    stages = deployment.pipeline_stages or []
-    if not isinstance(stages, list):
-        stages = []
-
-    found = False
-    for stage in stages:
-        if stage.get('name') == name:
-            stage['status'] = status
-            if duration is not None:
-                stage['duration'] = duration
-            found = True
-            break
-
-    if not found:
-        stages.append({
-            'name': name,
-            'status': status,
-            'duration': duration or 0
-        })
-
-    deployment.pipeline_stages = stages
-    deployment.save(update_fields=['pipeline_stages'])
-    _broadcast_pipeline(deployment)
-
-def _append_log(deployment, log_line):
-    """
-    Append logs safely using refresh and update_fields.
-    """
-    if not log_line:
-        return
-    # Refresh logs to avoid overwrite race conditions
-    deployment.refresh_from_db(fields=['build_logs'])
-    deployment.build_logs += log_line
-    deployment.save(update_fields=['build_logs'])
-    _broadcast_log(deployment, log_line)
 
 
 # ==============================================================================
@@ -252,15 +71,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.status = Deployment.Status.BUILDING
         deployment.started_at = timezone.now()
         deployment.save(update_fields=['status', 'started_at'])
-        _broadcast_status(deployment)
+        broadcast_status(deployment)
 
         # Initialize pipeline stages
         deployment.pipeline_stages = []
-        _update_stage(deployment, 'Clone', 'pending')
-        _update_stage(deployment, 'Build', 'pending')
+        update_stage(deployment, 'Clone', 'pending')
+        update_stage(deployment, 'Build', 'pending')
         if getattr(settings, 'CONTAINER_REGISTRY_URL', None):
-            _update_stage(deployment, 'Push', 'pending')
-        _update_stage(deployment, 'Deploy', 'pending')
+            update_stage(deployment, 'Push', 'pending')
+        update_stage(deployment, 'Deploy', 'pending')
 
         # Check cancellation
         deployment.refresh_from_db(fields=['status'])
@@ -282,10 +101,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 tag_hash = deployment.commit_hash[:7] if deployment.commit_hash else 'latest'
                 local_tag = f"smsly/func-{service.name}:{tag_hash}"
 
-                _update_stage(deployment, 'Build', 'running')
+                update_stage(deployment, 'Build', 'running')
                 build_start = timezone.now()
 
-                _append_log(deployment, f"Building function image {local_tag}...\n")
+                append_log(deployment, f"Building function image {local_tag}...\n")
 
                 import subprocess
                 docker_cmd = ["docker", "build", "-t", local_tag, build_dir]
@@ -298,17 +117,17 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     timeout=300
                 )
 
-                _append_log(deployment, process.stdout)
-                _update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
+                append_log(deployment, process.stdout)
+                update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
 
                 # Push
                 registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
                 if registry_url:
-                    _update_stage(deployment, 'Push', 'running')
+                    update_stage(deployment, 'Push', 'running')
                     push_start = timezone.now()
                     remote_tag = NixpacksBuilder.push_image(local_tag, registry_url)
                     image_name = remote_tag
-                    _update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
+                    update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
                 else:
                     image_name = local_tag
 
@@ -321,8 +140,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.status = Deployment.Status.FAILED
                 deployment.save(update_fields=['status', 'build_logs'])
 
-                _update_stage(deployment, 'Build', 'failed')
-                _broadcast_status(deployment)
+                update_stage(deployment, 'Build', 'failed')
+                broadcast_status(deployment)
                 if source_dir and os.path.exists(source_dir):
                     shutil.rmtree(source_dir, ignore_errors=True)
                 raise self.retry(exc=e, countdown=30)
@@ -334,14 +153,14 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     prefix=f"build_{deployment.id}_")
 
                 # A. Clone Repository
-                _update_stage(deployment, 'Clone', 'running')
+                update_stage(deployment, 'Clone', 'running')
                 clone_start = timezone.now()
 
                 log_line = f"Cloning {service.repository_url}...\n"
                 logger.info(
                     "Cloning repository: %s (branch: %s)",
                     service.repository_url, service.branch)
-                _append_log(deployment, log_line)
+                append_log(deployment, log_line)
 
                 # Check cancellation
                 deployment.refresh_from_db(fields=['status'])
@@ -353,9 +172,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 try:
                     parsed = urlparse(service.repository_url or "")
                     if parsed.scheme in ("http", "https") and (parsed.hostname or "").lower().endswith("github.com"):
-                        repo_token = _get_github_oauth_token_for_user(getattr(service, "owner", None))
+                        repo_token = get_github_oauth_token_for_user(getattr(service, "owner", None))
                         if repo_token:
-                            _append_log(deployment, "Using linked GitHub account for private repo access...\n")
+                            append_log(deployment, "Using linked GitHub account for private repo access...\n")
                 except Exception:
                     repo_token = None
 
@@ -372,8 +191,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.commit_message = repo.head.commit.message
                 deployment.save(update_fields=['commit_hash', 'commit_message'])
 
-                _append_log(deployment, f"✓ Cloned successfully. Commit: {deployment.commit_hash[:7]}\n")
-                _update_stage(deployment, 'Clone', 'success', (timezone.now() - clone_start).total_seconds())
+                append_log(deployment, f"✓ Cloned successfully. Commit: {deployment.commit_hash[:7]}\n")
+                update_stage(deployment, 'Clone', 'success', (timezone.now() - clone_start).total_seconds())
 
                 # ── AI Intelligent Pre-Deploy Analysis (Automatic) ──
                 try:
@@ -403,60 +222,27 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
 
                     deployment.ai_diagnosis = ai_response
                     deployment.save(update_fields=['ai_diagnosis'])
-                    _append_log(deployment, ai_log)
+                    append_log(deployment, ai_log)
                     logger.info("AI pre-deploy analysis complete for %s via %s", deployment_id, ai_provider)
 
                 except Exception as ai_err:
                     logger.warning("AI pre-deploy analysis failed (non-fatal): %s", ai_err)
-                    _append_log(deployment, "\n🤖 AI analysis skipped (no provider available)\n\n")
+                    append_log(deployment, "\n🤖 AI analysis skipped (no provider available)\n\n")
 
                 # ── Auto-Inject Detected Environment Variables ──
                 try:
                     from apps.intelligence.scanner import RepoScanner as _RS
                     from apps.deployments.models import EnvironmentVariable
-                    import secrets as _secrets
 
                     _scanner = _RS(source_dir)
                     _scan = _scanner.scan()
                     detected_vars = _scan.get('env_vars', [])
 
                     if detected_vars:
-                        def _default_value(key):
-                            key_upper = key.upper()
-                            # (Simulating complex logic from original file for brevity,
-                            # assuming full logic should be preserved. Since I'm overwriting,
-                            # I must include the full logic or risk breaking functionality.)
-                            # I will paste the full logic here.
-
-                            if 'SECRET_KEY' in key_upper or key_upper == 'SECRET': return _secrets.token_urlsafe(50), True
-                            if key_upper in ('JWT_SECRET', 'SESSION_SECRET', 'COOKIE_SECRET', 'CSRF_SECRET', 'SIGNING_KEY', 'HASH_SALT'): return _secrets.token_urlsafe(32), True
-                            if key_upper in ('DATABASE_URL', 'DB_URL', 'DB_URI', 'SQLALCHEMY_DATABASE_URI', 'SQLALCHEMY_DATABASE_URL'):
-                                stack = _scan.get('stack', '')
-                                deps = _scan.get('dependencies', [])
-                                dep_str = ' '.join(deps) if isinstance(deps, list) else str(deps)
-                                if 'asyncpg' in dep_str or 'async' in dep_str.lower(): return 'postgresql+asyncpg://user:password@db:5432/dbname', True
-                                return 'postgresql://user:password@db:5432/dbname', True
-                            if key_upper == 'REDIS_URL': return 'redis://redis:6379/0', True
-                            if key_upper in ('CELERY_BROKER_URL', 'BROKER_URL'): return 'redis://redis:6379/1', True
-                            if key_upper in ('CELERY_RESULT_BACKEND', 'RESULT_BACKEND'): return 'redis://redis:6379/2', True
-                            if key_upper in ('MONGODB_URI', 'MONGO_URI', 'MONGO_URL'): return 'mongodb://mongo:27017/dbname', True
-                            if key_upper == 'PORT': return '8000', True # simplified default
-                            if key_upper.endswith('_PORT'): return '8080', True
-                            if key_upper.endswith('_HOST') or key_upper.endswith('_HOSTNAME'): return 'localhost', True
-                            if key_upper in ('POSTGRES_USER', 'DB_USER'): return 'appuser', True
-                            if key_upper in ('POSTGRES_DB', 'DB_NAME'): return service.name.replace('-', '_')[:30], True
-                            if key_upper in ('POSTGRES_PASSWORD', 'DB_PASSWORD'): return _secrets.token_urlsafe(24), True
-                            if key_upper in ('DEBUG', 'TESTING'): return 'false', True
-                            if key_upper in ('NODE_ENV', 'ENVIRONMENT'): return 'production', True
-                            if key_upper in ('ALLOWED_HOSTS', 'CORS_ALLOWED_ORIGINS'): return '*', True
-                            if key_upper in ('LOG_LEVEL',): return 'info', True
-                            if key_upper in ('WORKERS', 'WEB_CONCURRENCY'): return '4', True
-                            return None, False
-
                         injected, skipped, fixed, user_required = 0, 0, 0, 0
                         user_required_keys = []
                         for var_name in detected_vars:
-                            default_val, should_inject = _default_value(var_name)
+                            default_val, should_inject = get_default_env_value(var_name, _scan, service.name)
                             if not should_inject:
                                 user_required += 1
                                 user_required_keys.append(var_name)
@@ -466,26 +252,30 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                                 service=service, key=var_name,
                                 defaults={'value': default_val, 'is_secret': True}
                             )
-                            if created: injected += 1
+                            if created:
+                                injected += 1
                             elif env_obj.value == 'CHANGE_ME':
                                 env_obj.value = default_val
                                 env_obj.save(update_fields=['value'])
                                 fixed += 1
-                            else: skipped += 1
+                            else:
+                                skipped += 1
 
-                        env_log = (f"\n🔧 Auto-injected {injected} env vars ({skipped} already set by user)")
-                        if fixed > 0: env_log += f"\n🔄 Auto-healed {fixed} stale CHANGE_ME values"
-                        if user_required > 0: env_log += f"\n⚠️ {user_required} vars need your input: {', '.join(user_required_keys[:5])}...\n"
+                        env_log = f"\n🔧 Auto-injected {injected} env vars ({skipped} already set by user)"
+                        if fixed > 0:
+                            env_log += f"\n🔄 Auto-healed {fixed} stale CHANGE_ME values"
+                        if user_required > 0:
+                            env_log += f"\n⚠️ {user_required} vars need your input: {', '.join(user_required_keys[:5])}...\n"
                         env_log += "\n"
 
-                        _append_log(deployment, env_log)
+                        append_log(deployment, env_log)
                         logger.info("Env auto-injection for %s: %d injected", deployment_id, injected)
 
                 except Exception as env_err:
                     logger.warning("Env auto-injection failed (non-fatal): %s", env_err)
 
                 # B. Build image — Dockerfile preferred, Nixpacks fallback
-                _update_stage(deployment, 'Build', 'running')
+                update_stage(deployment, 'Build', 'running')
                 build_start = timezone.now()
 
                 local_tag = (
@@ -506,9 +296,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             raise ValueError(f"Directory not found: {root_dir}")
                         build_context_dir = candidate
 
-                        _append_log(deployment, f"\nUsing root_directory: {root_dir}\n")
+                        append_log(deployment, f"\nUsing root_directory: {root_dir}\n")
                 except Exception as root_err:
-                    _append_log(deployment, f"\nWARNING: invalid root_directory; using repo root ({root_err})\n")
+                    append_log(deployment, f"\nWARNING: invalid root_directory; using repo root ({root_err})\n")
 
                 # Check cancellation before build
                 deployment.refresh_from_db(fields=['status'])
@@ -546,10 +336,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 should_use_docker = (buildpack == 'DOCKER') and has_dockerfile
 
                 if should_use_docker:
-                    _append_log(deployment, f"\nDockerfile detected (Strategy: {buildpack}) — building image {local_tag} via Docker...\n")
+                    append_log(deployment, f"\nDockerfile detected (Strategy: {buildpack}) — building image {local_tag} via Docker...\n")
                     logger.info("Building image with Docker: %s", local_tag)
 
-                    dockerfile_arg_names = _extract_dockerfile_arg_names(dockerfile_path)
+                    dockerfile_arg_names = extract_dockerfile_arg_names(dockerfile_path)
                     build_args = []
                     if dockerfile_arg_names:
                         arg_keys = [k for k in sorted(dockerfile_arg_names) if k in build_env_vars]
@@ -557,7 +347,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             build_args.extend(["--build-arg", f"{k}={build_env_vars[k]}"])
 
                         arg_preview = ", ".join(arg_keys[:15])
-                        _append_log(deployment, f"Using Dockerfile ARG build-args: {arg_preview or '(none)'}\n")
+                        append_log(deployment, f"Using Dockerfile ARG build-args: {arg_preview or '(none)'}\n")
                     else:
                         for k, v in build_env_vars.items():
                             if k.startswith(("NEXT_PUBLIC_", "PUBLIC_", "VITE_")):
@@ -568,7 +358,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         try:
                             with open(dockerignore_path, "w", encoding="utf-8") as f:
                                 f.write(".git\nnode_modules\nvenv\n__pycache__\n*.log\n")
-                        except Exception: pass
+                        except Exception:
+                            pass
 
                     import subprocess
                     docker_cmd = [
@@ -591,26 +382,29 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         )
                         build_result = {
                             "image_name": local_tag,
-                            "stdout": _redact_values(process.stdout or "", secret_values),
-                            "stderr": _redact_values(process.stderr or "", secret_values),
+                            "stdout": redact_values(process.stdout or "", secret_values),
+                            "stderr": redact_values(process.stderr or "", secret_values),
                         }
                     except subprocess.CalledProcessError as e:
                         full_error = str(e) + (getattr(e, "stdout", "") or "") + (getattr(e, "stderr", "") or "")
                         if is_buildkit_cache_error(full_error):
                             prune_buildkit_cache()
 
-                        stdout = _redact_values(getattr(e, "stdout", "") or "", secret_values)
-                        stderr = _redact_values(getattr(e, "stderr", "") or "", secret_values)
+                        stdout = redact_values(getattr(e, "stdout", "") or "", secret_values)
+                        stderr = redact_values(getattr(e, "stderr", "") or "", secret_values)
                         error_detail = ""
-                        if stdout: error_detail += f"\n--- Build Output ---\n{stdout[-3000:]}"
-                        if stderr: error_detail += f"\n--- Build Errors ---\n{stderr[-3000:]}"
+                        if stdout:
+                            error_detail += f"\n--- Build Output ---\n{stdout[-3000:]}"
+                        if stderr:
+                            error_detail += f"\n--- Build Errors ---\n{stderr[-3000:]}"
                         raise RuntimeError(f"Docker build failed:{error_detail}") from e
 
                 else:
                     reason = "Strategy: " + buildpack
-                    if buildpack == 'DOCKER' and not has_dockerfile: reason += " (Dockerfile missing, fallback)"
+                    if buildpack == 'DOCKER' and not has_dockerfile:
+                        reason += " (Dockerfile missing, fallback)"
 
-                    _append_log(deployment, f"\nBuilding image {local_tag} via Nixpacks ({reason})...\n")
+                    append_log(deployment, f"\nBuilding image {local_tag} via Nixpacks ({reason})...\n")
                     logger.info("Building image with Nixpacks: %s", local_tag)
 
                     build_result = NixpacksBuilder.build_image(
@@ -619,30 +413,32 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         env_vars=build_env_vars
                     )
 
-                build_stdout = (_redact_values(build_result.get("stdout", ""), secret_values) if isinstance(build_result, dict) else "")
-                build_stderr = (_redact_values(build_result.get("stderr", ""), secret_values) if isinstance(build_result, dict) else "")
+                build_stdout = (redact_values(build_result.get("stdout", ""), secret_values) if isinstance(build_result, dict) else "")
+                build_stderr = (redact_values(build_result.get("stderr", ""), secret_values) if isinstance(build_result, dict) else "")
 
                 if build_stdout or build_stderr:
                     output = ""
-                    if build_stdout: output += f"\n--- Build Output ---\n{build_stdout[-3000:]}\n"
-                    if build_stderr: output += f"\n--- Build Errors ---\n{build_stderr[-3000:]}\n"
-                    _append_log(deployment, output)
+                    if build_stdout:
+                        output += f"\n--- Build Output ---\n{build_stdout[-3000:]}\n"
+                    if build_stderr:
+                        output += f"\n--- Build Errors ---\n{build_stderr[-3000:]}\n"
+                    append_log(deployment, output)
 
-                _append_log(deployment, f"✓ Successfully built {local_tag}\n")
-                _update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
+                append_log(deployment, f"✓ Successfully built {local_tag}\n")
+                update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
 
                 # C. Push to Registry (if configured)
                 registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
                 if registry_url:
-                    _update_stage(deployment, 'Push', 'running')
+                    update_stage(deployment, 'Push', 'running')
                     push_start = timezone.now()
 
-                    _append_log(deployment, f"\nPushing to {registry_url}...\n")
+                    append_log(deployment, f"\nPushing to {registry_url}...\n")
                     remote_tag = NixpacksBuilder.push_image(local_tag, registry_url)
                     image_name = remote_tag
 
-                    _append_log(deployment, f"✓ Pushed to {remote_tag}\n")
-                    _update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
+                    append_log(deployment, f"✓ Pushed to {remote_tag}\n")
+                    update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
                 else:
                     image_name = local_tag
 
@@ -657,20 +453,21 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     deployment.finished_at = timezone.now()
                     deployment.build_logs += f"\n✗ {error_msg}\n"
                     deployment.save(update_fields=['status', 'finished_at', 'build_logs'])
-                    _broadcast_status(deployment)
+                    broadcast_status(deployment)
 
-                _broadcast_log(deployment, f"\n✗ {error_msg}\n")
+                broadcast_log(deployment, f"\n✗ {error_msg}\n")
 
                 stages = deployment.pipeline_stages or []
                 for stage in stages:
                     if stage.get('status') == 'running':
-                        _update_stage(deployment, stage['name'], 'failed')
+                        update_stage(deployment, stage['name'], 'failed')
 
                 if analyze_failure_task:
                     try:
                         analyze_failure_task.delay(str(deployment.id))
-                        _append_log(deployment, "\n🤖 AI diagnosis requested...\n")
-                    except Exception: pass
+                        append_log(deployment, "\n🤖 AI diagnosis requested...\n")
+                    except Exception:
+                        pass
 
                 if source_dir and os.path.exists(source_dir):
                     shutil.rmtree(source_dir, ignore_errors=True)
@@ -678,7 +475,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 raise self.retry(exc=e, countdown=30)
 
         # Step 2: Deploy
-        _update_stage(deployment, 'Deploy', 'running')
+        update_stage(deployment, 'Deploy', 'running')
         deploy_start = timezone.now()
 
         # Check cancellation
@@ -689,18 +486,22 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
 
         deployment.status = Deployment.Status.DEPLOYING
         deployment.save(update_fields=['status'])
-        _broadcast_status(deployment)
+        broadcast_status(deployment)
 
-        _append_log(deployment, "\nDeploying container...\n")
+        append_log(deployment, "\nDeploying container...\n")
         compute = ComputeService(provider)
         env_vars = {env.key: env.value for env in service.env_vars.all()}
-        if 'PUBLIC_DOMAIN' not in env_vars and service.public_domain: env_vars['PUBLIC_DOMAIN'] = service.public_domain
-        if 'PORT' not in env_vars: env_vars['PORT'] = '8000'
+        if 'PUBLIC_DOMAIN' not in env_vars and service.public_domain:
+            env_vars['PUBLIC_DOMAIN'] = service.public_domain
+        if 'PORT' not in env_vars:
+            env_vars['PORT'] = '8000'
 
         requested_replicas = service.min_replicas
-        try: replicas = int(requested_replicas)
-        except (TypeError, ValueError): replicas = 1
-        if replicas < 1: replicas = 1
+        try:
+            replicas = int(requested_replicas)
+        except (TypeError, ValueError):
+            replicas = 1
+        replicas = max(replicas, 1)
 
         from apps.deployments.models_storage import Volume
         db_volumes = Volume.objects.filter(service=service)
@@ -729,12 +530,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.container_id = resource.resource_id
         deployment.save(update_fields=['status', 'finished_at', 'container_id'])
 
-        _update_stage(deployment, 'Deploy', 'success', (timezone.now() - deploy_start).total_seconds())
+        update_stage(deployment, 'Deploy', 'success', (timezone.now() - deploy_start).total_seconds())
 
         log_line = (f"✓ Deployment successful! Container: {resource.resource_id[:12]}\n"
                     f"  Duration: {deployment.duration_seconds:.1f}s\n")
-        _append_log(deployment, log_line)
-        _broadcast_status(deployment)
+        append_log(deployment, log_line)
+        broadcast_status(deployment)
 
         logger.info("Deployment %s successful on %s", deployment_id, provider.name)
 
@@ -750,20 +551,21 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.finished_at = timezone.now()
                 deployment.build_logs += f"\n✗ Deployment failed: {str(e)}\n"
                 deployment.save(update_fields=['status', 'finished_at', 'build_logs'])
-                _broadcast_status(deployment)
+                broadcast_status(deployment)
 
-            _broadcast_log(deployment, f"\n✗ Deployment failed: {str(e)}\n")
+            broadcast_log(deployment, f"\n✗ Deployment failed: {str(e)}\n")
 
             if analyze_failure_task:
                 try:
                     analyze_failure_task.delay(str(deployment.id))
-                    _append_log(deployment, "\n🤖 AI diagnosis requested...\n")
-                except Exception: pass
+                    append_log(deployment, "\n🤖 AI diagnosis requested...\n")
+                except Exception:
+                    pass
 
         if source_dir and os.path.exists(source_dir):
             shutil.rmtree(source_dir, ignore_errors=True)
 
-        _update_stage(deployment, 'Deploy', 'failed')
+        update_stage(deployment, 'Deploy', 'failed')
 
         raise self.retry(exc=e, countdown=30)
 
@@ -883,7 +685,7 @@ def provision_addon_task(self, addon_id: str):
     from apps.deployments.models import EnvironmentVariable
     from services.addon_provisioner import addon_provisioner
 
-    ENV_KEY_MAP = {
+    env_key_map = {
         Addon.Type.POSTGRES: 'DATABASE_URL',
         Addon.Type.REDIS: 'REDIS_URL',
         Addon.Type.MYSQL: 'MYSQL_URL',
@@ -906,7 +708,7 @@ def provision_addon_task(self, addon_id: str):
 
         # Inject connection URL if attached to a service
         if addon.service:
-            env_key = ENV_KEY_MAP.get(
+            env_key = env_key_map.get(
                 addon.addon_type, f"{addon.addon_type}_URL")
             EnvironmentVariable.objects.update_or_create(
                 service=addon.service,
