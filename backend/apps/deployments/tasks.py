@@ -120,6 +120,20 @@ def _deploy_container(deployment, provider, image_name):
         if service.public_domain:
             env_vars.setdefault('PUBLIC_DOMAIN', service.public_domain)
 
+        # Inject addon connection URLs into deployed container
+        from apps.deployments.models_addons import Addon
+        from services.addon_provisioner import AddonProvisioner
+        for addon in Addon.objects.filter(service=service, status='ACTIVE'):
+            env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
+            if env_key and addon.connection_url:
+                env_vars.setdefault(env_key, addon.connection_url)
+                # Qdrant: also set host/port for apps that expect QDRANT_HOST
+                if addon.addon_type == 'QDRANT':
+                    from urllib.parse import urlparse
+                    parsed = urlparse(addon.connection_url)
+                    env_vars.setdefault('QDRANT_HOST', parsed.hostname or 'localhost')
+                    env_vars.setdefault('QDRANT_PORT', str(parsed.port or 6333))
+
         volumes = [{'name': v.name, 'mount_path': v.mount_path}
                    for v in Volume.objects.filter(service=service)]
 
