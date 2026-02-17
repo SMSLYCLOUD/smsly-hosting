@@ -62,6 +62,8 @@ export interface Service {
   autoscale_cpu_target?: number;
   vpa_enabled?: boolean;
   buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
+  root_directory?: string;
+  build_command?: string;
   deploy_type?: 'GIT' | 'DOCKER' | 'UPLOAD' | 'TEMPLATE' | 'FUNCTION';
   function_code?: string;
   function_runtime?: string;
