@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor"
 import { useToast } from "@/components/ui/use-toast"
+import { BuildpackSelector, BuildpackType } from "@/components/deployments/BuildpackSelector"
 import api from "@/lib/api"
 import { templatesApi } from "@/lib/api"
 import { motion, AnimatePresence } from "framer-motion"
@@ -62,6 +63,7 @@ export default function NewServicePage() {
   // Config state
   const [name, setName] = React.useState("")
   const [branch, setBranch] = React.useState("main")
+  const [buildpack, setBuildpack] = React.useState<BuildpackType>("NIXPACKS")
   const [region, setRegion] = React.useState("us-east-1")
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)
@@ -226,6 +228,7 @@ export default function NewServicePage() {
         body: JSON.stringify({
           name,
           deploy_type: deployType,
+          buildpack: sourceType === "docker" ? "DOCKER" : buildpack,
           repository_url: sourceType === "docker" ? null : finalRepo,
           docker_image: sourceType === "docker" ? dockerImage : null,
           branch: branch || "main",
@@ -764,6 +767,13 @@ export default function NewServicePage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {sourceType !== "docker" && (
+                    <div className="pt-4">
+                      <BuildpackSelector value={buildpack} onChange={setBuildpack} />
+                    </div>
+                  )}
+
                   <div className="pt-4">
                     <EnvVarEditor
                       initialVars={envVars}
