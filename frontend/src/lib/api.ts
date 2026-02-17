@@ -57,7 +57,14 @@ export interface Service {
   created_at?: string;
   cpu_cores?: number;
   memory_mb?: number;
-  deploy_type?: 'GIT' | 'DOCKER' | 'UPLOAD' | 'TEMPLATE';
+  min_replicas?: number;
+  max_replicas?: number;
+  autoscale_cpu_target?: number;
+  vpa_enabled?: boolean;
+  buildpack?: 'NIXPACKS' | 'DOCKER' | 'STATIC';
+  deploy_type?: 'GIT' | 'DOCKER' | 'UPLOAD' | 'TEMPLATE' | 'FUNCTION';
+  function_code?: string;
+  function_runtime?: string;
   docker_image?: string;
   start_command?: string;
   template_id?: string;
@@ -80,6 +87,7 @@ export interface Deployment {
   commit_message?: string;
   status: string;
   build_logs?: string;
+  pipeline_stages?: { name: string; status: string; duration?: number }[];
   ai_diagnosis?: string;
   duration_seconds?: number;
   created_at: string;
@@ -291,6 +299,52 @@ export const aiApi = {
       prompt,
       system_prompt: systemPrompt,
     });
+    return response.data;
+  },
+};
+
+// ─── Teams API ──────────────────────────────────────────────────────────────
+
+export interface Team {
+  id: string;
+  name: string;
+  members_count: number;
+  owner: string;
+  created_at: string;
+}
+
+export interface TeamMember {
+  id: number;
+  user: number;
+  username: string;
+  email: string;
+  role: 'ADMIN' | 'MEMBER' | 'VIEWER';
+  team: string;
+}
+
+export const teamsApi = {
+  list: async (): Promise<Team[]> => {
+    const response = await api.get('/teams/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  create: async (name: string): Promise<Team> => {
+    const response = await api.post('/teams/', { name });
+    return response.data;
+  },
+  get: async (id: string): Promise<Team> => {
+    const response = await api.get(`/teams/${id}/`);
+    return response.data;
+  },
+  members: async (id: string): Promise<TeamMember[]> => {
+    const response = await api.get(`/teams/${id}/members/`);
+    return response.data;
+  },
+  inviteMember: async (teamId: string, email: string, role: string): Promise<any> => {
+    const response = await api.post(`/teams/${teamId}/invite_member/`, { email, role });
+    return response.data;
+  },
+  removeMember: async (teamId: string, userId: number): Promise<any> => {
+    const response = await api.post(`/teams/${teamId}/remove_member/`, { user_id: userId });
     return response.data;
   },
 };

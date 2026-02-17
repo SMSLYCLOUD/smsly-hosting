@@ -18,6 +18,7 @@ import { StorageTab } from '@/components/storage/StorageTab';
 import { AddonsTab } from '@/components/addons/AddonsTab';
 import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
+import { BuildTab } from '@/components/settings/BuildTab';
 import { toast } from '@/components/ui/use-toast';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
@@ -219,6 +220,8 @@ export default function ServiceDetailPage() {
             )}
 
             {activeTab === 'logs' && <LogsTab deployment={deployment} />}
+
+            {activeTab === 'build' && <BuildTab service={service} />}
 
             {activeTab === 'env' && <EnvVarsTab serviceId={service.id} />}
 

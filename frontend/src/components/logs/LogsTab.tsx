@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Terminal, Zap, Clock, RefreshCw, Radio } from 'lucide-react';
 import { Deployment } from '@/lib/api';
+import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
 
 /**
  * Generate pseudo-timestamps for log lines based on deployment start time.
@@ -26,6 +27,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [runtimeLoading, setRuntimeLoading] = useState(false);
     const [runtimeMessage, setRuntimeMessage] = useState('');
     const [liveBuildLogs, setLiveBuildLogs] = useState<string>('');
+    const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
     const [isLive, setIsLive] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
@@ -36,6 +38,13 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     useEffect(() => {
         logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [deployment?.build_logs, runtimeLogs, liveBuildLogs]);
+
+    // Initial load of stages
+    useEffect(() => {
+        if (deployment?.pipeline_stages) {
+            setPipelineStages(deployment.pipeline_stages);
+        }
+    }, [deployment?.pipeline_stages]);
 
     // Determine if build is still in progress
     const isBuilding = deployment?.status === 'BUILDING' || deployment?.status === 'QUEUED' || deployment?.status === 'PENDING';
@@ -67,8 +76,13 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                         if (data.build_logs) {
                             setLiveBuildLogs(data.build_logs);
                         }
+                        if (data.stages) {
+                            setPipelineStages(data.stages);
+                        }
                     } else if (data.type === 'build_log') {
                         setLiveBuildLogs(prev => prev + (data.log || ''));
+                    } else if (data.type === 'pipeline_update') {
+                        setPipelineStages(data.stages);
                     } else if (data.type === 'status_change') {
                         // Build finished, stop live streaming
                         if (data.status === 'ACTIVE' || data.status === 'FAILED') {
@@ -265,6 +279,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
             <div className="flex-1 p-6 overflow-y-auto text-zinc-300 leading-relaxed custom-scrollbar">
                 {logType === 'BUILD' && (
                     <>
+                        {pipelineStages.length > 0 && (
+                            <div className="mb-8 px-4">
+                                <PipelineVisualizer stages={pipelineStages} />
+                            </div>
+                        )}
+
                         {deployment?.ai_diagnosis && (
                             <div className="bg-emerald-500/10 border-l-2 border-emerald-500 p-4 mb-6 text-emerald-200 rounded-r-lg">
                                 <strong className="flex items-center gap-2 mb-2 text-emerald-400 font-sans uppercase tracking-wider text-[10px]">
