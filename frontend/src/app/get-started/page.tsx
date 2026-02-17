@@ -37,7 +37,7 @@ export default function LivingOnboarding() {
         setLoading(true);
 
         try {
-            const res = await api.post('/ai/chat/', { message: userMsg });
+            const res = await api.post('/ai-chat/', { message: userMsg });
             setMessages(prev => [...prev, { role: 'AI', content: res.data.text }]);
         } catch (e) {
             setMessages(prev => [...prev, { role: 'AI', content: "Sorry, I encountered an error processing that request." }]);
