@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -22,6 +21,7 @@ from apps.billing.models import BillingAccount, BillingPayment, UsageRecord
 from apps.billing.services.cryptomus import CryptomusService
 from apps.billing.services.flutterwave import FlutterwaveService
 from apps.billing.services.stripe import StripeService
+from apps.billing.utils import _activate_paid_plan
 
 logger = logging.getLogger(__name__)
 
@@ -96,37 +96,6 @@ def _pro_amount_currency() -> tuple[Decimal, str]:
         raise ValueError("Invalid BILLING_PRO_AMOUNT") from e
     currency = (getattr(settings, "BILLING_CURRENCY", "USD") or "USD").upper().strip()
     return amount, currency
-
-
-def _activate_paid_plan(*, user, plan: str):
-    """Activate a paid plan for a user."""
-    plan = (plan or "").upper().strip()
-    if plan not in {
-        BillingAccount.Plan.HOBBY,
-        BillingAccount.Plan.PRO,
-        BillingAccount.Plan.ENTERPRISE,
-    }:
-        return
-
-    # Stripe remains source-of-truth for Stripe subscriptions.
-    # Non-Stripe providers activate a timed period.
-    account = StripeService.get_or_create_billing_account(user)
-    account.plan = plan
-
-    if plan == BillingAccount.Plan.PRO:
-        account.subscription_status = BillingAccount.SubscriptionStatus.ACTIVE
-        days = int(getattr(settings, "BILLING_PRO_PERIOD_DAYS", 30) or 30)
-        base = account.current_period_end \
-            if account.current_period_end and account.current_period_end > timezone.now() \
-            else timezone.now()
-        account.current_period_end = base + timedelta(days=days)
-    elif plan == BillingAccount.Plan.HOBBY:
-        account.subscription_status = BillingAccount.SubscriptionStatus.NONE
-        account.current_period_end = None
-    else:
-        account.subscription_status = BillingAccount.SubscriptionStatus.ACTIVE
-
-    account.save(update_fields=["plan", "subscription_status", "current_period_end"])
 
 
 class BillingSummaryView(APIView):
