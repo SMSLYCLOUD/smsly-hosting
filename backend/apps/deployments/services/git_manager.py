@@ -1,10 +1,10 @@
 """Git module."""
 import os
 import shutil
-import git
 import logging
 import uuid
 import stat
+import git
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)

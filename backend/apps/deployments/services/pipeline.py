@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.deployments.models import Deployment, EnvironmentVariable
-from apps.deployments.services.git import GitManager
+from apps.deployments.services.git_manager import GitManager
 from apps.deployments.utils import (
     append_log,
     update_stage,
