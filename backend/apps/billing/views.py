@@ -115,7 +115,7 @@ class BillingSummaryView(APIView):
         try:
             account = StripeService.sync_subscription_from_stripe(account)
         except Exception:
-            account = account
+            pass
 
         total_cost = (
             UsageRecord.objects.filter(service__owner=user).aggregate(total=Sum("cost"))["total"]

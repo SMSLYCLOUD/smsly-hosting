@@ -1,8 +1,8 @@
+import os
 from django.core.management.base import BaseCommand
-from allauth.socialaccount.models import SocialApp
 from django.contrib.sites.models import Site
 from django.conf import settings
-import os
+from allauth.socialaccount.models import SocialApp
 
 class Command(BaseCommand):
     help = 'Setup GitHub and Google SocialApps for authentication'

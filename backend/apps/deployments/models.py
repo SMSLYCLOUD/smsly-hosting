@@ -1,18 +1,21 @@
 """Models module."""
 import uuid
 from django.db import models
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from encrypted_model_fields.fields import EncryptedCharField
 from django.utils.translation import gettext_lazy as _
+from encrypted_model_fields.fields import EncryptedCharField
 from apps.cloud.models import CloudProvider
 
 # Import AuditLog explicitly to register it with the app
+# pylint: disable=unused-import
 from .models_audit import AuditLog
 from .models_cron import CronJob
 from .models_storage import Volume  # Add this
 from .api_token_auth import APIToken  # CLI token auth
 from .models_servers import ManagedServer  # Multi-server management
+# pylint: enable=unused-import
 
 
 class TimeStampedModel(models.Model):
@@ -91,7 +94,7 @@ class Service(TimeStampedModel):
     docker_image = models.CharField(max_length=255, blank=True, null=True)
 
     owner = models.ForeignKey(
-        'auth.User',
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
