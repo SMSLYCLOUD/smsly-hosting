@@ -58,10 +58,17 @@ class Migration(migrations.Migration):
                 "ordering": ["-created_at"],
             },
         ),
-        migrations.RenameIndex(
-            model_name="servicemetric",
-            new_name="deployments_service_d8ff01_idx",
-            old_name="deployments_svc_ts_idx",
+        # State-only RenameIndex: the index may or may not exist with the old name
+        # depending on whether 0009 was applied or faked. Safe to update state only.
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RenameIndex(
+                    model_name="servicemetric",
+                    new_name="deployments_service_d8ff01_idx",
+                    old_name="deployments_svc_ts_idx",
+                ),
+            ],
+            database_operations=[],
         ),
         migrations.AddField(
             model_name="service",
