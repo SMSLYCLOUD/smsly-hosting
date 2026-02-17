@@ -168,6 +168,54 @@ def _broadcast_status(deployment):
         logger.debug("Failed to broadcast status: %s", e)
 
 
+def _broadcast_pipeline(deployment):
+    """Broadcast pipeline stages update via WebSocket."""
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            group_name = f"build_logs_{deployment.id}"
+            async_to_sync(channel_layer.group_send)(
+                group_name,
+                {
+                    'type': 'pipeline_update',
+                    'stages': deployment.pipeline_stages,
+                }
+            )
+    except Exception as e:
+        logger.debug("Failed to broadcast pipeline: %s", e)
+
+
+def _update_stage(deployment, name, status, duration=None):
+    """Update a pipeline stage status."""
+    stages = deployment.pipeline_stages or []
+    # Ensure stages is a list (handle legacy null)
+    if not isinstance(stages, list):
+        stages = []
+
+    found = False
+    for stage in stages:
+        if stage.get('name') == name:
+            stage['status'] = status
+            if duration is not None:
+                stage['duration'] = duration
+            found = True
+            break
+
+    if not found:
+        stages.append({
+            'name': name,
+            'status': status,
+            'duration': duration or 0
+        })
+
+    deployment.pipeline_stages = stages
+    deployment.save(update_fields=['pipeline_stages'])
+    _broadcast_pipeline(deployment)
+
+
 # ==============================================================================
 # Smart Multi-Cloud Deployment
 # ==============================================================================
@@ -205,16 +253,86 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.save()
         _broadcast_status(deployment)
 
+        # Initialize pipeline stages
+        deployment.pipeline_stages = []
+        _update_stage(deployment, 'Clone', 'pending')
+        _update_stage(deployment, 'Build', 'pending')
+        if getattr(settings, 'CONTAINER_REGISTRY_URL', None):
+            _update_stage(deployment, 'Push', 'pending')
+        _update_stage(deployment, 'Deploy', 'pending')
+
         # Step 1: Build Pipeline
         image_name = service.docker_image
 
-        if service.deploy_type == 'GIT':
+        if service.deploy_type == 'FUNCTION':
+            try:
+                build_dir = tempfile.mkdtemp(prefix=f"func_build_{deployment.id}_")
+                source_dir = build_dir
+
+                from apps.cloud.services.function_provisioner import FunctionProvisioner
+                FunctionProvisioner.prepare_context(service, build_dir)
+
+                tag_hash = deployment.commit_hash[:7] if deployment.commit_hash else 'latest'
+                local_tag = f"smsly/func-{service.name}:{tag_hash}"
+
+                _update_stage(deployment, 'Build', 'running')
+                build_start = timezone.now()
+
+                deployment.build_logs += f"Building function image {local_tag}...\n"
+                deployment.save()
+                _broadcast_log(deployment, f"Building function image {local_tag}...\n")
+
+                import subprocess
+                docker_cmd = ["docker", "build", "-t", local_tag, build_dir]
+                process = subprocess.run(
+                    docker_cmd,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=300
+                )
+
+                deployment.build_logs += process.stdout
+                deployment.save()
+                _broadcast_log(deployment, process.stdout)
+
+                _update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
+
+                # Push
+                registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+                if registry_url:
+                    _update_stage(deployment, 'Push', 'running')
+                    push_start = timezone.now()
+                    remote_tag = NixpacksBuilder.push_image(local_tag, registry_url)
+                    image_name = remote_tag
+                    _update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
+                else:
+                    image_name = local_tag
+
+            except Exception as e:
+                logger.error(f"Function build failed: {e}")
+                deployment.build_logs += f"\nBuild failed: {e}\n"
+                if hasattr(e, 'stderr'):
+                    deployment.build_logs += e.stderr
+                deployment.status = Deployment.Status.FAILED
+                deployment.save()
+                _update_stage(deployment, 'Build', 'failed')
+                _broadcast_status(deployment)
+                if source_dir and os.path.exists(source_dir):
+                    shutil.rmtree(source_dir, ignore_errors=True)
+                raise self.retry(exc=e, countdown=30)
+
+        elif service.deploy_type == 'GIT':
             try:
                 # Create temporary build directory
                 build_dir = tempfile.mkdtemp(
                     prefix=f"build_{deployment.id}_")
 
                 # A. Clone Repository
+                _update_stage(deployment, 'Clone', 'running')
+                clone_start = timezone.now()
+
                 log_line = f"Cloning {service.repository_url}...\n"
                 logger.info(
                     "Cloning repository: %s (branch: %s)",
@@ -254,6 +372,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     f"Commit: {deployment.commit_hash[:7]}\n")
                 deployment.build_logs += log_line
                 deployment.save()
+
+                _update_stage(deployment, 'Clone', 'success', (timezone.now() - clone_start).total_seconds())
 
                 # ── AI Intelligent Pre-Deploy Analysis (Automatic) ──
                 try:
@@ -577,6 +697,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     logger.warning("Env auto-injection failed (non-fatal): %s", env_err)
 
                 # B. Build image — Dockerfile preferred, Nixpacks fallback
+                _update_stage(deployment, 'Build', 'running')
+                build_start = timezone.now()
+
                 local_tag = (
                     f"smsly/{service.name}:"
                     f"{deployment.commit_hash[:7]}")
@@ -633,8 +756,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                             logger.info("Found Dockerfile in subdirectory: %s", candidate)
                             break
 
-                if has_dockerfile:
-                    log_line = f"\nDockerfile detected — building image {local_tag} via Docker...\n"
+                # Determine build strategy
+                buildpack = getattr(service, 'buildpack', 'NIXPACKS')
+                should_use_docker = (buildpack == 'DOCKER') and has_dockerfile
+
+                if should_use_docker:
+                    log_line = f"\nDockerfile detected (Strategy: {buildpack}) — building image {local_tag} via Docker...\n"
                     logger.info("Building image with Docker: %s", local_tag)
                     deployment.build_logs += log_line
                     deployment.save()
@@ -716,7 +843,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                         raise RuntimeError(f"Docker build failed:{error_detail}") from e
 
                 else:
-                    log_line = f"\nNo Dockerfile found — building image {local_tag} via Nixpacks...\n"
+                    reason = "Strategy: " + buildpack
+                    if buildpack == 'DOCKER' and not has_dockerfile:
+                        reason += " (Dockerfile missing, fallback)"
+
+                    log_line = f"\nBuilding image {local_tag} via Nixpacks ({reason})...\n"
                     logger.info("Building image with Nixpacks: %s", local_tag)
                     deployment.build_logs += log_line
                     deployment.save()
@@ -754,10 +885,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.save()
                 _broadcast_log(deployment, log_line)
 
+                _update_stage(deployment, 'Build', 'success', (timezone.now() - build_start).total_seconds())
+
                 # C. Push to Registry (if configured)
                 registry_url = getattr(
                     settings, 'CONTAINER_REGISTRY_URL', None)
                 if registry_url:
+                    _update_stage(deployment, 'Push', 'running')
+                    push_start = timezone.now()
+
                     log_line = f"\nPushing to {registry_url}...\n"
                     logger.info(
                         "Pushing image to registry: %s", registry_url)
@@ -773,6 +909,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                     deployment.build_logs += log_line
                     deployment.save()
                     _broadcast_log(deployment, log_line)
+
+                    _update_stage(deployment, 'Push', 'success', (timezone.now() - push_start).total_seconds())
                 else:
                     # Use local image if no registry configured
                     image_name = local_tag
@@ -789,6 +927,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 deployment.save()
                 _broadcast_log(deployment, log_line)
                 _broadcast_status(deployment)
+
+                # Mark current running stage as failed
+                stages = deployment.pipeline_stages or []
+                for stage in stages:
+                    if stage.get('status') == 'running':
+                        _update_stage(deployment, stage['name'], 'failed')
 
                 # Trigger AI diagnosis on failure
                 if analyze_failure_task:
@@ -811,6 +955,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
                 raise self.retry(exc=e, countdown=30)
 
         # Step 2: Deploy
+        _update_stage(deployment, 'Deploy', 'running')
+        deploy_start = timezone.now()
+
         deployment.status = Deployment.Status.DEPLOYING
         deployment.save()
         _broadcast_status(deployment)
@@ -885,6 +1032,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         deployment.container_id = resource.resource_id
         deployment.save()
 
+        _update_stage(deployment, 'Deploy', 'success', (timezone.now() - deploy_start).total_seconds())
+
         log_line = (
             f"✓ Deployment successful! Container: "
             f"{resource.resource_id[:12]}\n"
@@ -931,6 +1080,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
             logger.info(
                 "Cleaned up build directory after failure: %s",
                 source_dir)
+
+        _update_stage(deployment, 'Deploy', 'failed')
 
         raise self.retry(exc=e, countdown=30)
 

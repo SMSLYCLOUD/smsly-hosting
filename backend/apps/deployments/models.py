@@ -66,11 +66,28 @@ class Service(TimeStampedModel):
         ('DOCKER', 'Docker Image'),
         ('UPLOAD', 'File Upload'),
         ('TEMPLATE', 'Predefined Template'),
+        ('FUNCTION', 'Serverless Function'),
     ]
     deploy_type = models.CharField(
         max_length=20,
         choices=DEPLOY_TYPE_CHOICES,
         default='GIT')
+
+    BUILDPACK_CHOICES = [
+        ('NIXPACKS', 'Nixpacks'),
+        ('DOCKER', 'Dockerfile'),
+        ('STATIC', 'Static Site'),
+    ]
+    buildpack = models.CharField(
+        max_length=20,
+        choices=BUILDPACK_CHOICES,
+        default='NIXPACKS',
+        help_text="Build strategy for source code deployments")
+
+    # Serverless Function Config
+    function_code = models.TextField(blank=True, help_text="Raw source code for serverless functions")
+    function_runtime = models.CharField(max_length=50, default='nodejs18', help_text="Runtime environment (e.g. nodejs18, python3.9)")
+
     docker_image = models.CharField(max_length=255, blank=True, null=True)
 
     owner = models.ForeignKey(
@@ -285,6 +302,10 @@ class Deployment(TimeStampedModel):
 
     build_logs = models.TextField(blank=True)
     runtime_logs_url = models.URLField(blank=True, null=True)
+
+    pipeline_stages = models.JSONField(
+        default=list, blank=True,
+        help_text="List of pipeline stages (name, status, duration)")
 
     ai_diagnosis = models.TextField(
         blank=True, help_text="AI suggested fix for failure")

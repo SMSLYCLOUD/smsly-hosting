@@ -1,7 +1,7 @@
 import { 
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, 
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network,
-    HeartPulse, Cpu, BarChart3
+    HeartPulse, Cpu, BarChart3, Box
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -23,6 +23,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'deployments', label: 'Deployments', icon: Clock },
         { id: 'logs', label: 'Logs', icon: List },
         { id: 'console', label: 'Console', icon: Terminal },
+        { id: 'build', label: 'Build', icon: Box },
         { id: 'addons', label: 'Addons', icon: Puzzle },
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
