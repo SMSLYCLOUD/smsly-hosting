@@ -212,6 +212,7 @@ export default function NewServicePage() {
     try {
       const token = localStorage.getItem("auth_token")
       if (!token) throw new Error("Not authenticated")
+      if (!name.trim()) throw new Error("Service name is required")
 
       const finalRepo = sourceType === "template"
         ? templates.find(t => t.id === selectedTemplate || t.slug === selectedTemplate)?.repository_url || ''
