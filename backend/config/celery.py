@@ -16,6 +16,10 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
 
+# Explicitly register tasks defined outside of tasks.py files
+import apps.deployments.services.autoscaler  # noqa: F401
+import apps.deployments.services.health_monitor  # noqa: F401
+
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
 # =============================================================================
