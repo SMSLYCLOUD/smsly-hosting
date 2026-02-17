@@ -171,6 +171,7 @@ services:
   # Frontend
   # ============================================================
   frontend:
+    init: true  # Fix: Next.js spawns child workers that become zombies without a proper init
     build:
       context: ./frontend
       network: host
