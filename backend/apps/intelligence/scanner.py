@@ -14,7 +14,7 @@ pre-deploy analysis and auto-fix decisions.
 import os
 import re
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
@@ -225,12 +225,12 @@ class RepoScanner:
                     max_read = MAX_LOCK_READ if is_lock else MAX_FILE_READ
 
                     try:
-                        with open(filepath, 'r', errors='ignore') as fh:
+                        with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
                             content = fh.read(max_read)
                             if len(content) == max_read:
                                 content += "\n... (truncated)"
                             configs[rel_path] = content
-                    except Exception as e:
+                    except Exception as e: # pylint: disable=broad-exception-caught
                         configs[rel_path] = f"(unreadable: {e})"
 
         return configs
@@ -240,6 +240,7 @@ class RepoScanner:
     # -----------------------------------------------------------------------
 
     def _detect_env_vars(self) -> List[str]:
+        # pylint: disable=too-many-locals, too-many-branches
         """
         Detect all environment variables the app expects.
         Scans .env files, code files, and config files for patterns.
@@ -258,14 +259,15 @@ class RepoScanner:
                 if f in ENV_FILES or f.startswith('.env'):
                     filepath = os.path.join(root, f)
                     try:
-                        with open(filepath, 'r', errors='ignore') as fh:
+                        with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
                             for line in fh:
                                 line = line.strip()
                                 if line and not line.startswith('#') and '=' in line:
+                                    # pylint: disable=superfluous-parens
                                     key = line.split('=', 1)[0].strip()
                                     if key and re.match(r'^[A-Z_][A-Z0-9_]*$', key):
                                         env_vars.add(key)
-                    except Exception:
+                    except Exception: # pylint: disable=broad-exception-caught
                         pass
 
         # 2. Scan code files for os.environ / process.env patterns
@@ -294,12 +296,12 @@ class RepoScanner:
 
                 filepath = os.path.join(root, f)
                 try:
-                    with open(filepath, 'r', errors='ignore') as fh:
+                    with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
                         content = fh.read(50000)  # Read first 50KB of code files
                         for pattern in code_patterns:
                             for match in pattern.finditer(content):
                                 env_vars.add(match.group(1))
-                except Exception:
+                except Exception: # pylint: disable=broad-exception-caught
                     pass
 
         return sorted(env_vars)
@@ -316,6 +318,7 @@ class RepoScanner:
 
     def _build_tree(self, path: str, prefix: str, max_depth: int,
                     current_depth: int, lines: List[str]):
+        # pylint: disable=too-many-arguments, too-many-positional-arguments
         if current_depth > max_depth:
             return
 
@@ -331,7 +334,7 @@ class RepoScanner:
             lines.append(f"{prefix}{f}")
 
         for i, d in enumerate(dirs):
-            is_last = (i == len(dirs) - 1)
+            is_last = i == len(dirs) - 1
             connector = "└── " if is_last else "├── "
             lines.append(f"{prefix}{connector}{d}/")
             extension = "    " if is_last else "│   "
@@ -349,7 +352,7 @@ class RepoScanner:
                 if os.path.isdir(os.path.join(self.source_dir, d))
                 and d not in SKIP_DIRS
             ]
-        except Exception:
+        except Exception: # pylint: disable=broad-exception-caught
             return []
 
     # -----------------------------------------------------------------------
@@ -407,8 +410,9 @@ class RepoScanner:
         if any('docker-compose' in k for k in configs) and 'Dockerfile' not in configs:
             if 'in' not in stack.lower():  # Not a subdir detection
                 issues.append(
-                    "DOCKER COMPOSE PROJECT: This project uses docker-compose but has no Dockerfile. "
-                    "Set `root_directory` to the service subdirectory that contains the buildable app."
+                    "DOCKER COMPOSE PROJECT: This project uses docker-compose but "
+                    "has no Dockerfile. Set `root_directory` to the service subdirectory "
+                    "that contains the buildable app."
                 )
 
         return issues

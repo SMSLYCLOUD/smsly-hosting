@@ -1,7 +1,7 @@
 """Analyzer module."""
 import re
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class LogAnalyzer:
 
         return detected_issues
 
-    def generate_diagnosis(self, deployment_id: str, logs: str) -> str:
+    def generate_diagnosis(self, logs: str) -> str:
         """
         Generates a human-readable diagnosis using detected patterns or LLM simulation.
         """
@@ -58,17 +58,23 @@ class LogAnalyzer:
             for issue in issues:
                 if issue['type'] == 'OOM_KILLED':
                     descriptions.append(
-                        "The application ran out of memory. Consider upgrading the plan.")
+                        "The application ran out of memory. Consider upgrading the plan."
+                    )
                 elif issue['type'] == 'DB_CONNECTION_TIMEOUT':
                     descriptions.append(
-                        "Database connection failed. Check your credentials or pool size.")
+                        "Database connection failed. Check your credentials or pool size."
+                    )
                 elif issue['type'] == 'CRASH_LOOP':
                     descriptions.append(
-                        "The application is crashing repeatedly on startup.")
+                        "The application is crashing repeatedly on startup."
+                    )
             return " ".join(descriptions)
 
         # LLM Simulation for complex cases
         if "traceback" in logs.lower() or "error" in logs.lower():
-            return "AI Diagnosis: It appears your application is throwing an unhandled exception. Check line 42 of your main loop."
+            return (
+                "AI Diagnosis: It appears your application is throwing an unhandled exception. "
+                "Check line 42 of your main loop."
+            )
 
         return "No obvious issues detected. Check standard output."
