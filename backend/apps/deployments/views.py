@@ -604,7 +604,10 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         try:
             import docker
-            client = docker.from_env()
+            import os
+            # L-3 fix: respect DOCKER_HOST (socket proxy) instead of docker.from_env()
+            docker_host = os.environ.get('DOCKER_HOST', 'unix:///var/run/docker.sock')
+            client = docker.DockerClient(base_url=docker_host)
 
             # Find container by service name
             service_name = deployment.service.name
@@ -838,10 +841,9 @@ class SystemConfigView(APIView):
             # Rate Limiting
             'THROTTLE_RATES': settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {}),
 
-            # Database (safe subset)
-            'DATABASE_ENGINE': settings.DATABASES['default'].get('ENGINE', ''),
-            'DATABASE_NAME': settings.DATABASES['default'].get('NAME', ''),
-            'DATABASE_HOST': settings.DATABASES['default'].get('HOST', 'localhost'),
+            # Database (H-2 fix: expose only safe boolean flags, not internals)
+            'DATABASE_CONFIGURED': bool(settings.DATABASES['default'].get('HOST')),
+            'DATABASE_ENGINE_TYPE': 'postgres' if 'postgresql' in settings.DATABASES['default'].get('ENGINE', '') else 'other',
 
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),

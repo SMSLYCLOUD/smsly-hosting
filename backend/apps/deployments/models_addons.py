@@ -1,5 +1,6 @@
 """Models Addons module."""
 import uuid
+from encrypted_model_fields.fields import EncryptedCharField
 from django.db import models
 from .models import Service, TimeStampedModel
 
@@ -28,8 +29,8 @@ class Addon(TimeStampedModel):
         max_length=20,
         choices=Status.choices,
         default=Status.PROVISIONING)
-    connection_url = models.CharField(
-        max_length=512, blank=True)  # Encrypted field ideally
+    connection_url = EncryptedCharField(
+        max_length=512, blank=True)  # H-1 fix: encrypted at rest
 
     # Coolify Integration
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True,

@@ -57,15 +57,25 @@ class AuditLog(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.pk:  # Only on creation
-            # 1. Find last block
-            last_log = AuditLog.objects.order_by('-id').first()
-            if last_log:
-                self.previous_hash = last_log.hash
-            else:
-                self.previous_hash = "0" * 64  # Genesis block
+            from django.db import transaction
+            with transaction.atomic():
+                # H-4 fix: select_for_update on the last log to prevent
+                # concurrent writes from reading the same previous_hash
+                last_log = (
+                    AuditLog.objects
+                    .select_for_update()
+                    .order_by('-id')
+                    .first()
+                )
+                if last_log:
+                    self.previous_hash = last_log.hash
+                else:
+                    self.previous_hash = "0" * 64  # Genesis block
 
-            # 2. Compute Hash
-            self.hash = self.calculate_hash()
+                # 2. Compute Hash
+                self.hash = self.calculate_hash()
+                super().save(*args, **kwargs)
+                return
 
         super().save(*args, **kwargs)
 
