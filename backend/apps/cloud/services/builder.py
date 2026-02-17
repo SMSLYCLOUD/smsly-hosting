@@ -43,6 +43,14 @@ class NixpacksBuilder:
         effective_cache_dir = cache_dir or NixpacksBuilder.CACHE_DIR
         os.makedirs(effective_cache_dir, exist_ok=True)
 
+        # Ensure cargo bin is in PATH (common install location)
+        cargo_bin = os.path.expanduser("~/.cargo/bin")
+        if cargo_bin not in os.environ.get("PATH", "") and os.path.isdir(cargo_bin):
+            os.environ["PATH"] = f"{cargo_bin}:{os.environ.get('PATH', '')}"
+
+        if not shutil.which("nixpacks"):
+            raise RuntimeError("Nixpacks binary not found. Please install nixpacks.")
+
         command = [
             "nixpacks",
             "build",
