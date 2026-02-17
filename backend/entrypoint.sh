@@ -14,10 +14,6 @@ is_web_container() {
 }
 
 run_migrations_with_retry() {
-    echo "Running makemigrations..."
-    python manage.py makemigrations --noinput 2>&1 || \
-        echo "WARNING: makemigrations had issues (non-fatal)"
-
     echo "Running migrations..."
     max_retries="${MIGRATE_MAX_RETRIES:-5}"
     retry=0
