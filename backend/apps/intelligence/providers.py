@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Base Provider
 # ---------------------------------------------------------------------------
 
+
 class AIProvider(ABC):
     """Abstract base for all AI providers."""
 
@@ -69,18 +70,27 @@ class OpenAIProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": self.model, "messages": messages, "max_tokens": 2048},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+        # pylint: disable=broad-exception-caught
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error("OpenAI ask failed: %s", e)
+            raise
 
     def get_balance(self) -> dict:
         """Fetch OpenAI credit balance."""
@@ -100,7 +110,11 @@ class OpenAIProvider(AIProvider):
                     return {
                         "balance": f"${remaining:.2f}",
                         "currency": "USD",
-                        "raw": {"total_granted": total, "total_used": used, "remaining": remaining},
+                        "raw": {
+                            "total_granted": total,
+                            "total_used": used,
+                            "remaining": remaining
+                        },
                     }
                 # Fallback: try organization billing
                 resp2 = client.get(
@@ -109,9 +123,17 @@ class OpenAIProvider(AIProvider):
                     params={"limit": 1},
                 )
                 if resp2.status_code == 200:
-                    return {"balance": "Active (usage-based)", "currency": "USD", "raw": resp2.json()}
-                return {"balance": "Active (check platform.openai.com)", "currency": "USD", "raw": {}}
-        except Exception as e:
+                    return {
+                        "balance": "Active (usage-based)",
+                        "currency": "USD",
+                        "raw": resp2.json()
+                    }
+                return {
+                    "balance": "Active (check platform.openai.com)",
+                    "currency": "USD",
+                    "raw": {}
+                }
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.debug("OpenAI balance check failed: %s", e)
             return {"balance": "Error checking", "currency": "", "raw": {}}
 
@@ -141,18 +163,27 @@ class GrokProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": self.model, "messages": messages, "max_tokens": 2048},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+        # pylint: disable=broad-exception-caught
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error("Grok ask failed: %s", e)
+            raise
 
     def get_balance(self) -> dict:
         """Fetch xAI/Grok credit balance."""
@@ -174,8 +205,12 @@ class GrokProvider(AIProvider):
                             "raw": data,
                         }
                     return {"balance": "Active", "currency": "USD", "raw": data}
-                return {"balance": "Active (check console.x.ai)", "currency": "USD", "raw": {}}
-        except Exception as e:
+                return {
+                    "balance": "Active (check console.x.ai)",
+                    "currency": "USD",
+                    "raw": {}
+                }
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.debug("Grok balance check failed: %s", e)
             return {"balance": "Error checking", "currency": "", "raw": {}}
 
@@ -207,15 +242,20 @@ class GeminiProvider(AIProvider):
         contents.append({"role": "user", "parts": [{"text": prompt}]})
 
         url = f"{self.BASE_URL}/models/{self.model}:generateContent?key={self.api_key}"
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={"contents": contents},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+        # pylint: disable=broad-exception-caught
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={"contents": contents},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            logger.error("Gemini ask failed: %s", e)
+            raise
 
     def get_balance(self) -> dict:
         """Check Gemini API quota status. Gemini uses quota-based billing, not credits."""
@@ -237,8 +277,12 @@ class GeminiProvider(AIProvider):
                     }
                 if resp.status_code == 429:
                     return {"balance": "⚠️ Quota exhausted", "currency": "quota-based", "raw": {}}
-                return {"balance": "Unknown (check aistudio.google.com)", "currency": "", "raw": {}}
-        except Exception as e:
+                return {
+                    "balance": "Unknown (check aistudio.google.com)",
+                    "currency": "",
+                    "raw": {}
+                }
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.debug("Gemini balance check failed: %s", e)
             return {"balance": "Error checking", "currency": "", "raw": {}}
 
@@ -273,23 +317,28 @@ class ClaudeProvider(AIProvider):
         if system_prompt:
             payload["system"] = system_prompt
 
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                f"{self.BASE_URL}/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            # Claude returns content as a list of blocks
-            return "".join(
-                block.get("text", "") for block in data.get("content", [])
-                if block.get("type") == "text"
-            )
+        # pylint: disable=broad-exception-caught
+        try:
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(
+                    f"{self.BASE_URL}/messages",
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                # Claude returns content as a list of blocks
+                return "".join(
+                    block.get("text", "") for block in data.get("content", [])
+                    if block.get("type") == "text"
+                )
+        except Exception as e:
+            logger.error("Claude ask failed: %s", e)
+            raise
 
     def get_balance(self) -> dict:
         """Check Claude/Anthropic balance. No official balance API yet."""
@@ -312,13 +361,21 @@ class ClaudeProvider(AIProvider):
                     },
                 )
                 if resp.status_code == 200:
-                    return {"balance": "Active (check console.anthropic.com)", "currency": "USD", "raw": {}}
+                    return {
+                        "balance": "Active (check console.anthropic.com)",
+                        "currency": "USD",
+                        "raw": {}
+                    }
                 if resp.status_code == 401:
                     return {"balance": "❌ Invalid API key", "currency": "", "raw": {}}
                 if resp.status_code == 429:
-                    return {"balance": "⚠️ Rate limited / credits low", "currency": "USD", "raw": {}}
+                    return {
+                        "balance": "⚠️ Rate limited / credits low",
+                        "currency": "USD",
+                        "raw": {}
+                    }
                 return {"balance": f"Status {resp.status_code}", "currency": "", "raw": {}}
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.debug("Claude balance check failed: %s", e)
             return {"balance": "Error checking", "currency": "", "raw": {}}
 
@@ -341,7 +398,7 @@ class MockProvider(AIProvider):
             return (
                 "Based on my analysis, here are some suggestions:\n\n"
                 "1. **Check your Dockerfile** - ensure the build command completes successfully\n"
-                "2. **Verify environment variables** - missing DB_URL or SECRET_KEY will crash on startup\n"
+                "2. **Verify environment variables** - missing DB_URL or SECRET_KEY crash apps\n"
                 "3. **Review memory limits** - OOM kills are common with default 256MB\n\n"
                 "Would you like me to analyze your deployment logs?"
             )
@@ -389,12 +446,12 @@ def _get_db_settings():
     """
     Best-effort DB-backed settings lookup.
     Fails open because it can be called early during boot/migrations.
-    If the table exists but has missing columns (e.g. unmigrated claude fields),
-    we still try to read known-good fields via raw SQL fallback.
     """
+    # pylint: disable=too-many-locals, too-many-return-statements, import-outside-toplevel
     try:
         from django.apps import apps
         from django.db.utils import OperationalError, ProgrammingError
+        from django.db import connection
 
         model = apps.get_model("intelligence", "AIProviderSettings")
         if model is None:
@@ -405,7 +462,6 @@ def _get_db_settings():
             # Table or column missing — try raw SQL for the fields we know exist
             logger.warning("AIProviderSettings query failed (migration pending?): %s", e)
             try:
-                from django.db import connection
                 with connection.cursor() as cursor:
                     cursor.execute(
                         "SELECT column_name FROM information_schema.columns "
@@ -438,7 +494,7 @@ def _get_db_settings():
                     return None
 
                 # Return a simple namespace object with the available fields
-                class _PartialSettings:
+                class _PartialSettings: # pylint: disable=too-few-public-methods
                     pass
                 obj = _PartialSettings()
                 for i, field_name in enumerate(available):
@@ -448,10 +504,10 @@ def _get_db_settings():
                     if f not in columns:
                         setattr(obj, f, None)
                 return obj
-            except Exception as inner_e:
+            except Exception as inner_e: # pylint: disable=broad-exception-caught
                 logger.debug("Raw SQL fallback also failed: %s", inner_e)
                 return None
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
         logger.debug("_get_db_settings outer exception: %s", e)
         return None
 
@@ -535,7 +591,11 @@ def get_provider() -> AIProvider:
 # Single Provider Ask
 # ---------------------------------------------------------------------------
 
-def _ask_single(provider: AIProvider, prompt: str, system_prompt: Optional[str] = None) -> Tuple[str, str]:
+def _ask_single(
+    provider: AIProvider,
+    prompt: str,
+    system_prompt: Optional[str] = None
+) -> Tuple[str, str]:
     """Ask a single provider. Returns (response, provider_name) or raises."""
     response = provider.ask(prompt, system_prompt=system_prompt)
     return response, provider.name()
@@ -568,13 +628,14 @@ def _parallel_ask(providers: List[AIProvider], prompt: str,
             try:
                 response, name = future.result()
                 results.append((response, name))
-            except Exception as e:
+            except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Provider %s failed: %s", provider.name(), e)
 
     return results
 
 
 def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple[str, str]:
+    # pylint: disable=too-many-locals, too-many-statements, too-many-return-statements
     """
     Senate Committee deliberation when 2+ providers are active.
 
@@ -597,10 +658,11 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
         provider = configured[0]
         try:
             return _ask_single(provider, prompt, system_prompt)
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("Single provider %s failed: %s", provider.name(), e)
             mock = MockProvider()
-            return mock.ask(prompt, system_prompt=system_prompt), f"Mock AI ({provider.name()} failed)"
+            return mock.ask(prompt, system_prompt=system_prompt), \
+                f"Mock AI ({provider.name()} failed)"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # PHASE 1 — PROPOSE: Each provider answers independently
@@ -610,13 +672,15 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
 
     if not proposals:
         mock = MockProvider()
-        return mock.ask(prompt, system_prompt=system_prompt), f"Mock AI (all {len(configured)} senators failed)"
+        return mock.ask(prompt, system_prompt=system_prompt), \
+            f"Mock AI (all {len(configured)} senators failed)"
 
     if len(proposals) == 1:
         return proposals[0]
 
     member_names = [name for _, name in proposals]
-    logger.info("Phase 1 complete: %d proposals received from %s", len(proposals), ", ".join(member_names))
+    logger.info("Phase 1 complete: %d proposals received from %s",
+                len(proposals), ", ".join(member_names))
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # PHASE 2 — REVIEW & VOTE: Each provider reviews all other proposals
@@ -666,20 +730,21 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
         attribution = f"Senate Committee ({' + '.join(member_names)})"
         logger.info("Phase 3 complete: Chair %s delivered resolution", chair.name())
         return resolution, attribution
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
         logger.warning("Chair %s failed to deliver resolution: %s", chair.name(), e)
         # Fallback: try another provider as chair
         for fallback_chair in configured:
             if fallback_chair is not chair:
                 try:
-                    resolution = fallback_chair.ask(chair_prompt, system_prompt=COMMITTEE_SYSTEM_PROMPT)
+                    resolution = fallback_chair.ask(
+                        chair_prompt, system_prompt=COMMITTEE_SYSTEM_PROMPT
+                    )
                     attribution = f"Senate Committee ({' + '.join(member_names)})"
                     return resolution, attribution
-                except Exception:
+                except Exception: # pylint: disable=broad-exception-caught
                     continue
         # Last resort: return first proposal
         return proposals[0][0], f"{proposals[0][1]} (committee failed, solo answer)"
-
 
 
 # ---------------------------------------------------------------------------
@@ -705,13 +770,12 @@ def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None) -> Tuple
         provider = configured[0]
         try:
             return _ask_single(provider, prompt, system_prompt)
-        except Exception as e:
+        except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("Provider %s failed, falling back to mock: %s", provider.name(), e)
             mock = MockProvider()
-            return mock.ask(prompt, system_prompt=system_prompt), f"Mock AI ({provider.name()} failed)"
+            return mock.ask(prompt, system_prompt=system_prompt), \
+                f"Mock AI ({provider.name()} failed)"
 
     # No providers configured
     mock = MockProvider()
     return mock.ask(prompt, system_prompt=system_prompt), mock.name()
-
-
