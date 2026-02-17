@@ -11,8 +11,13 @@ from apps.intelligence.providers import get_provider, get_available_providers, a
 
 
 class CloudProviderViewSet(viewsets.ModelViewSet):
-    queryset = CloudProvider.objects.all()
+    # M-3 fix: non-admin users only see active providers (no credential details)
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        if self.request.user.is_staff:
+            return CloudProvider.objects.all()
+        return CloudProvider.objects.filter(is_active=True)
 
     def get_permissions(self):
         # Provider credential mutations are admin-only.
@@ -291,6 +296,18 @@ class EcosystemViewSet(viewsets.ViewSet):
             return Response(
                 {'error': 'repo_url is required.'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # M-5 fix: validate repo URL against allowed Git hosts
+        import re as _re
+        allowed_pattern = _re.compile(
+            r'^https://(github\.com|gitlab\.com|bitbucket\.org)/[\w.\-]+/[\w.\-]+',
+            _re.IGNORECASE,
+        )
+        if not allowed_pattern.match(repo_url):
+            return Response(
+                {'error': 'Only GitHub, GitLab, and Bitbucket URLs are allowed.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Get GitHub OAuth token for authenticated clones

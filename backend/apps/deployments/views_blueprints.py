@@ -29,6 +29,14 @@ class BlueprintViewSet(viewsets.ViewSet):
         POST /api/v1/blueprints/deploy/
         Body: { "blueprint_id": "smsly-ecosystem", "provider_id": "..." }
         """
+        # M-6 fix: blueprint deployment is admin-only since CloudProvider
+        # is a global resource (no per-user ownership)
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Only admins can deploy blueprints.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         blueprint_id = request.data.get('blueprint_id')
         provider_id = request.data.get('provider_id')
 

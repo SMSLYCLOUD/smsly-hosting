@@ -8,23 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Github, Chrome, Mail, ArrowLeft, Loader2 } from "lucide-react";
-
-
-const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-
-function setAuthTokenCookie(token: string) {
-  const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
-  const cookieParts = [
-    `auth_token=${encodeURIComponent(token)}`,
-    "path=/",
-    `max-age=${AUTH_COOKIE_MAX_AGE_SECONDS}`,
-    "SameSite=Lax",
-  ];
-  if (isSecure) {
-    cookieParts.push("Secure");
-  }
-  document.cookie = cookieParts.join("; ");
-}
+import { setAuthTokenCookie } from "@/lib/auth-cookies";
 
 export default function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);

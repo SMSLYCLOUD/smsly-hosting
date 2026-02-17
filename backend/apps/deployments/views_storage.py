@@ -1,4 +1,6 @@
 """Views Storage module."""
+import posixpath
+
 from rest_framework import viewsets, permissions, serializers, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -19,11 +21,18 @@ class VolumeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if 'service_pk' in self.kwargs:
-            return Volume.objects.filter(service_id=self.kwargs['service_pk'])
+            return Volume.objects.filter(
+                service_id=self.kwargs['service_pk'],
+                service__owner=self.request.user,
+            )
         return Volume.objects.none()
 
     def perform_create(self, serializer):
         service = Service.objects.get(pk=self.kwargs['service_pk'])
+        # M-1 fix: verify the requesting user owns this service
+        if service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You do not own this service.")
         serializer.save(service=service)
 
     @action(detail=True, methods=['get'])
@@ -35,9 +44,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
         volume = self.get_object()
         path = request.query_params.get('path', volume.mount_path)
 
-        # Security check: Ensure path starts with volume mount path to prevent
-        # traversal
-        if not path.startswith(volume.mount_path):
+        # C-1 fix: normalize path to prevent traversal and command injection.
+        # posixpath.normpath collapses ".." and "." sequences.
+        path = posixpath.normpath(path)
+
+        # Reject any path that doesn't start with the volume mount path
+        mount = posixpath.normpath(volume.mount_path)
+        if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'},
                             status=status.HTTP_403_FORBIDDEN)
 
@@ -53,8 +66,9 @@ class VolumeViewSet(viewsets.ModelViewSet):
             try:
                 container = adapter.docker_client.containers.get(
                     latest_deploy.container_id)
+                # C-1 fix: use argument-list form to prevent shell injection
                 exit_code, output = container.exec_run(
-                    f"ls -la {path}", user="root")
+                    ["ls", "-la", path], user="root")
 
                 if exit_code != 0:
                     return Response({'error': 'Failed to list directory', 'details': output.decode(

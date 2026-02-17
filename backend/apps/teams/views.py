@@ -40,6 +40,14 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], serializer_class=InviteMemberSerializer)
     def invite_member(self, request, pk=None):
         team = self.get_object()
+        # M-4 fix: only team admins can invite members
+        if not TeamMember.objects.filter(
+            team=team, user=request.user, role=TeamMember.Role.ADMIN
+        ).exists():
+            return Response(
+                {'error': 'Only team admins can invite members'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             email = serializer.validated_data['email']
@@ -76,6 +84,14 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def remove_member(self, request, pk=None):
         team = self.get_object()
+        # M-4 fix: only team admins can remove members
+        if not TeamMember.objects.filter(
+            team=team, user=request.user, role=TeamMember.Role.ADMIN
+        ).exists():
+            return Response(
+                {'error': 'Only team admins can remove members'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         user_id = request.data.get('user_id')
         
         try:

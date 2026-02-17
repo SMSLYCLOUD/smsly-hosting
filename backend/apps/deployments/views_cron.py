@@ -24,9 +24,16 @@ class CronJobViewSet(viewsets.ModelViewSet):
         # Filter by service if provided in query params or nested
         # /api/v1/services/{id}/cron/
         if 'service_pk' in self.kwargs:
-            return CronJob.objects.filter(service_id=self.kwargs['service_pk'])
+            return CronJob.objects.filter(
+                service_id=self.kwargs['service_pk'],
+                service__owner=self.request.user,
+            )
         return CronJob.objects.none()  # Should be nested
 
     def perform_create(self, serializer):
         service = Service.objects.get(pk=self.kwargs['service_pk'])
+        # M-2 fix: verify the requesting user owns this service
+        if service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You do not own this service.")
         serializer.save(service=service)

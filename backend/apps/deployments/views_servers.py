@@ -209,14 +209,44 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Forward an API request to a remote server.
         Body: { "method": "GET", "path": "/api/v1/services/", "body": null }
         """
+        import posixpath
+        from urllib.parse import urlparse
+
         server = self.get_object()
         method = request.data.get("method", "GET").upper()
         path = request.data.get("path", "")
         body = request.data.get("body")
 
+        # C-2 fix: normalize path to collapse ".." traversal sequences
+        path = posixpath.normpath(path)
+
+        # Reject any path containing ".." even after normalization
+        if ".." in path:
+            return Response(
+                {"error": "Directory traversal is not allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Re-verify /api/ prefix after normalization
         if not path.startswith("/api/"):
             return Response(
                 {"error": "Only /api/ paths can be proxied."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate only HTTP/HTTPS methods are allowed
+        allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if method not in allowed_methods:
+            return Response(
+                {"error": f"Method {method} is not allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate the server URL scheme is HTTP/HTTPS (prevent file://, etc.)
+        parsed = urlparse(server.api_url)
+        if parsed.scheme not in ("http", "https"):
+            return Response(
+                {"error": "Server API URL must use HTTP or HTTPS."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
