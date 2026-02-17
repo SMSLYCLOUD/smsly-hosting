@@ -11,6 +11,7 @@ class Addon(TimeStampedModel):
         REDIS = 'REDIS', 'Redis'
         MYSQL = 'MYSQL', 'MySQL'
         MONGODB = 'MONGODB', 'MongoDB'
+        QDRANT = 'QDRANT', 'Qdrant (Vector DB)'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'

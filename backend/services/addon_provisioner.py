@@ -34,6 +34,7 @@ class AddonProvisioner:
         'REDIS': 'redis:7-alpine',
         'MYSQL': 'mysql:8.0',
         'MONGODB': 'mongo:7.0',
+        'QDRANT': 'qdrant/qdrant:v1.12.1',
     }
 
     # Default ports for each addon
@@ -42,6 +43,7 @@ class AddonProvisioner:
         'REDIS': 6379,
         'MYSQL': 3306,
         'MONGODB': 27017,
+        'QDRANT': 6333,
     }
 
     # Environment variable keys for connection URLs
@@ -50,6 +52,7 @@ class AddonProvisioner:
         'REDIS': 'REDIS_URL',
         'MYSQL': 'MYSQL_URL',
         'MONGODB': 'MONGODB_URI',
+        'QDRANT': 'QDRANT_URL',
     }
 
     def __init__(self):
@@ -117,6 +120,10 @@ class AddonProvisioner:
         elif addon_type == 'MONGODB':
             container_id, connection_url = self._provision_mongodb(
                 container_name, password, port
+            )
+        elif addon_type == 'QDRANT':
+            container_id, connection_url = self._provision_qdrant(
+                container_name, port
             )
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
@@ -239,6 +246,32 @@ class AddonProvisioner:
         container_id = result.stdout.strip()[:12]
 
         connection_url = f"mongodb://{db_user}:{password}@{container_name}:{port}/{db_name}?authSource=admin"  # pylint: disable=line-too-long
+
+        self._wait_for_health(container_name, port)
+        return container_id, connection_url
+
+    def _provision_qdrant(self, container_name: str,
+                          port: int) -> Tuple[str, str]:
+        """Provision a Qdrant vector database container."""
+        cmd = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+            '-e', 'QDRANT__SERVICE__GRPC_PORT=6334',
+            '-v', f'{container_name}-data:/qdrant/storage',
+            self.ADDON_IMAGES['QDRANT']
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
+        container_id = result.stdout.strip()[:12]
+
+        # Qdrant uses HTTP API — no auth by default
+        connection_url = f"http://{container_name}:{port}"
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
