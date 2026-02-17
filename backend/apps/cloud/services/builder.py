@@ -1,5 +1,6 @@
 """Builder module."""
 import subprocess
+import shutil
 import os
 import logging
 import docker
