@@ -266,7 +266,7 @@ class EnvironmentVariable(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name='env_vars')
     key = models.CharField(max_length=255)
-    value = EncryptedCharField(max_length=255)
+    value = EncryptedCharField(max_length=255, blank=True, default='')
     is_secret = models.BooleanField(default=False)
 
     class Meta:

@@ -334,12 +334,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
             serializer = EnvVarSerializer(vars, many=True)
             return Response(serializer.data)
 
-        serializer = EnvVarSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        # Allow partial data — key is required, value can be empty
+        key = str(request.data.get('key') or '').strip()
+        if not key:
+            return Response(
+                {'key': ['This field is required.']},
+                status=status.HTTP_400_BAD_REQUEST)
 
-        key = str(serializer.validated_data.get('key') or '').strip()
-        value = serializer.validated_data.get('value', '')
-        is_secret = bool(serializer.validated_data.get('is_secret', False))
+        value = str(request.data.get('value', '') or '')
+        is_secret = bool(request.data.get('is_secret', False))
 
         env_var, created = EnvironmentVariable.objects.update_or_create(
             service=service,
