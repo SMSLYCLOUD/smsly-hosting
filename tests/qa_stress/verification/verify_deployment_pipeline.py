@@ -17,7 +17,7 @@ from django.conf import settings
 if not settings.configured:
     django.setup()
 
-from apps.deployments.services.git import GitManager
+from apps.deployments.services.git_manager import GitManager
 from apps.deployments.utils import extract_dockerfile_arg_names, get_default_env_value
 from apps.cloud.adapters.local import LocalAdapter
 from apps.cloud.services.builder import NixpacksBuilder
@@ -67,7 +67,7 @@ class TestDeploymentPipeline(unittest.TestCase):
         with open(dockerfile_path, "w") as f:
             f.write(dockerfile_content)
 
-        print(f"\n[Test] Extracting ARGs from Dockerfile...")
+        print("\n[Test] Extracting ARGs from Dockerfile...")
         args = extract_dockerfile_arg_names(dockerfile_path)
         self.assertIn("MY_ARG", args)
         self.assertIn("ANOTHER_ARG", args)
@@ -76,7 +76,7 @@ class TestDeploymentPipeline(unittest.TestCase):
 
     def test_local_adapter_connectivity(self):
         """Verify LocalAdapter can talk to Docker."""
-        print(f"\n[Test] LocalAdapter connectivity...")
+        print("\n[Test] LocalAdapter connectivity...")
         try:
             adapter = LocalAdapter()
             self.assertTrue(adapter.authenticate(), "Adapter should authenticate")
@@ -94,7 +94,7 @@ class TestDeploymentPipeline(unittest.TestCase):
 
     def test_nixpacks_installed(self):
         """Verify Nixpacks binary is available."""
-        print(f"\n[Test] Checking for Nixpacks...")
+        print("\n[Test] Checking for Nixpacks...")
         if shutil.which("nixpacks"):
             print("[Pass] Nixpacks is installed.")
         else:
@@ -103,7 +103,7 @@ class TestDeploymentPipeline(unittest.TestCase):
 
     def test_health_check_logic(self):
         """Verify LocalAdapter constructs health checks correctly (simulated)."""
-        print(f"\n[Test] Health Check Logic...")
+        print("\n[Test] Health Check Logic...")
         adapter = LocalAdapter()
         # Mock docker client
         with patch.object(adapter, 'docker_client') as mock_client:
