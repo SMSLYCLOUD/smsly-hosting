@@ -220,6 +220,17 @@ class IntelligenceViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # M-5 fix: validate repo URL against allow-listed Git hosts
+        import re as _re
+        if not _re.match(
+            r'^https://(github\.com|gitlab\.com|bitbucket\.org)/',
+            repo_url,
+        ):
+            return Response(
+                {'error': 'Only GitHub, GitLab, and Bitbucket URLs are allowed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Clone to temp dir
         import re
         repo_name = re.sub(r'\.git$', '', repo_url.split('/')[-1])
