@@ -10,6 +10,8 @@ import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { useAuth } from "@/components/auth-provider";
 import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/components/ui/use-toast";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -29,6 +31,7 @@ export default function DashboardPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
+  const { toast } = useToast();
   const [showPasswordWarning, setShowPasswordWarning] = useState(false);
 
   useEffect(() => {
@@ -47,6 +50,14 @@ export default function DashboardPage() {
       } catch (err) {
         console.error('Failed to fetch services:', err);
         setServices([]);
+        // Only show toast on first load failure to avoid spamming
+        if (loading) {
+            toast({
+                title: "Dashboard Error",
+                description: "Failed to load services. Please check your connection.",
+                variant: "destructive",
+            });
+        }
       } finally {
         setLoading(false);
       }
@@ -277,24 +288,24 @@ export default function DashboardPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    ACTIVE: 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30',
-    RUNNING: 'bg-emerald-500/20 text-emerald-500 border-emerald-500/30',
-    FAILED: 'bg-red-500/20 text-red-500 border-red-500/30',
-    PENDING: 'bg-yellow-500/20 text-yellow-500 border-yellow-500/30',
-    BUILDING: 'bg-blue-500/20 text-blue-500 border-blue-500/30',
-    DEPLOYING: 'bg-indigo-500/20 text-indigo-500 border-indigo-500/30',
-    HEALTH_CHECK: 'bg-cyan-500/20 text-cyan-500 border-cyan-500/30',
-    QUEUED: 'bg-gray-500/20 text-gray-500 border-gray-500/30',
-    CANCELLED: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  const styles: Record<string, "default" | "secondary" | "destructive" | "outline" | "success" | "warning" | "info" | "purple" | "gray"> = {
+    ACTIVE: 'success',
+    RUNNING: 'success',
+    FAILED: 'destructive',
+    PENDING: 'warning',
+    BUILDING: 'info',
+    DEPLOYING: 'purple',
+    HEALTH_CHECK: 'info',
+    QUEUED: 'gray',
+    CANCELLED: 'gray',
   };
 
   const label = status === 'HEALTH_CHECK' ? 'Health Check' : status;
 
   return (
-    <span className={`px-3 py-1 rounded-full text-xs font-medium border ${styles[status] || styles.PENDING}`}>
+    <Badge variant={styles[status] || "outline"}>
       {label}
-    </span>
+    </Badge>
   );
 }
 
