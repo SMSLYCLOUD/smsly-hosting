@@ -20,6 +20,8 @@ services:
       NODES: 0
       SERVICES: 0
       TASKS: 0
+      PUT: 1
+      DELETE: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -54,9 +56,10 @@ services:
   # ============================================================
   redis:
     image: redis:7-alpine
+    command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", ${REDIS_PASSWORD:+-a ${REDIS_PASSWORD}}, "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
