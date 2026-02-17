@@ -21,31 +21,38 @@ class KubernetesAdapter(BaseCloudAdapter):
                 # Fallback to in-cluster config
                 try:
                     config.load_incluster_config()
-                except BaseException:
+                except config.ConfigException:
                     config.load_kube_config()
 
             self.k8s_client = client.CoreV1Api()
             self.k8s_apps = client.AppsV1Api()
             self.k8s_networking = client.NetworkingV1Api()
-        except Exception as e:
-            logger.error(f"Failed to initialize Kubernetes client: {e}")
-            raise
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.error("Failed to initialize Kubernetes client: %s", e)
+            # Do not raise here to allow backend start without kubeconfig (simulation mode)
+            # raise
 
     def authenticate(self) -> bool:
+        """Authenticate with the Kubernetes cluster."""
         try:
             self.k8s_client.list_node(limit=1)
             return True
-        except Exception:
+        except Exception: # pylint: disable=broad-exception-caught
             return False
 
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int,
+                         replicas: int = 1, **kwargs) -> str:
+        # pylint: disable=too-many-positional-arguments, too-many-locals, too-many-arguments
+        """
+        Deploy container to K8s cluster.
+        """
         namespace = 'smsly-apps'
         self._ensure_namespace(namespace)
 
         # 1. Create/Update Deployment
         deployment = self._build_deployment(
-            service_name, image, env_vars, cpu, memory)
+            service_name, image, env_vars, cpu, memory, replicas, **kwargs)
         try:
             self.k8s_apps.create_namespaced_deployment(
                 namespace=namespace, body=deployment)
@@ -79,15 +86,58 @@ class KubernetesAdapter(BaseCloudAdapter):
 
         return f"k8s://{namespace}/{service_name}"
 
+    def deploy_function(self, function_name: str,
+                        code_zip: str, handler: str, runtime: str) -> str:
+        """
+        Deploy serverless function (placeholder for OpenFaaS/Knative).
+        """
+        raise NotImplementedError("Serverless on K8s not yet implemented.")
+
+    def create_bucket(self, bucket_name: str, public: bool = False) -> str:
+        """Create an object storage bucket."""
+        raise NotImplementedError
+
+    def provision_database(self, db_name: str, engine: str,
+                           version: str) -> str:
+        """Provision a managed database (RDS/CloudSQL)."""
+        raise NotImplementedError
+
+    def create_vpc(self, cidr_block: str) -> str:
+        """Create a Virtual Private Cloud."""
+        raise NotImplementedError
+
+    def create_waf_policy(self, name: str, scope: str = 'REGIONAL') -> str:
+        """Create a WAF (Web Application Firewall) ACL/Policy."""
+        raise NotImplementedError
+
+    def issue_ssl_cert(self, domain_name: str) -> str:
+        """Request/Issue an SSL Certificate (ACM/Managed)."""
+        raise NotImplementedError
+
+    def create_iam_role(self, role_name: str, policy: Dict[str, Any]) -> str:
+        """Create an IAM Role with specific permissions."""
+        raise NotImplementedError
+
+    def store_secret(self, secret_name: str, secret_value: str) -> str:
+        """Store a secret in the provider's secret manager."""
+        raise NotImplementedError
+
+    def get_metrics(self, resource_id: str, metric_name: str,
+                    start_time: str, end_time: str) -> List[Dict]:
+        """Fetch metrics for a resource."""
+        # pylint: disable=unused-argument
+        return []
+
     def scale_service(self, service_name: str, replicas: int) -> bool:
+        """Scale K8s deployment."""
         namespace = 'smsly-apps'
         patch = {'spec': {'replicas': replicas}}
         try:
             self.k8s_apps.patch_namespaced_deployment_scale(
                 name=service_name, namespace=namespace, body=patch)
             return True
-        except Exception as e:
-            logger.error(f"Failed to scale {service_name}: {e}")
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.error("Failed to scale %s: %s", service_name, e)
             return False
 
     def _ensure_namespace(self, name: str):
@@ -100,11 +150,25 @@ class KubernetesAdapter(BaseCloudAdapter):
                         name=name))
                 self.k8s_client.create_namespace(body=ns)
 
-    def _build_deployment(self, name, image, env, cpu, memory):
+    def _build_deployment(self, name, image, env, cpu, memory, replicas, **kwargs):
+        # Handle healthcheck
+        # pylint: disable=too-many-arguments
+        healthcheck = kwargs.get('healthcheck')
+        liveness_probe = None
+        if healthcheck:
+            liveness_probe = client.V1Probe(
+                http_get=client.V1HTTPGetAction(
+                    path=healthcheck['path'], port=int(env.get('PORT', 8000))),
+                initial_delay_seconds=healthcheck.get('interval', 30),
+                period_seconds=healthcheck.get('interval', 10),
+                timeout_seconds=healthcheck.get('timeout', 5),
+                failure_threshold=healthcheck.get('retries', 3)
+            )
+
         return client.V1Deployment(
             metadata=client.V1ObjectMeta(name=name),
             spec=client.V1DeploymentSpec(
-                replicas=1,
+                replicas=replicas,
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 strategy=client.V1DeploymentStrategy(
                     type="RollingUpdate",
@@ -129,12 +193,7 @@ class KubernetesAdapter(BaseCloudAdapter):
                                     limits={"cpu": f"{cpu * 2}m",
                                             "memory": f"{memory * 2}Mi"}
                                 ),
-                                liveness_probe=client.V1Probe(
-                                    http_get=client.V1HTTPGetAction(
-                                        path="/health", port=int(env.get('PORT', 8000))),
-                                    initial_delay_seconds=30,
-                                    period_seconds=10
-                                )
+                                liveness_probe=liveness_probe
                             )
                         ]
                     )
