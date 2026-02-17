@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("deployments", "0012_apitoken_and_more"),
+        ("deployments", "0001_initial"),
         ("domains", "0001_initial"),
     ]
 
