@@ -119,8 +119,17 @@ class LocalAdapter(BaseCloudAdapter):
         labels = {
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
+            # HTTP router (redirects to HTTPS)
+            f'traefik.http.routers.{name}-http.rule': host_rule,
+            f'traefik.http.routers.{name}-http.entrypoints': 'web',
+            f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
+            f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
+            f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
+            # HTTPS router (main)
             f'traefik.http.routers.{name}.rule': host_rule,
-            f'traefik.http.routers.{name}.entrypoints': 'web',
+            f'traefik.http.routers.{name}.entrypoints': 'websecure',
+            f'traefik.http.routers.{name}.tls': 'true',
+            f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
