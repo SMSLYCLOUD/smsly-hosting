@@ -242,10 +242,14 @@ class Service(TimeStampedModel):
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
 
-        # Auto-generate Railway-style subdomain if not set
+        # Auto-generate deterministic subdomain from owner + name
+        # Same owner + same name = same domain, always.
         if not self.public_domain:
+            import hashlib
             slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
-            short_id = str(self.id)[:6] if self.id else uuid.uuid4().hex[:6]
+            # Deterministic hash: owner_id + service_name → stable short_id
+            seed = f"{self.owner_id}:{self.name}".encode()
+            short_id = hashlib.sha256(seed).hexdigest()[:6]
             self.public_domain = f"{slug}-{short_id}.cloud.smsly.cloud"
 
         self.full_clean()  # Enforce validation (e.g. max_length)
