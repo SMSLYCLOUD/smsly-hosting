@@ -841,13 +841,16 @@ class PipelineManager:
     def _run_subprocess(self, cmd: list, cwd: str):
         """Helper to run shell commands with logging."""
         env = os.environ.copy()
-        env["DOCKER_BUILDKIT"] = "0"  # Disable buildkit if causing cache issues
+        # BuildKit MUST be enabled for layer caching. Without it, every build
+        # re-downloads all dependencies from scratch (extremely slow).
+        # If BuildKit causes cache corruption, the auto-prune below handles it.
+        env["DOCKER_BUILDKIT"] = "1"
 
         try:
             process = subprocess.run(
                 cmd, check=True, cwd=cwd, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=7200  # 2 hours for heavy builds
+                text=True, timeout=1800  # 30 minutes max
             )
             # Log output (redacted)
             output = redact_values(process.stdout + process.stderr, self.secret_values)
