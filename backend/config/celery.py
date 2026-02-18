@@ -16,11 +16,14 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django apps.
 app.autodiscover_tasks()
 
-# Explicitly register tasks defined outside of tasks.py files
-# (autodiscover_tasks only finds tasks.py, not tasks_metrics.py etc.)
-import apps.deployments.services.autoscaler  # noqa: F401
-import apps.deployments.services.health_monitor  # noqa: F401
-import apps.deployments.tasks_metrics  # noqa: F401
+# Explicitly register tasks defined outside of tasks.py files.
+# These imports MUST be deferred until Django apps are fully loaded,
+# otherwise models.py triggers AppRegistryNotReady.
+@app.on_after_finalize.connect
+def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
+    import apps.deployments.services.autoscaler  # noqa: F401
+    import apps.deployments.services.health_monitor  # noqa: F401
+    import apps.deployments.tasks_metrics  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
