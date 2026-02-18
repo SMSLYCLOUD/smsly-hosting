@@ -405,6 +405,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
                        else f'DNS not configured. Add a CNAME record pointing to {cname_target}',
         })
 
+    def _sync_caddy(self):
+        """Regenerate Caddyfile with all custom domains and trigger reload."""
+        try:
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            from .models import PlatformConfig
+            config = PlatformConfig.objects.first()
+            if not config:
+                logger.warning("No PlatformConfig found, skipping Caddy sync")
+                return False
+            content = generate_caddyfile(config)
+            result = apply_caddyfile(content)
+            if result['ok']:
+                logger.info("Caddy synced after domain change")
+            else:
+                logger.error("Caddy sync failed: %s", result['message'])
+            return result['ok']
+        except Exception as e:
+            logger.error("Caddy sync error: %s", e)
+            return False
+
     @action(detail=True, methods=['post'], url_path='add-domain')
     def add_domain(self, request, pk=None):
         """
@@ -428,9 +448,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
+        # Auto-sync Caddyfile so SSL is provisioned immediately
+        caddy_ok = self._sync_caddy()
+
         return Response({
             'domain': domain,
             'domains': domains,
+            'caddy_synced': caddy_ok,
             'message': f'{domain} added. Configure DNS to point to your server.',
         }, status=status.HTTP_201_CREATED)
 
@@ -453,8 +477,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
+        # Auto-sync Caddyfile so stale domain entry is removed
+        caddy_ok = self._sync_caddy()
+
         return Response({
             'domains': domains,
+            'caddy_synced': caddy_ok,
             'message': f'{domain} removed.',
         })
 
