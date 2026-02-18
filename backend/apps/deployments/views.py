@@ -24,6 +24,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _has_active_deployment(service):
+    """
+    Check if a service already has an active deployment in progress.
+    Returns the existing deployment if found, None otherwise.
+    Prevents rapid-fire deployment spam from the dashboard.
+    """
+    return service.deployments.filter(
+        status__in=[
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            'REVIEW',  # Also block if awaiting review
+        ]
+    ).order_by('-created_at').first()
+
+
 def _resolve_provider_for_service(service: Service):
     """
     Resolve provider for deployment in a fail-closed way.
@@ -185,6 +201,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
+
+        # Prevent rapid-fire deployment spam
+        existing = _has_active_deployment(service)
+        if existing:
+            return Response({
+                'error': f'Deployment already in progress (status: {existing.status}). '
+                         'Wait for it to finish or cancel it first.',
+                'existing_deployment': DeploymentSerializer(existing).data,
+            }, status=status.HTTP_409_CONFLICT)
 
         # Determine provider
         provider = _resolve_provider_for_service(service)
@@ -564,6 +589,15 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 # ZH-011 FIX: Verify service ownership before triggering deployment
                 service = Service.objects.get(id=service_id, owner=request.user)
                 provider = CloudProvider.objects.get(id=provider_id)
+
+                # Prevent rapid-fire deployment spam
+                existing = _has_active_deployment(service)
+                if existing:
+                    return Response({
+                        'error': f'Deployment already in progress (status: {existing.status}). '
+                                 'Wait for it to finish or cancel it first.',
+                        'existing_deployment': DeploymentSerializer(existing).data,
+                    }, status=status.HTTP_409_CONFLICT)
 
                 deployment = Deployment.objects.create(
                     service=service,
