@@ -202,6 +202,9 @@ services:
   traefik:
     image: traefik:v3.4
     restart: unless-stopped
+    environment:
+      # Force Docker client API version to match the Engine (v1.44+ required)
+      DOCKER_API_VERSION: "1.45"
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
