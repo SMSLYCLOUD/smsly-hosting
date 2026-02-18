@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Deployment } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer } from 'lucide-react';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -15,6 +15,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [expandedDetails, setExpandedDetails] = useState<Record<string, any>>({});
     const [redeploying, setRedeploying] = useState(false);
+    const [cancellingId, setCancellingId] = useState<string | null>(null);
+    const [approvingId, setApprovingId] = useState<string | null>(null);
 
     const loadDeployments = useCallback(async () => {
         try {
@@ -62,6 +64,36 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handleCancel = async (deployment: Deployment) => {
+        if (!confirm(`Cancel deployment ${deployment.commit_hash.substring(0, 7)}?`)) return;
+        try {
+            setCancellingId(deployment.id);
+            await servicesApi.cancelDeployment(deployment.id);
+            toast({ title: "Deployment cancelled" });
+            setTimeout(() => { void loadDeployments(); }, 1000);
+        } catch (err) {
+            console.error(err);
+            toast({ title: "Cancel failed", variant: "destructive" });
+        } finally {
+            setCancellingId(null);
+        }
+    };
+
+    const handleApprove = async (deployment: Deployment) => {
+        try {
+            setApprovingId(deployment.id);
+            await servicesApi.approveDeployment(deployment.id);
+            toast({ title: "Deployment approved", description: "Build phase has started." });
+            setTimeout(() => { void loadDeployments(); }, 2000);
+        } catch (err: any) {
+            console.error(err);
+            const msg = err?.response?.data?.error || 'Approve failed';
+            toast({ title: msg, variant: "destructive" });
+        } finally {
+            setApprovingId(null);
+        }
+    };
+
     const toggleExpand = async (d: Deployment) => {
         if (expandedId === d.id) {
             setExpandedId(null);
@@ -85,6 +117,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         switch (status) {
             case 'ACTIVE': return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
             case 'FAILED': return <XCircle className="w-5 h-5 text-red-500" />;
+            case 'CANCELLED': return <Ban className="w-5 h-5 text-muted-foreground" />;
+            case 'REVIEW': return <Eye className="w-5 h-5 text-amber-500 animate-pulse" />;
             case 'BUILDING':
             case 'DEPLOYING': return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />;
             default: return <Clock className="w-5 h-5 text-muted-foreground" />;
@@ -95,6 +129,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         switch (status) {
             case 'ACTIVE': return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30';
             case 'FAILED': return 'bg-red-500/10 text-red-500 border-red-500/30';
+            case 'REVIEW': return 'bg-amber-500/10 text-amber-500 border-amber-500/30';
             case 'BUILDING':
             case 'DEPLOYING': return 'bg-blue-500/10 text-blue-500 border-blue-500/30';
             default: return 'bg-muted text-muted-foreground border-border';
@@ -167,6 +202,39 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                         </div>
 
                                         <div className="flex items-center gap-2">
+                                            {/* Approve button for REVIEW */}
+                                            {d.status === 'REVIEW' && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                                                    onClick={(e) => { e.stopPropagation(); handleApprove(d); }}
+                                                    disabled={!!approvingId}
+                                                >
+                                                    {approvingId === d.id ? (
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                    ) : (
+                                                        <><CheckCheck className="w-4 h-4 mr-1" /> Approve</>
+                                                    )}
+                                                </Button>
+                                            )}
+                                            {/* Cancel button for QUEUED / REVIEW / BUILDING */}
+                                            {['QUEUED', 'REVIEW', 'BUILDING'].includes(d.status) && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                                                    onClick={(e) => { e.stopPropagation(); handleCancel(d); }}
+                                                    disabled={!!cancellingId}
+                                                >
+                                                    {cancellingId === d.id ? (
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                    ) : (
+                                                        <><Ban className="w-4 h-4 mr-1" /> Cancel</>
+                                                    )}
+                                                </Button>
+                                            )}
+                                            {/* Rollback for terminal states */}
                                             {['ACTIVE', 'FAILED', 'CANCELLED'].includes(d.status) && (
                                                 <Button
                                                     variant="ghost"
