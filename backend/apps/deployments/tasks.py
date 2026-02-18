@@ -385,7 +385,7 @@ def _escalate_to_ai(deployment, service, container_logs):
             f"Service: {service.name}\n"
             f"Deploy type: {service.deploy_type}\n"
             f"Image: {service.docker_image or 'built from git'}\n"
-            f"Git repo: {service.git_url}\n"
+            f"Git repo: {service.repository_url}\n"
             f"Env vars: {env_summary}\n\n"
             f"--- CONTAINER LOGS (last 200 lines) ---\n"
             f"{container_logs[-4000:]}\n"
