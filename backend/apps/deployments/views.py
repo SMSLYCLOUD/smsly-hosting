@@ -132,6 +132,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
 
+        # Clear health monitor restart state (ends exponential backoff)
+        from apps.deployments.services.health_monitor import reset_restart_state
+        reset_restart_state(str(service.id))
+
         # Stop active deployments first
         service.deployments.filter(
             status__in=[
