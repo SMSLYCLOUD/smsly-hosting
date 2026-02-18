@@ -39,12 +39,17 @@ except ImportError:
     soft_time_limit=7200,  # 2 hours (heavy deps: torch, playwright, transformers)
     time_limit=7500,       # 2h 5m hard kill
 )
-def smart_deploy_task(self, deployment_id: str, provider_id: str):
+def smart_deploy_task(self, deployment_id: str, provider_id: str,
+                     skip_review: bool = False):
     """
     Orchestrates a deployment using PipelineManager for build steps.
 
-    For fresh GIT deploys: runs analysis only, pauses at REVIEW status.
-    For rollbacks, restarts, and non-GIT: runs full pipeline immediately.
+    For fresh GIT deploys (manual): runs analysis only, pauses at REVIEW.
+    For rollbacks, restarts, webhooks, and non-GIT: runs full pipeline.
+
+    Args:
+        skip_review: If True, bypass the REVIEW gate (used by restarts,
+                     webhooks, and any automated deploy path).
     """
     # pylint: disable=too-many-locals
     deployment = None
@@ -61,11 +66,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         if service.deploy_type == 'GIT':
             manager = PipelineManager(deployment)
 
-            # Rollbacks/restarts → full pipeline (skip review)
-            if deployment.is_rollback:
+            # Skip review for: rollbacks, restarts, webhooks
+            if deployment.is_rollback or skip_review:
                 image_name = manager.run()
             else:
-                # Fresh deploy → analysis only, pause for review
+                # Fresh manual deploy → analysis only, pause for review
                 manager.run_analysis_only()
                 broadcast_status(deployment)
                 return  # Paused at REVIEW — user must approve
