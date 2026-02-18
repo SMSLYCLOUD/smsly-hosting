@@ -124,23 +124,39 @@ class LocalAdapter(BaseCloudAdapter):
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
-        # Docker-native healthcheck
-        docker_healthcheck = None
-        if healthcheck:
-            hc_port = env.get('PORT', '8000')
-            hc_path = healthcheck.get('path', '/health')
-            hc_interval = healthcheck.get('interval', 30)
+        # Docker-native healthcheck — CRITICAL for Traefik v3
+        # Traefik v3 filters containers that are unhealthy or still starting.
+        # We ALWAYS set a healthcheck so containers reach "healthy" quickly.
+        # Default: TCP port check (works with ANY app, no /health endpoint needed).
+        # If user provides a health_check_path, use HTTP check with TCP fallback.
+        hc_port = env.get('PORT', '8000')
+        if healthcheck and healthcheck.get('path'):
+            hc_path = healthcheck['path']
+            hc_interval = healthcheck.get('interval', 10)
             hc_timeout = healthcheck.get('timeout', 5)
             hc_retries = healthcheck.get('retries', 3)
-            docker_healthcheck = docker.types.Healthcheck(
-                # Use wget (available in alpine/slim) or python as fallback.
-                # curl is NOT available in most app images.
-                test=["CMD-SHELL", f"wget -qO- http://localhost:{hc_port}{hc_path} > /dev/null 2>&1 || python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:{hc_port}{hc_path}')\" 2>/dev/null || exit 1"],
-                interval=hc_interval * 1_000_000_000,   # nanoseconds
-                timeout=hc_timeout * 1_000_000_000,
-                retries=hc_retries,
-                start_period=10 * 1_000_000_000,        # 10s grace period
+            # HTTP check with TCP fallback: try the path first, fall back to port check
+            hc_cmd = (
+                f"python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:{hc_port}{hc_path}')\" 2>/dev/null "
+                f"|| python3 -c \"import socket; s=socket.create_connection(('localhost',{hc_port}),2); s.close()\" "
+                f"|| exit 1"
             )
+        else:
+            hc_interval = 10
+            hc_timeout = 3
+            hc_retries = 3
+            # TCP-only check: just verify the port is listening
+            hc_cmd = (
+                f"python3 -c \"import socket; s=socket.create_connection(('localhost',{hc_port}),2); s.close()\" "
+                f"|| exit 1"
+            )
+        docker_healthcheck = docker.types.Healthcheck(
+            test=["CMD-SHELL", hc_cmd],
+            interval=hc_interval * 1_000_000_000,
+            timeout=hc_timeout * 1_000_000_000,
+            retries=hc_retries,
+            start_period=5 * 1_000_000_000,  # 5s grace — most apps boot in <5s
+        )
 
         # Resource limits
         run_kwargs = {}
