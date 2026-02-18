@@ -63,7 +63,7 @@ export default function NewServicePage() {
   // Config state
   const [name, setName] = React.useState("")
   const [branch, setBranch] = React.useState("main")
-  const [buildpack, setBuildpack] = React.useState<BuildpackType>("NIXPACKS")
+  const [buildpack, setBuildpack] = React.useState<BuildpackType>("DOCKER")
   const [region, setRegion] = React.useState("us-east-1")
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)

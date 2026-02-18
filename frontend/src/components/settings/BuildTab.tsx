@@ -16,7 +16,7 @@ interface BuildTabProps {
 
 export function BuildTab({ service }: BuildTabProps) {
   const { toast } = useToast();
-  const [buildpack, setBuildpack] = useState<BuildpackType>(service.buildpack || 'NIXPACKS');
+  const [buildpack, setBuildpack] = useState<BuildpackType>(service.buildpack || 'DOCKER');
   const [rootDirectory, setRootDirectory] = useState(service.root_directory || '/');
   const [buildCommand, setBuildCommand] = useState(service.build_command || '');
   const [saving, setSaving] = useState(false);
