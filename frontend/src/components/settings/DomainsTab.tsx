@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Globe, Plus, Trash2, CheckCircle, XCircle, ExternalLink, RefreshCw, Copy, Loader2, ArrowRight } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 
-const CNAME_TARGET = 'cname.cloud.smsly.cloud';
+// CNAME target is derived per service from its public domain
 
 interface DomainStatus {
     domain: string;
@@ -174,12 +174,12 @@ export function DomainsTab({ service }: { service: Service }) {
                             Option 1: <strong>CNAME</strong> — for subdomains (e.g., app.yourdomain.com)
                         </p>
                         <div className="flex items-center gap-2 p-2 bg-background/60 rounded border border-border mb-3">
-                            <code className="text-sm font-mono text-primary flex-1">{CNAME_TARGET}</code>
+                            <code className="text-sm font-mono text-primary flex-1">{defaultDomain}</code>
                             <Button
                                 variant="ghost"
                                 size="icon"
                                 className="h-7 w-7"
-                                onClick={() => copyToClipboard(CNAME_TARGET)}
+                                onClick={() => copyToClipboard(defaultDomain)}
                             >
                                 <Copy size={14} />
                             </Button>
@@ -189,7 +189,7 @@ export function DomainsTab({ service }: { service: Service }) {
                             <ArrowRight size={12} />
                             <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">CNAME</span>
                             <ArrowRight size={12} />
-                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{CNAME_TARGET}</span>
+                            <span className="font-mono bg-muted/50 px-2 py-0.5 rounded">{defaultDomain}</span>
                         </div>
 
                         {/* Option 2: A Record (apex domains) */}
