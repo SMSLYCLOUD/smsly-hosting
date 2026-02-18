@@ -64,7 +64,8 @@ class PipelineManager:
 
     def run(self) -> str:
         """
-        Executes the full pipeline.
+        Executes the full pipeline (no review gate).
+        Used for rollbacks, restarts, and DOCKER/FUNCTION deploys.
         Returns: The final image tag/url.
         """
         try:
@@ -84,6 +85,165 @@ class PipelineManager:
             raise InfraError(f"Unexpected pipeline failure: {str(e)}") from e
         finally:
             self._cleanup()
+
+    def run_analysis_only(self) -> dict:
+        """
+        Phase 1: Clone + AI analysis + env scan + addon detection.
+        Pauses at REVIEW status so the user can review before building.
+        Returns: The review summary dict.
+        """
+        try:
+            self._setup()
+            self._clone_repo()
+            self._run_ai_analysis()
+            self._inject_env_vars()
+            self._auto_provision_addons()
+
+            # Build the review summary from what was detected
+            summary = self._build_review_summary()
+
+            # Save summary and pause
+            self.deployment.review_summary = summary
+            self.deployment.status = Deployment.Status.REVIEW
+            self.deployment.save(
+                update_fields=['review_summary', 'status']
+            )
+
+            update_stage(self.deployment, 'Review', 'waiting')
+            append_log(
+                self.deployment,
+                "\n⏸️ Deployment paused for review. "
+                "Approve to continue building.\n"
+            )
+
+            # NOTE: Don't cleanup — build_dir stays for run_build_only()
+            return summary
+
+        except PipelineError as e:
+            self._cleanup()  # Clean up on failure
+            raise e
+        except Exception as e:
+            self._cleanup()  # Clean up on failure
+            raise InfraError(
+                f"Analysis phase failure: {str(e)}"
+            ) from e
+
+    def run_build_only(self) -> str:
+        """
+        Phase 2: Build + Push (called after user approves review).
+        Assumes analysis phase already ran (source cloned, env set up).
+        Returns: The final image tag/url.
+        """
+        try:
+            # Re-attach to existing build dir from the analysis phase
+            self._setup_for_resume()
+
+            self._build_image()
+            self._push_image()
+            return self.image_name
+        except PipelineError as e:
+            raise e
+        except Exception as e:
+            raise InfraError(
+                f"Build phase failure: {str(e)}"
+            ) from e
+        finally:
+            self._cleanup()
+
+    def _setup_for_resume(self):
+        """Re-initialise state for phase 2 (build) from saved deployment data."""
+        import glob
+
+        # Find the build directory from phase 1
+        tmp_base = tempfile.gettempdir()
+        tmp_pattern = os.path.join(
+            tmp_base, f"build_{self.deployment.id}_*"
+        )
+        matches = glob.glob(tmp_pattern)
+        if not matches:
+            raise InfraError(
+                "Build directory from analysis phase not found. "
+                "The deployment may need to be restarted."
+            )
+
+        self.build_dir = matches[0]
+
+        # Find the cloned repo dir: look for a dir containing .git
+        subdirs = [
+            d for d in os.listdir(self.build_dir)
+            if os.path.isdir(os.path.join(self.build_dir, d))
+        ]
+        git_dirs = [
+            d for d in subdirs
+            if os.path.isdir(
+                os.path.join(self.build_dir, d, '.git')
+            )
+        ]
+        if git_dirs:
+            self.source_dir = os.path.join(self.build_dir, git_dirs[0])
+        elif subdirs:
+            self.source_dir = os.path.join(self.build_dir, subdirs[0])
+        else:
+            self.source_dir = self.build_dir
+
+        # Reload secrets for log redaction
+        env_vars = self.service.env_vars.all()
+        self.secret_values = [
+            env.value for env in env_vars
+            if getattr(env, "is_secret", False) or re.search(
+                r"(SECRET|TOKEN|PASSWORD|DSN|PRIVATE_KEY|API_KEY)",
+                str(getattr(env, "key", "") or ""),
+                re.IGNORECASE,
+            )
+        ]
+
+    def _build_review_summary(self) -> dict:
+        """Compile the review summary from current service+deployment state."""
+        service = self.service
+        service.refresh_from_db()
+
+        # Current resources
+        resources = {
+            'cpu_cores': float(service.cpu_cores),
+            'memory_mb': service.memory_mb,
+        }
+
+        # Env vars (mask secrets)
+        env_vars = []
+        for ev in service.env_vars.all().order_by('key'):
+            env_vars.append({
+                'key': ev.key,
+                'value': '********' if ev.is_secret else ev.value,
+                'is_secret': ev.is_secret,
+            })
+
+        # Extract issues from AI diagnosis
+        issues = []
+        if self.deployment.ai_diagnosis:
+            from apps.deployments.utils import (
+                parse_ai_resource_recommendation,
+            )
+            parsed = parse_ai_resource_recommendation(
+                self.deployment.ai_diagnosis
+            )
+            issues = parsed.get('issues', [])
+
+        # Active addons
+        from apps.deployments.models_addons import Addon
+        addons = list(
+            Addon.objects.filter(
+                service=service, status='ACTIVE'
+            ).values_list('addon_type', flat=True)
+        )
+
+        return {
+            'resources': resources,
+            'env_vars': env_vars,
+            'issues': issues,
+            'addons': addons,
+            'diagnosis': self.deployment.ai_diagnosis[:2000]
+            if self.deployment.ai_diagnosis else '',
+        }
 
     def _setup(self):
         """Initialize build environment."""

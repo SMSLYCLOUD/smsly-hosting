@@ -139,3 +139,18 @@ class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog
         fields = '__all__'
+
+
+class DeploymentApproveSerializer(serializers.Serializer):
+    """Accept optional overrides when approving a deployment review."""
+    cpu_cores = serializers.DecimalField(
+        max_digits=4, decimal_places=2, required=False,
+        help_text="Override CPU cores (0.25–4.0)")
+    memory_mb = serializers.IntegerField(
+        required=False,
+        help_text="Override memory in MB (256–8192)")
+    env_overrides = serializers.DictField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+        help_text="Dict of env var key→value to add/update before build")
+
