@@ -296,6 +296,7 @@ class Deployment(TimeStampedModel):
     class Status(models.TextChoices):
         """Deployment statuses."""
         QUEUED = 'QUEUED', _('Queued')
+        REVIEW = 'REVIEW', _('Review')
         BUILDING = 'BUILDING', _('Building')
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
@@ -326,6 +327,11 @@ class Deployment(TimeStampedModel):
 
     ai_diagnosis = models.TextField(
         blank=True, help_text="AI suggested fix for failure")
+
+    # Pre-deploy review: stores AI recommendations for user approval
+    review_summary = models.JSONField(
+        default=dict, blank=True,
+        help_text="AI-recommended resources, env vars, and issues for review")
 
     # Security
     vulnerability_report = models.JSONField(

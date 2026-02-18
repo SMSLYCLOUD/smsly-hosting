@@ -42,6 +42,9 @@ except ImportError:
 def smart_deploy_task(self, deployment_id: str, provider_id: str):
     """
     Orchestrates a deployment using PipelineManager for build steps.
+
+    For fresh GIT deploys: runs analysis only, pauses at REVIEW status.
+    For rollbacks, restarts, and non-GIT: runs full pipeline immediately.
     """
     # pylint: disable=too-many-locals
     deployment = None
@@ -57,7 +60,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         # 1. Build Phase (Pipeline)
         if service.deploy_type == 'GIT':
             manager = PipelineManager(deployment)
-            image_name = manager.run()
+
+            # Rollbacks/restarts → full pipeline (skip review)
+            if deployment.is_rollback:
+                image_name = manager.run()
+            else:
+                # Fresh deploy → analysis only, pause for review
+                manager.run_analysis_only()
+                broadcast_status(deployment)
+                return  # Paused at REVIEW — user must approve
 
         elif service.deploy_type == 'FUNCTION':
             image_name = _build_function(deployment, service)
@@ -68,12 +79,46 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str):
         else:
             raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
 
-        # 2. Deploy Phase
+        # 2. Deploy Phase (only reached for rollbacks/non-GIT)
         _deploy_container(deployment, provider, image_name)
 
     except PipelineError as e:
         _handle_failure(self, deployment, str(e), "Pipeline Failure")
     except Exception as e: # pylint: disable=broad-exception-caught
+        _handle_failure(self, deployment, str(e), "System Failure")
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    soft_time_limit=7200,
+    time_limit=7500,
+)
+def resume_deploy_task(self, deployment_id: str, provider_id: str):
+    """
+    Phase 2: Build + Deploy after user approves review.
+    Called when user hits POST /api/v1/deployments/{id}/approve/.
+    """
+    deployment = None
+    try:
+        deployment = Deployment.objects.get(id=deployment_id)
+        if deployment.status == Deployment.Status.CANCELLED:
+            logger.info("Deployment %s cancelled", deployment_id)
+            return
+
+        service = deployment.service
+        provider = CloudProvider.objects.get(id=provider_id)
+
+        # Build phase
+        manager = PipelineManager(deployment)
+        image_name = manager.run_build_only()
+
+        # Deploy phase
+        _deploy_container(deployment, provider, image_name)
+
+    except PipelineError as e:
+        _handle_failure(self, deployment, str(e), "Build Failure")
+    except Exception as e:  # pylint: disable=broad-exception-caught
         _handle_failure(self, deployment, str(e), "System Failure")
 
 
