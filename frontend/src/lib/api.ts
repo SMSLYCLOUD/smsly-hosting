@@ -161,6 +161,18 @@ export const servicesApi = {
     const response = await api.post(`/deployments/${deploymentId}/rollback/`);
     return response.data;
   },
+  cancelDeployment: async (deploymentId: string): Promise<any> => {
+    const response = await api.post(`/deployments/${deploymentId}/cancel/`);
+    return response.data;
+  },
+  approveDeployment: async (deploymentId: string, overrides?: {
+    cpu_cores?: number;
+    memory_mb?: number;
+    env_overrides?: Record<string, string>;
+  }): Promise<any> => {
+    const response = await api.post(`/deployments/${deploymentId}/approve/`, overrides || {});
+    return response.data;
+  },
 
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
