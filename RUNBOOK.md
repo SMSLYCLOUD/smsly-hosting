@@ -57,9 +57,16 @@ To update the platform to the latest version:
 ```bash
 cd /opt/smsly-hosting
 git pull origin main
-docker compose -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
+
+# Full rebuild (both compose files required)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+
+# Run migrations
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python manage.py migrate
 ```
+
+> **Important**: Always use `down` + `up --force-recreate` instead of just `up --build`. This prevents Nginx DNS cache issues where Nginx holds stale container IPs after a rebuild. See [502 Bad Gateway](#502-bad-gateway-after-rebuild) below.
 
 ### Database Backup
 
@@ -81,6 +88,55 @@ gunzip -c /opt/smsly-hosting/backups/smsly_hosting_YYYYMMDD.sql.gz | \
 ---
 
 ## Troubleshooting
+
+### 502 Bad Gateway After Rebuild
+
+**Symptoms**: Frontend loads fine but all `/api/` requests return 502. Backend container shows healthy in `docker ps`.
+
+**Root cause**: Nginx cached the old backend container IP. When the backend was rebuilt, it got a new Docker network IP, but Nginx wasn't restarted and still points at the old (dead) IP.
+
+**Diagnosis**:
+```bash
+# Check Nginx error logs — look for "Connection refused" or "Connection reset by peer"
+docker logs smsly-hosting-nginx-1 --tail 20 2>&1 | grep error
+
+# You'll see something like:
+# connect() failed (111: Connection refused) while connecting to upstream,
+# upstream: "http://10.0.1.14:8000/..."
+# ← This IP no longer exists
+```
+
+**Fix**:
+```bash
+# Option 1: Quick fix — restart just Nginx
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart nginx
+
+# Option 2: Full fix — recreate everything (preferred)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+```
+
+**Prevention**: Always use `down` + `up --force-recreate` when rebuilding services. Never rebuild just the backend without also restarting Nginx.
+
+### 429 Too Many Requests
+
+**Symptoms**: Dashboard actions fail with "Too Many Requests" error.
+
+**Root cause**: Two rate limiting layers — middleware (IP-based) and DRF throttle (user-based).
+
+**Diagnosis**:
+```bash
+# Check which layer is throttling
+docker logs smsly-hosting-backend-1 --tail 50 2>&1 | grep -i "rate limit"
+```
+
+**Current limits** (as of 2026-02-18):
+- Middleware: 1000 req/60s per IP (anonymous only, skips authenticated users)
+- DRF `user` throttle: 5000/hour (~83/min)
+- DRF `deployments` throttle: 10/hour
+- DRF `deployment_burst` throttle: 3/minute
+
+**Fix**: If legitimate users are being throttled, bump rates in `backend/config/settings.py` → `DEFAULT_THROTTLE_RATES`.
 
 ### Dashboard Not Accessible on Port 8090
 
