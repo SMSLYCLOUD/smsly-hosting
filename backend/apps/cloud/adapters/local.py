@@ -75,10 +75,15 @@ class LocalAdapter(BaseCloudAdapter):
             self.docker_client.networks.create(network_name, driver="bridge")
 
         # Mesh / Service Discovery
-        # NOTE: Do NOT use networking_config with containers.run() — it conflicts
-        # with the network= kwarg and causes Docker to attach to the wrong network,
-        # breaking Traefik discovery. Use network= only; aliases are set post-run.
-        network_aliases = [name, f"{name}.{project_id}.internal"]
+        # IMPORTANT: Use networking_config with containers.create() + container.start()
+        # instead of containers.run(network=...). This ensures the container is on
+        # smsly-net from the very first moment Traefik inspects it, avoiding the
+        # race condition where Traefik sees the container before net.connect() runs.
+        networking_config = self.docker_client.api.create_networking_config({
+            network_name: self.docker_client.api.create_endpoint_config(
+                aliases=[name, f"{name}.{project_id}.internal"]
+            )
+        })
 
         # Prepare Volumes
         docker_volumes = {}
@@ -147,25 +152,21 @@ class LocalAdapter(BaseCloudAdapter):
             run_kwargs['cpu_period'] = 100000
             run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
 
-        container = self.docker_client.containers.run(
+        # Use create() + start() so networking_config is applied at creation time.
+        # This guarantees the container is on smsly-net before Traefik inspects it.
+        container = self.docker_client.containers.create(
             image,
             name=name,
             environment=env,
-            detach=True,
             network=network_name,
+            networking_config=networking_config,
             labels=labels,
             volumes=docker_volumes if docker_volumes else None,
             healthcheck=docker_healthcheck,
             restart_policy={"Name": restart_policy} if restart_policy != 'no' else None,
             **run_kwargs
         )
-
-        # Set network aliases post-run (cannot use networking_config alongside network=)
-        try:
-            net = self.docker_client.networks.get(network_name)
-            net.connect(container, aliases=network_aliases)
-        except Exception as alias_err:
-            logger.warning("Failed to set network aliases for %s: %s", name, alias_err)
+        container.start()
 
         return container.id
 
