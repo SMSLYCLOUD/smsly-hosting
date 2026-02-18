@@ -17,8 +17,10 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks()
 
 # Explicitly register tasks defined outside of tasks.py files
+# (autodiscover_tasks only finds tasks.py, not tasks_metrics.py etc.)
 import apps.deployments.services.autoscaler  # noqa: F401
 import apps.deployments.services.health_monitor  # noqa: F401
+import apps.deployments.tasks_metrics  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
