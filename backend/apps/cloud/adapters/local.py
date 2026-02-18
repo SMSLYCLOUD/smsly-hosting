@@ -75,11 +75,10 @@ class LocalAdapter(BaseCloudAdapter):
             self.docker_client.networks.create(network_name, driver="bridge")
 
         # Mesh / Service Discovery
-        networking_config = self.docker_client.api.create_networking_config({
-            network_name: self.docker_client.api.create_endpoint_config(
-                aliases=[name, f"{name}.{project_id}.internal"]
-            )
-        })
+        # NOTE: Do NOT use networking_config with containers.run() — it conflicts
+        # with the network= kwarg and causes Docker to attach to the wrong network,
+        # breaking Traefik discovery. Use network= only; aliases are set post-run.
+        network_aliases = [name, f"{name}.{project_id}.internal"]
 
         # Prepare Volumes
         docker_volumes = {}
@@ -129,7 +128,9 @@ class LocalAdapter(BaseCloudAdapter):
             hc_timeout = healthcheck.get('timeout', 5)
             hc_retries = healthcheck.get('retries', 3)
             docker_healthcheck = docker.types.Healthcheck(
-                test=["CMD-SHELL", f"curl -sf http://localhost:{hc_port}{hc_path} || exit 1"],
+                # Use wget (available in alpine/slim) or python as fallback.
+                # curl is NOT available in most app images.
+                test=["CMD-SHELL", f"wget -qO- http://localhost:{hc_port}{hc_path} > /dev/null 2>&1 || python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:{hc_port}{hc_path}')\" 2>/dev/null || exit 1"],
                 interval=hc_interval * 1_000_000_000,   # nanoseconds
                 timeout=hc_timeout * 1_000_000_000,
                 retries=hc_retries,
@@ -154,11 +155,18 @@ class LocalAdapter(BaseCloudAdapter):
             network=network_name,
             labels=labels,
             volumes=docker_volumes if docker_volumes else None,
-            networking_config=networking_config,
             healthcheck=docker_healthcheck,
             restart_policy={"Name": restart_policy} if restart_policy != 'no' else None,
             **run_kwargs
         )
+
+        # Set network aliases post-run (cannot use networking_config alongside network=)
+        try:
+            net = self.docker_client.networks.get(network_name)
+            net.connect(container, aliases=network_aliases)
+        except Exception as alias_err:
+            logger.warning("Failed to set network aliases for %s: %s", name, alias_err)
+
         return container.id
 
     def _deploy_k8s(self, name: str, image: str,
