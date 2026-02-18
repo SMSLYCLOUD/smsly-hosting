@@ -127,27 +127,30 @@ class LocalAdapter(BaseCloudAdapter):
         # Docker-native healthcheck — CRITICAL for Traefik v3
         # Traefik v3 filters containers that are unhealthy or still starting.
         # We ALWAYS set a healthcheck so containers reach "healthy" quickly.
-        # Default: TCP port check (works with ANY app, no /health endpoint needed).
-        # If user provides a health_check_path, use HTTP check with TCP fallback.
+        # IMPORTANT: Use universal commands (wget/curl/shell) — NOT python3.
+        # Python3 is not available in Node.js, Go, Rust, or static containers.
         hc_port = env.get('PORT', '8000')
         if healthcheck and healthcheck.get('path'):
             hc_path = healthcheck['path']
             hc_interval = healthcheck.get('interval', 10)
             hc_timeout = healthcheck.get('timeout', 5)
             hc_retries = healthcheck.get('retries', 3)
-            # HTTP check with TCP fallback: try the path first, fall back to port check
+            # HTTP check: try wget (Alpine/Debian), then curl, then TCP fallback
             hc_cmd = (
-                f"python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:{hc_port}{hc_path}')\" 2>/dev/null "
-                f"|| python3 -c \"import socket; s=socket.create_connection(('localhost',{hc_port}),2); s.close()\" "
+                f"wget -q -O /dev/null http://localhost:{hc_port}{hc_path} 2>/dev/null "
+                f"|| curl -sf http://localhost:{hc_port}{hc_path} >/dev/null 2>&1 "
+                f"|| (echo >/dev/tcp/localhost/{hc_port}) 2>/dev/null "
                 f"|| exit 1"
             )
         else:
             hc_interval = 10
             hc_timeout = 3
             hc_retries = 3
-            # TCP-only check: just verify the port is listening
+            # TCP-only check: works in any container with bash or BusyBox
             hc_cmd = (
-                f"python3 -c \"import socket; s=socket.create_connection(('localhost',{hc_port}),2); s.close()\" "
+                f"wget -q -O /dev/null http://localhost:{hc_port}/ 2>/dev/null "
+                f"|| curl -sf http://localhost:{hc_port}/ >/dev/null 2>&1 "
+                f"|| (echo >/dev/tcp/localhost/{hc_port}) 2>/dev/null "
                 f"|| exit 1"
             )
         docker_healthcheck = docker.types.Healthcheck(
