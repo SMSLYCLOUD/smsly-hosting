@@ -1,6 +1,7 @@
 """
 Utility functions for deployment tasks.
 """
+import json
 import logging
 import os
 import re
@@ -11,6 +12,124 @@ from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+# ── Resource size heuristics (by dependency weight) ─────────────────────
+# Maps heavy Python packages to recommended minimum resources.
+_HEAVY_DEPS = {
+    'torch': (1.0, 2048), 'pytorch': (1.0, 2048),
+    'tensorflow': (1.0, 2048), 'transformers': (1.0, 1536),
+    'playwright': (0.5, 1024), 'selenium': (0.5, 1024),
+    'pandas': (0.5, 1024), 'numpy': (0.5, 768),
+    'scipy': (0.5, 1024), 'scikit-learn': (0.5, 1024),
+    'opencv-python': (0.5, 1024), 'pillow': (0.25, 768),
+    'spacy': (0.5, 1024), 'celery': (0.25, 768),
+}
+
+
+def parse_ai_resource_recommendation(ai_response: str) -> dict:
+    """
+    Extract structured JSON from an AI analysis response.
+
+    Handles responses that may include markdown code blocks.
+    Returns a safe dict with keys: resources, required_env_vars, issues, diagnosis.
+    Returns empty dict on parse failure (non-blocking).
+    """
+    if not ai_response:
+        return {}
+
+    try:
+        # Try to find JSON inside ```json ... ``` blocks first
+        json_match = re.search(
+            r'```(?:json)?\s*\n?(.*?)\n?\s*```',
+            ai_response,
+            re.DOTALL
+        )
+        if json_match:
+            raw = json_match.group(1).strip()
+        else:
+            # Try to find a raw JSON object
+            brace_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+            if brace_match:
+                raw = brace_match.group(0)
+            else:
+                return {}
+
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return {}
+
+        # Validate and sanitise
+        result = {}
+
+        # Resources
+        res = parsed.get('resources', {})
+        if isinstance(res, dict):
+            cpu = res.get('cpu_cores')
+            mem = res.get('memory_mb')
+            if cpu is not None or mem is not None:
+                result['resources'] = {}
+                if isinstance(cpu, (int, float)) and 0.1 <= cpu <= 16:
+                    result['resources']['cpu_cores'] = round(float(cpu), 2)
+                if isinstance(mem, (int, float)) and 128 <= mem <= 32768:
+                    result['resources']['memory_mb'] = int(mem)
+
+        # Required env vars
+        env = parsed.get('required_env_vars', {})
+        if isinstance(env, dict):
+            result['required_env_vars'] = {
+                str(k): str(v) for k, v in env.items()
+                if isinstance(k, str) and k.strip()
+            }
+
+        # Issues (list of strings)
+        issues = parsed.get('issues', [])
+        if isinstance(issues, list):
+            result['issues'] = [str(i) for i in issues[:10]]
+
+        # Diagnosis (free text)
+        diag = parsed.get('diagnosis', '')
+        if isinstance(diag, str):
+            result['diagnosis'] = diag[:5000]
+
+        return result
+
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        logger.debug("Failed to parse AI resource recommendation: %s", e)
+        return {}
+
+
+def estimate_resources_from_deps(source_dir: str) -> dict:
+    """
+    Quick heuristic: scan requirements.txt / package.json for heavy deps
+    and return recommended minimum resources.
+
+    Returns: {'cpu_cores': float, 'memory_mb': int} or empty dict.
+    """
+    max_cpu = 0.0
+    max_mem = 0
+
+    # Python deps
+    for req_file in ('requirements.txt', 'requirements/base.txt',
+                     'requirements/production.txt'):
+        path = os.path.join(source_dir, req_file)
+        if os.path.isfile(path):
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        pkg = (line.strip().split('==')[0].split('>=')[0]
+                               .split('<=')[0].split('[')[0].split('#')[0]
+                               .strip().lower())
+                        if pkg in _HEAVY_DEPS:
+                            cpu, mem = _HEAVY_DEPS[pkg]
+                            max_cpu = max(max_cpu, cpu)
+                            max_mem = max(max_mem, mem)
+            except OSError:
+                pass
+
+    if max_cpu > 0 or max_mem > 0:
+        return {'cpu_cores': max_cpu, 'memory_mb': max_mem}
+    return {}
 
 
 def extract_dockerfile_arg_names(dockerfile_path: str) -> set[str]:

@@ -25,7 +25,9 @@ from apps.deployments.utils import (
     get_github_oauth_token_for_user,
     get_default_env_value,
     extract_dockerfile_arg_names,
-    redact_values
+    redact_values,
+    parse_ai_resource_recommendation,
+    estimate_resources_from_deps,
 )
 from services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
@@ -161,7 +163,7 @@ class PipelineManager:
             raise BuildError(f"Clone failed: {str(e)}") from e
 
     def _run_ai_analysis(self):
-        """Step 1.5: AI Analysis (Non-blocking)."""
+        """Step 1.5: AI Analysis → structured resource + env var recommendations."""
         try:
             # pylint: disable=import-outside-toplevel
             from apps.intelligence.providers import ask_with_fallback
@@ -171,23 +173,185 @@ class PipelineManager:
             ai_context = scanner.build_ai_context()
 
             prompt = (
-                f"Analyze this repo for deployment.\n"
+                f"Analyze this repo for deployment on CloudNeuron (Docker-based PaaS).\n"
                 f"Service: {self.service.name}\n"
-                f"Stack Context:\n{ai_context}\n"
-                f"Identify potential deployment issues concisely."
+                f"Current resources: {self.service.cpu_cores} CPU, "
+                f"{self.service.memory_mb}MB RAM\n"
+                f"Stack Context:\n{ai_context}\n\n"
+                f"Return ONLY a JSON object (no extra text):\n"
+                f'{{\n'
+                f'  "resources": {{"cpu_cores": <float 0.25-4.0>, '
+                f'"memory_mb": <int 256-8192>}},\n'
+                f'  "required_env_vars": {{"VAR_NAME": '
+                f'"default_value_or_empty_string"}},\n'
+                f'  "issues": ["potential deployment issue 1", ...],\n'
+                f'  "diagnosis": "Brief free-text analysis"\n'
+                f'}}\n\n'
+                f"Rules:\n"
+                f"- For required_env_vars, include ALL env vars the app "
+                f"needs to start.\n"
+                f"- Set sensible defaults where possible (e.g. "
+                f"AI_PROVIDER=auto, DEBUG=false).\n"
+                f"- Leave value as empty string for secrets the user must "
+                f"provide (API keys etc).\n"
+                f"- For resources, recommend based on the dependencies "
+                f"(ML libs need more RAM).\n"
             )
+
             response, provider = ask_with_fallback(prompt)
 
+            # Store the raw AI response
             self.deployment.ai_diagnosis = response
             self.deployment.save(update_fields=['ai_diagnosis'])
-            append_log(self.deployment, f"\n🤖 AI Analysis ({provider}):\n{response}\n")
+            append_log(
+                self.deployment,
+                f"\n🤖 AI Analysis ({provider}) complete.\n"
+            )
 
-        except Exception as e: # pylint: disable=broad-exception-caught
+            # Parse structured recommendations
+            recommendation = parse_ai_resource_recommendation(response)
+
+            if recommendation:
+                # Apply resource upgrades
+                self._apply_resource_recommendations(
+                    recommendation.get('resources', {})
+                )
+
+                # Auto-inject AI-detected env vars
+                ai_env_vars = recommendation.get('required_env_vars', {})
+                if ai_env_vars:
+                    self._inject_ai_env_vars(ai_env_vars)
+
+                # Log issues
+                for issue in recommendation.get('issues', []):
+                    append_log(
+                        self.deployment,
+                        f"  ⚠️ {issue}\n"
+                    )
+            else:
+                append_log(
+                    self.deployment,
+                    "  ℹ️ AI returned unstructured response, "
+                    "using heuristic fallback.\n"
+                )
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("AI analysis failed: %s", e)
             append_log(self.deployment, "\n🤖 AI analysis skipped.\n")
 
+        # Always run fast heuristic fallback (catches heavy deps
+        # even if AI is unavailable or returns bad JSON)
+        if self.source_dir:
+            self._apply_heuristic_resources()
+
+    def _apply_resource_recommendations(self, resources: dict):
+        """Apply AI resource recommendations (only increase, never decrease)."""
+        if not resources:
+            return
+
+        updated_fields = []
+        cpu = resources.get('cpu_cores')
+        mem = resources.get('memory_mb')
+
+        if cpu and float(cpu) > float(self.service.cpu_cores):
+            old = self.service.cpu_cores
+            self.service.cpu_cores = cpu
+            updated_fields.append('cpu_cores')
+            append_log(
+                self.deployment,
+                f"  📈 CPU: {old} → {cpu} cores (AI recommendation)\n"
+            )
+
+        if mem and int(mem) > self.service.memory_mb:
+            old = self.service.memory_mb
+            self.service.memory_mb = mem
+            updated_fields.append('memory_mb')
+            append_log(
+                self.deployment,
+                f"  📈 RAM: {old}MB → {mem}MB (AI recommendation)\n"
+            )
+
+        if updated_fields:
+            self.service.save(update_fields=updated_fields)
+
+    def _apply_heuristic_resources(self):
+        """Fast fallback: scan deps for heavy packages and boost resources."""
+        heuristic = estimate_resources_from_deps(self.source_dir)
+        if not heuristic:
+            return
+
+        updated_fields = []
+        cpu = heuristic.get('cpu_cores', 0)
+        mem = heuristic.get('memory_mb', 0)
+
+        if cpu > float(self.service.cpu_cores):
+            self.service.cpu_cores = cpu
+            updated_fields.append('cpu_cores')
+
+        if mem > self.service.memory_mb:
+            self.service.memory_mb = mem
+            updated_fields.append('memory_mb')
+
+        if updated_fields:
+            self.service.save(update_fields=updated_fields)
+            append_log(
+                self.deployment,
+                f"  🔧 Resources auto-adjusted from dependency scan: "
+                f"{self.service.cpu_cores} CPU, "
+                f"{self.service.memory_mb}MB RAM\n"
+            )
+
+    def _inject_ai_env_vars(self, ai_env_vars: dict):
+        """Inject env vars recommended by AI analysis."""
+        injected = 0
+        warned = 0
+
+        for key, default_val in ai_env_vars.items():
+            key = key.strip().upper()
+            if not key:
+                continue
+
+            # Skip if already set by the user
+            if EnvironmentVariable.objects.filter(
+                service=self.service, key=key
+            ).exists():
+                continue
+
+            if default_val and default_val.strip():
+                # Has a sensible default → inject it
+                EnvironmentVariable.objects.create(
+                    service=self.service,
+                    key=key,
+                    value=default_val.strip(),
+                    is_secret=False
+                )
+                injected += 1
+                append_log(
+                    self.deployment,
+                    f"  🔧 Auto-set {key}={default_val}\n"
+                )
+            else:
+                # Empty value = secret the user must provide
+                warned += 1
+                append_log(
+                    self.deployment,
+                    f"  ⚠️ Missing required env var: {key} "
+                    f"(set this in Service → Settings)\n"
+                )
+
+        if injected:
+            append_log(
+                self.deployment,
+                f"\n  ✅ Auto-injected {injected} env var(s) from AI analysis.\n"
+            )
+        if warned:
+            append_log(
+                self.deployment,
+                f"  🔴 {warned} env var(s) need manual setup!\n"
+            )
+
     def _inject_env_vars(self):
-        """Step 1.6: Auto-inject env vars."""
+        """Step 1.6: Auto-inject env vars from code scanning."""
         try:
             # pylint: disable=import-outside-toplevel
             from apps.intelligence.scanner import RepoScanner
