@@ -816,6 +816,7 @@ class PipelineManager:
             "docker", "build",
             "-t", self.image_name,
             "-f", dockerfile_path,
+            "--load",  # Ensure image is loaded into Docker (required for docker-container buildx driver)
             "--cache-from", self.image_name,
             *build_args,
             context_dir
