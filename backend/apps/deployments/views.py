@@ -157,7 +157,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             commit_message='Service restart',
         )
 
-        smart_deploy_task.delay(str(deployment.id), str(provider.id))
+        smart_deploy_task.delay(str(deployment.id), str(provider.id),
+                               skip_review=True)
 
         AuditLog(
             actor=request.user.get_username(),
@@ -576,6 +577,18 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         deployment.finished_at = timezone.now()
         deployment.build_logs += "\n\n[CANCELLED] Deployment cancelled by user."
         deployment.save()
+
+        # Clean up orphaned build dir from analysis phase (REVIEW status only)
+        if deployment.status == Deployment.Status.CANCELLED:
+            import glob
+            import shutil
+            import tempfile
+            tmp_pattern = os.path.join(
+                tempfile.gettempdir(),
+                f"build_{deployment.id}_*"
+            )
+            for d in glob.glob(tmp_pattern):
+                shutil.rmtree(d, ignore_errors=True)
 
         return Response(DeploymentSerializer(deployment).data)
 

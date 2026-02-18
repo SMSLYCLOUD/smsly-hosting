@@ -74,7 +74,8 @@ class GitHubWebhookHandler:
                 service.provider.id) if service.provider else None
 
             if provider_id:
-                smart_deploy_task.delay(str(deployment.id), provider_id)
+                smart_deploy_task.delay(str(deployment.id), provider_id,
+                                       skip_review=True)
                 triggered_count += 1
             else:
                 logger.warning(
@@ -170,7 +171,8 @@ class GitHubWebhookHandler:
         provider_id = str(
             preview_service.provider.id) if preview_service.provider else None
         if provider_id:
-            smart_deploy_task.delay(str(deployment.id), provider_id)
+            smart_deploy_task.delay(str(deployment.id), provider_id,
+                                   skip_review=True)
             return 1
         return 0
 
