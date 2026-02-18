@@ -202,21 +202,21 @@ services:
   traefik:
     image: traefik:v3.4
     restart: unless-stopped
-    environment:
-      # Force Docker client API version to match the Engine (v1.44+ required)
-      DOCKER_API_VERSION: "1.45"
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=smsly-net"
-      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
+      # Direct socket mount — socket-proxy is incompatible with Docker 29+ API negotiation
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       - "--entrypoints.web.address=:80"
       - "--log.level=WARN"
     ports:
       - "127.0.0.1:8081:80"      # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
       - "127.0.0.1:8082:8080"    # Traefik dashboard (optional debug)
-    depends_on:
-      - socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
     networks:
       - smsly-net
     deploy:
