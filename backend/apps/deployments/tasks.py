@@ -222,13 +222,212 @@ def _deploy_container(deployment, provider, image_name):
         broadcast_status(deployment)
         append_log(deployment, f"✓ Deployment successful! ID: {resource.resource_id}\n")
 
+        # ── Real-Time Post-Deploy Health Monitor ──
+        # Monitor container logs for ~30s to catch runtime crashes early
+        _post_deploy_monitor.delay(
+            str(deployment.id),
+            str(provider.id),
+            resource.resource_id,
+            image_name,
+        )
+
     except Exception as e:
         update_stage(deployment, 'Deploy', 'failed')
         raise e
 
 
+@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
+def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
+                         image_name):
+    """
+    Real-time post-deploy health monitor.
+
+    Watches container logs for 30s after deploy. If the container crashes:
+    1. Pattern resolver scans logs instantly for known errors (no API call)
+    2. If a pattern matches and has an auto-fix → fix + auto-redeploy
+    3. If patterns can't explain → escalate to AI models with code context
+    """
+    import time
+    import docker
+
+    try:
+        deployment = Deployment.objects.get(id=deployment_id)
+        service = deployment.service
+    except Deployment.DoesNotExist:
+        return
+
+    try:
+        client = docker.from_env()
+    except Exception:
+        logger.warning("Docker not available for post-deploy monitor")
+        return
+
+    append_log(deployment, "\n🔍 Post-deploy health monitor active (30s)...\n")
+    broadcast_status(deployment)
+
+    # Poll container status for 30 seconds
+    crash_detected = False
+    container_logs = ""
+    for check in range(6):  # 6 checks × 5s = 30s
+        time.sleep(5)
+
+        try:
+            container = client.containers.get(container_id)
+            status = container.status  # running, exited, restarting, dead
+            container_logs = container.logs(tail=200).decode(
+                'utf-8', errors='replace'
+            )
+
+            if status in ('exited', 'dead'):
+                crash_detected = True
+                append_log(
+                    deployment,
+                    f"\n🔴 Container crashed (status: {status}) "
+                    f"after {(check + 1) * 5}s\n"
+                )
+                break
+
+            if status == 'restarting':
+                # Wait one more cycle to see if it stabilises
+                if check >= 2:
+                    crash_detected = True
+                    append_log(
+                        deployment,
+                        f"\n🔴 Container stuck in restart loop "
+                        f"after {(check + 1) * 5}s\n"
+                    )
+                    break
+
+        except docker.errors.NotFound:
+            crash_detected = True
+            append_log(deployment, "\n🔴 Container disappeared after deploy\n")
+            break
+        except Exception as e:
+            logger.warning("Monitor check failed: %s", e)
+            continue
+
+    if not crash_detected:
+        append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
+        broadcast_status(deployment)
+        return
+
+    # ── CRASH DETECTED — Run real-time diagnosis ──
+    deployment.refresh_from_db()
+
+    # Step 1: Pattern resolver (instant, no API call)
+    from apps.deployments.services.error_resolver import diagnose_runtime_logs
+    results = diagnose_runtime_logs(
+        container_logs,
+        service=service,
+        deployment=deployment,
+        auto_apply=True,
+    )
+
+    auto_fixed = [r for r in results if r.get('auto_fixed')]
+
+    if auto_fixed:
+        # Auto-fix applied — trigger automatic redeploy
+        append_log(
+            deployment,
+            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed. "
+            f"Triggering automatic redeploy...\n"
+        )
+        deployment.status = 'FAILED'
+        deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+        deployment.save()
+        broadcast_status(deployment)
+
+        # Create a new deployment with the fix applied
+        new_deployment = Deployment.objects.create(
+            service=service,
+            status='QUEUED',
+            commit_hash=deployment.commit_hash,
+            commit_message=f"[auto-fix] {', '.join(r['category'] for r in auto_fixed)}",
+            is_rollback=False,
+        )
+        provider = CloudProvider.objects.get(id=provider_id)
+        smart_deploy_task.delay(
+            str(new_deployment.id), str(provider.id), skip_review=True
+        )
+        return
+
+    # Step 2: No pattern match — escalate to AI models
+    _escalate_to_ai(deployment, service, container_logs)
+
+    # Mark deployment as failed
+    deployment.status = 'FAILED'
+    deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+    deployment.finished_at = timezone.now()
+    deployment.save()
+    broadcast_status(deployment)
+
+
+def _escalate_to_ai(deployment, service, container_logs):
+    """
+    Escalate an unknown runtime error to AI models with full code context.
+    Uses all configured AI providers via ask_with_fallback.
+    """
+    try:
+        from apps.intelligence.providers import ask_with_fallback
+
+        # Build rich context: logs + service info + env vars (masked)
+        env_summary = ", ".join(
+            f"{ev.key}={'***' if ev.is_secret else ev.value}"
+            for ev in service.env_vars.all()
+        )
+
+        prompt = (
+            f"A deployed container for service '{service.name}' crashed immediately "
+            f"after deployment. Analyze the logs and provide:\n"
+            f"1. Root cause of the crash\n"
+            f"2. Specific fix (env var to add, config to change, code to fix)\n"
+            f"3. Whether this can be auto-fixed by the platform\n\n"
+            f"Service: {service.name}\n"
+            f"Deploy type: {service.deploy_type}\n"
+            f"Image: {service.docker_image or 'built from git'}\n"
+            f"Git repo: {service.git_url}\n"
+            f"Env vars: {env_summary}\n\n"
+            f"--- CONTAINER LOGS (last 200 lines) ---\n"
+            f"{container_logs[-4000:]}\n"
+            f"--- END LOGS ---\n\n"
+            f"Return a JSON object:\n"
+            f'{{\n'
+            f'  "root_cause": "Brief description",\n'
+            f'  "fix": "Specific actionable fix",\n'
+            f'  "env_vars_needed": {{"KEY": "value_or_empty"}},\n'
+            f'  "auto_fixable": true/false,\n'
+            f'  "severity": "critical/warning/info"\n'
+            f'}}\n'
+        )
+
+        response, provider_name = ask_with_fallback(prompt)
+        deployment.ai_diagnosis = response
+        deployment.save(update_fields=['ai_diagnosis'])
+
+        append_log(
+            deployment,
+            f"\n🤖 AI Diagnosis ({provider_name}):\n{response[:2000]}\n"
+        )
+
+        # Try to parse and auto-apply AI suggestions
+        from apps.deployments.utils import parse_ai_resource_recommendation
+        parsed = parse_ai_resource_recommendation(response)
+        if parsed and parsed.get('env_vars_needed'):
+            from apps.deployments.services.error_resolver import _apply_fix
+            fix = {'env': parsed['env_vars_needed']}
+            import re as _re
+            action = _apply_fix(fix, _re.match('', ''), '', service, deployment)
+            if action:
+                append_log(deployment, f"  ✅ AI-suggested fix applied: {action}\n")
+
+    except Exception as e:
+        logger.warning("AI escalation failed for deployment %s: %s",
+                       deployment.id, e)
+        append_log(deployment, f"\n🤖 AI diagnosis unavailable: {e}\n")
+
+
 def _handle_failure(task, deployment, error_msg, reason):
-    """Centralized failure handling."""
+    """Centralized failure handling with pattern resolver + AI escalation."""
     logger.error("%s: %s", reason, error_msg)
 
     if deployment:
@@ -240,6 +439,21 @@ def _handle_failure(task, deployment, error_msg, reason):
             deployment.save()
             broadcast_status(deployment)
 
+            # Step 1: Pattern resolver on build logs (instant)
+            try:
+                from apps.deployments.services.error_resolver import (
+                    diagnose_runtime_logs,
+                )
+                diagnose_runtime_logs(
+                    deployment.build_logs,
+                    service=deployment.service,
+                    deployment=deployment,
+                    auto_apply=True,
+                )
+            except Exception as e:
+                logger.warning("Pattern resolver failed: %s", e)
+
+            # Step 2: AI diagnosis (async)
             if analyze_failure_task:
                 analyze_failure_task.delay(str(deployment.id))
 
