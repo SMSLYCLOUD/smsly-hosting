@@ -375,6 +375,13 @@ class Deployment(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        # When a deployment becomes ACTIVE, deactivate all other ACTIVE
+        # deployments for the same service (only one can be live at a time).
+        if self.status == self.Status.ACTIVE and self.service_id:
+            Deployment.objects.filter(
+                service_id=self.service_id,
+                status=self.Status.ACTIVE,
+            ).exclude(pk=self.pk).update(status=self.Status.CANCELLED)
         super().save(*args, **kwargs)
 
 

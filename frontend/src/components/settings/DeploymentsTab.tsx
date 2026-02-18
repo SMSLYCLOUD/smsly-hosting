@@ -168,14 +168,15 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                             No deployments found.
                         </div>
                     ) : (
-                        deployments.map((d) => {
+                        deployments.map((d, idx) => {
                             const isExpanded = expandedId === d.id;
+                            const isLive = d.status === 'ACTIVE' && idx === deployments.findIndex(x => x.status === 'ACTIVE');
                             const details = expandedDetails[d.id] || d;
                             return (
                                 <div key={d.id}>
                                     {/* Clickable Row */}
                                     <div
-                                        className="p-4 flex items-center justify-between hover:bg-muted/30 transition-colors cursor-pointer"
+                                        className={`p-4 flex items-center justify-between hover:bg-muted/30 transition-colors cursor-pointer ${isLive ? 'bg-emerald-500/5 border-l-2 border-l-emerald-500' : ''}`}
                                         onClick={() => toggleExpand(d)}
                                     >
                                         <div className="flex items-center gap-4">
@@ -184,9 +185,16 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-bold uppercase px-2 py-0.5 rounded text-[10px] border ${getStatusColor(d.status)}`}>
-                                                        {d.status}
-                                                    </span>
+                                                    {isLive ? (
+                                                        <span className="text-sm font-bold uppercase px-2.5 py-0.5 rounded text-[10px] border bg-emerald-500 text-white border-emerald-600 flex items-center gap-1.5">
+                                                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                                            LIVE
+                                                        </span>
+                                                    ) : (
+                                                        <span className={`text-sm font-bold uppercase px-2 py-0.5 rounded text-[10px] border ${getStatusColor(d.status)}`}>
+                                                            {d.status}
+                                                        </span>
+                                                    )}
                                                     <span className="text-xs text-muted-foreground">
                                                         {d.created_at ? formatDistanceToNow(new Date(d.created_at), { addSuffix: true }) : 'Unknown time'}
                                                     </span>
