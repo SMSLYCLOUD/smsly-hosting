@@ -44,8 +44,11 @@ def generate_traefik_labels(
         "traefik.enable": "true",
 
         # HTTP Router configuration
+        # NOTE: Always use the 'web' entrypoint because Caddy handles SSL
+        # termination in production and forwards plain HTTP to Traefik:8081.
+        # Traefik does NOT have a 'websecure' entrypoint in production.
         f"traefik.http.routers.{router_name}.rule": f"Host(`{domain}`)",
-        f"traefik.http.routers.{router_name}.entrypoints": "websecure" if enable_tls else "web",
+        f"traefik.http.routers.{router_name}.entrypoints": "web",
         f"traefik.http.routers.{router_name}.service": f"{router_name}-service",
 
         # Load balancer configuration
@@ -57,10 +60,8 @@ def generate_traefik_labels(
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.timeout": "3s",
     }
 
-    # TLS configuration with Let's Encrypt
-    if enable_tls:
-        labels[f"traefik.http.routers.{router_name}.tls"] = "true"
-        labels[f"traefik.http.routers.{router_name}.tls.certresolver"] = "letsencrypt"
+    # NOTE: TLS labels removed — Caddy handles SSL termination in production.
+    # Traefik only listens on the 'web' entrypoint (port 80) behind Caddy.
 
     # Middlewares chain
     middlewares = [f"{router_name}-ratelimit", f"{router_name}-headers"]
