@@ -137,6 +137,9 @@ SOCIALACCOUNT_STORE_TOKENS = True
 LOGIN_REDIRECT_URL = '/auth/callback'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 
+# Ensure allauth uses HTTPS callback URLs in production (prevents CSRF Referer mismatch)
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG else 'http'
+
 # Custom allauth adapters (callback redirect behavior)
 ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
 SOCIALACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomSocialAccountAdapter'
@@ -314,9 +317,11 @@ CORS_ALLOWED_ORIGINS = config(
     default=f'http://localhost:3000,{SITE_URL}',
     cast=Csv())
 # ZH-007 FIX: No wildcard subdomains — explicit trusted origins only
+# Include both the frontend SITE_URL and the backend's own domain for OAuth callbacks
+_BACKEND_ORIGIN = f'https://{DOMAIN}' if not DEBUG else 'http://localhost:8000'
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default=f'{SITE_URL}',
+    default=f'{SITE_URL},{_BACKEND_ORIGIN}',
     cast=Csv())
 CORS_ALLOW_HEADERS = [
     'accept',

@@ -357,6 +357,13 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
             'duration_seconds': event.get('duration_seconds'),
         }))
 
+    async def pipeline_update(self, event):
+        """Handle pipeline stages update from Celery task."""
+        await self.send(text_data=json.dumps({
+            'type': 'pipeline_update',
+            'stages': event.get('stages', []),
+        }))
+
     # ── Database helpers ────────────────────────────────────────────────
 
     @database_sync_to_async
