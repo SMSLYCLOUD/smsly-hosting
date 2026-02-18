@@ -25,13 +25,17 @@ class RateLimitMiddleware:
 
     def __call__(self, request):
         if request.path.startswith('/api/'):
-            ip = self._get_client_ip(request)
-            if not self._check_rate_limit(ip):
-                logger.warning("Rate limit exceeded for IP %s", ip)
-                return JsonResponse(
-                    {"error": "Too Many Requests", "retry_after": self.window},
-                    status=429
-                )
+            # DRF handles throttling for authenticated users.
+            # This middleware only rate-limits anonymous/unauthenticated requests
+            # to prevent DDoS and brute-force attacks.
+            if not (hasattr(request, 'user') and request.user.is_authenticated):
+                ip = self._get_client_ip(request)
+                if not self._check_rate_limit(ip):
+                    logger.warning("Rate limit exceeded for IP %s", ip)
+                    return JsonResponse(
+                        {"error": "Too Many Requests", "retry_after": self.window},
+                        status=429
+                    )
 
         response = self.get_response(request)
         return response
