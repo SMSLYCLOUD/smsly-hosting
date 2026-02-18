@@ -1,138 +1,150 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import dynamic from 'next/dynamic';
+/**
+ * TopologyView — reusable canvas topology graph.
+ * Re-exports the page-level canvas view for embedding in other contexts.
+ * The full implementation lives in app/topology/page.tsx.
+ */
+
+import { useEffect, useState, useRef, useCallback, MouseEvent as ReactMouseEvent } from 'react';
 import api from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { Server, Database, HardDrive, X, ExternalLink } from 'lucide-react';
 
-const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
-
-interface GraphNode {
-    id: string;
-    name: string;
-    type: string;
-    data?: any;
+/* ── Types ── */
+interface TopoNode {
+    id: string; name: string; type: string; data?: any;
+    x: number; y: number;
+}
+interface TopoEdge {
+    source: string; target: string; type?: string;
 }
 
-interface GraphLink {
-    source: string;
-    target: string;
+const CARD_W = 200;
+const CARD_H = 80;
+
+const THEME_COLORS: Record<string, string> = {
+    service: '#3b82f6', POSTGRES: '#6366f1', REDIS: '#22c55e',
+    MYSQL: '#f59e0b', MONGODB: '#a855f7', volume: '#eab308',
+};
+const EDGE_COLORS: Record<string, string> = {
+    API: '#60a5fa', DATABASE: '#818cf8', CACHE: '#34d399',
+    STORAGE: '#fbbf24', ADDON: '#64748b',
+};
+
+function getColor(node: TopoNode) {
+    if (node.type === 'service') return THEME_COLORS.service;
+    if (node.type === 'addon') return THEME_COLORS[(node.data?.addon_type || '').toUpperCase()] || '#3b82f6';
+    return THEME_COLORS.volume;
+}
+
+function autoLayout(nodes: TopoNode[], edges: TopoEdge[]) {
+    const services = nodes.filter(n => n.type === 'service');
+    const GAP = 280;
+    const startX = -(services.length - 1) * GAP / 2;
+    services.forEach((s, i) => { s.x = startX + i * GAP; s.y = 0; });
+
+    const children: Record<string, string[]> = {};
+    services.forEach(s => { children[s.id] = []; });
+    edges.forEach(e => { if (children[e.source]) children[e.source].push(e.target); });
+
+    services.forEach(svc => {
+        const ch = children[svc.id] || [];
+        const cx = svc.x - (ch.length - 1) * 220 / 2;
+        ch.forEach((cid, j) => {
+            const child = nodes.find(n => n.id === cid);
+            if (child) { child.x = cx + j * 220; child.y = svc.y + 140; }
+        });
+    });
 }
 
 export function TopologyView() {
     const router = useRouter();
-    const [graphData, setGraphData] = useState<{ nodes: GraphNode[], links: GraphLink[] }>({ nodes: [], links: [] });
+    const [nodes, setNodes] = useState<TopoNode[]>([]);
+    const [edges, setEdges] = useState<TopoEdge[]>([]);
     const [loading, setLoading] = useState(true);
-    const graphRef = useRef<any>(null);
 
     useEffect(() => {
-        async function loadTopology() {
+        (async () => {
             try {
                 const res = await api.get('/topology/');
-                const nodesIn = Array.isArray(res?.data?.nodes) ? res.data.nodes : [];
-                const edgesIn = Array.isArray(res?.data?.edges) ? res.data.edges : [];
+                const ns = (res?.data?.nodes || []).map((n: any) => ({
+                    id: String(n?.id || ''), name: String(n?.data?.name || n?.id || ''),
+                    type: String(n?.type || 'node'), data: n?.data || {}, x: 0, y: 0,
+                })).filter((n: TopoNode) => n.id);
 
-                if (nodesIn.length === 0) {
-                    setGraphData({ nodes: [{ id: 'empty', name: 'No services deployed', type: 'INFO' }], links: [] });
-                    return;
-                }
+                const es = (res?.data?.edges || []).map((e: any) => ({
+                    source: String(e?.source || ''), target: String(e?.target || ''),
+                    type: String(e?.type || 'ADDON'),
+                })).filter((e: TopoEdge) => e.source && e.target);
 
-                const nodes: GraphNode[] = nodesIn.map((n: any) => ({
-                    id: String(n?.id || ''),
-                    name: String(n?.data?.name || n?.data?.mount_path || n?.id || 'node'),
-                    type: String(n?.type || 'node'),
-                    data: n?.data || {},
-                })).filter((n: GraphNode) => Boolean(n.id));
-
-                const links: GraphLink[] = edgesIn.map((e: any) => ({
-                    source: String(e?.source || ''),
-                    target: String(e?.target || ''),
-                })).filter((l: GraphLink) => Boolean(l.source && l.target));
-
-                setGraphData({ nodes, links });
-            } catch (error) {
-                console.error('Failed to load topology:', error);
-                setGraphData({
-                    nodes: [{ id: 'error', name: 'Failed to load', type: 'ERROR' }],
-                    links: []
-                });
-            } finally {
-                setLoading(false);
-            }
-        }
-        loadTopology();
+                autoLayout(ns, es);
+                setNodes(ns);
+                setEdges(es);
+            } catch { /* ignore */ }
+            finally { setLoading(false); }
+        })();
     }, []);
 
-    return (
-        <div className="relative w-full h-full bg-black overflow-hidden">
-            <div className="absolute top-4 left-4 z-10 pointer-events-none">
-                <h1 className="text-2xl font-bold text-white mb-2 drop-shadow-md">Infrastructure Topology</h1>
-                <div className="flex gap-4 text-sm text-gray-300 drop-shadow-sm">
-                    <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-500"></span> Service</div>
-                    <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500"></span> Database</div>
-                    <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-green-500"></span> Redis</div>
-                    <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-yellow-500"></span> Volume</div>
-                </div>
-            </div>
+    if (loading) return <div className="flex items-center justify-center h-64 text-zinc-500">Loading...</div>;
+    if (nodes.length === 0) return <div className="flex items-center justify-center h-64 text-zinc-500">No topology data</div>;
 
-            {loading ? (
-                <div className="text-white p-24 flex items-center justify-center h-full">Loading topology...</div>
-            ) : graphData.nodes.length === 0 || graphData.nodes[0].id === 'empty' ? (
-                <div className="text-white p-24 flex flex-col items-center justify-center h-full">
-                    <p className="text-xl mb-4">No services deployed yet</p>
-                    <p className="text-gray-400">Deploy your first service to see the topology visualization.</p>
-                </div>
-            ) : (
-                <div className="w-full h-full min-h-[500px]">
-                    <ForceGraph3D
-                        ref={graphRef}
-                        graphData={graphData}
-                        nodeLabel={(node: any) => {
-                            const n = node as GraphNode;
-                            const parts: string[] = [n.name];
-                            if (n.type === 'service') {
-                                if (n.data?.port) parts.push(`port: ${n.data.port}`);
-                                if (n.data?.replicas) parts.push(`replicas: ${n.data.replicas}`);
-                            }
-                            if (n.type === 'addon') {
-                                if (n.data?.addon_type) parts.push(String(n.data.addon_type));
-                                if (n.data?.status) parts.push(String(n.data.status));
-                            }
-                            if (n.type === 'volume') {
-                                if (n.data?.size_gb) parts.push(`${n.data.size_gb}GB`);
-                            }
-                            return parts.join(' • ');
+    return (
+        <div className="relative w-full h-full min-h-[400px] bg-[#0a0a0b] rounded-xl overflow-hidden"
+            style={{
+                backgroundImage: 'radial-gradient(circle, #ffffff06 1px, transparent 1px)',
+                backgroundSize: '20px 20px',
+            }}>
+            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                {edges.map((e, i) => {
+                    const s = nodes.find(n => n.id === e.source);
+                    const t = nodes.find(n => n.id === e.target);
+                    if (!s || !t) return null;
+                    const sx = s.x + CARD_W / 2 + 400;
+                    const sy = s.y + CARD_H + 100;
+                    const tx = t.x + CARD_W / 2 + 400;
+                    const ty = t.y + 100;
+                    const mid = (sy + ty) / 2;
+                    return (
+                        <path key={i}
+                            d={`M ${sx} ${sy} C ${sx} ${mid}, ${tx} ${mid}, ${tx} ${ty}`}
+                            fill="none" stroke={EDGE_COLORS[e.type || 'ADDON'] || '#64748b'}
+                            strokeWidth={2} strokeOpacity={0.4} />
+                    );
+                })}
+            </svg>
+            <div style={{ transform: 'translate(400px, 100px)' }}>
+                {nodes.map(node => (
+                    <div key={node.id} className="absolute rounded-lg border overflow-hidden cursor-pointer
+                        hover:border-opacity-100 transition-all"
+                        style={{
+                            left: node.x, top: node.y, width: CARD_W, height: CARD_H,
+                            backgroundColor: '#18181b',
+                            borderColor: getColor(node) + '40',
                         }}
-                        nodeColor={(node: any) => {
-                            if (node.type === 'service') return '#3b82f6';
-                            if (node.type === 'addon') {
-                                const t = String(node?.data?.addon_type || '').toUpperCase();
-                                if (t === 'POSTGRES') return '#ef4444';
-                                if (t === 'REDIS') return '#22c55e';
-                                if (t === 'MYSQL') return '#f59e0b';
-                                if (t === 'MONGODB') return '#a855f7';
-                                if (t === 'ELASTICSEARCH') return '#06b6d4';
-                                if (t === 'RABBITMQ') return '#f97316';
-                                return '#06b6d4';
-                            }
-                            if (node.type === 'volume') return '#eab308';
-                            if (node.type === 'ERROR') return '#f97316';
-                            return '#ffffff';
-                        }}
-                        nodeRelSize={6}
-                        linkColor={() => '#ffffff'}
-                        linkWidth={2}
-                        linkDirectionalParticles={4}
-                        linkDirectionalParticleSpeed={() => 0.005}
-                        backgroundColor="#000000"
-                        onNodeClick={(node: any) => {
-                            if (node?.type === 'service' && node?.id) {
-                                router.push(`/services/${node.id}`);
-                            }
-                        }}
-                    />
-                </div>
-            )}
+                        onClick={() => {
+                            if (node.type === 'service') router.push(`/services/${node.id}`);
+                        }}>
+                        <div className="h-[2px] w-full" style={{ backgroundColor: getColor(node) }} />
+                        <div className="p-2.5 flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-md flex items-center justify-center"
+                                style={{ backgroundColor: getColor(node) + '15' }}>
+                                {node.type === 'service'
+                                    ? <Server className="w-3.5 h-3.5" style={{ color: getColor(node) }} />
+                                    : node.type === 'addon'
+                                        ? <Database className="w-3.5 h-3.5" style={{ color: getColor(node) }} />
+                                        : <HardDrive className="w-3.5 h-3.5" style={{ color: getColor(node) }} />}
+                            </div>
+                            <div>
+                                <div className="text-[12px] font-semibold text-white truncate">{node.name}</div>
+                                <div className="text-[9px] text-zinc-500 uppercase">
+                                    {node.type === 'service' ? 'Service' : node.data?.addon_type || node.type}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 }
