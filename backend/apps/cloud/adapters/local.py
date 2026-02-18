@@ -155,7 +155,7 @@ class LocalAdapter(BaseCloudAdapter):
             interval=hc_interval * 1_000_000_000,
             timeout=hc_timeout * 1_000_000_000,
             retries=hc_retries,
-            start_period=5 * 1_000_000_000,  # 5s grace — most apps boot in <5s
+            start_period=30 * 1_000_000_000,  # 30s grace — apps need time to boot
         )
 
         # Resource limits
@@ -168,6 +168,15 @@ class LocalAdapter(BaseCloudAdapter):
             run_kwargs['cpu_period'] = 100000
             run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
 
+        # Restart policy: on-failure with max 5 retries to prevent infinite loops.
+        # "unless-stopped" retries forever; "on-failure" stops after MaximumRetryCount.
+        if restart_policy == 'no':
+            rp = None
+        elif restart_policy == 'unless-stopped':
+            rp = {"Name": "on-failure", "MaximumRetryCount": 5}
+        else:
+            rp = {"Name": restart_policy, "MaximumRetryCount": 5}
+
         # Use create() + start() so networking_config is applied at creation time.
         # This guarantees the container is on smsly-net before Traefik inspects it.
         container = self.docker_client.containers.create(
@@ -179,7 +188,7 @@ class LocalAdapter(BaseCloudAdapter):
             labels=labels,
             volumes=docker_volumes if docker_volumes else None,
             healthcheck=docker_healthcheck,
-            restart_policy={"Name": restart_policy} if restart_policy != 'no' else None,
+            restart_policy=rp,
             **run_kwargs
         )
         container.start()
