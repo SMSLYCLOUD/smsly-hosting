@@ -38,7 +38,7 @@ fi
 # 3. Bring up infrastructure first (db, redis, socket-proxy, registry)
 echo ""
 echo "▸ Starting infrastructure (db, redis, socket-proxy)..."
-docker compose up -d db redis socket-proxy registry
+docker compose up -d --remove-orphans db redis socket-proxy registry
 
 # 4. Wait for health checks
 echo "▸ Waiting for DB + Redis to be healthy..."
