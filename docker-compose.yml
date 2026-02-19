@@ -50,7 +50,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - internal
+      - smsly-net
 
   # ============================================================
   # Redis
@@ -65,7 +65,7 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - internal
+      - smsly-net
 
   # ============================================================
   # Backend API
@@ -103,7 +103,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - internal
+      - smsly-net
       - socket-proxy
 
   # ============================================================
@@ -140,7 +140,7 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - internal
+      - smsly-net
       - socket-proxy
 
   # ============================================================
@@ -170,7 +170,7 @@ services:
     tmpfs:
       - /tmp
     networks:
-      - internal
+      - smsly-net
 
   # ============================================================
   # Frontend
@@ -198,7 +198,7 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - internal
+      - smsly-net
 
   # ============================================================
   # Nginx (Reverse proxy for backend + frontend)
@@ -223,7 +223,7 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - internal
+      - smsly-net
 
   # ============================================================
   # Docker Registry
@@ -236,11 +236,12 @@ services:
     volumes:
       - registry_data:/var/lib/registry
     networks:
-      - internal
+      - smsly-net
 
 networks:
-  internal:
+  smsly-net:
     driver: bridge
+    name: smsly-net
   socket-proxy:
     driver: bridge
     internal: true
