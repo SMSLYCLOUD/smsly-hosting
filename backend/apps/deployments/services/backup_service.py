@@ -4,7 +4,9 @@ import tarfile
 import json
 import uuid
 import logging
+from django.core.exceptions import PermissionDenied
 from django.utils import timezone
+from django.utils.text import slugify
 from django.conf import settings
 from apps.deployments.models import Service, EnvironmentVariable
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
@@ -38,7 +40,8 @@ class BackupService:
             backups_dir = os.path.join(settings.BASE_DIR, 'backups', 'services')
             os.makedirs(backups_dir, exist_ok=True)
 
-            filename = f"backup_{service.name}_{uuid.uuid4().hex[:8]}.tar.gz"
+            safe_name = slugify(service.name) or f"service-{str(service.id)[:8]}"
+            filename = f"backup_{safe_name}_{uuid.uuid4().hex[:8]}.tar.gz"
             filepath = os.path.join(backups_dir, filename)
 
             with tarfile.open(filepath, "w:gz") as tar:
@@ -60,16 +63,25 @@ class BackupService:
             backup.error_message = str(e)
             backup.save()
             logger.error(f"Backup failed for service {service.name}: {e}")
-            raise e
+            raise
 
-    def restore_service(self, backup_id, target_service_id=None):
-        backup = ServiceBackup.objects.get(id=backup_id)
+    def restore_service(self, backup_id, target_service_id=None, requesting_user_id=None):
+        backup_qs = ServiceBackup.objects.select_related('service', 'service__owner')
+        if requesting_user_id is not None:
+            backup_qs = backup_qs.filter(service__owner_id=requesting_user_id)
+        backup = backup_qs.get(id=backup_id)
+
         if not target_service_id:
             # Restore to original service (overwrite or alongside?)
             # Usually creates a new deployment on the same service
             target_service = backup.service
         else:
-            target_service = Service.objects.get(id=target_service_id)
+            target_qs = Service.objects.filter(id=target_service_id)
+            if requesting_user_id is not None:
+                target_qs = target_qs.filter(owner_id=requesting_user_id)
+            target_service = target_qs.first()
+            if not target_service:
+                raise PermissionDenied("Target service does not belong to requesting user")
 
         # Logic to restore env vars and trigger deployment
         # For now, just log
@@ -121,7 +133,9 @@ class BackupService:
         except Exception as e:
             backup.status = 'FAILED'
             backup.save()
-            raise e
+            raise
 
     def restore_server(self, backup_id):
-        pass
+        raise NotImplementedError(
+            "Server restore is not implemented via API. Use CLI/ops runbook flow."
+        )

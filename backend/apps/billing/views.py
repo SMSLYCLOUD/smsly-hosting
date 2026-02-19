@@ -14,9 +14,9 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets, permissions
 from rest_framework.decorators import action
+from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from apps.billing.models import (
     BillingAccount, BillingPayment, UsageRecord,
@@ -76,6 +76,10 @@ class PortalSerializer(serializers.Serializer):
         return instance
 
 
+class EmptySerializer(serializers.Serializer):
+    """Schema placeholder for response-only APIViews."""
+
+
 def _base_url_from_request(request) -> str:
     """Extract base URL from request."""
     # build_absolute_uri("/") returns something like "https://cloud.smsly.cloud/"
@@ -107,8 +111,9 @@ def _pro_amount_currency() -> tuple[Decimal, str]:
     return amount, currency
 
 
-class BillingSummaryView(APIView):
+class BillingSummaryView(GenericAPIView):
     """View for retrieving billing summary."""
+    serializer_class = EmptySerializer
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -160,8 +165,9 @@ class BillingSummaryView(APIView):
         )
 
 
-class CheckoutView(APIView):
+class CheckoutView(GenericAPIView):
     """View for initiating checkout."""
+    serializer_class = CheckoutSerializer
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -264,8 +270,9 @@ class CheckoutView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class PortalSessionView(APIView):
+class PortalSessionView(GenericAPIView):
     """View for creating customer portal sessions."""
+    serializer_class = PortalSerializer
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -283,8 +290,9 @@ class PortalSessionView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class InvoicesView(APIView):
+class InvoicesView(GenericAPIView):
     """View for listing user invoices."""
+    serializer_class = EmptySerializer
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -299,7 +307,7 @@ class InvoicesView(APIView):
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class StripeWebhookView(APIView):
+class StripeWebhookView(GenericAPIView):
     """
     Stripe webhook endpoint.
 
@@ -308,6 +316,7 @@ class StripeWebhookView(APIView):
     - In production (DEBUG=False), a missing secret is treated as misconfiguration.
     """
 
+    serializer_class = EmptySerializer
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -400,7 +409,7 @@ class StripeWebhookView(APIView):
         return Response({"ok": True})
 
 
-class FlutterwaveWebhookView(APIView):
+class FlutterwaveWebhookView(GenericAPIView):
     """
     Flutterwave webhook endpoint.
 
@@ -410,6 +419,7 @@ class FlutterwaveWebhookView(APIView):
     - In production (DEBUG=False), missing secret hash fails closed.
     """
 
+    serializer_class = EmptySerializer
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -474,7 +484,7 @@ class FlutterwaveWebhookView(APIView):
         return Response({"ok": True})
 
 
-class CryptomusWebhookView(APIView):
+class CryptomusWebhookView(GenericAPIView):
     """
     Cryptomus webhook endpoint.
 
@@ -482,6 +492,7 @@ class CryptomusWebhookView(APIView):
     - Verifies payload `sign` using CRYPTOMUS_API_KEY (md5(base64(json_without_sign)+api_key)).
     """
 
+    serializer_class = EmptySerializer
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -553,18 +564,18 @@ class PricingPlanViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class SubscriptionViewSet(viewsets.ModelViewSet):
+    queryset = UserSubscription.objects.all()
     serializer_class = UserSubscriptionSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return UserSubscription.objects.filter(user=self.request.user)
+        return self.queryset.filter(user=self.request.user)
 
     @action(detail=False, methods=['POST'])
     def subscribe(self, request):
-        # Implementation for subscribing to a plan
-        # This would typically involve redirecting to Stripe checkout
-        # But for now we might just update the subscription if using mock
-        pass
+        """Backward-compatible alias for /billing/checkout/."""
+        checkout_view = CheckoutView()
+        return checkout_view.post(request)
 
     @action(detail=False, methods=['POST'])
     def cancel(self, request):
@@ -577,14 +588,25 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 
 
 class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Invoice.objects.all()
     serializer_class = InvoiceSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Invoice.objects.filter(user=self.request.user).order_by('-period_end')
+        return self.queryset.filter(user=self.request.user).order_by('-period_end')
 
 
-class UsageViewSet(viewsets.ViewSet):
+class UsageSummarySerializer(serializers.Serializer):
+    cpu_hours = serializers.DecimalField(max_digits=20, decimal_places=6)
+    memory_gb_hours = serializers.DecimalField(max_digits=20, decimal_places=6)
+    storage_gb = serializers.DecimalField(max_digits=20, decimal_places=6)
+    bandwidth_gb = serializers.DecimalField(max_digits=20, decimal_places=6)
+    active_services = serializers.IntegerField()
+    active_addons = serializers.IntegerField()
+
+
+class UsageViewSet(viewsets.GenericViewSet):
+    serializer_class = UsageSummarySerializer
     permission_classes = [IsAuthenticated]
 
     def list(self, request):

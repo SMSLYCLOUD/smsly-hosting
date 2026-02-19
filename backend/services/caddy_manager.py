@@ -7,6 +7,8 @@ to a shared volume for the host-side watcher to pick up.
 import os
 import logging
 
+from apps.deployments.domain_utils import normalize_domain
+
 logger = logging.getLogger(__name__)
 
 # Path inside the container where caddy-config volume is mounted
@@ -22,6 +24,7 @@ def _get_custom_domain_blocks() -> list:
     Caddy auto-provisions Let's Encrypt certs for each.
     """
     blocks = []
+    seen = set()
     try:
         from apps.deployments.models import Service
         for service in Service.objects.all():
@@ -29,6 +32,18 @@ def _get_custom_domain_blocks() -> list:
                 d = domain.strip() if isinstance(domain, str) else ''
                 if not d:
                     continue
+                try:
+                    d = normalize_domain(d)
+                except ValueError:
+                    logger.warning(
+                        "Skipping invalid custom domain %r for service %s",
+                        domain,
+                        service.id,
+                    )
+                    continue
+                if d in seen:
+                    continue
+                seen.add(d)
                 blocks.append(f"""{d} {{
     reverse_proxy localhost:8081
     encode gzip
@@ -53,7 +68,12 @@ def generate_caddyfile(config) -> str:
     Also includes per-service custom domain blocks.
     """
     sections = []
-    domain = config.domain.strip() if config.domain else ''
+    domain = ''
+    if config.domain:
+        try:
+            domain = normalize_domain(config.domain)
+        except ValueError:
+            logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
     ip = config.server_ip or ''
 
     if config.use_ssl and domain:

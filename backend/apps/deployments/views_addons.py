@@ -32,6 +32,7 @@ class BackupSerializer(serializers.ModelSerializer):
 
 
 class AddonViewSet(viewsets.ModelViewSet):
+    queryset = Addon.objects.all()
     serializer_class = AddonSerializer
     permission_classes = [IsAuthenticated]
 
@@ -40,7 +41,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     # ==========================================================================
     def get_queryset(self):
         """Filter addons to only those belonging to the user's services."""
-        return Addon.objects.filter(service__owner=self.request.user)
+        return self.queryset.filter(service__owner=self.request.user)
 
     def perform_create(self, serializer):
         # SECURITY: Verify user owns the service before creating addon

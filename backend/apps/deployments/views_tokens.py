@@ -1,5 +1,7 @@
 """API Token management views — generate, list, revoke tokens for CLI access."""
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +10,7 @@ from rest_framework.response import Response
 from .api_token_auth import APIToken
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_tokens(request):
@@ -18,6 +21,7 @@ def list_tokens(request):
     return Response({"tokens": list(tokens)})
 
 
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_token(request):
@@ -42,6 +46,16 @@ def create_token(request):
     }, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    parameters=[
+        OpenApiParameter(
+            name='token_id',
+            type=OpenApiTypes.UUID,
+            location=OpenApiParameter.PATH,
+        )
+    ],
+    responses=OpenApiTypes.OBJECT,
+)
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def revoke_token(request, token_id):

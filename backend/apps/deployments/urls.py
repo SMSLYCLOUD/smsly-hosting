@@ -33,7 +33,6 @@ router = DefaultRouter()
 router.register(r'services', ServiceViewSet, basename='service')
 router.register(r'deployments', DeploymentViewSet, basename='deployment')
 router.register(r'addons', AddonViewSet, basename='addon')
-router.register(r'templates', TemplateViewSet, basename='template')
 router.register(r'blueprints', BlueprintViewSet, basename='blueprint')
 router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'tunnels', TunnelViewSet, basename='tunnel')
@@ -59,6 +58,13 @@ services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 services_router.register(r'backups', ServiceBackupViewSet, basename='service-backup')
 
 urlpatterns = router.urls + [
+    path('templates/', TemplateViewSet.as_view({'get': 'list'}), name='template-list'),
+    path('templates/<str:pk>/', TemplateViewSet.as_view({'get': 'retrieve'}), name='template-detail'),
+    path(
+        'templates/<str:pk>/one_click_deploy/',
+        TemplateViewSet.as_view({'post': 'one_click_deploy'}),
+        name='template-one-click-deploy',
+    ),
     path('', include(services_router.urls)),
     # Non-router views
     path('auth/session-token/', SessionTokenView.as_view(), name='session-token'),

@@ -1,24 +1,46 @@
 """Views Metrics module."""
-from rest_framework import viewsets, permissions, status
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Service
 from .metrics import metrics_adapter
 
 
-class MetricsViewSet(viewsets.ViewSet):
+class MetricsResponseSerializer(serializers.Serializer):
+    cpu = serializers.JSONField()
+    memory = serializers.JSONField()
+    network = serializers.JSONField()
+    disk = serializers.JSONField()
+    current = serializers.JSONField()
+
+
+class MetricsViewSet(viewsets.GenericViewSet):
     """
     ReadOnly ViewSet for Service Metrics.
     """
+    queryset = Service.objects.all()
+    serializer_class = MetricsResponseSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name='service_pk',
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+            )
+        ],
+        responses=MetricsResponseSerializer,
+    )
     def list(self, request, service_pk=None):
         if not service_pk:
             return Response({'error': 'Service ID required'},
                             status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            service = Service.objects.get(pk=service_pk)
+            service = self.queryset.get(pk=service_pk)
             # Check permission
             if service.owner != request.user:
                 return Response(status=status.HTTP_403_FORBIDDEN)
@@ -43,4 +65,3 @@ class MetricsViewSet(viewsets.ViewSet):
             })
         except Service.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
-

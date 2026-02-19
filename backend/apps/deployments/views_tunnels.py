@@ -49,11 +49,12 @@ class TunnelViewSet(viewsets.ModelViewSet):
 
     SECURITY: Zero Trust — users can only see their own tunnels.
     """
+    queryset = Tunnel.objects.all()
     serializer_class = TunnelSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Tunnel.objects.filter(
+        return self.queryset.filter(
             owner=self.request.user, is_active=True)
 
     def list(self, request):
@@ -70,8 +71,11 @@ class TunnelViewSet(viewsets.ModelViewSet):
         serializer = TunnelRequestSerializer(tunnel_requests, many=True)
         return Response({'requests': serializer.data})
 
-    @action(detail=True, methods=['post'],
-            url_path=r'replay/(?P<request_id>[^/.]+)')
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path=r'replay/(?P<request_id>[0-9a-f-]{36})',
+    )
     def replay(self, request, pk=None, request_id=None):
         """POST /api/v1/tunnels/{id}/replay/{req_id}/ — replay a request"""
         tunnel = self.get_object()

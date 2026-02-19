@@ -81,7 +81,7 @@ def validate_subdomain(subdomain):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def tunnel_list(request):  # pylint: disable=too-many-return-statements
     # pylint: disable=too-many-return-statements
     """
@@ -195,7 +195,7 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
 
 
 @api_view(['GET', 'DELETE'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def tunnel_detail(request, tunnel_id):
     """Get or delete a specific tunnel."""
     tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
@@ -222,11 +222,18 @@ def tunnel_detail(request, tunnel_id):
 
 
 @api_view(['GET'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def tunnel_requests(request, tunnel_id):
     """Get request logs for a tunnel."""
-    # Verify ownership first if needed, or just return public logs if allowed
-    # For now assuming public readable if you have ID
+    tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
+    if not tunnel:
+        return Response({'error': 'Tunnel not found'},
+                        status=status.HTTP_404_NOT_FOUND)
+    user_id = str(request.user.id)
+    if tunnel['user_id'] != user_id:
+        return Response({'error': 'Not authorized'},
+                        status=status.HTTP_403_FORBIDDEN)
+
     logs = tunnel_storage.get_request_logs(tunnel_id)
     return Response({
         'requests': logs,
@@ -235,10 +242,19 @@ def tunnel_requests(request, tunnel_id):
 
 
 @api_view(['POST'])
-@permission_classes([permissions.AllowAny])
+@permission_classes([permissions.IsAuthenticated])
 def replay_request(request, tunnel_id, request_id):
     """Replay a logged request."""
     # pylint: disable=unused-argument
+    tunnel = tunnel_storage.get_tunnel_by_id(tunnel_id)
+    if not tunnel:
+        return Response({'error': 'Tunnel not found'},
+                        status=status.HTTP_404_NOT_FOUND)
+    user_id = str(request.user.id)
+    if tunnel['user_id'] != user_id:
+        return Response({'error': 'Not authorized'},
+                        status=status.HTTP_403_FORBIDDEN)
+
     logs = tunnel_storage.get_request_logs(tunnel_id)
     log_entry = next((l for l in logs if l['request_id'] == request_id), None)
 

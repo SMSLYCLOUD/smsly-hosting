@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import logging
+import re
 import uuid
 from django.conf import settings
 from apps.deployments.models import Service, Deployment
@@ -129,6 +130,9 @@ class GitHubWebhookHandler:
                                   branch: str, commit_hash: str):
         """Create a new preview service or update an existing one."""
         preview_name = f"{parent.name}-pr-{pr_number}"
+        preview_slug = re.sub(r'[^a-z0-9-]+', '-', preview_name.lower()).strip('-')
+        preview_slug = (preview_slug[:48]).strip('-') or f"pr-{pr_number}"
+        base_domain = Service.default_public_base_domain()
 
         # Check if preview already exists
         preview_service, created = Service.objects.get_or_create(
@@ -148,7 +152,7 @@ class GitHubWebhookHandler:
                 'cpu_cores': parent.cpu_cores,
                 'memory_mb': parent.memory_mb,
                 # Unique domain for preview
-                'public_domain': f"{preview_name}.smsly-hosting.cloud"
+                'public_domain': f"{preview_slug}.{base_domain}"
             }
         )
 

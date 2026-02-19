@@ -103,6 +103,8 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_started
+    volumes:
+      - media_volume:/app/media
     networks:
       - smsly-net
 
@@ -118,6 +120,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - media_volume:/app/media
     networks:
       - smsly-net
 
@@ -179,6 +183,9 @@ services:
       IMAGES: 1
       NETWORKS: 1
       VOLUMES: 1
+      INFO: 1
+      VERSION: 1
+      EVENTS: 1
       BUILD: 1
       # Required for provisioning/deployments (create/start containers, create networks/volumes, etc.)
       POST: 1
@@ -206,15 +213,16 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=smsly-net"
-      # Direct socket mount — socket-proxy is incompatible with Docker 29+ API negotiation
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      # Read Docker metadata via restricted socket-proxy
+      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       - "--entrypoints.web.address=:80"
       - "--log.level=WARN"
     ports:
       - "127.0.0.1:8081:80"      # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
       - "127.0.0.1:8082:8080"    # Traefik dashboard (optional debug)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      socket-proxy:
+        condition: service_started
     security_opt:
       - no-new-privileges:true
     networks:

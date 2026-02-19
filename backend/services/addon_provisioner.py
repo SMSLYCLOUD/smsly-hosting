@@ -59,10 +59,12 @@ class AddonProvisioner:
         self.network_name = config(
             'DOCKER_NETWORK',
             default='smsly-net')
-        self._ensure_network()
+        self._network_checked = False
 
     def _ensure_network(self):
         """Ensure the Docker network exists for service connectivity."""
+        if self._network_checked:
+            return
         try:
             result = subprocess.run(
                 ['docker', 'network', 'inspect', self.network_name],
@@ -75,6 +77,7 @@ class AddonProvisioner:
                     check=True
                 )
                 logger.info(f"Created Docker network: {self.network_name}")
+            self._network_checked = True
         except Exception as e:
             logger.warning(f"Could not create/verify network: {e}")
 
@@ -90,6 +93,7 @@ class AddonProvisioner:
         """
         addon_type = addon.addon_type
         service_name = addon.service.name
+        self._ensure_network()
 
         # Generate unique container name and credentials
         container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"

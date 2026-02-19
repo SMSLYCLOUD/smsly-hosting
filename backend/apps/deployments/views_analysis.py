@@ -4,7 +4,8 @@ AI-Powered Repository Analysis View
 Analyzes Git repositories to detect framework, runtime, and provide intelligent
 deployment suggestions. Features real GitHub API integration for accurate detection.
 """
-from rest_framework.views import APIView
+from rest_framework import serializers
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
@@ -101,7 +102,11 @@ ENV_VAR_HINTS = {
 }
 
 
-class RepoAnalysisView(APIView):
+class RepoAnalysisSchemaSerializer(serializers.Serializer):
+    """Schema placeholder for repo analysis API."""
+
+
+class RepoAnalysisView(GenericAPIView):
     """
     AI-powered repository analysis endpoint.
 
@@ -112,6 +117,7 @@ class RepoAnalysisView(APIView):
 
     Returns detected framework, port, build commands, and suggestions.
     """
+    serializer_class = RepoAnalysisSchemaSerializer
     permission_classes = [IsAuthenticated]
 
     def post(self, request):

@@ -10,6 +10,7 @@ Rate limiting:
   - Exponential backoff: 10min, 20min, 40min between restarts
 """
 import logging
+import os
 import time
 import requests
 from celery import shared_task
@@ -86,7 +87,12 @@ def _check_service_health(service, Deployment):
     timeout = service.health_check_timeout or 5
 
     try:
-        resp = requests.get(health_url, timeout=timeout, verify=False)
+        verify_tls = True
+        if health_url.startswith("https://"):
+            verify_tls = str(
+                os.environ.get("HEALTH_CHECK_VERIFY_TLS", "true")
+            ).strip().lower() not in ("0", "false", "no")
+        resp = requests.get(health_url, timeout=timeout, verify=verify_tls)
         is_healthy = 200 <= resp.status_code < 400
 
         if is_healthy:
@@ -187,12 +193,23 @@ def _trigger_restart(service):
     try:
         from apps.deployments.tasks import smart_deploy_task
         from apps.deployments.models import Deployment
+        from apps.cloud.models import CloudProvider
 
         latest = Deployment.objects.filter(
             service=service, status=Deployment.Status.ACTIVE
         ).order_by('-created_at').first()
 
         if latest:
+            provider = service.provider or CloudProvider.objects.filter(
+                is_active=True
+            ).first()
+            if not provider:
+                logger.warning(
+                    "Cannot auto-restart %s: no active cloud provider",
+                    service.name,
+                )
+                return
+
             # Create a new deployment that rebuilds from the same commit
             new_deployment = Deployment.objects.create(
                 service=service,
@@ -203,8 +220,8 @@ def _trigger_restart(service):
             service.save(update_fields=['health_status', 'updated_at'])
 
             smart_deploy_task.delay(
-                str(service.id),
                 str(new_deployment.id),
+                str(provider.id),
             )
 
             # Track restart state

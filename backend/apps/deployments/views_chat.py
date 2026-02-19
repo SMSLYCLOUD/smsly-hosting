@@ -1,5 +1,6 @@
 """Views Chat module."""
-from rest_framework.views import APIView
+from rest_framework import serializers
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
@@ -9,7 +10,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AIChatView(APIView):
+class AIChatSchemaSerializer(serializers.Serializer):
+    """Schema placeholder for AI chat endpoint."""
+
+
+class AIChatView(GenericAPIView):
+    serializer_class = AIChatSchemaSerializer
     permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
 
     def post(self, request):

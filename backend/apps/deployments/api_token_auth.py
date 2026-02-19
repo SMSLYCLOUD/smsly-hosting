@@ -56,7 +56,7 @@ class APIToken(models.Model):
         verbose_name = "API Token"
 
     def __str__(self):
-        return f"{self.name} ({self.prefix}…) — {self.user}"
+        return f"{self.name} ({self.prefix}...) - {self.user}"
 
     # ---- Factory ----
 
@@ -111,11 +111,11 @@ class APITokenAuthentication(BaseAuthentication):
     keyword = "Bearer"
 
     def authenticate(self, request):
-        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-        if not auth_header.startswith(f"{self.keyword} smsly_"):
-            return None  # Not our token format — let other backends try
+        auth_header = str(request.META.get("HTTP_AUTHORIZATION", "")).strip()
+        scheme, _, raw_token = auth_header.partition(" ")
+        if scheme.lower() != "bearer" or not raw_token.startswith("smsly_"):
+            return None  # Not our token format - let other backends try
 
-        raw_token = auth_header[len(self.keyword) + 1 :]
         user, token = APIToken.verify(raw_token)
 
         if not user.is_active:

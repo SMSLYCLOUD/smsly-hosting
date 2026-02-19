@@ -4,19 +4,30 @@ import os
 import secrets
 import re
 from django.conf import settings
-from rest_framework import viewsets, status
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import serializers, viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 
 
-class TemplateViewSet(viewsets.ViewSet):
+class TemplateSchemaSerializer(serializers.Serializer):
+    """Schema placeholder for template endpoints."""
+
+
+class TemplateViewSet(viewsets.GenericViewSet):
     """
     Returns a list of predefined application templates.
     """
+    serializer_class = TemplateSchemaSerializer
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        operation_id='templates_list',
+        responses=OpenApiTypes.OBJECT,
+    )
     def list(self, request):
         # Load from fixtures
         try:
@@ -43,6 +54,17 @@ class TemplateViewSet(viewsets.ViewSet):
             return Response({'error': str(e)},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @extend_schema(
+        operation_id='templates_retrieve_by_id',
+        parameters=[
+            OpenApiParameter(
+                name='id',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+            )
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
     def retrieve(self, request, pk=None):
         try:
             path = os.path.join(settings.BASE_DIR,
@@ -59,6 +81,16 @@ class TemplateViewSet(viewsets.ViewSet):
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name='id',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+            )
+        ],
+        responses=OpenApiTypes.OBJECT,
+    )
     def one_click_deploy(self, request, pk=None):
         """
         One-click deploy a template.

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,11 +16,7 @@ export default function AdminPricingPage() {
     const [plans, setPlans] = useState<PricingPlan[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        loadPlans();
-    }, []);
-
-    async function loadPlans() {
+    const loadPlans = useCallback(async () => {
         try {
             const data = await billingApi.adminGetPlans();
             setPlans(data);
@@ -30,7 +26,11 @@ export default function AdminPricingPage() {
         } finally {
             setLoading(false);
         }
-    }
+    }, [toast]);
+
+    useEffect(() => {
+        loadPlans();
+    }, [loadPlans]);
 
     async function handleUpdate(plan: PricingPlan) {
         try {

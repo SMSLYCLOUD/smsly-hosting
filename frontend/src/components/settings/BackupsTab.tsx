@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,11 +14,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
 
-    useEffect(() => {
-        loadBackups();
-    }, [serviceId]);
-
-    const loadBackups = async () => {
+    const loadBackups = useCallback(async () => {
         try {
             const res = await api.get(`/services/${serviceId}/backups/`);
             setBackups(Array.isArray(res.data) ? res.data : res.data.results || []);
@@ -27,7 +23,11 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [serviceId]);
+
+    useEffect(() => {
+        loadBackups();
+    }, [loadBackups]);
 
     const handleCreateBackup = async () => {
         setCreating(true);

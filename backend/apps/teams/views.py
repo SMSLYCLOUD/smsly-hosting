@@ -13,13 +13,14 @@ from django.conf import settings
 
 
 class TeamViewSet(viewsets.ModelViewSet):
+    queryset = Team.objects.all()
     serializer_class = TeamSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         # Return teams owned by user or where user is a member
         from django.db.models import Q
-        return Team.objects.filter(Q(owner=self.request.user) | Q(
+        return self.queryset.filter(Q(owner=self.request.user) | Q(
             members__user=self.request.user)).distinct()
 
     def perform_create(self, serializer):

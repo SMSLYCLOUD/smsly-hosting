@@ -1,4 +1,6 @@
 """OAuth configuration views."""
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
@@ -8,6 +10,7 @@ from django.contrib.sites.models import Site
 from django.conf import settings
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
 def oauth_providers_status(request):
@@ -27,6 +30,7 @@ def oauth_providers_status(request):
         )
 
 
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(['GET', 'POST'])
 @permission_classes([IsAdminUser])
 def oauth_credentials(request):

@@ -79,10 +79,11 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
 class ManagedServerViewSet(viewsets.ModelViewSet):
     """CRUD for managed remote servers, plus health check, proxy, and provisioning."""
 
+    queryset = ManagedServer.objects.all()
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return ManagedServer.objects.filter(owner=self.request.user)
+        return self.queryset.filter(owner=self.request.user)
 
     def get_serializer_class(self):
         if self.action == "provision_new":

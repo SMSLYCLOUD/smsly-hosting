@@ -1,6 +1,7 @@
 """Views Webhooks module."""
 import logging
-from rest_framework.views import APIView
+from rest_framework import serializers
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
@@ -9,7 +10,12 @@ from .webhooks.github import GitHubWebhookHandler
 logger = logging.getLogger(__name__)
 
 
-class GitHubWebhookView(APIView):
+class WebhookSchemaSerializer(serializers.Serializer):
+    """Schema placeholder for GitHub webhook endpoint."""
+
+
+class GitHubWebhookView(GenericAPIView):
+    serializer_class = WebhookSchemaSerializer
     authentication_classes = []  # Webhooks use signature auth
     permission_classes = []
 
@@ -20,7 +26,7 @@ class GitHubWebhookView(APIView):
         # If no secret is configured, reject ALL webhooks.
         webhook_secret = getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')
         if not webhook_secret:
-            logger.error("GITHUB_WEBHOOK_SECRET is not configured — rejecting webhook")
+            logger.error("GITHUB_WEBHOOK_SECRET is not configured - rejecting webhook")
             return Response({'error': 'Webhook processing unavailable'},
                             status=status.HTTP_503_SERVICE_UNAVAILABLE)
 

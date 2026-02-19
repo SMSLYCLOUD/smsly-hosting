@@ -1,6 +1,6 @@
 """Views module."""
-from rest_framework import viewsets, permissions, status, parsers
-from rest_framework.views import APIView
+from rest_framework import viewsets, permissions, status, parsers, serializers
+from rest_framework.generics import GenericAPIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
@@ -18,13 +18,17 @@ from .serializers import (
 from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
 from .tasks import smart_deploy_task, resume_deploy_task, create_service_backup_task, create_server_backup_task, restore_service_backup_task
-from .services.backup_service import BackupService
+from .domain_utils import normalize_domain
 from apps.cloud.models import CloudProvider
 import os
 import uuid
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class EmptySerializer(serializers.Serializer):
+    """Schema placeholder for APIViews without request/response bodies."""
 
 
 def _has_active_deployment(service):
@@ -54,16 +58,36 @@ def _resolve_provider_for_service(service: Service):
     return CloudProvider.objects.filter(is_active=True).first()
 
 
+def _normalize_request_domain(raw_domain: str):
+    """Normalize and validate user-provided domains."""
+    try:
+        return normalize_domain(raw_domain), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def _parse_bool(value):
+    """Safely parse booleans from JSON or form-encoded payloads."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 class ServiceViewSet(viewsets.ModelViewSet):
     """
     Service Management and Nested Resources.
     """
+    queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         """ZH-001 FIX: Only return services owned by the requesting user."""
-        qs = Service.objects.prefetch_related('deployments')
+        qs = self.queryset.prefetch_related('deployments')
         if self.request.user.is_superuser:
             return qs.all().order_by('-created_at')
         return qs.filter(owner=self.request.user).order_by('-created_at')
@@ -410,13 +434,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         import socket
         service = self.get_object()
-        domain = request.data.get('domain', '').strip().lower()
+        domain, domain_error = _normalize_request_domain(
+            request.data.get('domain', '')
+        )
+        if domain_error:
+            return Response(
+                {'error': f'Invalid domain: {domain_error}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if not domain or '.' not in domain:
-            return Response({'error': 'Invalid domain'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        cname_target = os.getenv('CNAME_TARGET', 'cname.cloud.smsly.cloud')
+        raw_cname_target = os.getenv('CNAME_TARGET', 'cname.cloud.smsly.cloud')
+        try:
+            cname_target = normalize_domain(raw_cname_target)
+        except ValueError:
+            cname_target = 'cname.cloud.smsly.cloud'
         try:
             # Check CNAME or A record
             resolved = socket.getaddrinfo(domain, 443)
@@ -442,10 +473,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             from services.caddy_manager import generate_caddyfile, apply_caddyfile
             from .models import PlatformConfig
-            config = PlatformConfig.objects.first()
-            if not config:
-                logger.warning("No PlatformConfig found, skipping Caddy sync")
-                return False
+            config = PlatformConfig.load()
             content = generate_caddyfile(config)
             result = apply_caddyfile(content)
             if result['ok']:
@@ -465,18 +493,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "domain": "myapp.com" }
         """
         service = self.get_object()
-        domain = request.data.get('domain', '').strip().lower()
+        domain, domain_error = _normalize_request_domain(
+            request.data.get('domain', '')
+        )
+        if domain_error:
+            return Response(
+                {'error': f'Invalid domain: {domain_error}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if not domain or '.' not in domain:
-            return Response({'error': 'Invalid domain'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        domains = service.custom_domains or []
+        domains = [
+            d for d in (service.custom_domains or [])
+            if isinstance(d, str) and d.strip()
+        ]
         if domain in domains:
             return Response({'error': 'Domain already added'},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        domains.append(domain)
+        domains = list(dict.fromkeys([*domains, domain]))
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
@@ -498,14 +532,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Body: { "domain": "myapp.com" }
         """
         service = self.get_object()
-        domain = request.data.get('domain', '').strip().lower()
+        domain, domain_error = _normalize_request_domain(
+            request.data.get('domain', '')
+        )
+        if domain_error:
+            return Response(
+                {'error': f'Invalid domain: {domain_error}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        domains = service.custom_domains or []
+        domains = [
+            d for d in (service.custom_domains or [])
+            if isinstance(d, str) and d.strip()
+        ]
         if domain not in domains:
             return Response({'error': 'Domain not found'},
                             status=status.HTTP_404_NOT_FOUND)
 
-        domains.remove(domain)
+        domains = [d for d in domains if d != domain]
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
@@ -523,6 +567,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     """
     API endpoint for managing Deployments.
     """
+    queryset = Deployment.objects.all()
     serializer_class = DeploymentSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [
@@ -532,8 +577,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """ZH-002 FIX: Only return deployments for services owned by the requesting user."""
         if self.request.user.is_superuser:
-            return Deployment.objects.all()
-        return Deployment.objects.filter(service__owner=self.request.user)
+            return self.queryset.all()
+        return self.queryset.filter(service__owner=self.request.user)
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -842,12 +887,23 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         # Trigger analysis asynchronously
         try:
             analyze_failure_task.delay(str(deployment.id))
-        except Exception:
+        except Exception as exc:
             # Avoid hard-failing the API when the broker is unavailable.
-            logger.exception(
-                "Unable to queue AI diagnosis task for deployment %s",
-                deployment.id,
-            )
+            try:
+                from kombu.exceptions import OperationalError as BrokerOperationalError
+            except Exception:  # pragma: no cover
+                BrokerOperationalError = tuple()
+
+            if BrokerOperationalError and isinstance(exc, BrokerOperationalError):
+                logger.warning(
+                    "Unable to queue AI diagnosis task for deployment %s: broker unavailable",
+                    deployment.id,
+                )
+            else:
+                logger.exception(
+                    "Unable to queue AI diagnosis task for deployment %s",
+                    deployment.id,
+                )
 
         return Response({'message': 'Analysis started'})
 
@@ -874,7 +930,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
 
         # Security: Validate file extension
-        if not uploaded_file.name.endswith('.zip'):
+        if not uploaded_file.name.lower().endswith('.zip'):
             return Response(
                 {'error': 'Invalid file type. Only .zip files are allowed'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -886,7 +942,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
             # Security: Use secure upload directory
             import secrets
-            base_dir = getattr(settings, 'MEDIA_ROOT', '/tmp/smsly/uploads')
+            base_dir = getattr(settings, 'MEDIA_ROOT', '/app/media')
             upload_dir = os.path.join(base_dir, 'uploads')
             os.makedirs(upload_dir, mode=0o700, exist_ok=True)
 
@@ -902,9 +958,10 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             os.chmod(file_path, 0o600)
 
             # Update Service to point to this file
+            from pathlib import Path
             service.deploy_type = 'UPLOAD'
-            service.repository_url = f"file://{file_path}"
-            service.save()
+            service.repository_url = Path(file_path).resolve().as_uri()
+            service.save(update_fields=['deploy_type', 'repository_url', 'updated_at'])
 
             # Trigger Deployment
             deployment = Deployment.objects.create(
@@ -959,22 +1016,24 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         return qs
 
 
-class SessionTokenView(APIView):
+class SessionTokenView(GenericAPIView):
     """
     Exchange an authenticated Django session for a DRF token.
     Used by the frontend callback page to avoid token-in-URL leakage.
     """
+    serializer_class = EmptySerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         token, _ = Token.objects.get_or_create(user=request.user)
         return Response({'token': token.key})
 
-class SystemConfigView(APIView):
+class SystemConfigView(GenericAPIView):
     """
     Expose safe server configuration to the frontend.
     GET /api/v1/system/config/
     """
+    serializer_class = EmptySerializer
     permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
@@ -1028,12 +1087,13 @@ class SystemConfigView(APIView):
         })
 
 
-class DomainConfigView(APIView):
+class DomainConfigView(GenericAPIView):
     """
     Manage platform domain & SSL configuration.
     GET  /api/v1/system/domain-config/ → current config
     PUT  /api/v1/system/domain-config/ → update + apply Caddyfile
     """
+    serializer_class = EmptySerializer
     permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
@@ -1054,11 +1114,21 @@ class DomainConfigView(APIView):
 
         # Update fields
         if 'domain' in data:
-            config.domain = data['domain'].strip()
+            raw_domain = str(data.get('domain') or '').strip()
+            if raw_domain:
+                domain, domain_error = _normalize_request_domain(raw_domain)
+                if domain_error:
+                    return Response(
+                        {'error': f'Invalid domain: {domain_error}'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                config.domain = domain
+            else:
+                config.domain = ''
         if 'use_ssl' in data:
-            config.use_ssl = bool(data['use_ssl'])
+            config.use_ssl = _parse_bool(data.get('use_ssl'))
         if 'wildcard_subdomains' in data:
-            config.wildcard_subdomains = bool(data['wildcard_subdomains'])
+            config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
         if 'cloudflare_api_token' in data and data['cloudflare_api_token']:
             config.cloudflare_api_token = data['cloudflare_api_token'].strip()
         if 'server_ip' in data:
@@ -1095,11 +1165,12 @@ class DomainConfigView(APIView):
         })
 
 class ServiceBackupViewSet(viewsets.ModelViewSet):
+    queryset = ServiceBackup.objects.all()
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return ServiceBackup.objects.filter(service__owner=self.request.user).order_by('-created_at')
+        return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
@@ -1109,7 +1180,22 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     def restore(self, request, pk=None):
         backup = self.get_object()
         target_service_id = request.data.get('target_service_id')
-        restore_service_backup_task.delay(str(backup.id), target_service_id)
+
+        if target_service_id:
+            if not Service.objects.filter(
+                id=target_service_id,
+                owner=request.user,
+            ).exists():
+                return Response(
+                    {'error': 'Target service not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        restore_service_backup_task.delay(
+            str(backup.id),
+            str(target_service_id) if target_service_id else None,
+            request.user.id,
+        )
         return Response({'status': 'restore_started'})
 
     @action(detail=True, methods=['get'])
@@ -1134,9 +1220,10 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         return Response({'error': 'Server restore via API not implemented. Use CLI.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
 
 class BackupScheduleViewSet(viewsets.ModelViewSet):
+    queryset = BackupSchedule.objects.all()
     serializer_class = BackupScheduleSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return BackupSchedule.objects.filter(service__owner=self.request.user)
+        return self.queryset.filter(service__owner=self.request.user)
 from .views_transfer import ServerTransferViewSet
