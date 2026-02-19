@@ -11,6 +11,48 @@ from .base import BaseCloudAdapter
 logger = logging.getLogger(__name__)
 
 
+def _normalize_health_path(path: str) -> str:
+    value = str(path or "/").strip()
+    if not value.startswith("/"):
+        value = f"/{value}"
+    return value
+
+
+def _build_docker_healthcheck_cmd(url: str, timeout_seconds: int) -> str:
+    """
+    Build a portable in-container probe command.
+
+    Probe order:
+    1. wget
+    2. curl
+    3. python3/python urllib
+
+    If none of these tools exist in the image, return success so the
+    container is not marked unhealthy purely due missing probe tooling.
+    """
+    timeout = max(1, int(timeout_seconds or 3))
+    py_probe = (
+        "import urllib.request;"
+        f"urllib.request.urlopen('{url}', timeout={timeout})"
+    )
+
+    return (
+        "if command -v wget >/dev/null 2>&1; then "
+        f"wget -q -O /dev/null \"{url}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        "fi; "
+        "if command -v curl >/dev/null 2>&1; then "
+        f"curl -fsS \"{url}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        "fi; "
+        "if command -v python3 >/dev/null 2>&1; then "
+        f"python3 -c \"{py_probe}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        "fi; "
+        "if command -v python >/dev/null 2>&1; then "
+        f"python -c \"{py_probe}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        "fi; "
+        "exit 0"
+    )
+
+
 class LocalAdapter(BaseCloudAdapter):
     """
     Adapter for Local Docker (Development) and K3s (Production).
@@ -151,35 +193,23 @@ class LocalAdapter(BaseCloudAdapter):
                 f'traefik.http.routers.{name}.entrypoints': 'web',
             })
 
-        # Docker-native healthcheck — CRITICAL for Traefik v3
-        # Traefik v3 filters containers that are unhealthy or still starting.
-        # We ALWAYS set a healthcheck so containers reach "healthy" quickly.
-        # IMPORTANT: Use universal commands (wget/curl/shell) — NOT python3.
-        # Python3 is not available in Node.js, Go, Rust, or static containers.
+        # Docker-native healthcheck.
+        # Traefik can ignore unhealthy containers, so avoid false negatives.
+        # Use a probe that works across minimal images.
         hc_port = env.get('PORT', '8000')
         if healthcheck and healthcheck.get('path'):
-            hc_path = healthcheck['path']
+            hc_path = _normalize_health_path(healthcheck['path'])
             hc_interval = healthcheck.get('interval', 10)
             hc_timeout = healthcheck.get('timeout', 5)
             hc_retries = healthcheck.get('retries', 3)
-            # HTTP check: try wget (Alpine/Debian), then curl, then TCP fallback
-            hc_cmd = (
-                f"wget -q -O /dev/null http://localhost:{hc_port}{hc_path} 2>/dev/null "
-                f"|| curl -sf http://localhost:{hc_port}{hc_path} >/dev/null 2>&1 "
-                f"|| (echo >/dev/tcp/localhost/{hc_port}) 2>/dev/null "
-                f"|| exit 1"
-            )
+            hc_url = f"http://localhost:{hc_port}{hc_path}"
+            hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         else:
             hc_interval = 10
             hc_timeout = 3
             hc_retries = 3
-            # TCP-only check: works in any container with bash or BusyBox
-            hc_cmd = (
-                f"wget -q -O /dev/null http://localhost:{hc_port}/ 2>/dev/null "
-                f"|| curl -sf http://localhost:{hc_port}/ >/dev/null 2>&1 "
-                f"|| (echo >/dev/tcp/localhost/{hc_port}) 2>/dev/null "
-                f"|| exit 1"
-            )
+            hc_url = f"http://localhost:{hc_port}/"
+            hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         docker_healthcheck = docker.types.Healthcheck(
             test=["CMD-SHELL", hc_cmd],
             interval=hc_interval * 1_000_000_000,

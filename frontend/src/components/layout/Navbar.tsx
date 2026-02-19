@@ -123,7 +123,8 @@ export function Navbar() {
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
-        <nav className="hidden md:flex items-center justify-center flex-1 space-x-1">
+        <nav className="hidden md:flex flex-1 min-w-0 px-2">
+            <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
@@ -132,7 +133,7 @@ export function Navbar() {
                          href={link.href}
                          prefetch={false}
                          className={`
-                             px-3 py-2 rounded-md text-sm font-medium transition-colors
+                             shrink-0 px-3 py-2 rounded-md text-sm font-medium transition-colors
                              ${isActive
                                 ? 'text-emerald-600 dark:text-emerald-400'
                                 : 'text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400'}
@@ -151,7 +152,7 @@ export function Navbar() {
                          href={link.href}
                          prefetch={false}
                          className={`
-                             relative px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
+                             relative shrink-0 px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
                              ${isActive
                                 ? 'text-primary bg-primary/5'
                                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
@@ -170,6 +171,7 @@ export function Navbar() {
                     </Link>
                 );
             })}
+            </div>
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
