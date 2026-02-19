@@ -58,12 +58,12 @@ To update the platform to the latest version:
 cd /opt/smsly-hosting
 git pull origin main
 
-# Full rebuild (both compose files required)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+# Full rebuild (production compose only)
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 
 # Run migrations
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python manage.py migrate
+docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
 ```
 
 > **Important**: Always use `down` + `up --force-recreate` instead of just `up --build`. This prevents Nginx DNS cache issues where Nginx holds stale container IPs after a rebuild. See [502 Bad Gateway](#502-bad-gateway-after-rebuild) below.
@@ -109,11 +109,11 @@ docker logs smsly-hosting-nginx-1 --tail 20 2>&1 | grep error
 **Fix**:
 ```bash
 # Option 1: Quick fix — restart just Nginx
-docker compose -f docker-compose.yml -f docker-compose.prod.yml restart nginx
+docker compose -f docker-compose.prod.yml restart nginx
 
 # Option 2: Full fix — recreate everything (preferred)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 ```
 
 **Prevention**: Always use `down` + `up --force-recreate` when rebuilding services. Never rebuild just the backend without also restarting Nginx.
