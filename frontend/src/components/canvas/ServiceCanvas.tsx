@@ -133,15 +133,34 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   const initialDistanceRef = useRef(220);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
+  const measureContainer = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) {
+      return;
+    }
+    setDimensions({
+      width: Math.max(el.clientWidth, 400),
+      height: Math.max(el.clientHeight, 400),
+    });
+  }, []);
+
   useEffect(() => {
-    if (!containerRef.current) return;
-    const obs = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      setDimensions({ width: Math.max(width, 400), height: Math.max(height, 400) });
+    measureContainer();
+    if (!containerRef.current) {
+      return;
+    }
+
+    const obs = new ResizeObserver(() => {
+      measureContainer();
     });
     obs.observe(containerRef.current);
-    return () => obs.disconnect();
-  }, []);
+    window.addEventListener('resize', measureContainer);
+
+    return () => {
+      obs.disconnect();
+      window.removeEventListener('resize', measureContainer);
+    };
+  }, [measureContainer]);
 
   const graphData = React.useMemo(() => {
     const nodes: SvcNode[] = services.map((svc) => ({
@@ -184,6 +203,20 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
     );
   }, []);
 
+  const fitGraphToViewport = useCallback((duration = 450) => {
+    const fg = fgRef.current;
+    if (!fg || graphData.nodes.length === 0) {
+      return;
+    }
+    if (typeof fg.zoomToFit === 'function') {
+      try {
+        fg.zoomToFit(duration, 120);
+      } catch (error) {
+        console.error('zoomToFit failed:', error);
+      }
+    }
+  }, [graphData.nodes.length]);
+
   useEffect(() => {
     if (fgRef.current && graphData.nodes.length > 0) {
       const fg = fgRef.current;
@@ -192,29 +225,23 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
 
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
       fg.d3Force('charge')?.strength(-250);
-
-      let angle = 0;
-      const radius = dist;
-      const rotateInterval = setInterval(() => {
-        angle += 0.002;
-        fg.cameraPosition(
-          { x: radius * Math.sin(angle), y: 50, z: radius * Math.cos(angle) },
-          { x: 0, y: 0, z: 0 }
-        );
-      }, 30);
-
-      const container = containerRef.current;
-      const stopRotate = () => clearInterval(rotateInterval);
-      container?.addEventListener('mousedown', stopRotate, { once: true });
-      container?.addEventListener('touchstart', stopRotate, { once: true });
-
+      fg.d3ReheatSimulation?.();
+      const fitTimer = setTimeout(() => fitGraphToViewport(700), 250);
       return () => {
-        clearInterval(rotateInterval);
-        container?.removeEventListener('mousedown', stopRotate);
-        container?.removeEventListener('touchstart', stopRotate);
+        clearTimeout(fitTimer);
       };
     }
-  }, [graphData]);
+  }, [fitGraphToViewport, graphData]);
+
+  useEffect(() => {
+    if (graphData.nodes.length === 0) {
+      return;
+    }
+    const fitTimer = setTimeout(() => fitGraphToViewport(250), 120);
+    return () => {
+      clearTimeout(fitTimer);
+    };
+  }, [dimensions.height, dimensions.width, graphData.nodes.length, fitGraphToViewport]);
 
   const handleNodeClick = useCallback((node: any) => {
     router.push(`/services/${node.id}`);
@@ -304,6 +331,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         showNavInfo={false}
         warmupTicks={30}
         cooldownTicks={80}
+        onEngineStop={() => fitGraphToViewport(350)}
       />
     </div>
   );
