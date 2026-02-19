@@ -12,6 +12,7 @@ class Addon(TimeStampedModel):
         MYSQL = 'MYSQL', 'MySQL'
         MONGODB = 'MONGODB', 'MongoDB'
         QDRANT = 'QDRANT', 'Qdrant (Vector DB)'
+        ELASTICSEARCH = 'ELASTICSEARCH', 'Elasticsearch'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'

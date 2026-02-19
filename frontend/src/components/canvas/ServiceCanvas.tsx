@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 
 // @ts-ignore
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
@@ -129,6 +130,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
+  const initialDistanceRef = useRef(220);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
   useEffect(() => {
@@ -153,10 +155,40 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
     return { nodes, links };
   }, [services]);
 
+  const zoomCamera = useCallback((factor: number) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const camera = fg.camera?.();
+    if (!camera?.position) return;
+
+    const { x, y, z } = camera.position;
+    const currentDistance = Math.sqrt(x * x + y * y + z * z) || 1;
+    const nextDistance = Math.max(80, Math.min(2200, currentDistance * factor));
+    const scale = nextDistance / currentDistance;
+
+    fg.cameraPosition(
+      { x: x * scale, y: y * scale, z: z * scale },
+      { x: 0, y: 0, z: 0 },
+      300
+    );
+  }, []);
+
+  const resetCamera = useCallback(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const dist = initialDistanceRef.current;
+    fg.cameraPosition(
+      { x: dist * 0.6, y: dist * 0.4, z: dist },
+      { x: 0, y: 0, z: 0 },
+      450
+    );
+  }, []);
+
   useEffect(() => {
     if (fgRef.current && graphData.nodes.length > 0) {
       const fg = fgRef.current;
       const dist = 120 + graphData.nodes.length * 30;
+      initialDistanceRef.current = dist;
 
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
       fg.d3Force('charge')?.strength(-250);
@@ -219,6 +251,36 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
 
       <div className="absolute bottom-4 right-4 z-10 bg-black/60 backdrop-blur-md rounded-lg px-3 py-2 border border-zinc-800">
         <div className="text-[10px] text-zinc-500">🖱️ Drag to orbit • Scroll to zoom • Click to open</div>
+      </div>
+
+      <div className="absolute top-4 right-4 z-10 bg-black/60 backdrop-blur-md rounded-lg p-1.5 border border-zinc-800 flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => zoomCamera(0.82)}
+          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          <ZoomIn className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomCamera(1.22)}
+          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={resetCamera}
+          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          title="Reset view"
+          aria-label="Reset view"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
       </div>
 
       <ForceGraph3D

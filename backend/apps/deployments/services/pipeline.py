@@ -17,7 +17,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.cloud.services.builder import NixpacksBuilder
-from apps.deployments.models import Deployment, EnvironmentVariable
+from apps.deployments.models import Deployment, EnvironmentVariable, PlatformConfig
 from apps.deployments.services.git_manager import GitManager
 from apps.deployments.utils import (
     append_log,
@@ -544,8 +544,46 @@ class PipelineManager:
             if injected_count:
                 append_log(self.deployment, f"\n🔧 Auto-injected {injected_count} env vars.\n")
 
+            self._inject_proxy_runtime_defaults(scan_result)
+
         except Exception as e: # pylint: disable=broad-exception-caught
             logger.warning("Env injection failed: %s", e)
+
+    def _inject_proxy_runtime_defaults(self, scan_result: dict):
+        """
+        Inject runtime defaults for proxied TLS deployments.
+
+        In the default production topology (Caddy -> Traefik -> app), some
+        Django apps enable SECURE_SSL_REDIRECT but do not trust forwarded
+        headers, causing HTTPS redirect loops.
+        """
+        try:
+            platform_cfg = PlatformConfig.load()
+            if not platform_cfg.use_ssl:
+                return
+
+            if str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower() in {
+                "1", "true", "yes", "on"
+            }:
+                return
+
+            stack = str((scan_result or {}).get("stack", "")).lower()
+            if "django" not in stack:
+                return
+
+            _, created = EnvironmentVariable.objects.get_or_create(
+                service=self.service,
+                key="SECURE_SSL_REDIRECT",
+                defaults={"value": "false", "is_secret": False},
+            )
+            if created:
+                append_log(
+                    self.deployment,
+                    "  🔧 Set SECURE_SSL_REDIRECT=false for proxied TLS runtime\n",
+                )
+
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Proxy runtime defaults injection failed: %s", exc)
 
     # Dependency package → addon type mapping
     _REQUIREMENTS_ADDON_MAP = {
@@ -654,6 +692,18 @@ class PipelineManager:
             # pylint: disable=import-outside-toplevel
             from apps.deployments.models_addons import Addon
             from services.addon_provisioner import addon_provisioner
+
+            supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
+            unsupported = detected_types - supported_addons
+            if unsupported:
+                append_log(
+                    self.deployment,
+                    f"  ℹ️ Detected unsupported addons (skipped): {', '.join(sorted(unsupported))}\n"
+                )
+
+            detected_types = detected_types & supported_addons
+            if not detected_types:
+                return
 
             existing = set(
                 Addon.objects.filter(
@@ -854,31 +904,38 @@ class PipelineManager:
         # re-downloads all dependencies from scratch (extremely slow).
         # If BuildKit causes cache corruption, the auto-prune below handles it.
         env["DOCKER_BUILDKIT"] = "1"
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                process = subprocess.run(
+                    cmd, check=True, cwd=cwd, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, timeout=1800  # 30 minutes max
+                )
+                # Log output (redacted)
+                output = redact_values(process.stdout + process.stderr, self.secret_values)
+                if len(output) > 5000:
+                    output = output[-5000:] + "\n...(truncated)"
+                append_log(self.deployment, output)
+                return
 
-        try:
-            process = subprocess.run(
-                cmd, check=True, cwd=cwd, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=1800  # 30 minutes max
-            )
-            # Log output (redacted)
-            output = redact_values(process.stdout + process.stderr, self.secret_values)
-            if len(output) > 5000:
-                output = output[-5000:] + "\n...(truncated)"
-            append_log(self.deployment, output)
+            except subprocess.CalledProcessError as e:
+                full_err = redact_values(e.stdout + e.stderr, self.secret_values)
 
-        except subprocess.CalledProcessError as e:
-            full_err = redact_values(e.stdout + e.stderr, self.secret_values)
+                if is_buildkit_cache_error(full_err) and attempt < max_attempts:
+                    append_log(
+                        self.deployment,
+                        "BuildKit cache corruption detected. Pruning cache and retrying once...\n"
+                    )
+                    prune_buildkit_cache()
+                    continue
 
-            # Auto-prune cache check
-            if is_buildkit_cache_error(full_err):
-                prune_buildkit_cache()
-                raise BuildError(
-                    "Docker cache corruption detected. Cache pruned. Please retry."
-                ) from e
-
-            append_log(self.deployment, full_err)
-            raise BuildError("Command failed") from e
+                append_log(self.deployment, full_err)
+                if is_buildkit_cache_error(full_err):
+                    raise BuildError(
+                        "Docker cache corruption detected after automatic recovery attempt."
+                    ) from e
+                raise BuildError("Command failed") from e
 
     def _push_image(self):
         """Step 3: Push to Registry."""

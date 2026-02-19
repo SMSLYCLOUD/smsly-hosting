@@ -842,8 +842,13 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
     # Provision addons
     required_addons = (template.get('required_addons') or []) if template else []
+    supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
 
     for addon_type in required_addons:
+        if addon_type not in supported_addons:
+            logger.warning("Template addon %s is not supported yet; skipping", addon_type)
+            continue
+
         addon = Addon.objects.create(
             service=service,
             name=f"{addon_type.lower()}-{service.name}"[:255],
@@ -857,7 +862,11 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             addon.save()
 
             # Inject Env
-            key_map = {'POSTGRES': 'DATABASE_URL', 'REDIS': 'REDIS_URL'}
+            key_map = {
+                'POSTGRES': 'DATABASE_URL',
+                'REDIS': 'REDIS_URL',
+                'ELASTICSEARCH': 'ELASTICSEARCH_URL',
+            }
             key = key_map.get(addon_type, f"{addon_type}_URL")
             EnvironmentVariable.objects.create(
                 service=service, key=key, value=url, is_secret=True
