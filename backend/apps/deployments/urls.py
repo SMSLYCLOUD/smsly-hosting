@@ -2,7 +2,11 @@
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from rest_framework_nested import routers
-from .views import DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView
+from .views import (
+    DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView,
+    ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
+)
+from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
 from .views_cron import CronJobViewSet
@@ -35,6 +39,10 @@ router.register(r'topology', TopologyViewSet, basename='topology')
 router.register(r'tunnels', TunnelViewSet, basename='tunnel')
 router.register(r'audit-logs', AuditLogViewSet, basename='auditlog')
 router.register(r'servers', ManagedServerViewSet, basename='server')
+router.register(r'backups', ServiceBackupViewSet, basename='backup')
+router.register(r'server/backups', ServerBackupViewSet, basename='server-backup')
+router.register(r'backup-schedules', BackupScheduleViewSet, basename='backup-schedule')
+router.register(r'transfers', ServerTransferViewSet, basename='transfer')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/
@@ -48,6 +56,7 @@ services_router.register(
     basename='service-metrics')
 services_router.register(r'cron', CronJobViewSet, basename='service-cron')
 services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
+services_router.register(r'backups', ServiceBackupViewSet, basename='service-backup')
 
 urlpatterns = router.urls + [
     path('', include(services_router.urls)),
@@ -67,4 +76,3 @@ urlpatterns = router.urls + [
     path('tokens/create/', create_token, name='token-create'),
     path('tokens/<uuid:token_id>/revoke/', revoke_token, name='token-revoke'),
 ]
-

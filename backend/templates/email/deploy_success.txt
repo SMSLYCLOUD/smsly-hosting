@@ -1,0 +1,16 @@
+{% autoescape off %}
+Deployment Successful
+
+Hi {{ user.username }},
+
+Your service "{{ service.name }}" has been successfully deployed.
+
+Commit: {{ deployment.commit_message }}
+URL: {{ service.service_url }}
+
+View logs:
+{{ site_url }}/deployments/{{ deployment.id }}
+
+Cheers,
+CloudNeuron
+{% endautoescape %}

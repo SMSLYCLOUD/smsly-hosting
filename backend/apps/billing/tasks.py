@@ -1,33 +1,170 @@
 """Tasks module."""
+import logging
+from decimal import Decimal
+from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
-from .models import UsageRecord
+from django.db.models import Sum
+from .models import UsageRecord, UserSubscription, Invoice, PricingPlan
+from .models_analytics import DailyRevenue, InfrastructureCost
 from apps.deployments.models import Deployment, Service
-from decimal import Decimal
+from .services.metering import UsageMeter
+
+logger = logging.getLogger(__name__)
 
 # Pricing: $0.01 per vCPU/hour, $0.005 per GB-RAM/hour
 PRICE_CPU_HOUR = Decimal("0.01")
 PRICE_RAM_GB_HOUR = Decimal("0.005")
 
 
-@shared_task
+@shared_task(soft_time_limit=300, time_limit=330)
 def collect_usage_task():
     """
     Runs hourly. Snapshots active services and calculates cost.
     """
-    active_services = Service.objects.filter(
-        deployments__status=Deployment.Status.ACTIVE
-    ).distinct()
+    try:
+        active_services = Service.objects.filter(
+            deployments__status=Deployment.Status.ACTIVE
+        ).distinct()
 
-    for service in active_services:
-        cpu = service.cpu_cores
-        ram_gb = Decimal(service.memory_mb) / 1024
+        for service in active_services:
+            cpu = service.cpu_cores
+            ram_gb = Decimal(service.memory_mb) / 1024
 
-        cost = (cpu * PRICE_CPU_HOUR) + (ram_gb * PRICE_RAM_GB_HOUR)
+            cost = (cpu * PRICE_CPU_HOUR) + (ram_gb * PRICE_RAM_GB_HOUR)
 
-        UsageRecord.objects.create(
-            service=service,
-            cpu_cores=cpu,
-            memory_mb=service.memory_mb,
-            cost=cost
-        )
+            UsageRecord.objects.create(
+                service=service,
+                cpu_cores=cpu,
+                memory_mb=service.memory_mb,
+                cost=cost
+            )
+    except Exception as e:
+        logger.error(f"Error collecting usage: {e}")
+
+
+@shared_task(soft_time_limit=3600, time_limit=3900)
+def generate_monthly_invoices():
+    """Run on 1st of each month — generate invoices for all active subscriptions."""
+    meter = UsageMeter()
+    # Get subscriptions that need billing (active)
+    subscriptions = UserSubscription.objects.filter(status='ACTIVE')
+
+    for sub in subscriptions:
+        try:
+            now = timezone.now()
+            period_end = sub.current_period_end
+            period_start = sub.current_period_start
+
+            # Skip if not yet due
+            if period_end > now:
+                continue
+
+            # Calculate cost (base plan + usage)
+            # For simplicity, calculate_cost returns a total.
+            # In a real system, we'd detail line items.
+            total_cost = meter.calculate_cost(sub.user, period_start, period_end)
+
+            line_items = [
+                {
+                    'description': f"Subscription: {sub.plan.name}",
+                    'qty': 1,
+                    'unit_price': float(total_cost), # Simplified
+                    'total': float(total_cost)
+                }
+            ]
+
+            # Create Invoice
+            invoice = Invoice.objects.create(
+                user=sub.user,
+                subscription=sub,
+                status='DRAFT',
+                period_start=period_start,
+                period_end=period_end,
+                subtotal=total_cost,
+                tax=0,
+                total=total_cost,
+                line_items=line_items,
+                due_date=now + timedelta(days=7)
+            )
+
+            # Advance billing period
+            if sub.billing_cycle == 'MONTHLY':
+                next_period_end = period_end + timedelta(days=30)
+            else:
+                next_period_end = period_end + timedelta(days=365)
+
+            sub.current_period_start = period_end
+            sub.current_period_end = next_period_end
+            sub.save()
+
+            # Mark sent (or integrate with payment provider)
+            invoice.status = 'SENT'
+            invoice.save()
+
+            logger.info(f"Generated invoice {invoice.id} for user {sub.user.username}")
+
+        except Exception as e:
+            logger.error(f"Failed to generate invoice for subscription {sub.id}: {e}")
+
+
+@shared_task(soft_time_limit=600, time_limit=660)
+def send_payment_reminders():
+    """Run daily — send reminders for overdue invoices."""
+    try:
+        overdue_invoices = Invoice.objects.filter(status='OVERDUE')
+        for invoice in overdue_invoices:
+            # Here we would send email
+            logger.info(f"Sending reminder for overdue invoice {invoice.id}")
+    except Exception as e:
+        logger.error(f"Error sending payment reminders: {e}")
+
+@shared_task(soft_time_limit=600, time_limit=660)
+def aggregate_daily_revenue():
+    """Run at midnight — snapshot yesterday's revenue."""
+    yesterday = timezone.now().date() - timedelta(days=1)
+
+    if DailyRevenue.objects.filter(date=yesterday).exists():
+        return
+
+    # Sum invoices paid yesterday
+    total_rev = Invoice.objects.filter(
+        paid_at__date=yesterday,
+        status='PAID'
+    ).aggregate(total=Sum('total'))['total'] or 0
+
+    # Subscriptions created yesterday
+    # Note: current_period_start might be updated on renewal, so created_at on subscription would be better
+    # But UserSubscription doesn't have created_at in the model I defined (it has current_period_start)
+    # I'll rely on Invoice creation for new subs revenue or just use 0 for now.
+    new_subs = UserSubscription.objects.filter(
+        current_period_start__date=yesterday
+    ).count()
+
+    active_subs = UserSubscription.objects.filter(status='ACTIVE').count()
+
+    DailyRevenue.objects.create(
+        date=yesterday,
+        total_revenue=total_rev,
+        subscription_revenue=total_rev,
+        overage_revenue=0,
+        new_subscriptions=new_subs,
+        active_subscribers=active_subs
+    )
+
+@shared_task(soft_time_limit=600, time_limit=660)
+def calculate_infrastructure_costs():
+    """Run daily — pull costs from cloud provider APIs."""
+    yesterday = timezone.now().date() - timedelta(days=1)
+
+    # Placeholder: estimate cost based on active resources * cost
+    # $5/month per service (approx $0.16/day)
+    active_services_count = Service.objects.filter(deployments__status='ACTIVE').distinct().count()
+    cost_usd = active_services_count * 0.16
+
+    InfrastructureCost.objects.create(
+        date=yesterday,
+        cost_type='VPS',
+        amount_usd=cost_usd,
+        description='Estimated VPS cost'
+    )

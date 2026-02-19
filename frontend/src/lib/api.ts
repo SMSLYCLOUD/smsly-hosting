@@ -544,6 +544,223 @@ export const tunnelsApi = {
   },
 };
 
+// ─── Billing API ────────────────────────────────────────────────────────────
+
+export interface PricingPlan {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  price_monthly_usd: number;
+  price_yearly_usd: number;
+  max_services: number;
+  max_cpu_cores: number;
+  max_memory_mb: number;
+  max_storage_gb: number;
+  is_active: boolean;
+  features: {
+    has_auto_scaling: boolean;
+    has_priority_support: boolean;
+    has_backup: boolean;
+    has_server_transfer: boolean;
+    has_advanced_metrics: boolean;
+    has_ai_diagnosis: boolean;
+  }
+}
+
+export interface UserSubscription {
+  id: number;
+  plan: number;
+  plan_name: string;
+  status: 'ACTIVE' | 'PAST_DUE' | 'CANCELLED' | 'TRIAL';
+  billing_cycle: 'MONTHLY' | 'YEARLY';
+  current_period_end: string;
+}
+
+export interface Invoice {
+  id: number;
+  total: number;
+  status: 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE';
+  period_start: string;
+  period_end: string;
+  pdf_url?: string;
+}
+
+export interface UsageSummary {
+  cpu_hours: number;
+  memory_gb_hours: number;
+  storage_gb: number;
+  bandwidth_gb: number;
+  active_services: number;
+  active_addons: number;
+}
+
+export const billingApi = {
+  getPlans: async (): Promise<PricingPlan[]> => {
+    const res = await api.get('/billing/plans/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+
+  getSubscription: async (): Promise<UserSubscription | null> => {
+    const res = await api.get('/billing/subscription/');
+    const results = Array.isArray(res.data) ? res.data : res.data.results || [];
+    return results.length > 0 ? results[0] : null;
+  },
+
+  subscribe: async (planId: number, cycle: 'MONTHLY' | 'YEARLY'): Promise<any> => {
+    // This is a placeholder for the actual subscribe flow
+    const res = await api.post('/billing/subscription/subscribe/', { plan_id: planId, cycle });
+    return res.data;
+  },
+
+  cancelSubscription: async (): Promise<any> => {
+    const res = await api.post('/billing/subscription/cancel/');
+    return res.data;
+  },
+
+  getInvoices: async (): Promise<Invoice[]> => {
+    const res = await api.get('/billing/invoices/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+
+  getUsage: async (): Promise<UsageSummary> => {
+    const res = await api.get('/billing/usage/');
+    return res.data;
+  },
+
+  // Admin
+  adminGetPlans: async (): Promise<PricingPlan[]> => {
+    const res = await api.get('/billing/admin/plans/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+
+  adminUpdatePlan: async (id: number, data: Partial<PricingPlan>): Promise<PricingPlan> => {
+    const res = await api.patch(`/billing/admin/plans/${id}/`, data);
+    return res.data;
+  },
+
+  adminCreatePlan: async (data: Partial<PricingPlan>): Promise<PricingPlan> => {
+    const res = await api.post('/billing/admin/plans/', data);
+    return res.data;
+  },
+
+  // Admin Analytics
+  adminGetOverview: async (): Promise<any> => {
+    const res = await api.get('/billing/admin/analytics/');
+    return res.data;
+  },
+  adminGetRevenue: async (): Promise<any> => {
+    const res = await api.get('/billing/admin/analytics/revenue/');
+    return res.data;
+  },
+  adminGetPlanBreakdown: async (): Promise<any> => {
+    const res = await api.get('/billing/admin/analytics/plans/');
+    return res.data;
+  },
+  adminGetCustomers: async (): Promise<any> => {
+    const res = await api.get('/billing/admin/analytics/customers/');
+    return res.data;
+  },
+  adminGetCosts: async (): Promise<any> => {
+    const res = await api.get('/billing/admin/analytics/costs/');
+    return res.data;
+  }
+};
+
+// ─── Core API ───────────────────────────────────────────────────────────────
+
+export interface DashboardOverview {
+  services: { total: number; running: number; failed: number; stopped: number };
+  deployments_this_month: number;
+  addons: { total: number; active: number };
+  cost_estimate: { monthly_usd: number; currency: string };
+  resource_usage: {
+    cpu_hours: number;
+    memory_gb_hours: number;
+    storage_gb: number;
+    bandwidth_gb: number;
+  };
+  recent_activity: any[];
+  alerts: any[];
+}
+
+export const coreApi = {
+  getDashboardOverview: async (): Promise<DashboardOverview> => {
+    const res = await api.get('/dashboard/overview/');
+    return res.data;
+  },
+
+  // API Keys
+  getApiKeys: async (): Promise<any[]> => {
+    const res = await api.get('/api-keys/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+  createApiKey: async (name: string): Promise<any> => {
+    const res = await api.post('/api-keys/', { name });
+    return res.data;
+  },
+  revokeApiKey: async (id: number): Promise<void> => {
+    await api.delete(`/api-keys/${id}/`);
+  },
+
+  // Notifications
+  getNotifications: async (): Promise<any[]> => {
+    const res = await api.get('/notifications/notifications/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+  markAllNotificationsRead: async (): Promise<void> => {
+    await api.post('/notifications/notifications/mark_all_read/');
+  },
+  getNotificationPreferences: async (): Promise<any[]> => {
+    const res = await api.get('/notifications/preferences/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+  updateNotificationPreference: async (id: number, data: any): Promise<any> => {
+    const res = await api.patch(`/notifications/preferences/${id}/`, data);
+    return res.data;
+  }
+};
+
+// ─── Addons API ─────────────────────────────────────────────────────────────
+
+export interface Addon {
+    id: string;
+    name: string;
+    addon_type: 'POSTGRES' | 'REDIS' | 'MONGODB' | 'MINIO';
+    status: 'PROVISIONING' | 'RUNNING' | 'FAILED' | 'STOPPED';
+    created_at: string;
+    connection_url?: string;
+    config: Record<string, any>;
+}
+
+export const addonsApi = {
+    list: async (): Promise<Addon[]> => {
+        const res = await api.get('/addons/');
+        return Array.isArray(res.data) ? res.data : res.data.results || [];
+    },
+    get: async (id: string): Promise<Addon> => {
+        const res = await api.get(`/addons/${id}/`);
+        return res.data;
+    },
+    create: async (data: Partial<Addon>): Promise<Addon> => {
+        const res = await api.post('/addons/', data);
+        return res.data;
+    },
+    delete: async (id: string): Promise<void> => {
+        await api.delete(`/addons/${id}/`);
+    },
+    rotateCredentials: async (id: string): Promise<{ connection_url: string }> => {
+        const res = await api.post(`/addons/${id}/rotate-credentials/`);
+        return res.data;
+    },
+    getMetrics: async (id: string): Promise<any> => {
+        const res = await api.get(`/addons/${id}/metrics/`);
+        return res.data;
+    },
+    runQuery: async (id: string, query: string): Promise<{ results: any[], columns: string[], error?: string }> => {
+        const res = await api.post(`/addons/${id}/query/`, { query });
+        return res.data;
+    }
+};
+
 export default api;
-
-

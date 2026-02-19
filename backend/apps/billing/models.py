@@ -1,6 +1,7 @@
 """Models module."""
 import uuid
 from django.db import models
+from django.conf import settings
 from apps.deployments.models import Service
 
 
@@ -115,3 +116,104 @@ class UsageRecord(models.Model):
 
     def __str__(self):
         return f"{self.service.name} - {self.timestamp} - ${self.cost}"
+
+
+# ─── NEW PRICING & BILLING MODELS ───
+
+class PricingPlan(models.Model):
+    """Admin-configurable pricing tiers."""
+    name = models.CharField(max_length=100)  # Starter, Pro, Enterprise
+    slug = models.SlugField(unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+
+    # Resource limits
+    max_services = models.IntegerField(default=3)
+    max_cpu_cores = models.DecimalField(max_digits=5, decimal_places=2, default=1.0)
+    max_memory_mb = models.IntegerField(default=512)
+    max_storage_gb = models.IntegerField(default=5)
+    max_bandwidth_gb = models.IntegerField(default=50)
+    max_addons = models.IntegerField(default=2)
+    max_custom_domains = models.IntegerField(default=1)
+    max_team_members = models.IntegerField(default=1)
+
+    # Features
+    has_auto_scaling = models.BooleanField(default=False)
+    has_priority_support = models.BooleanField(default=False)
+    has_backup = models.BooleanField(default=False)
+    has_server_transfer = models.BooleanField(default=False)
+    has_advanced_metrics = models.BooleanField(default=False)
+    has_ai_diagnosis = models.BooleanField(default=True)
+
+    # Pricing
+    price_monthly_usd = models.DecimalField(max_digits=10, decimal_places=2)
+    price_yearly_usd = models.DecimalField(max_digits=10, decimal_places=2)  # annual discount
+
+    # Stripe/payment provider IDs
+    stripe_price_id_monthly = models.CharField(max_length=100, blank=True)
+    stripe_price_id_yearly = models.CharField(max_length=100, blank=True)
+    flutterwave_plan_id = models.CharField(max_length=100, blank=True)
+
+    def __str__(self):
+        return self.name
+
+
+class ResourcePrice(models.Model):
+    """Per-unit pricing for usage-based billing."""
+    resource_type = models.CharField(choices=[
+        ('CPU', 'CPU Core'), ('RAM', 'RAM (per GB)'),
+        ('STORAGE', 'Storage (per GB)'), ('BANDWIDTH', 'Bandwidth (per GB)'),
+        ('ADDON_POSTGRES', 'PostgreSQL'), ('ADDON_REDIS', 'Redis'),
+        ('ADDON_MONGODB', 'MongoDB'), ('ADDON_QDRANT', 'Qdrant'),
+        ('AI_QUERY', 'AI Query'), ('BUILD_MINUTE', 'Build Minute'),
+    ], max_length=20, unique=True)
+    price_per_unit_monthly = models.DecimalField(max_digits=10, decimal_places=4)
+    unit_label = models.CharField(max_length=50)  # "per core/month", "per GB/month"
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.resource_type}: ${self.price_per_unit_monthly}"
+
+
+class UserSubscription(models.Model):
+    """User's active subscription to a plan."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='active_subscription')
+    plan = models.ForeignKey(PricingPlan, on_delete=models.PROTECT)
+    status = models.CharField(choices=[
+        ('ACTIVE', 'Active'), ('PAST_DUE', 'Past Due'),
+        ('CANCELLED', 'Cancelled'), ('TRIAL', 'Trial'),
+    ], max_length=20)
+    billing_cycle = models.CharField(choices=[
+        ('MONTHLY', 'Monthly'), ('YEARLY', 'Yearly'),
+    ], max_length=10, default='MONTHLY')
+    current_period_start = models.DateTimeField()
+    current_period_end = models.DateTimeField()
+    stripe_subscription_id = models.CharField(max_length=100, blank=True)
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.plan.name}"
+
+
+class Invoice(models.Model):
+    """Generated invoice per billing period."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    subscription = models.ForeignKey(UserSubscription, on_delete=models.SET_NULL, null=True)
+    status = models.CharField(choices=[
+        ('DRAFT', 'Draft'), ('SENT', 'Sent'),
+        ('PAID', 'Paid'), ('OVERDUE', 'Overdue'),
+    ], max_length=10)
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+    tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    line_items = models.JSONField(default=list)  # [{description, qty, unit_price, total}]
+    pdf_url = models.URLField(blank=True)
+    paid_at = models.DateTimeField(null=True)
+    due_date = models.DateTimeField()
+
+    def __str__(self):
+        return f"Invoice {self.id} for {self.user.username}"
+from .models_analytics import DailyRevenue, InfrastructureCost

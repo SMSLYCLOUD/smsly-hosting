@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
+from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -154,3 +155,20 @@ class DeploymentApproveSerializer(serializers.Serializer):
         required=False,
         help_text="Dict of env var key→value to add/update before build")
 
+class ServiceBackupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceBackup
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'completed_at', 'status', 'file_path', 'size_bytes', 'metadata', 'error_message']
+
+class ServerBackupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServerBackup
+        fields = '__all__'
+        read_only_fields = ['id', 'status', 'file_path', 'size_bytes', 'services_included', 'created_at', 'completed_at']
+
+class BackupScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BackupSchedule
+        fields = '__all__'
+from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer

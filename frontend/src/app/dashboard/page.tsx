@@ -1,17 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X } from "lucide-react";
-import { servicesApi, Service } from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell } from "lucide-react";
+import { coreApi, DashboardOverview } from "@/lib/api";
 import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { useAuth } from "@/components/auth-provider";
-import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
+import { Progress } from "@/components/ui/progress";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -28,7 +28,7 @@ const stagger = {
 };
 
 export default function DashboardPage() {
-  const [services, setServices] = useState<Service[]>([]);
+  const [data, setData] = useState<DashboardOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
   const { toast } = useToast();
@@ -45,16 +45,15 @@ export default function DashboardPage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const svcs = await servicesApi.list();
-        setServices(svcs || []);
+        const overview = await coreApi.getDashboardOverview();
+        setData(overview);
       } catch (err) {
-        console.error('Failed to fetch services:', err);
-        setServices([]);
+        console.error('Failed to fetch dashboard data:', err);
         // Only show toast on first load failure to avoid spamming
         if (loading) {
             toast({
                 title: "Dashboard Error",
-                description: "Failed to load services. Please check your connection.",
+                description: "Failed to load dashboard data.",
                 variant: "destructive",
             });
         }
@@ -63,271 +62,224 @@ export default function DashboardPage() {
       }
     };
     fetchData();
-    const interval = setInterval(fetchData, 10000);
+    const interval = setInterval(fetchData, 30000); // 30s refresh
     return () => clearInterval(interval);
   }, []);
 
-  const activeDeployments = services.filter(s => s.latest_deployment?.status === 'ACTIVE').length;
-  const totalServices = services.length;
-  const failedServices = services.filter(s => s.latest_deployment?.status === 'FAILED').length;
-
-  if (loading) {
+  if (loading || !data) {
     return <SkeletonDashboard />;
   }
 
-  // Calculate stats from real data
-  const databaseServices = services.filter(s =>
-    s.name?.toLowerCase().includes('postgres') ||
-    s.name?.toLowerCase().includes('redis') ||
-    s.name?.toLowerCase().includes('mysql') ||
-    s.name?.toLowerCase().includes('mongo')
-  ).length;
-
-  const uniqueProviders: string[] = Array.from(
-    new Set(services.map(s => s.provider).filter((p): p is string => Boolean(p)))
-  );
-
   const stats = [
     {
-      title: "Total Services",
-      value: totalServices,
-      subtitle: "Deployed services",
+      title: "Services",
+      value: `${data.services.running} / ${data.services.total}`,
+      subtitle: `${data.services.failed} failed`,
       icon: Server,
       color: "text-blue-500",
       bg: "bg-blue-500/10",
-      trend: totalServices > 0 ? "Active" : "None yet"
+      trend: "Running"
     },
     {
-      title: "Active Deployments",
-      value: activeDeployments,
-      subtitle: failedServices > 0 ? `${failedServices} failed` : "Running smoothly",
+      title: "Deployments",
+      value: data.deployments_this_month,
+      subtitle: "This month",
       icon: Activity,
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
-      trend: totalServices > 0 ? `${Math.round((activeDeployments / Math.max(totalServices, 1)) * 100)}% success` : "Deploy first service"
+      trend: "Active"
     },
     {
-      title: "Databases",
-      value: databaseServices,
-      subtitle: databaseServices > 0 ? "Managed instances" : "None provisioned",
+      title: "Active Addons",
+      value: data.addons.active,
+      subtitle: `of ${data.addons.total} total`,
       icon: Database,
       color: "text-purple-500",
       bg: "bg-purple-500/10",
-      trend: databaseServices > 0 ? "Healthy" : "Add from marketplace"
+      trend: "Healthy"
     },
     {
-      title: "Cloud Providers",
-      value: uniqueProviders.length || totalServices > 0 ? 1 : 0,
-      subtitle: uniqueProviders.length > 0 ? uniqueProviders.slice(0, 2).join(", ") : totalServices > 0 ? "Local" : "None configured",
-      icon: Globe,
-      color: "text-cyan-500",
-      bg: "bg-cyan-500/10",
-      trend: uniqueProviders.length > 1 ? "Multi-cloud" : "Single provider"
+      title: "Current Cost",
+      value: `$${Number(data.cost_estimate.monthly_usd).toFixed(2)}`,
+      subtitle: "Estimated this month",
+      icon: DollarSign,
+      color: "text-amber-500",
+      bg: "bg-amber-500/10",
+      trend: data.cost_estimate.currency
     }
   ];
 
-
   return (
     <DashboardShell>
-
       <div className="flex-1 p-8 relative z-10">
-    <motion.div
-      className="flex-1 space-y-6 max-w-7xl mx-auto"
-      initial="initial"
-      animate="animate"
-      variants={stagger}
-    >
-      {/* Header */}
-      <motion.div variants={fadeInUp} className="flex items-center justify-between">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-          <p className="text-muted-foreground">Welcome back! Here&apos;s your infrastructure overview.</p>
-        </div>
-        <Link href="/new">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="btn-shimmer px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white font-semibold shadow-lg shadow-primary/25 flex items-center gap-2"
-          >
-            <Zap size={18} />
-            Quick Deploy
-          </motion.button>
-        </Link>
-      </motion.div>
-
-      {/* Default Password Warning */}
-      <AnimatePresence>
-        {showPasswordWarning && (
-          <motion.div
-            initial={{ opacity: 0, y: -10, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: 'auto' }}
-            exit={{ opacity: 0, y: -10, height: 0 }}
-            className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3"
-          >
-            <ShieldAlert className="text-amber-500 mt-0.5 flex-shrink-0" size={20} />
-            <div className="flex-1">
-              <p className="font-semibold text-amber-600 dark:text-amber-400">Default password detected</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                You are using the default admin password. For security, please{' '}
-                <Link href="/settings" className="text-primary font-medium underline hover:no-underline">
-                  change your password in Settings
-                </Link>.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setShowPasswordWarning(false);
-                localStorage.setItem('password_warning_dismissed', 'true');
-              }}
-              className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 p-1 rounded-lg hover:bg-muted/50"
-              aria-label="Dismiss warning"
-            >
-              <X size={16} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Alert Banner (if failed services) */}
-      {failedServices > 0 && (
         <motion.div
-          variants={fadeInUp}
-          className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center gap-3"
+          className="flex-1 space-y-6 max-w-7xl mx-auto"
+          initial="initial"
+          animate="animate"
+          variants={stagger}
         >
-          <AlertCircle className="text-red-500" />
-          <div>
-            <p className="font-medium text-red-500">{failedServices} service(s) need attention</p>
-            <p className="text-sm text-muted-foreground">Check the services tab for details</p>
+          {/* Header */}
+          <motion.div variants={fadeInUp} className="flex items-center justify-between">
+            <div>
+              <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
+              <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
+            </div>
+            <Link href="/new">
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="btn-shimmer px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white font-semibold shadow-lg shadow-primary/25 flex items-center gap-2"
+              >
+                <Zap size={18} />
+                Quick Deploy
+              </motion.button>
+            </Link>
+          </motion.div>
+
+          {/* Default Password Warning */}
+          <AnimatePresence>
+            {showPasswordWarning && (
+              <motion.div
+                initial={{ opacity: 0, y: -10, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, y: -10, height: 0 }}
+                className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3"
+              >
+                <ShieldAlert className="text-amber-500 mt-0.5 flex-shrink-0" size={20} />
+                <div className="flex-1">
+                  <p className="font-semibold text-amber-600 dark:text-amber-400">Default password detected</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    You are using the default admin password. Please <Link href="/settings" className="underline">change it</Link>.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowPasswordWarning(false);
+                    localStorage.setItem('password_warning_dismissed', 'true');
+                  }}
+                  className="p-1 hover:bg-amber-500/20 rounded"
+                >
+                  <X size={16} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Stats Grid */}
+          <motion.div variants={fadeInUp} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {stats.map((stat) => (
+              <motion.div
+                key={stat.title}
+                whileHover={{ scale: 1.03, y: -4 }}
+                transition={{ type: "spring", stiffness: 400, damping: 15 }}
+              >
+                <Card className="card-premium rounded-xl">
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
+                    <div className={`icon-glow p-2.5 rounded-xl ${stat.bg}`}>
+                      <stat.icon className={`h-5 w-5 ${stat.color}`} />
+                    </div>
+                  </CardHeader>
+                  <CardContent className="relative z-10">
+                    <div className="text-3xl font-bold">{stat.value}</div>
+                    <div className="flex items-center justify-between mt-1">
+                      <p className="text-xs text-muted-foreground">{stat.subtitle}</p>
+                      {stat.trend && (
+                        <span className="text-xs text-emerald-500 flex items-center gap-1">
+                          <TrendingUp size={12} />
+                          {stat.trend}
+                        </span>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            ))}
+          </motion.div>
+
+          {/* Activity Feed + Resource Usage */}
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+            {/* Recent Activity */}
+            <motion.div variants={fadeInUp} className="col-span-4">
+              <Card className="card-premium rounded-xl h-full">
+                <CardHeader>
+                  <CardTitle>Recent Activity</CardTitle>
+                  <CardDescription>Last 10 deployment events</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {data.recent_activity.length === 0 ? (
+                      <div className="text-center text-muted-foreground py-8">No recent activity</div>
+                    ) : (
+                      data.recent_activity.map((activity: any) => (
+                        <div key={activity.id} className="flex items-start gap-3">
+                          <div className={`w-2 h-2 mt-2 rounded-full ${
+                            activity.status === 'ACTIVE' ? 'bg-emerald-500' :
+                            activity.status === 'FAILED' ? 'bg-red-500' : 'bg-blue-500'
+                          }`} />
+                          <div>
+                            <p className="text-sm font-medium">{activity.service__name}</p>
+                            <p className="text-xs text-muted-foreground truncate max-w-[300px]">
+                              {activity.commit_message || 'Deployment'}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {new Date(activity.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="ml-auto text-[10px]">
+                            {activity.status}
+                          </Badge>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+
+            {/* Resource Usage */}
+            <motion.div variants={fadeInUp} className="col-span-3">
+              <Card className="card-premium rounded-xl h-full">
+                <CardHeader>
+                  <CardTitle>Resource Usage</CardTitle>
+                  <CardDescription>Aggregated across all services</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <Activity className="w-4 h-4 text-blue-500" /> CPU Hours
+                      </span>
+                      <span className="font-mono">{data.resource_usage.cpu_hours.toFixed(1)} hrs</span>
+                    </div>
+                    <Progress value={Math.min(100, (data.resource_usage.cpu_hours / 100) * 100)} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-yellow-500" /> Memory Hours (GB)
+                      </span>
+                      <span className="font-mono">{data.resource_usage.memory_gb_hours.toFixed(1)} GB-h</span>
+                    </div>
+                    <Progress value={Math.min(100, (data.resource_usage.memory_gb_hours / 200) * 100)} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="flex items-center gap-2">
+                        <Database className="w-4 h-4 text-purple-500" /> Storage
+                      </span>
+                      <span className="font-mono">{data.resource_usage.storage_gb} GB</span>
+                    </div>
+                    <Progress value={Math.min(100, (data.resource_usage.storage_gb / 20) * 100)} />
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
           </div>
         </motion.div>
-      )}
-
-      {/* Stats Grid */}
-      <motion.div variants={fadeInUp} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, i) => (
-          <motion.div
-            key={stat.title}
-            whileHover={{ scale: 1.03, y: -4 }}
-            transition={{ type: "spring", stiffness: 400, damping: 15 }}
-          >
-            <Card className="card-premium rounded-xl">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 relative z-10">
-                <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-                <div className={`icon-glow p-2.5 rounded-xl ${stat.bg}`}>
-                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
-                </div>
-              </CardHeader>
-              <CardContent className="relative z-10">
-                <div className="text-3xl font-bold">{stat.value}</div>
-                <div className="flex items-center justify-between mt-1">
-                  <p className="text-xs text-muted-foreground">{stat.subtitle}</p>
-                  <span className="text-xs text-emerald-500 flex items-center gap-1">
-                    <TrendingUp size={12} />
-                    {stat.trend}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-        ))}
-      </motion.div>
-
-      {/* Content Grid */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
-        {/* Recent Services */}
-        <motion.div variants={fadeInUp} className="col-span-4">
-          <Card className="card-premium rounded-xl h-full">
-            <CardHeader className="flex flex-row items-center justify-between relative z-10">
-              <CardTitle>Recent Services</CardTitle>
-              <Link href="/services" className="text-sm text-primary hover:underline font-medium">
-                View all →
-              </Link>
-            </CardHeader>
-            <CardContent className="relative z-10">
-              <div className="space-y-3">
-                {services.length === 0 ? (
-                  <EmptyState />
-                ) : (
-                  services.slice(0, 5).map((svc, i) => (
-                    <motion.div
-                      key={svc.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.1 }}
-                      className="flex items-center justify-between p-3 rounded-xl hover:bg-primary/5 border border-transparent hover:border-primary/10 transition-all group"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-cyan-500/10 flex items-center justify-center text-primary font-bold shadow-sm">
-                          {svc.name[0].toUpperCase()}
-                        </div>
-                        <div>
-                          <p className="font-medium group-hover:text-primary transition-colors">{svc.name}</p>
-                          <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                            {svc.repository_url || 'Docker deployment'}
-                          </p>
-                        </div>
-                      </div>
-                      <StatusBadge status={svc.latest_deployment?.status || 'PENDING'} />
-                    </motion.div>
-                  ))
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Activity Feed */}
-        <motion.div variants={fadeInUp} className="col-span-3">
-          <ActivityFeed />
-        </motion.div>
-      </div>
-    </motion.div>
       </div>
     </DashboardShell>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, "default" | "secondary" | "destructive" | "outline" | "success" | "warning" | "info" | "purple" | "gray"> = {
-    ACTIVE: 'success',
-    RUNNING: 'success',
-    FAILED: 'destructive',
-    PENDING: 'warning',
-    BUILDING: 'info',
-    DEPLOYING: 'purple',
-    HEALTH_CHECK: 'info',
-    QUEUED: 'gray',
-    CANCELLED: 'gray',
-  };
-
-  const label = status === 'HEALTH_CHECK' ? 'Health Check' : status;
-
-  return (
-    <Badge variant={styles[status] || "outline"}>
-      {label}
-    </Badge>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="text-center py-12">
-      <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-muted/50 flex items-center justify-center">
-        <Server className="w-8 h-8 text-muted-foreground" />
-      </div>
-      <h3 className="font-semibold mb-2">No services yet</h3>
-      <p className="text-sm text-muted-foreground mb-4">
-        Deploy your first application to get started
-      </p>
-      <Link href="/new">
-        <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          className="btn-shimmer px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-cyan-500 text-white font-semibold shadow-lg shadow-primary/25"
-        >
-          Deploy Now
-        </motion.button>
-      </Link>
-    </div>
   );
 }

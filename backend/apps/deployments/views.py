@@ -12,10 +12,13 @@ from .serializers import (
     ServiceSerializer, DeploymentSerializer,
     DeploymentTriggerSerializer, EnvVarSerializer,
     DeploymentTimelineSerializer, InstantRollbackSerializer,
-    AuditLogSerializer, DeploymentApproveSerializer
+    AuditLogSerializer, DeploymentApproveSerializer,
+    ServiceBackupSerializer, ServerBackupSerializer, BackupScheduleSerializer
 )
 from .models_audit import AuditLog
-from .tasks import smart_deploy_task, resume_deploy_task
+from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from .tasks import smart_deploy_task, resume_deploy_task, create_service_backup_task, create_server_backup_task, restore_service_backup_task
+from .services.backup_service import BackupService
 from apps.cloud.models import CloudProvider
 import os
 import uuid
@@ -1056,3 +1059,50 @@ class DomainConfigView(APIView):
             'caddy_status': config.caddy_status,
             'caddyfile_preview': caddyfile_content,
         })
+
+class ServiceBackupViewSet(viewsets.ModelViewSet):
+    serializer_class = ServiceBackupSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return ServiceBackup.objects.filter(service__owner=self.request.user).order_by('-created_at')
+
+    def perform_create(self, serializer):
+        backup = serializer.save(created_by=self.request.user, status='PENDING')
+        create_service_backup_task.delay(str(backup.service.id), 'MANUAL')
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None):
+        backup = self.get_object()
+        target_service_id = request.data.get('target_service_id')
+        restore_service_backup_task.delay(str(backup.id), target_service_id)
+        return Response({'status': 'restore_started'})
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+        from django.http import FileResponse
+        return FileResponse(open(backup.file_path, 'rb'), as_attachment=True)
+
+class ServerBackupViewSet(viewsets.ModelViewSet):
+    serializer_class = ServerBackupSerializer
+    permission_classes = [permissions.IsAdminUser]
+    queryset = ServerBackup.objects.all().order_by('-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(status='PENDING')
+        create_server_backup_task.delay()
+
+    @action(detail=True, methods=['post'])
+    def restore(self, request, pk=None):
+        return Response({'error': 'Server restore via API not implemented. Use CLI.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
+
+class BackupScheduleViewSet(viewsets.ModelViewSet):
+    serializer_class = BackupScheduleSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return BackupSchedule.objects.filter(service__owner=self.request.user)
+from .views_transfer import ServerTransferViewSet
