@@ -498,7 +498,7 @@ def _deploy_container(deployment, provider, image_name):
         compute = ComputeService(provider)
 
         env_vars = {env.key: env.value for env in service.env_vars.all()}
-        env_vars.setdefault('PORT', '8000')
+        env_vars.setdefault('PORT', str(service.internal_port or 8000))
         if service.public_domain:
             env_vars.setdefault('PUBLIC_DOMAIN', service.public_domain)
         if service.custom_domains:
