@@ -2,7 +2,7 @@ import uuid
 from django.db import models
 from django.utils import timezone
 from .models import Service
-from .models_backup import ServiceBackup
+from .models_backup import ServiceBackup, ServerBackup
 
 class ServerTransfer(models.Model):
     """Tracks migration of services from source to target server."""
@@ -20,7 +20,8 @@ class ServerTransfer(models.Model):
 
     # Source
     source_server_ip = models.GenericIPAddressField()
-    source_backup = models.ForeignKey(ServiceBackup, on_delete=models.SET_NULL, null=True)
+    source_backup = models.ForeignKey(ServiceBackup, on_delete=models.SET_NULL, null=True, blank=True)
+    source_server_backup = models.ForeignKey(ServerBackup, on_delete=models.SET_NULL, null=True, blank=True)
 
     # Target
     target_server_ip = models.GenericIPAddressField()

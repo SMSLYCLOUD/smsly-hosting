@@ -116,22 +116,40 @@ class LocalAdapter(BaseCloudAdapter):
             all_domains.extend([d.strip() for d in custom.split(',') if d.strip()])
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
+        # Check Platform Config for SSL
+        try:
+            from apps.deployments.models import PlatformConfig
+            config = PlatformConfig.load()
+            use_ssl = config.use_ssl
+        except Exception:
+            use_ssl = False
+
         labels = {
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
-            # HTTP router (redirects to HTTPS)
-            f'traefik.http.routers.{name}-http.rule': host_rule,
-            f'traefik.http.routers.{name}-http.entrypoints': 'web',
-            f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
-            f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
-            f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
-            # HTTPS router (main)
-            f'traefik.http.routers.{name}.rule': host_rule,
-            f'traefik.http.routers.{name}.entrypoints': 'websecure',
-            f'traefik.http.routers.{name}.tls': 'true',
-            f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
+
+        if use_ssl:
+            labels.update({
+                # HTTP router (redirects to HTTPS)
+                f'traefik.http.routers.{name}-http.rule': host_rule,
+                f'traefik.http.routers.{name}-http.entrypoints': 'web',
+                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
+                # HTTPS router (main)
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'websecure',
+                f'traefik.http.routers.{name}.tls': 'true',
+                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
+            })
+        else:
+            # IP Mode / No SSL: simple HTTP router
+            labels.update({
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'web',
+            })
 
         # Docker-native healthcheck — CRITICAL for Traefik v3
         # Traefik v3 filters containers that are unhealthy or still starting.
