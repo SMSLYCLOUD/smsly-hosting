@@ -1,6 +1,7 @@
 """Urls module."""
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
 from config.health import health_check, liveness_check, readiness_check
 
 
@@ -30,7 +31,8 @@ urlpatterns = [
 
 # ─── Tunnel API (function-based views, not DRF router) ────────────────────
 try:
-    from services.tunnels.api import get_urlpatterns as tunnel_urls
-    urlpatterns += [path('api/v1/', include(tunnel_urls()))]
+    if getattr(settings, 'ENABLE_LEGACY_TUNNEL_API', False):
+        from services.tunnels.api import get_urlpatterns as tunnel_urls
+        urlpatterns += [path('api/v1/legacy/', include(tunnel_urls()))]
 except ImportError:
     pass  # tunnels module not installed

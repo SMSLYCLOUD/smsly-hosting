@@ -69,7 +69,7 @@ cloud.smsly.cloud {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
-    reverse_proxy localhost:8090
+    reverse_proxy localhost:8081
     encode gzip
     log {
         output file /var/log/caddy/wildcard.log
@@ -109,7 +109,7 @@ nslookup anything.cloud.smsly.cloud
 
 
 NOTES:
-- All *.cloud.smsly.cloud subdomains route to the SAME backend (nginx:8090)
+- All *.cloud.smsly.cloud subdomains route to Traefik (localhost:8081), which forwards to per-service containers
 - The backend auto-generates subdomains like: my-app-abc123.cloud.smsly.cloud
 - Custom domains can still be added per-service via the Domains tab
 - If Caddy fails to start, check: journalctl -u caddy -f

@@ -9,7 +9,6 @@ services:
     image: tecnativa/docker-socket-proxy:latest
     container_name: smsly-socket-proxy
     restart: unless-stopped
-    privileged: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:

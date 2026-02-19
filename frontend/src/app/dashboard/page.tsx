@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Activity, Server, Database, Globe, TrendingUp, Zap, AlertCircle, ShieldAlert, X, DollarSign, Bell } from "lucide-react";
 import { coreApi, DashboardOverview } from "@/lib/api";
@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [showPasswordWarning, setShowPasswordWarning] = useState(false);
+  const hasShownLoadError = useRef(false);
 
   useEffect(() => {
     // Show warning if logged in as 'admin' and not dismissed
@@ -49,8 +50,9 @@ export default function DashboardPage() {
         setData(overview);
       } catch (err) {
         console.error('Failed to fetch dashboard data:', err);
-        // Only show toast on first load failure to avoid spamming
-        if (loading) {
+        // Only show toast once to avoid spamming repeated poll failures.
+        if (!hasShownLoadError.current) {
+            hasShownLoadError.current = true;
             toast({
                 title: "Dashboard Error",
                 description: "Failed to load dashboard data.",
@@ -64,7 +66,7 @@ export default function DashboardPage() {
     fetchData();
     const interval = setInterval(fetchData, 30000); // 30s refresh
     return () => clearInterval(interval);
-  }, []);
+  }, [toast]);
 
   if (loading || !data) {
     return <SkeletonDashboard />;

@@ -1,9 +1,15 @@
-from rest_framework import viewsets, permissions
+from rest_framework import serializers, viewsets, permissions
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .services.analytics import RevenueAnalytics
 
-class AnalyticsViewSet(viewsets.ViewSet):
+
+class AnalyticsPayloadSerializer(serializers.Serializer):
+    data = serializers.JSONField()
+
+
+class AnalyticsViewSet(viewsets.GenericViewSet):
+    serializer_class = AnalyticsPayloadSerializer
     permission_classes = [permissions.IsAdminUser]
 
     def list(self, request):

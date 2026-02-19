@@ -238,6 +238,24 @@ class Service(TimeStampedModel):
         """Railway-style auto-generated URL for the service."""
         return f"https://{self.public_domain}" if self.public_domain else None
 
+    @classmethod
+    def default_public_base_domain(cls) -> str:
+        """Resolve the base domain used for generated service subdomains."""
+        fallback = "cloud.smsly.cloud"
+        configured = (getattr(settings, "DOMAIN", "") or "").strip().lower().rstrip(".")
+        if configured in ("localhost", "127.0.0.1"):
+            configured = ""
+
+        try:
+            platform_cfg = PlatformConfig.objects.only("domain").first()
+            if platform_cfg and platform_cfg.domain:
+                configured = platform_cfg.domain.strip().lower().rstrip(".")
+        except Exception:
+            # App startup/migrations can run before DB tables exist.
+            pass
+
+        return configured or fallback
+
     def save(self, *args, **kwargs):
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
@@ -247,10 +265,12 @@ class Service(TimeStampedModel):
         if not self.public_domain:
             import hashlib
             slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
+            slug = (slug[:48]).strip('-') or "service"
             # Deterministic hash: owner_id + service_name → stable short_id
             seed = f"{self.owner_id}:{self.name}".encode()
             short_id = hashlib.sha256(seed).hexdigest()[:6]
-            self.public_domain = f"{slug}-{short_id}.cloud.smsly.cloud"
+            base_domain = self.default_public_base_domain()
+            self.public_domain = f"{slug}-{short_id}.{base_domain}"
 
         self.full_clean()  # Enforce validation (e.g. max_length)
         super().save(*args, **kwargs)
@@ -361,7 +381,7 @@ class Deployment(TimeStampedModel):
         ordering = ['-created_at']
 
     @property
-    def duration_seconds(self):
+    def duration_seconds(self) -> float | None:
         """Compute deployment duration in seconds."""
         if self.started_at and self.finished_at:
             return (self.finished_at - self.started_at).total_seconds()

@@ -39,10 +39,18 @@ REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 # ZH-010 FIX: Webhook secret MUST be set in production (fail-closed)
 if DEBUG:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+    # Keep local/tests deterministic without weakening production behavior.
+    if os.environ.get('TESTING') and not GITHUB_WEBHOOK_SECRET:
+        GITHUB_WEBHOOK_SECRET = 'test-github-webhook-secret'
 else:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
 # SECURITY: No wildcard default - prevents host header injection
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
+ENABLE_LEGACY_TUNNEL_API = config(
+    'ENABLE_LEGACY_TUNNEL_API',
+    default=False,
+    cast=bool,
+)
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 
@@ -222,6 +230,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+MAX_UPLOAD_SIZE = config('MAX_UPLOAD_SIZE', default=100 * 1024 * 1024, cast=int)
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
@@ -311,9 +322,11 @@ CELERY_TASK_SOFT_TIME_LIMIT = 7200  # 2 hours
 CELERY_TASK_TIME_LIMIT = 7500       # 2h 5m hard kill
 # NOTE: Beat schedule is defined in config/celery.py (the authoritative source)
 
-# CORS - ZH-006 FIX: Never allow all origins. Hardcoded to False.
+# CORS - allow "*" only in DEBUG when explicitly enabled.
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = bool(
+    DEBUG and config('CORS_ALLOW_ALL_ORIGINS', default=False, cast=bool)
+)
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default=f'http://localhost:3000,{SITE_URL}',

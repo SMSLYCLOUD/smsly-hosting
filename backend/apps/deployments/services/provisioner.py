@@ -6,11 +6,13 @@ then auto-registers the server with the API credentials.
 """
 
 import io
+import ipaddress
 import logging
-import re
+import os
 import time
 
 import paramiko
+import requests
 from celery import shared_task
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -45,7 +47,15 @@ def _append_log(server: ManagedServer, line: str):
 def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     """Create and connect an SSH client to the target server."""
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_system_host_keys()
+
+    strict_host_key_check = str(
+        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")
+    ).strip().lower() not in ("0", "false", "no")
+    if strict_host_key_check:
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    else:
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     connect_kwargs = {
         "hostname": server.host,
@@ -108,7 +118,6 @@ def provision_server(self, server_id: str):
         sftp = ssh.open_sftp()
 
         # Read the install script from the local filesystem
-        import os
         install_script_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
             "install.sh",
@@ -152,7 +161,10 @@ def provision_server(self, server_id: str):
                         _append_log(server, line)
 
                         # Look for credentials file path
-                        if "credentials saved" in line.lower() or "/root/.smsly-credentials" in line:
+                        if (
+                            "credentials saved" in line.lower()
+                            or ".credentials" in line
+                        ):
                             _append_log(server, "🔑 Credentials detected — extracting...")
 
             if channel.exit_status_ready():
@@ -177,53 +189,104 @@ def provision_server(self, server_id: str):
         _append_log(server, "🔑 Reading credentials from server...")
 
         stdin, stdout, stderr = ssh.exec_command(
+            "cat /root/.credentials 2>/dev/null || "
+            "cat /opt/smsly-hosting/.credentials 2>/dev/null || "
             "cat /root/.smsly-credentials 2>/dev/null || "
             "cat /opt/smsly-hosting/.smsly-credentials 2>/dev/null || "
             "echo 'CREDS_NOT_FOUND'"
         )
         credentials_file_content = stdout.read().decode("utf-8", errors="replace")
 
+        api_token = ""
+        admin_user = ""
+        admin_password = ""
+
         if "CREDS_NOT_FOUND" in credentials_file_content:
             _append_log(server, "⚠️ Credentials file not found — trying API token from .env")
             # Fallback: extract from .env file
             stdin, stdout, stderr = ssh.exec_command(
-                "grep -E '^(ADMIN_TOKEN|API_TOKEN|AUTH_TOKEN)=' /opt/smsly-hosting/.env 2>/dev/null | head -1"
+                "grep -E '^(ADMIN_TOKEN|API_TOKEN|AUTH_TOKEN|DJANGO_SUPERUSER_PASSWORD)=' "
+                "/opt/smsly-hosting/.env 2>/dev/null | head -1"
             )
             token_line = stdout.read().decode("utf-8").strip()
             if "=" in token_line:
-                api_token = token_line.split("=", 1)[1].strip().strip("'\"")
-            else:
-                api_token = ""
+                value = token_line.split("=", 1)[1].strip().strip("'\"")
+                if token_line.startswith("DJANGO_SUPERUSER_PASSWORD="):
+                    admin_user = "admin"
+                    admin_password = value
+                else:
+                    api_token = value
         else:
             # Parse credentials file
-            api_token = ""
             for line in credentials_file_content.split("\n"):
                 line = line.strip()
-                if "token" in line.lower() and ":" in line:
-                    api_token = line.split(":", 1)[1].strip()
-                    break
-                if line.startswith("API_TOKEN=") or line.startswith("ADMIN_TOKEN="):
+                if not line:
+                    continue
+                if line.lower().startswith("username:"):
+                    admin_user = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("password:"):
+                    admin_password = line.split(":", 1)[1].strip()
+                elif "token" in line.lower() and ":" in line:
+                    api_token = line.split(":", 1)[1].strip().strip("'\"")
+                elif line.startswith(("API_TOKEN=", "ADMIN_TOKEN=", "AUTH_TOKEN=")):
                     api_token = line.split("=", 1)[1].strip().strip("'\"")
-                    break
 
         # ── Step 5: Determine API URL ──
         # Check if SSL was set up (look for Caddy with domain)
         stdin, stdout, stderr = ssh.exec_command(
-            "grep -oP 'https?://[a-zA-Z0-9._-]+' /etc/caddy/Caddyfile 2>/dev/null | head -1"
+            "grep -E '^(DOMAIN|USE_SSL)=' /opt/smsly-hosting/.env 2>/dev/null"
         )
-        api_url = stdout.read().decode("utf-8").strip()
+        env_pairs = {}
+        for line in stdout.read().decode("utf-8", errors="replace").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env_pairs[key.strip()] = value.strip().strip("'\"")
 
-        if not api_url:
-            # Fall back to http://host:8090
+        env_domain = (env_pairs.get("DOMAIN") or "").strip().rstrip(".")
+        use_ssl = (env_pairs.get("USE_SSL") or "").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+        is_ip_domain = False
+        try:
+            ipaddress.ip_address(env_domain)
+            is_ip_domain = True
+        except ValueError:
+            is_ip_domain = False
+
+        if env_domain and env_domain not in ("localhost", "127.0.0.1") and not is_ip_domain:
+            scheme = "https" if use_ssl else "http"
+            api_url = f"{scheme}://{env_domain}"
+        else:
             api_url = f"http://{server.host}:8090"
+
+        # If installer did not emit an API token, exchange admin credentials for one.
+        if not api_token and admin_user and admin_password:
+            login_url = f"{api_url.rstrip('/')}/api/v1/auth/login/"
+            try:
+                response = requests.post(
+                    login_url,
+                    json={"username": admin_user, "password": admin_password},
+                    timeout=20,
+                    verify=api_url.startswith("https://"),
+                )
+                if response.ok:
+                    payload = response.json()
+                    api_token = payload.get("key") or payload.get("token", "")
+                else:
+                    _append_log(
+                        server,
+                        f"Warning: Could not mint API token from credentials (HTTP {response.status_code})",
+                    )
+            except Exception as token_exc:
+                _append_log(server, f"Warning: API token exchange failed: {token_exc}")
 
         _append_log(server, f"🌐 API URL: {api_url}")
         _append_log(server, f"🔑 Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
 
         # ── Step 6: Update server record ──
         server.api_url = api_url
-        if api_token:
-            server.api_token = api_token
+        server.api_token = api_token or ""
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.status = ManagedServer.Status.ONLINE
         server.save(update_fields=[

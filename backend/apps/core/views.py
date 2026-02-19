@@ -1,6 +1,6 @@
 """Contact form API — stores messages for admin review."""
-from rest_framework.views import APIView
-from rest_framework import viewsets
+from rest_framework import viewsets, mixins
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -23,8 +23,13 @@ class ContactSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=5000)
 
 
-class ContactView(APIView):
+class EmptySerializer(serializers.Serializer):
+    """Schema placeholder for response-only APIViews."""
+
+
+class ContactView(GenericAPIView):
     """Accept contact form submissions. No auth required."""
+    serializer_class = ContactSerializer
     permission_classes = [AllowAny]
     throttle_scope = 'contact'
 
@@ -42,7 +47,8 @@ class ContactView(APIView):
         return Response({"detail": "Message received. We'll get back to you within 24 hours."}, status=status.HTTP_201_CREATED)
 
 
-class DashboardOverviewView(APIView):
+class DashboardOverviewView(GenericAPIView):
+    serializer_class = EmptySerializer
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -102,21 +108,29 @@ class DashboardOverviewView(APIView):
             "alerts": []
         })
 
-class APIKeyViewSet(viewsets.ModelViewSet):
+
+class APIKeySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = APIKey
+        fields = ['id', 'name', 'prefix', 'last_used', 'created_at']
+        read_only_fields = ['id', 'prefix', 'last_used', 'created_at']
+
+
+class APIKeyViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = [IsAuthenticated]
+    queryset = APIKey.objects.all()
+    serializer_class = APIKeySerializer
 
     def get_queryset(self):
-        return APIKey.objects.filter(user=self.request.user)
+        return self.queryset.filter(user=self.request.user)
 
     def list(self, request):
-        keys = self.get_queryset()
-        return Response([{
-            'id': k.id,
-            'name': k.name,
-            'prefix': k.prefix,
-            'last_used': k.last_used,
-            'created_at': k.created_at
-        } for k in keys])
+        return super().list(request)
 
     def create(self, request):
         name = request.data.get('name', 'My API Key')
@@ -135,7 +149,7 @@ class APIKeyViewSet(viewsets.ModelViewSet):
             'id': api_key.id,
             'name': api_key.name,
             'prefix': api_key.prefix,
-            'key': raw_key # Returned ONCE
+            'key': raw_key  # Returned once
         }, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, pk=None):

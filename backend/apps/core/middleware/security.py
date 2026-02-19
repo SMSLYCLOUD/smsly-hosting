@@ -94,15 +94,19 @@ class SecurityMiddleware:
 
     def _has_valid_token_auth_header(self, request):
         """
-        Validate Token/Bearer header against DRF token store.
-        This avoids bypassing HMAC based on a forged header value.
+        Validate Token/Bearer headers against supported token backends.
+
+        Accepted:
+        - Authorization: Token <drf-token>
+        - Authorization: Bearer <drf-token>
+        - Authorization: Bearer smsly_<api-token>
         """
         auth_header = request.headers.get('Authorization', '').strip()
         if not auth_header:
             return False
 
         scheme, _, raw_token = auth_header.partition(' ')
-        if scheme not in ('Token', 'Bearer') or not raw_token:
+        if scheme.lower() not in ('token', 'bearer') or not raw_token:
             return False
 
         token_key = raw_token.strip()
@@ -110,6 +114,14 @@ class SecurityMiddleware:
             return False
 
         try:
+            if token_key.startswith("smsly_"):
+                from apps.deployments.api_token_auth import APIToken
+                token_hash = hashlib.sha256(token_key.encode()).hexdigest()
+                return APIToken.objects.filter(
+                    token_hash=token_hash,
+                    is_active=True,
+                ).exists()
+
             from rest_framework.authtoken.models import Token
             return Token.objects.filter(key=token_key).exists()
         except Exception:

@@ -1,5 +1,5 @@
 """Views module."""
-from rest_framework import viewsets, permissions, status
+from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from apps.intelligence.analyzer import LogAnalyzer
@@ -42,15 +42,20 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
 
 
 class CloudResourceViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
     serializer_class = CloudResourceSerializer
     queryset = CloudResource.objects.all()
 
 
-class IntelligenceViewSet(viewsets.ViewSet):
+class IntelligencePayloadSerializer(serializers.Serializer):
+    data = serializers.JSONField(required=False)
+
+
+class IntelligenceViewSet(viewsets.GenericViewSet):
     """
     AI-powered cloud optimization and debugging.
     """
+    serializer_class = IntelligencePayloadSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     @action(detail=False, methods=['post'])
@@ -95,18 +100,23 @@ class IntelligenceViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def chat(self, request):
         """Interactive AI assistant for cloud ops."""
-        message = request.data.get('message')
+        message = (request.data.get('message') or '').strip()
+        if not message:
+            return Response(
+                {'error': 'message is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         # history = request.data.get('history', [])
 
         # Add system context
         context = "User is asking about cloud infrastructure."
 
-        response = ask_with_fallback(
+        response, provider_name = ask_with_fallback(
             prompt=f"{context}\nUser: {message}",
             system_prompt=SYSTEM_PROMPT
         )
 
-        return Response({'response': response})
+        return Response({'response': response, 'provider': provider_name})
 
     @action(detail=False, methods=['get'])
     def providers(self, request):

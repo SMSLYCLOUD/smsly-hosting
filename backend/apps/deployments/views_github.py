@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 import requests
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -100,6 +102,7 @@ def _refresh_github_token(token_obj):
         return False
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_repos(request):

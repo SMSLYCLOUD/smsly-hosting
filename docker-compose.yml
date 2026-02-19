@@ -113,6 +113,8 @@ services:
     build: ./backend
     restart: unless-stopped
     command: celery -A config worker -l info
+    volumes:
+      - ./backend:/app
     env_file:
       - .env
     environment:
@@ -148,6 +150,8 @@ services:
     build: ./backend
     restart: unless-stopped
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
+    volumes:
+      - ./backend:/app
     env_file:
       - .env
     environment:

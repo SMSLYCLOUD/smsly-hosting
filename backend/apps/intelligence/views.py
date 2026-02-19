@@ -1,4 +1,6 @@
 """Views for AI provider configuration and status."""
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
@@ -12,6 +14,7 @@ from .providers import (
 )
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def ai_providers_status(request):
@@ -47,6 +50,7 @@ def ai_providers_status(request):
     })
 
 
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
 def ai_providers_update(request):
@@ -90,6 +94,7 @@ def ai_providers_update(request):
     })
 
 
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def ai_test_prompt(request):

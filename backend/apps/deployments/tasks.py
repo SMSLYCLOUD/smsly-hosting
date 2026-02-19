@@ -1,10 +1,13 @@
 """Tasks module."""
 import logging
+import re
 import shutil
 import tempfile
 import subprocess
 import os
 import json
+import zipfile
+from urllib.parse import unquote, urlparse
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
@@ -32,6 +35,47 @@ from .models_backup import BackupSchedule, ServiceBackup
 from .models_transfer import ServerTransfer
 
 logger = logging.getLogger(__name__)
+
+
+def _docker_safe_segment(value: str, fallback: str = "app") -> str:
+    """Normalize strings used in Docker image tags and names."""
+    slug = re.sub(r"[^a-z0-9_.-]+", "-", str(value or "").lower()).strip("-.")
+    if not slug:
+        slug = fallback
+    return slug[:63]
+
+
+def _resolve_upload_zip_path(repository_url: str) -> str:
+    """Extract a local file path from file:// repository URLs."""
+    parsed = urlparse(repository_url or "")
+    if parsed.scheme != "file":
+        raise ValueError("UPLOAD deploys require a file:// repository_url")
+
+    if parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"):
+        raise ValueError("Only local file:// paths are supported for uploads")
+
+    zip_path = unquote(parsed.path or "")
+    if os.name == "nt" and zip_path.startswith("/"):
+        # file:///C:/path.zip -> /C:/path.zip
+        zip_path = zip_path.lstrip("/")
+    zip_path = os.path.abspath(zip_path)
+    if not os.path.isfile(zip_path):
+        raise FileNotFoundError(f"Uploaded source archive not found: {zip_path}")
+    return zip_path
+
+
+def _safe_extract_zip(zip_path: str, destination: str):
+    """Extract zip archive while preventing ZipSlip path traversal."""
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        dest_root = os.path.abspath(destination)
+        for member in zf.infolist():
+            member_name = member.filename
+            if not member_name or member_name.endswith("/"):
+                continue
+            target_path = os.path.abspath(os.path.join(dest_root, member_name))
+            if not target_path.startswith(dest_root + os.sep):
+                raise ValueError("Archive contains unsafe file paths")
+        zf.extractall(dest_root)
 
 # AI diagnosis task — imported at top level to avoid circular import issues
 try:
@@ -87,6 +131,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
         elif service.deploy_type == 'DOCKER':
             image_name = service.docker_image
+
+        elif service.deploy_type == 'UPLOAD':
+            image_name = _build_uploaded_source(deployment, service)
 
         else:
             raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
@@ -145,7 +192,9 @@ def _build_function(deployment, service) -> str:
         build_dir = tempfile.mkdtemp(prefix=f"func_{deployment.id}_")
         FunctionProvisioner.prepare_context(service, build_dir)
 
-        tag = f"smsly/func-{service.name}:{deployment.id[:7]}"
+        safe_service_name = _docker_safe_segment(service.name, fallback="function")
+        deploy_tag = str(deployment.id).replace("-", "")[:8]
+        tag = f"smsly/func-{safe_service_name}:{deploy_tag}"
 
         append_log(deployment, f"Building function {tag}...\n")
 
@@ -156,6 +205,69 @@ def _build_function(deployment, service) -> str:
         if registry:
             return NixpacksBuilder.push_image(tag, registry)
         return tag
+
+    finally:
+        if build_dir:
+            shutil.rmtree(build_dir, ignore_errors=True)
+
+
+def _build_uploaded_source(deployment, service) -> str:
+    """Build an image from a previously uploaded zip archive."""
+    build_dir = None
+    try:
+        deployment.status = Deployment.Status.BUILDING
+        deployment.save(update_fields=["status"])
+        broadcast_status(deployment)
+
+        zip_path = _resolve_upload_zip_path(service.repository_url)
+        build_dir = tempfile.mkdtemp(prefix=f"upload_{deployment.id}_")
+        source_dir = os.path.join(build_dir, "source")
+        os.makedirs(source_dir, exist_ok=True)
+
+        append_log(deployment, f"Extracting uploaded source from {zip_path}...\n")
+        _safe_extract_zip(zip_path, source_dir)
+
+        # Normalize archives that contain a single top-level folder.
+        entries = [
+            os.path.join(source_dir, item)
+            for item in os.listdir(source_dir)
+            if item not in ("__MACOSX",)
+        ]
+        if len(entries) == 1 and os.path.isdir(entries[0]):
+            source_dir = entries[0]
+
+        safe_service_name = _docker_safe_segment(service.name, fallback="upload")
+        deploy_tag = str(deployment.id).replace("-", "")[:8]
+        image_name = f"smsly/{safe_service_name}:{deploy_tag}"
+
+        env_map = {env.key: env.value for env in service.env_vars.all()}
+        dockerfile_path = os.path.join(source_dir, "Dockerfile")
+        if service.buildpack == "DOCKER" and os.path.isfile(dockerfile_path):
+            append_log(deployment, "Building uploaded source with Dockerfile...\n")
+            try:
+                subprocess.run(
+                    ["docker", "build", "-t", image_name, "-f", dockerfile_path, source_dir],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,
+                )
+            except subprocess.CalledProcessError as exc:
+                append_log(deployment, f"{exc.stdout or ''}\n{exc.stderr or ''}\n")
+                raise
+        else:
+            append_log(deployment, "Building uploaded source with Nixpacks...\n")
+            NixpacksBuilder.build_image(
+                source_dir=source_dir,
+                image_name=image_name,
+                env_vars=env_map,
+            )
+
+        registry = getattr(settings, "CONTAINER_REGISTRY_URL", None)
+        if registry:
+            append_log(deployment, f"Pushing uploaded image to {registry}...\n")
+            image_name = NixpacksBuilder.push_image(image_name, registry)
+        return image_name
 
     finally:
         if build_dir:
@@ -176,6 +288,12 @@ def _deploy_container(deployment, provider, image_name):
         env_vars.setdefault('PORT', '8000')
         if service.public_domain:
             env_vars.setdefault('PUBLIC_DOMAIN', service.public_domain)
+        if service.custom_domains:
+            joined_domains = ",".join(
+                d.strip() for d in service.custom_domains if isinstance(d, str) and d.strip()
+            )
+            if joined_domains:
+                env_vars.setdefault('CUSTOM_DOMAINS', joined_domains)
 
         # Inject addon connection URLs into deployed container
         from apps.deployments.models_addons import Addon
@@ -595,18 +713,22 @@ def restore_addon_task(self, backup_id: str):
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900)
 def create_service_backup_task(self, service_id, backup_type='MANUAL'):
-    service = BackupService()
-    service.backup_service(service_id)
+    backup_service = BackupService()
+    backup_service.backup_service(service_id)
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def create_server_backup_task(self):
-    service = BackupService()
-    service.backup_server()
+    backup_service = BackupService()
+    backup_service.backup_server()
 
 @shared_task(bind=True, soft_time_limit=3600)
-def restore_service_backup_task(self, backup_id, target_service_id=None):
-    service = BackupService()
-    service.restore_service(backup_id, target_service_id)
+def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None):
+    backup_service = BackupService()
+    backup_service.restore_service(
+        backup_id,
+        target_service_id=target_service_id,
+        requesting_user_id=requesting_user_id,
+    )
 
 @shared_task
 def cleanup_old_backups_task():

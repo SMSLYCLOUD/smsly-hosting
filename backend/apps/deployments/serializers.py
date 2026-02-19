@@ -47,14 +47,15 @@ class ServiceSerializer(serializers.ModelSerializer):
             'owner',
             'verification_token']
 
-    def get_service_url(self, obj):
+    def get_service_url(self, obj: Service) -> str:
         """Railway-style auto-generated URL."""
         if obj.public_domain:
             return f"https://{obj.public_domain}"
         slug = obj.name.lower().replace(' ', '-')
-        return f"https://{slug}.cloud.smsly.cloud"
+        base_domain = Service.default_public_base_domain()
+        return f"https://{slug}.{base_domain}"
 
-    def get_latest_deployment(self, obj):
+    def get_latest_deployment(self, obj: Service) -> dict | None:
         dep = obj.deployments.order_by('-created_at').first()
         if not dep:
             return None
@@ -90,7 +91,7 @@ class ServiceSerializer(serializers.ModelSerializer):
 
 
 class DeploymentSerializer(serializers.ModelSerializer):
-    duration_seconds = serializers.ReadOnlyField()
+    duration_seconds = serializers.FloatField(read_only=True, allow_null=True)
     service_name = serializers.CharField(
         source='service.name', read_only=True)
 
@@ -101,7 +102,7 @@ class DeploymentSerializer(serializers.ModelSerializer):
 
 class DeploymentTimelineSerializer(serializers.ModelSerializer):
     """Lightweight serializer for deployment timeline view."""
-    duration_seconds = serializers.ReadOnlyField()
+    duration_seconds = serializers.FloatField(read_only=True, allow_null=True)
     service_name = serializers.CharField(
         source='service.name', read_only=True)
 

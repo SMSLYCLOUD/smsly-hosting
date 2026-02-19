@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -17,6 +19,7 @@ def _github_connect_url() -> str:
     return f"/accounts/github/login/?process=connect&next={next_path}"
 
 
+@extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def github_connection(request):
@@ -75,4 +78,3 @@ def github_connection(request):
         },
         status=status.HTTP_200_OK,
     )
-
