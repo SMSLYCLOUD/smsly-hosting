@@ -1,58 +1,83 @@
-"""
+﻿"""
 Caddy configuration manager.
 
 Generates Caddyfile content from PlatformConfig and writes it
 to a shared volume for the host-side watcher to pick up.
 """
-import os
+
 import logging
+import os
 
 from apps.deployments.domain_utils import normalize_domain
 
 logger = logging.getLogger(__name__)
 
 # Path inside the container where caddy-config volume is mounted
-CADDY_CONFIG_DIR = os.environ.get('CADDY_CONFIG_DIR', '/caddy-config')
-CADDY_FILE_PATH = os.path.join(CADDY_CONFIG_DIR, 'Caddyfile')
-CADDY_RELOAD_FLAG = os.path.join(CADDY_CONFIG_DIR, '.reload')
+CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
+CADDY_FILE_PATH = os.path.join(CADDY_CONFIG_DIR, "Caddyfile")
+CADDY_RELOAD_FLAG = os.path.join(CADDY_CONFIG_DIR, ".reload")
 
 
-def _get_custom_domain_blocks() -> list:
+def _build_service_domain_block(domain: str, cloudflare_token: str = "") -> str:
+    """Build a Caddy site block for a service domain routed via Traefik."""
+    lines = [f"{domain} {{"]
+    token = (cloudflare_token or "").strip()
+    if token:
+        lines.extend(
+            [
+                "    tls {",
+                f"        dns cloudflare {token}",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "    reverse_proxy localhost:8081",
+            "    encode gzip",
+            "    log {",
+            "        output file /var/log/caddy/access.log",
+            "    }",
+            "}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _get_service_domain_blocks(cloudflare_token: str = "") -> list:
     """
-    Query all services with custom domains and generate Caddy blocks.
-    Each custom domain gets its own block proxying to Traefik (localhost:8081).
-    Caddy auto-provisions Let's Encrypt certs for each.
+    Query all services and generate Caddy blocks for routable app domains.
+    Includes both service.public_domain and service.custom_domains.
     """
     blocks = []
     seen = set()
     try:
         from apps.deployments.models import Service
+
         for service in Service.objects.all():
-            for domain in (service.custom_domains or []):
-                d = domain.strip() if isinstance(domain, str) else ''
-                if not d:
+            all_domains = []
+            if isinstance(service.public_domain, str) and service.public_domain.strip():
+                all_domains.append(service.public_domain)
+            all_domains.extend(service.custom_domains or [])
+
+            for domain in all_domains:
+                value = domain.strip() if isinstance(domain, str) else ""
+                if not value:
                     continue
                 try:
-                    d = normalize_domain(d)
+                    value = normalize_domain(value)
                 except ValueError:
                     logger.warning(
-                        "Skipping invalid custom domain %r for service %s",
+                        "Skipping invalid domain %r for service %s",
                         domain,
                         service.id,
                     )
                     continue
-                if d in seen:
+                if value in seen:
                     continue
-                seen.add(d)
-                blocks.append(f"""{d} {{
-    reverse_proxy localhost:8081
-    encode gzip
-    log {{
-        output file /var/log/caddy/access.log
-    }}
-}}""")
-    except Exception as e:
-        logger.warning("Could not load custom domains for Caddyfile: %s", e)
+                seen.add(value)
+                blocks.append(_build_service_domain_block(value, cloudflare_token))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not load service domains for Caddyfile: %s", exc)
     return blocks
 
 
@@ -65,60 +90,72 @@ def generate_caddyfile(config) -> str:
     - SSL (no wildcard): domain block with auto HTTPS + :80 fallback
     - SSL + wildcard: domain block + *.domain with Cloudflare DNS challenge
 
-    Also includes per-service custom domain blocks.
+    Also includes per-service public and custom domain blocks.
     """
     sections = []
-    domain = ''
+    domain = ""
+    cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+
     if config.domain:
         try:
             domain = normalize_domain(config.domain)
         except ValueError:
             logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
-    ip = config.server_ip or ''
 
     if config.use_ssl and domain:
-        # Main domain — auto HTTPS via Let's Encrypt
-        sections.append(f"""{domain} {{
+        # Main domain - auto HTTPS via Let's Encrypt
+        sections.append(
+            f"""{domain} {{
     reverse_proxy localhost:8090
     encode gzip
     log {{
         output file /var/log/caddy/access.log
     }}
-}}""")
+}}"""
+        )
 
         # Wildcard subdomains for deployed services
-        if config.wildcard_subdomains and config.cloudflare_api_token:
-            sections.append(f"""*.{domain} {{
+        if config.wildcard_subdomains and cloudflare_token:
+            sections.append(
+                f"""*.{domain} {{
     tls {{
-        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}
+        dns cloudflare {cloudflare_token}
     }}
     reverse_proxy localhost:8081
-}}""")
+}}"""
+            )
 
     elif domain and not config.use_ssl:
         # Domain without SSL (HTTP only)
-        sections.append(f"""http://{domain} {{
+        sections.append(
+            f"""http://{domain} {{
     reverse_proxy localhost:8090
     encode gzip
-}}""")
+}}"""
+        )
 
     else:
-        # IP-only mode — plain HTTP
-        sections.append(""":80 {
+        # IP-only mode - plain HTTP
+        sections.append(
+            """:80 {
     reverse_proxy localhost:8090
-}""")
+}"""
+        )
 
     # Always add IP fallback if we have a domain (so IP still works)
     if domain and config.use_ssl:
-        sections.append(""":80 {
+        sections.append(
+            """:80 {
     reverse_proxy localhost:8090
-}""")
+}"""
+        )
 
-    # Per-service custom domains (auto-provisioned SSL)
-    custom_blocks = _get_custom_domain_blocks()
-    sections.extend(custom_blocks)
+    # Per-service domains (public + custom) routed to Traefik.
+    # If a Cloudflare token exists, use DNS challenge for more reliable issuance.
+    service_blocks = _get_service_domain_blocks(cloudflare_token if config.use_ssl else "")
+    sections.extend(service_blocks)
 
-    header = "# CloudNeuron Caddyfile — Auto-generated by Settings UI\n"
+    header = "# CloudNeuron Caddyfile - Auto-generated by Settings UI\n"
     header += "# Do not edit manually; changes will be overwritten.\n\n"
     return header + "\n\n".join(sections) + "\n"
 
@@ -130,24 +167,24 @@ def apply_caddyfile(content: str) -> dict:
 
     Returns a status dict.
     """
-    result = {'ok': False, 'message': ''}
+    result = {"ok": False, "message": ""}
 
     try:
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
 
-        with open(CADDY_FILE_PATH, 'w') as f:
-            f.write(content)
+        with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
+            handle.write(content)
 
-        # Create reload flag — the host watcher will pick this up
-        with open(CADDY_RELOAD_FLAG, 'w') as f:
-            f.write('reload')
+        # Create reload flag - the host watcher will pick this up
+        with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as handle:
+            handle.write("reload")
 
-        result['ok'] = True
-        result['message'] = 'Caddyfile written and reload flag set'
+        result["ok"] = True
+        result["message"] = "Caddyfile written and reload flag set"
         logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
 
-    except OSError as e:
-        result['message'] = f'Failed to write Caddyfile: {e}'
-        logger.error("Failed to write Caddyfile: %s", e)
+    except OSError as exc:
+        result["message"] = f"Failed to write Caddyfile: {exc}"
+        logger.error("Failed to write Caddyfile: %s", exc)
 
     return result

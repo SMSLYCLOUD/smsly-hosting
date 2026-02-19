@@ -28,16 +28,35 @@ export function Navbar() {
     // Check auth
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     if (token) {
-        // Fetch real user data
-        fetch(`${window.location.origin}/api/v1/auth/user/`, {
-          headers: { 'Authorization': `Token ${token}` },
-        })
-          .then(res => res.ok ? res.json() : Promise.reject())
-          .then(data => setUser({
-              email: data.email || data.username || 'User',
-              is_staff: data.is_staff || false
-          }))
-          .catch(() => setUser({ email: 'User' }));
+        // Fetch user data and resolve admin capability via admin-only endpoint.
+        (async () => {
+          try {
+            const userRes = await fetch(`${window.location.origin}/api/v1/auth/user/`, {
+              headers: { 'Authorization': `Token ${token}` },
+            });
+            if (!userRes.ok) {
+              throw new Error('unauthorized');
+            }
+            const data = await userRes.json();
+
+            let isStaff = Boolean(data?.is_staff || data?.is_superuser);
+            if (!isStaff) {
+              const adminRes = await fetch(`${window.location.origin}/api/v1/system/config/`, {
+                headers: { 'Authorization': `Token ${token}` },
+              });
+              isStaff = adminRes.ok;
+            }
+
+            setUser({
+              email: data?.email || data?.username || 'User',
+              is_staff: isStaff,
+            });
+          } catch {
+            localStorage.removeItem('auth_token');
+            clearAuthCookies();
+            setUser(null);
+          }
+        })();
     }
 
     const handleClickOutside = (event: MouseEvent) => {

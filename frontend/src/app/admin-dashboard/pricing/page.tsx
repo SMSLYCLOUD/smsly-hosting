@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,19 +11,27 @@ import { Loader2, Plus, Save } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import api from '@/lib/api';
 
 export default function AdminPricingPage() {
     const { toast } = useToast();
     const [plans, setPlans] = useState<PricingPlan[]>([]);
     const [loading, setLoading] = useState(true);
+    const [accessDenied, setAccessDenied] = useState(false);
 
     const loadPlans = useCallback(async () => {
         try {
+            await api.get('/system/config/');
             const data = await billingApi.adminGetPlans();
             setPlans(data);
         } catch (err) {
-            console.error(err);
-            toast({ title: 'Failed to load plans', variant: 'destructive' });
+            const httpError = err as any;
+            if (httpError?.response?.status === 403) {
+                setAccessDenied(true);
+            } else {
+                console.error(err);
+                toast({ title: 'Failed to load plans', variant: 'destructive' });
+            }
         } finally {
             setLoading(false);
         }
@@ -49,6 +58,22 @@ export default function AdminPricingPage() {
             </div>
         </DashboardShell>
     );
+
+    if (accessDenied) {
+        return (
+            <DashboardShell>
+                <div className="container p-6">
+                    <div className="border border-border rounded-xl bg-card p-6 space-y-3">
+                        <h1 className="text-2xl font-bold">Admin Access Required</h1>
+                        <p className="text-muted-foreground">You do not have permission to view this page.</p>
+                        <Link href="/dashboard" className="inline-flex px-4 py-2 rounded-lg bg-primary text-white font-medium">
+                            Go to User Dashboard
+                        </Link>
+                    </div>
+                </div>
+            </DashboardShell>
+        );
+    }
 
     return (
         <DashboardShell>

@@ -30,6 +30,7 @@ const stagger = {
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardOverview | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const { user } = useAuth();
   const { toast } = useToast();
   const [showPasswordWarning, setShowPasswordWarning] = useState(false);
@@ -48,8 +49,10 @@ export default function DashboardPage() {
       try {
         const overview = await coreApi.getDashboardOverview();
         setData(overview);
+        setLoadError(null);
       } catch (err) {
         console.error('Failed to fetch dashboard data:', err);
+        setLoadError("Failed to load dashboard data.");
         // Only show toast once to avoid spamming repeated poll failures.
         if (!hasShownLoadError.current) {
             hasShownLoadError.current = true;
@@ -68,8 +71,31 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [toast]);
 
-  if (loading || !data) {
+  if (loading) {
     return <SkeletonDashboard />;
+  }
+
+  if (!data) {
+    return (
+      <DashboardShell>
+        <div className="flex-1 p-8 flex items-center justify-center">
+          <Card className="w-full max-w-xl">
+            <CardHeader>
+              <CardTitle>Dashboard Unavailable</CardTitle>
+              <CardDescription>{loadError || "Unable to load dashboard data right now."}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <button
+                className="px-4 py-2 rounded-lg bg-primary text-white font-semibold hover:opacity-90"
+                onClick={() => window.location.reload()}
+              >
+                Retry
+              </button>
+            </CardContent>
+          </Card>
+        </div>
+      </DashboardShell>
+    );
   }
 
   const stats = [

@@ -31,13 +31,35 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+function isProtectedPath(path: string): boolean {
+  const protectedPrefixes = [
+    '/dashboard',
+    '/services',
+    '/deployments',
+    '/new',
+    '/project',
+    '/settings',
+    '/billing',
+    '/servers',
+    '/tunnels',
+    '/intelligence',
+    '/backups',
+    '/transfers',
+    '/admin-dashboard',
+    '/topology',
+    '/functions',
+  ];
+  return protectedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 // Auto-clear stale tokens on 401 and redirect to login
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Don't redirect if already on login page (avoid loop)
-      if (!window.location.pathname.startsWith('/login')) {
+      const path = window.location.pathname;
+      // Avoid redirect loops and keep public pages accessible.
+      if (isProtectedPath(path) && !path.startsWith('/login') && !path.startsWith('/register')) {
         localStorage.removeItem('auth_token');
         clearAuthCookies();
         window.location.href = '/login';

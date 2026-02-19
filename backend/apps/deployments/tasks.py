@@ -1,4 +1,4 @@
-"""Tasks module."""
+﻿"""Tasks module."""
 import logging
 import re
 import shutil
@@ -7,11 +7,13 @@ import subprocess
 import os
 import json
 import zipfile
+import time
 from urllib.parse import unquote, urlparse
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Sum
+import requests
 
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
@@ -77,7 +79,7 @@ def _safe_extract_zip(zip_path: str, destination: str):
                 raise ValueError("Archive contains unsafe file paths")
         zf.extractall(dest_root)
 
-# AI diagnosis task — imported at top level to avoid circular import issues
+# AI diagnosis task â€” imported at top level to avoid circular import issues
 try:
     from apps.deployments.tasks_ai import analyze_failure_task
 except ImportError:
@@ -121,10 +123,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             if deployment.is_rollback or skip_review:
                 image_name = manager.run()
             else:
-                # Fresh manual deploy → analysis only, pause for review
+                # Fresh manual deploy â†’ analysis only, pause for review
                 manager.run_analysis_only()
                 broadcast_status(deployment)
-                return  # Paused at REVIEW — user must approve
+                return  # Paused at REVIEW â€” user must approve
 
         elif service.deploy_type == 'FUNCTION':
             image_name = _build_function(deployment, service)
@@ -274,6 +276,108 @@ def _build_uploaded_source(deployment, service) -> str:
             shutil.rmtree(build_dir, ignore_errors=True)
 
 
+def _is_traefik_not_ready(response: requests.Response) -> bool:
+    """
+    Detect Traefik's default no-route 404 response.
+    """
+    body = (response.text or "").strip().lower()
+    server = (response.headers.get("Server") or "").lower()
+    return response.status_code == 404 and body == "404 page not found" and "traefik" in server
+
+
+def _wait_for_local_route_ready(
+    deployment,
+    service,
+    timeout_seconds: int = 90,
+    poll_seconds: int = 3,
+) -> bool:
+    """
+    Wait until Traefik has picked up host routing for this service.
+    """
+    host = (service.public_domain or "").strip()
+    if not host:
+        return True
+
+    base_candidates = []
+    configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
+    if configured:
+        base_candidates.append(configured)
+    base_candidates.extend([
+        "http://traefik:80",
+        "http://127.0.0.1:8081",
+        "http://localhost:8081",
+    ])
+
+    # Preserve order, remove duplicates, and trim trailing slash.
+    base_urls = []
+    seen = set()
+    for base in base_candidates:
+        normalized = base.rstrip("/")
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            base_urls.append(normalized)
+
+    path_candidates = []
+    if service.health_check_path:
+        path_candidates.append(service.health_check_path)
+    path_candidates.extend(["/", "/health", "/healthz"])
+
+    paths = []
+    seen_paths = set()
+    for raw_path in path_candidates:
+        path = raw_path if str(raw_path).startswith("/") else f"/{raw_path}"
+        if path not in seen_paths:
+            seen_paths.add(path)
+            paths.append(path)
+
+    append_log(
+        deployment,
+        f"[ROUTE-CHECK] Waiting for routing on host {host} "
+        f"(timeout {timeout_seconds}s)\n",
+    )
+
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    while time.monotonic() < deadline:
+        for base_url in base_urls:
+            for path in paths:
+                url = f"{base_url}{path}"
+                try:
+                    response = requests.get(
+                        url,
+                        headers={"Host": host},
+                        timeout=4,
+                        allow_redirects=False,
+                    )
+                except requests.RequestException as exc:
+                    last_error = f"{url}: {exc}"
+                    continue
+
+                if response.status_code >= 500:
+                    last_error = f"{url}: HTTP {response.status_code}"
+                    continue
+
+                # Traefik can briefly return default 404 while labels propagate.
+                if _is_traefik_not_ready(response):
+                    last_error = f"{url}: Traefik route not ready yet"
+                    continue
+
+                append_log(
+                    deployment,
+                    f"[ROUTE-CHECK] Route ready via {url} (HTTP {response.status_code})\n",
+                )
+                return True
+
+        time.sleep(poll_seconds)
+
+    append_log(
+        deployment,
+        "[ROUTE-CHECK] Routing readiness timed out. "
+        f"Last error: {last_error or 'unknown'}\n",
+    )
+    return False
+
+
 def _deploy_container(deployment, provider, image_name):
     """Deploy the built image to the cloud provider."""
     # pylint: disable=too-many-locals, R0914
@@ -333,10 +437,25 @@ def _deploy_container(deployment, provider, image_name):
             restart_policy=service.restart_policy
         )
 
-        deployment.status = 'ACTIVE'
+        deployment.status = Deployment.Status.HEALTH_CHECK
         deployment.container_id = resource.resource_id
+        deployment.save(update_fields=['status', 'container_id'])
+        broadcast_status(deployment)
+
+        if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+            route_ready = _wait_for_local_route_ready(
+                deployment,
+                service,
+                timeout_seconds=120,
+            )
+            if not route_ready:
+                raise RuntimeError(
+                    f"Service route did not become ready for host {service.public_domain}"
+                )
+
+        deployment.status = Deployment.Status.ACTIVE
         deployment.finished_at = timezone.now()
-        deployment.save()
+        deployment.save(update_fields=['status', 'finished_at'])
 
         update_stage(
             deployment,
@@ -345,9 +464,9 @@ def _deploy_container(deployment, provider, image_name):
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
-        append_log(deployment, f"✓ Deployment successful! ID: {resource.resource_id}\n")
+        append_log(deployment, f"[OK] Deployment successful. ID: {resource.resource_id}\n")
 
-        # ── Real-Time Post-Deploy Health Monitor ──
+        # Post-deploy runtime monitor
         # Monitor container logs for ~30s to catch runtime crashes early
         _post_deploy_monitor.delay(
             str(deployment.id),
@@ -369,8 +488,8 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
     Watches container logs for 30s after deploy. If the container crashes:
     1. Pattern resolver scans logs instantly for known errors (no API call)
-    2. If a pattern matches and has an auto-fix → fix + auto-redeploy
-    3. If patterns can't explain → escalate to AI models with code context
+    2. If a pattern matches and has an auto-fix â†’ fix + auto-redeploy
+    3. If patterns can't explain â†’ escalate to AI models with code context
     """
     import time
     import docker
@@ -387,13 +506,13 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         logger.warning("Docker not available for post-deploy monitor")
         return
 
-    append_log(deployment, "\n🔍 Post-deploy health monitor active (30s)...\n")
+    append_log(deployment, "\nðŸ” Post-deploy health monitor active (30s)...\n")
     broadcast_status(deployment)
 
     # Poll container status for 30 seconds
     crash_detected = False
     container_logs = ""
-    for check in range(6):  # 6 checks × 5s = 30s
+    for check in range(6):  # 6 checks Ã— 5s = 30s
         time.sleep(5)
 
         try:
@@ -407,7 +526,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 crash_detected = True
                 append_log(
                     deployment,
-                    f"\n🔴 Container crashed (status: {status}) "
+                    f"\nðŸ”´ Container crashed (status: {status}) "
                     f"after {(check + 1) * 5}s\n"
                 )
                 break
@@ -418,25 +537,34 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                     crash_detected = True
                     append_log(
                         deployment,
-                        f"\n🔴 Container stuck in restart loop "
+                        f"\nðŸ”´ Container stuck in restart loop "
                         f"after {(check + 1) * 5}s\n"
                     )
                     break
 
         except docker.errors.NotFound:
             crash_detected = True
-            append_log(deployment, "\n🔴 Container disappeared after deploy\n")
+            append_log(deployment, "\nðŸ”´ Container disappeared after deploy\n")
             break
         except Exception as e:
             logger.warning("Monitor check failed: %s", e)
             continue
 
     if not crash_detected:
-        append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
+        append_log(deployment, "âœ… Container healthy after 30s monitoring.\n")
         broadcast_status(deployment)
         return
 
-    # ── CRASH DETECTED — Run real-time diagnosis ──
+    try:
+        from apps.deployments.tasks_alerts import alert_user_task
+        alert_user_task.delay(
+            str(deployment.id),
+            "Runtime crash detected during post-deploy monitoring",
+        )
+    except Exception as alert_err:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to queue runtime crash alert: %s", alert_err)
+
+    # â”€â”€ CRASH DETECTED â€” Run real-time diagnosis â”€â”€
     deployment.refresh_from_db()
 
     # Step 1: Pattern resolver (instant, no API call)
@@ -451,10 +579,10 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     auto_fixed = [r for r in results if r.get('auto_fixed')]
 
     if auto_fixed:
-        # Auto-fix applied — trigger automatic redeploy
+        # Auto-fix applied â€” trigger automatic redeploy
         append_log(
             deployment,
-            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed. "
+            f"\nðŸ”§ {len(auto_fixed)} issue(s) auto-fixed. "
             f"Triggering automatic redeploy...\n"
         )
         deployment.status = 'FAILED'
@@ -476,7 +604,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         )
         return
 
-    # Step 2: No pattern match — escalate to AI models
+    # Step 2: No pattern match â€” escalate to AI models
     _escalate_to_ai(deployment, service, container_logs)
 
     # Mark deployment as failed
@@ -531,7 +659,7 @@ def _escalate_to_ai(deployment, service, container_logs):
 
         append_log(
             deployment,
-            f"\n🤖 AI Diagnosis ({provider_name}):\n{response[:2000]}\n"
+            f"\nðŸ¤– AI Diagnosis ({provider_name}):\n{response[:2000]}\n"
         )
 
         # Try to parse and auto-apply AI suggestions
@@ -543,12 +671,12 @@ def _escalate_to_ai(deployment, service, container_logs):
             import re as _re
             action = _apply_fix(fix, _re.match('', ''), '', service, deployment)
             if action:
-                append_log(deployment, f"  ✅ AI-suggested fix applied: {action}\n")
+                append_log(deployment, f"  âœ… AI-suggested fix applied: {action}\n")
 
     except Exception as e:
         logger.warning("AI escalation failed for deployment %s: %s",
                        deployment.id, e)
-        append_log(deployment, f"\n🤖 AI diagnosis unavailable: {e}\n")
+        append_log(deployment, f"\nðŸ¤– AI diagnosis unavailable: {e}\n")
 
 
 def _handle_failure(task, deployment, error_msg, reason):
@@ -560,9 +688,15 @@ def _handle_failure(task, deployment, error_msg, reason):
         if deployment.status != 'CANCELLED':
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
-            deployment.build_logs += f"\n✗ {reason}: {error_msg}\n"
+            deployment.build_logs += f"\nâœ— {reason}: {error_msg}\n"
             deployment.save()
             broadcast_status(deployment)
+
+            try:
+                from apps.deployments.tasks_alerts import alert_user_task
+                alert_user_task.delay(str(deployment.id), f"{reason}: {error_msg}")
+            except Exception as alert_err:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to queue deployment failure alert: %s", alert_err)
 
             # Step 1: Pattern resolver on build logs (instant)
             try:

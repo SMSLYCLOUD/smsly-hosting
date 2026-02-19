@@ -19,17 +19,42 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
 
+function isProtectedPath(path: string): boolean {
+  const protectedPrefixes = [
+    "/dashboard",
+    "/services",
+    "/deployments",
+    "/new",
+    "/project",
+    "/settings",
+    "/billing",
+    "/servers",
+    "/tunnels",
+    "/intelligence",
+    "/backups",
+    "/transfers",
+    "/admin-dashboard",
+    "/topology",
+    "/functions",
+  ];
+  return protectedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchUser = async () => {
+      const path = window.location.pathname;
       // Only fetch user if there's a token - avoids 403 on public pages
       const token = localStorage.getItem('auth_token');
       if (!token) {
         setUser(null);
         setLoading(false);
+        if (isProtectedPath(path)) {
+          window.location.replace("/login");
+        }
         return;
       }
 
@@ -39,7 +64,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const res = await api.get("/auth/user/");
         setUser(res.data);
 
-        const path = window.location.pathname;
         if (path === "/login" || path === "/register") {
           // Avoid Next.js route-cache edge cases: force a navigation.
           window.location.replace("/dashboard");
@@ -50,9 +74,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         clearAuthCookies();
         setUser(null);
 
-        // If user was trying to access a protected page, send them to login.
-        const path = window.location.pathname;
-        if (path !== "/login" && path !== "/register") {
+        // Only force-login when a protected page is requested.
+        if (isProtectedPath(path)) {
           window.location.replace("/login");
         }
       } finally {
