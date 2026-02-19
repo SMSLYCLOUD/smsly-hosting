@@ -1,116 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Check, X, Zap, Shield, Users, Building2, ChevronDown } from 'lucide-react';
-
-
-const tiers = [
-  {
-    name: 'Community',
-    price: 'Free',
-    period: 'forever',
-    description: 'Perfect for personal projects and learning.',
-    color: 'from-slate-500 to-slate-600',
-    cta: 'Get Started',
-    ctaLink: '/register',
-    highlighted: false,
-    icon: Zap,
-    features: [
-      'Single server deployment',
-      '3 applications',
-      'Git-based deploys',
-      'Auto-detection (20+ frameworks)',
-      'Community support',
-      'Basic monitoring',
-      'Shared build cache',
-    ],
-  },
-  {
-    name: 'Pro',
-    price: '$29',
-    period: '/mo per server',
-    description: 'For serious developers and growing projects.',
-    color: 'from-emerald-500 to-green-600',
-    cta: 'Start Pro Trial',
-    ctaLink: '/register?plan=pro',
-    highlighted: true,
-    icon: Shield,
-    features: [
-      'Everything in Community',
-      'Unlimited applications',
-      'Predictive autoscaler',
-      'Anomaly detection',
-      'Self-healing containers',
-      'AI deploy advisor',
-      'SSL certificates (auto)',
-      'Priority email support',
-      'Custom domains',
-      'Preview environments',
-    ],
-  },
-  {
-    name: 'Team',
-    price: '$79',
-    period: '/mo per server',
-    description: 'For teams that need collaboration and compliance.',
-    color: 'from-violet-500 to-purple-600',
-    cta: 'Start Team Trial',
-    ctaLink: '/register?plan=team',
-    highlighted: false,
-    icon: Users,
-    features: [
-      'Everything in Pro',
-      'RBAC & team management',
-      'Audit logs',
-      'SOC 2 compliance template',
-      'Distributed tracing',
-      'Database branching',
-      'Deploy approvals workflow',
-      'Slack/Discord integration',
-      'Cost allocation reports',
-      '3D topology view',
-    ],
-  },
-  {
-    name: 'Enterprise',
-    price: 'Custom',
-    period: '',
-    description: 'For organizations with mission-critical workloads.',
-    color: 'from-amber-500 to-orange-600',
-    cta: 'Talk to Sales',
-    ctaLink: '/contact',
-    highlighted: false,
-    icon: Building2,
-    features: [
-      'Everything in Team',
-      'Multi-cloud fabric',
-      'Bare metal scheduler',
-      'Chaos engineering suite',
-      'Zero-knowledge deployments',
-      'Dedicated support engineer',
-      'Custom SLA (99.99%)',
-      'On-premise deployment',
-      'HIPAA & PCI-DSS compliance',
-      'SSO / SAML integration',
-    ],
-  },
-];
-
-const comparisonRows = [
-  { feature: 'Applications', community: '3', pro: 'Unlimited', team: 'Unlimited', enterprise: 'Unlimited' },
-  { feature: 'Team members', community: '1', pro: '3', team: 'Unlimited', enterprise: 'Unlimited' },
-  { feature: 'Custom domains', community: false, pro: true, team: true, enterprise: true },
-  { feature: 'SSL certificates', community: false, pro: true, team: true, enterprise: true },
-  { feature: 'AI autoscaler', community: false, pro: true, team: true, enterprise: true },
-  { feature: 'Self-healing', community: false, pro: true, team: true, enterprise: true },
-  { feature: 'Audit logs', community: false, pro: false, team: true, enterprise: true },
-  { feature: 'RBAC', community: false, pro: false, team: true, enterprise: true },
-  { feature: 'Deploy approvals', community: false, pro: false, team: true, enterprise: true },
-  { feature: 'SOC 2 / HIPAA', community: false, pro: false, team: 'SOC 2', enterprise: 'All' },
-  { feature: 'Dedicated support', community: false, pro: false, team: false, enterprise: true },
-  { feature: 'SLA', community: 'Best effort', pro: '99.9%', team: '99.95%', enterprise: '99.99%' },
-];
+import { Check, X, Zap, Shield, Users, Building2, ChevronDown, Loader2 } from 'lucide-react';
+import { billingApi, PricingPlan } from '@/lib/api';
 
 const faqs = [
   {
@@ -136,12 +29,41 @@ const faqs = [
 ];
 
 export default function PricingPage() {
+  const [plans, setPlans] = useState<PricingPlan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [billingCycle, setBillingCycle] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+
+  useEffect(() => {
+    async function loadPlans() {
+      try {
+        const data = await billingApi.getPlans();
+        setPlans(data);
+      } catch (err) {
+        console.error('Failed to load plans:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPlans();
+  }, []);
+
+  const getIcon = (slug: string) => {
+    if (slug.includes('pro')) return Shield;
+    if (slug.includes('team') || slug.includes('enterprise')) return Users;
+    if (slug.includes('corp')) return Building2;
+    return Zap;
+  };
+
+  const getColor = (slug: string) => {
+    if (slug.includes('pro')) return 'from-emerald-500 to-green-600';
+    if (slug.includes('team')) return 'from-violet-500 to-purple-600';
+    if (slug.includes('enterprise')) return 'from-amber-500 to-orange-600';
+    return 'from-slate-500 to-slate-600';
+  };
 
   return (
     <main className="min-h-screen bg-white dark:bg-slate-950">
-
-
       {/* Hero */}
       <section className="pt-32 pb-12 px-4 text-center">
         <div className="max-w-4xl mx-auto">
@@ -155,105 +77,119 @@ export default function PricingPage() {
           <p className="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
             No surprises. No hidden fees. Every plan includes core deployment features.
           </p>
+
+          {/* Billing Toggle */}
+          <div className="flex items-center justify-center mt-8 gap-4">
+              <span className={`text-sm font-medium ${billingCycle === 'MONTHLY' ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`}>Monthly</span>
+              <button
+                  onClick={() => setBillingCycle(c => c === 'MONTHLY' ? 'YEARLY' : 'MONTHLY')}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      billingCycle === 'YEARLY' ? 'bg-emerald-500' : 'bg-slate-200 dark:bg-slate-700'
+                  }`}
+              >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                      billingCycle === 'YEARLY' ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+              </button>
+              <span className={`text-sm font-medium ${billingCycle === 'YEARLY' ? 'text-slate-900 dark:text-white' : 'text-slate-500'}`}>
+                  Yearly <span className="text-emerald-500 text-xs font-bold ml-1">(Save 20%)</span>
+              </span>
+          </div>
         </div>
       </section>
 
       {/* Pricing Cards */}
       <section className="pb-24 px-4">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {tiers.map((tier) => (
-            <div
-              key={tier.name}
-              className={`relative rounded-2xl p-6 border transition-all duration-300 flex flex-col ${
-                tier.highlighted
-                  ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 shadow-xl shadow-emerald-500/10 scale-[1.02] ring-2 ring-emerald-500/20'
-                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-300 dark:hover:border-emerald-700 hover:shadow-lg'
-              }`}
-            >
-              {tier.highlighted && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-emerald-600 text-white text-xs font-bold rounded-full uppercase tracking-wider">
-                  Most Popular
-                </div>
-              )}
-
-              <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${tier.color} flex items-center justify-center mb-4`}>
-                <tier.icon className="w-6 h-6 text-white" />
-              </div>
-
-              <h3 className="text-xl font-bold text-slate-900 dark:text-white">{tier.name}</h3>
-              <div className="mt-2 mb-1">
-                <span className="text-4xl font-extrabold text-slate-900 dark:text-white">{tier.price}</span>
-                {tier.period && <span className="text-slate-500 dark:text-slate-400 text-sm ml-1">{tier.period}</span>}
-              </div>
-              <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{tier.description}</p>
-
-              <Link
-                href={tier.ctaLink}
-                className={`block w-full text-center py-3 px-4 rounded-xl font-bold text-sm transition-all ${
-                  tier.highlighted
-                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-600/30'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
-              >
-                {tier.cta}
-              </Link>
-
-              <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-800 flex-1">
-                <ul className="space-y-3">
-                  {tier.features.map((feature) => (
-                    <li key={feature} className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
-                      <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+        {loading ? (
+             <div className="flex justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
+             </div>
+        ) : plans.length === 0 ? (
+            <div className="text-center py-12 text-slate-500">
+                No pricing plans available. Please check back later.
             </div>
-          ))}
-        </div>
-      </section>
+        ) : (
+            <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {plans.map((tier) => {
+                const Icon = getIcon(tier.slug);
+                const color = getColor(tier.slug);
+                const price = billingCycle === 'MONTHLY' ? tier.price_monthly_usd : tier.price_yearly_usd;
+                const period = billingCycle === 'MONTHLY' ? '/mo' : '/yr';
+                const highlighted = tier.slug.includes('pro');
 
-      {/* Comparison Table */}
-      <section className="py-24 bg-slate-50 dark:bg-slate-900">
-        <div className="max-w-6xl mx-auto px-4">
-          <h2 className="text-3xl font-extrabold text-center text-slate-900 dark:text-white mb-12">
-            Compare Plans
-          </h2>
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-700 shadow-lg">
-            <table className="w-full text-left border-collapse bg-white dark:bg-slate-800">
-              <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-700">
-                  <th className="px-6 py-4 text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Feature</th>
-                  <th className="px-6 py-4 text-sm font-semibold text-slate-500 dark:text-slate-400 text-center">Community</th>
-                  <th className="px-6 py-4 text-sm font-semibold text-emerald-600 dark:text-emerald-400 text-center">Pro</th>
-                  <th className="px-6 py-4 text-sm font-semibold text-slate-500 dark:text-slate-400 text-center">Team</th>
-                  <th className="px-6 py-4 text-sm font-semibold text-slate-500 dark:text-slate-400 text-center">Enterprise</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparisonRows.map((row, i) => (
-                  <tr key={i} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                    <td className="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{row.feature}</td>
-                    {(['community', 'pro', 'team', 'enterprise'] as const).map((plan) => {
-                      const val = row[plan];
-                      return (
-                        <td key={plan} className="px-6 py-4 text-center">
-                          {val === true ? (
-                            <Check className="w-5 h-5 text-emerald-500 mx-auto" />
-                          ) : val === false ? (
-                            <X className="w-5 h-5 text-slate-300 dark:text-slate-600 mx-auto" />
-                          ) : (
-                            <span className="text-sm text-slate-700 dark:text-slate-300">{val}</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                return (
+                <div
+                key={tier.id}
+                className={`relative rounded-2xl p-6 border transition-all duration-300 flex flex-col ${
+                    highlighted
+                    ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 shadow-xl shadow-emerald-500/10 scale-[1.02] ring-2 ring-emerald-500/20'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-emerald-300 dark:hover:border-emerald-700 hover:shadow-lg'
+                }`}
+                >
+                {highlighted && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-emerald-600 text-white text-xs font-bold rounded-full uppercase tracking-wider">
+                    Most Popular
+                    </div>
+                )}
+
+                <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center mb-4`}>
+                    <Icon className="w-6 h-6 text-white" />
+                </div>
+
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">{tier.name}</h3>
+                <div className="mt-2 mb-1">
+                    <span className="text-4xl font-extrabold text-slate-900 dark:text-white">${price}</span>
+                    <span className="text-slate-500 dark:text-slate-400 text-sm ml-1">{period}</span>
+                </div>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">{tier.description}</p>
+
+                <Link
+                    href={`/register?plan=${tier.slug}`}
+                    className={`block w-full text-center py-3 px-4 rounded-xl font-bold text-sm transition-all ${
+                    highlighted
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-600/30'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                >
+                    Get Started
+                </Link>
+
+                <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-800 flex-1">
+                    <ul className="space-y-3">
+                        <li className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            {tier.max_services} Services
+                        </li>
+                        <li className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            {tier.max_cpu_cores} vCPU Limit
+                        </li>
+                        <li className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            {tier.max_memory_mb} MB RAM Limit
+                        </li>
+                        <li className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            {tier.features.has_auto_scaling ? (
+                                <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            ) : (
+                                <X className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                            )}
+                            Auto-scaling
+                        </li>
+                        <li className="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+                            {tier.features.has_backup ? (
+                                <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            ) : (
+                                <X className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" />
+                            )}
+                            Backups
+                        </li>
+                    </ul>
+                </div>
+                </div>
+            )})}
+            </div>
+        )}
       </section>
 
       {/* FAQ */}
@@ -283,20 +219,6 @@ export default function PricingPage() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section className="py-16 bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 text-white">
-        <div className="max-w-4xl mx-auto px-4 text-center">
-          <h2 className="text-3xl font-extrabold mb-4">Ready to Get Started?</h2>
-          <p className="text-lg text-white/80 mb-8">Start free. No credit card required. Upgrade when you need to.</p>
-          <Link
-            href="/register"
-            className="inline-flex items-center gap-2 px-8 py-4 text-lg font-bold text-emerald-600 bg-white rounded-xl hover:bg-slate-100 transition-all shadow-lg"
-          >
-            Deploy Your First App
-          </Link>
         </div>
       </section>
     </main>

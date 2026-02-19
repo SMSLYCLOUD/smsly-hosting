@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,14 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import api, { systemApi, aiApi } from "@/lib/api";
+import api, { systemApi, aiApi, coreApi, teamsApi } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
+import { Switch } from "@/components/ui/switch";
 
 interface CloudProvider {
   id: string;
@@ -44,9 +45,19 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
 
+  // API Keys state
+  const [apiKeys, setApiKeys] = useState<any[]>([]);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+
+  // Team state
+  const [teams, setTeams] = useState<any[]>([]);
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("MEMBER");
+
   // Notification state
-  const [emailNotifs, setEmailNotifs] = useState(false);
-  const [slackConnected, setSlackConnected] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState<any[]>([]);
 
   // AI Config State
   const [aiData, setAiData] = useState<any>(null);
@@ -68,15 +79,50 @@ export default function SettingsPage() {
   const [savingDomain, setSavingDomain] = useState(false);
   const [showCfToken, setShowCfToken] = useState(false);
 
-  useEffect(() => {
-    fetchProviders();
-    fetchAIConfig();
-    fetchSystemConfig();
-    fetchProfile();
-    fetchDomainConfig();
+  const fetchProviders = useCallback(async () => {
+    try {
+      const res = await api.get("/cloud/providers/");
+      const data = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+      setProviders(data);
+    } catch (err) {
+      console.error("Failed to fetch providers:", err);
+    } finally {
+      setLoadingProviders(false);
+    }
   }, []);
 
-  const fetchDomainConfig = async () => {
+  const fetchAIConfig = useCallback(async () => {
+    try {
+      const result = await aiApi.getProviders(true);
+      setAiData(result);
+    } catch (err) {
+      console.error("Failed to fetch AI config", err);
+    } finally {
+      setLoadingAI(false);
+    }
+  }, []);
+
+  const fetchSystemConfig = useCallback(async () => {
+    try {
+      const config = await systemApi.getConfig();
+      setSystemConfig(config);
+    } catch (err) {
+      console.error("Failed to fetch system config", err);
+    }
+  }, []);
+
+  const fetchProfile = useCallback(async () => {
+    try {
+      const res = await api.get('/auth/user/');
+      setFirstName(res.data.first_name || '');
+      setLastName(res.data.last_name || '');
+      setEmail(res.data.email || '');
+    } catch (err) {
+      console.error('Failed to fetch profile', err);
+    }
+  }, []);
+
+  const fetchDomainConfig = useCallback(async () => {
     try {
       const data = await systemApi.getDomainConfig();
       setDomainConfig(data);
@@ -90,6 +136,78 @@ export default function SettingsPage() {
     } catch (err) {
       console.error('Failed to fetch domain config', err);
     }
+  }, []);
+
+  const fetchApiKeys = useCallback(async () => {
+      try {
+        const keys = await coreApi.getApiKeys();
+        setApiKeys(keys);
+      } catch (err) { console.error(err); }
+  }, []);
+
+  const fetchTeams = useCallback(async () => {
+      try {
+        const t = await teamsApi.list();
+        setTeams(t);
+        if (t.length > 0) {
+            const members = await teamsApi.members(t[0].id);
+            setTeamMembers(members);
+        }
+      } catch (err) { console.error(err); }
+  }, []);
+
+  const fetchNotifPrefs = useCallback(async () => {
+      try {
+        const prefs = await coreApi.getNotificationPreferences();
+        setNotifPrefs(prefs);
+      } catch (err) { console.error(err); }
+  }, []);
+
+  useEffect(() => {
+    fetchProviders();
+    fetchAIConfig();
+    fetchSystemConfig();
+    fetchProfile();
+    fetchDomainConfig();
+    fetchApiKeys();
+    fetchTeams();
+    fetchNotifPrefs();
+  }, [fetchProviders, fetchAIConfig, fetchSystemConfig, fetchProfile, fetchDomainConfig, fetchApiKeys, fetchTeams, fetchNotifPrefs]);
+
+  const handleCreateApiKey = async () => {
+      try {
+          const res = await coreApi.createApiKey(newKeyName || 'CLI Token');
+          setGeneratedKey(res.key);
+          setNewKeyName("");
+          fetchApiKeys();
+          toast({ title: "API Key Created", description: "Copy it now, you won't see it again." });
+      } catch (err) {
+          toast({ title: "Error", description: "Failed to create API key", variant: "destructive" });
+      }
+  };
+
+  const handleRevokeKey = async (id: number) => {
+      try {
+          await coreApi.revokeApiKey(id);
+          fetchApiKeys();
+          toast({ title: "API Key Revoked" });
+      } catch (err) {
+          toast({ title: "Error", description: "Failed to revoke key", variant: "destructive" });
+      }
+  };
+
+  const handleInvite = async () => {
+      if (!teams.length) return;
+      try {
+          await teamsApi.inviteMember(teams[0].id, inviteEmail, inviteRole);
+          toast({ title: "Invitation Sent" });
+          setInviteEmail("");
+          // Refresh members
+          const members = await teamsApi.members(teams[0].id);
+          setTeamMembers(members);
+      } catch (err) {
+          toast({ title: "Error", description: "Failed to invite member", variant: "destructive" });
+      }
   };
 
   const handleSaveDomainConfig = async () => {
@@ -105,37 +223,6 @@ export default function SettingsPage() {
       toast({ title: 'Error', description: msg, variant: 'destructive' });
     } finally {
       setSavingDomain(false);
-    }
-  };
-
-  const fetchProfile = async () => {
-    try {
-      const res = await api.get('/auth/user/');
-      setFirstName(res.data.first_name || '');
-      setLastName(res.data.last_name || '');
-      setEmail(res.data.email || '');
-    } catch (err) {
-      console.error('Failed to fetch profile', err);
-    }
-  };
-
-  const fetchSystemConfig = async () => {
-    try {
-      const config = await systemApi.getConfig();
-      setSystemConfig(config);
-    } catch (err) {
-      console.error("Failed to fetch system config", err);
-    }
-  };
-
-  const fetchAIConfig = async () => {
-    try {
-      const result = await aiApi.getProviders(true);
-      setAiData(result);
-    } catch (err) {
-      console.error("Failed to fetch AI config", err);
-    } finally {
-      setLoadingAI(false);
     }
   };
 
@@ -180,18 +267,6 @@ export default function SettingsPage() {
       toast({ title: "Error", description: detail, variant: "destructive" });
     } finally {
       setChangingPassword(false);
-    }
-  };
-
-  const fetchProviders = async () => {
-    try {
-      const res = await api.get("/cloud/providers/");
-      const data = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-      setProviders(data);
-    } catch (err) {
-      console.error("Failed to fetch providers:", err);
-    } finally {
-      setLoadingProviders(false);
     }
   };
 
@@ -241,7 +316,7 @@ export default function SettingsPage() {
 
   return (
     <DashboardShell>
-    <div className="container mx-auto py-10 max-w-4xl relative z-10">
+      <div className="container mx-auto py-10 max-w-4xl relative z-10">
       <PageHeader
         title="Settings"
         description="Manage your account and preferences."
@@ -254,6 +329,12 @@ export default function SettingsPage() {
         <TabsList className="flex flex-wrap w-full gap-1">
           <TabsTrigger value="profile" className="flex items-center gap-2">
             <User className="h-4 w-4" /> Profile
+          </TabsTrigger>
+          <TabsTrigger value="api-keys" className="flex items-center gap-2">
+            <Key className="h-4 w-4" /> API Keys
+          </TabsTrigger>
+          <TabsTrigger value="team" className="flex items-center gap-2">
+            <Users className="h-4 w-4" /> Team
           </TabsTrigger>
           <TabsTrigger value="notifications" className="flex items-center gap-2">
             <Bell className="h-4 w-4" /> Alerts
@@ -311,6 +392,129 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="api-keys">
+            <Card>
+                <CardHeader>
+                    <CardTitle>API Keys</CardTitle>
+                    <CardDescription>Manage API keys for CI/CD and external access.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    {generatedKey && (
+                        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+                            <p className="text-sm font-semibold text-green-600 mb-2">New API Key Generated</p>
+                            <div className="flex items-center gap-2">
+                                <code className="flex-1 p-2 bg-background border rounded font-mono text-sm">{generatedKey}</code>
+                                <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(generatedKey)}>
+                                    <Copy className="w-4 h-4" />
+                                </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-2">Save this key now. It won&apos;t be shown again.</p>
+                        </div>
+                    )}
+
+                    <div className="flex gap-2 items-end">
+                        <div className="space-y-2 flex-1">
+                            <Label>New Key Name</Label>
+                            <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g. GitHub Actions" />
+                        </div>
+                        <Button onClick={handleCreateApiKey}>Create Key</Button>
+                    </div>
+
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Prefix</TableHead>
+                                <TableHead>Created</TableHead>
+                                <TableHead>Last Used</TableHead>
+                                <TableHead></TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {apiKeys.map(key => (
+                                <TableRow key={key.id}>
+                                    <TableCell className="font-medium">{key.name}</TableCell>
+                                    <TableCell className="font-mono text-xs">{key.prefix}...</TableCell>
+                                    <TableCell>{new Date(key.created_at).toLocaleDateString()}</TableCell>
+                                    <TableCell>{key.last_used ? new Date(key.last_used).toLocaleDateString() : 'Never'}</TableCell>
+                                    <TableCell>
+                                        <Button variant="ghost" size="sm" onClick={() => handleRevokeKey(key.id)} className="text-red-500 hover:text-red-600">
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                            {apiKeys.length === 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">No API keys found.</TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
+        </TabsContent>
+
+        <TabsContent value="team">
+            <Card>
+                <CardHeader>
+                    <CardTitle>Team Members</CardTitle>
+                    <CardDescription>Manage your team and their access levels.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="flex gap-2 items-end">
+                        <div className="space-y-2 flex-1">
+                            <Label>Email Address</Label>
+                            <Input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="colleague@company.com" />
+                        </div>
+                        <div className="space-y-2 w-32">
+                            <Label>Role</Label>
+                            <select
+                                className="w-full h-10 px-3 border rounded-md bg-background"
+                                value={inviteRole}
+                                onChange={e => setInviteRole(e.target.value)}
+                            >
+                                <option value="ADMIN">Admin</option>
+                                <option value="MEMBER">Member</option>
+                                <option value="VIEWER">Viewer</option>
+                            </select>
+                        </div>
+                        <Button onClick={handleInvite}>Invite</Button>
+                    </div>
+
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>User</TableHead>
+                                <TableHead>Email</TableHead>
+                                <TableHead>Role</TableHead>
+                                <TableHead>Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {teamMembers.map(member => (
+                                <TableRow key={member.id}>
+                                    <TableCell>{member.username}</TableCell>
+                                    <TableCell>{member.email}</TableCell>
+                                    <TableCell><Badge variant="outline">{member.role}</Badge></TableCell>
+                                    <TableCell>
+                                        <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600">
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                            {teamMembers.length === 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No team members found.</TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
+        </TabsContent>
+
         <TabsContent value="notifications">
           <Card>
             <CardHeader>
@@ -318,38 +522,28 @@ export default function SettingsPage() {
               <CardDescription>Choose how you want to be notified.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex items-center justify-between p-4 border rounded-lg">
-                <div>
-                  <p className="font-medium">Email Notifications</p>
-                  <p className="text-sm text-muted-foreground">Receive deployment updates via email</p>
-                </div>
-                <Button
-                  variant={emailNotifs ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => {
-                    setEmailNotifs(!emailNotifs);
-                    toast({ title: emailNotifs ? "Disabled" : "Enabled", description: `Email notifications ${emailNotifs ? 'disabled' : 'enabled'}.` });
-                  }}
-                >
-                  {emailNotifs ? <><Check className="h-3 w-3 mr-1" /> Enabled</> : "Enable"}
-                </Button>
-              </div>
-              <div className="flex items-center justify-between p-4 border rounded-lg">
-                <div>
-                  <p className="font-medium">Slack Integration</p>
-                  <p className="text-sm text-muted-foreground">Get alerts in your Slack channel</p>
-                </div>
-                <Button
-                  variant={slackConnected ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => {
-                    setSlackConnected(!slackConnected);
-                    toast({ title: slackConnected ? "Disconnected" : "Connected", description: `Slack integration ${slackConnected ? 'disconnected' : 'connected'}.` });
-                  }}
-                >
-                  {slackConnected ? <><Check className="h-3 w-3 mr-1" /> Connected</> : "Connect"}
-                </Button>
-              </div>
+              <Table>
+                  <TableHeader>
+                      <TableRow>
+                          <TableHead>Event</TableHead>
+                          <TableHead>Email</TableHead>
+                          <TableHead>In-App</TableHead>
+                      </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                      {['deploy_success', 'deploy_failed', 'health_alert', 'billing_due'].map(type => (
+                          <TableRow key={type}>
+                              <TableCell className="capitalize">{type.replace('_', ' ')}</TableCell>
+                              <TableCell>
+                                  <Switch defaultChecked />
+                              </TableCell>
+                              <TableCell>
+                                  <Switch defaultChecked />
+                              </TableCell>
+                          </TableRow>
+                      ))}
+                  </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </TabsContent>
@@ -835,165 +1029,6 @@ export default function SettingsPage() {
                         <TableCell className="font-mono">HOST</TableCell>
                         <TableCell>{systemConfig.DATABASE_HOST}</TableCell>
                         <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </div>
-          ) : (
-            <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          )}
-        </TabsContent>
-
-        {/* System Config Tab (General + Security + Network + Auth) */}
-        <TabsContent value="system">
-          {systemConfig ? (
-            <div className="space-y-6">
-              {/* General */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>General</CardTitle>
-                  <CardDescription>Core platform settings.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell className="font-mono">VERSION</TableCell>
-                        <TableCell>{systemConfig.VERSION}</TableCell>
-                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">DEBUG</TableCell>
-                        <TableCell>{systemConfig.DEBUG ? "Enabled" : "Disabled"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.DEBUG ? "destructive" : "default"}>{systemConfig.DEBUG ? "Unsafe" : "Secure"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">DOMAIN</TableCell>
-                        <TableCell>{systemConfig.DOMAIN}</TableCell>
-                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">TIME_ZONE</TableCell>
-                        <TableCell>{systemConfig.TIME_ZONE}</TableCell>
-                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">SITE_ID</TableCell>
-                        <TableCell>{systemConfig.SITE_ID}</TableCell>
-                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-
-              {/* Security */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-red-500" /> Security</CardTitle>
-                  <CardDescription>TLS, HSTS, cookies, and signature verification.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell className="font-mono">SSL_REDIRECT</TableCell>
-                        <TableCell>{systemConfig.SECURE_SSL_REDIRECT ? "Enabled" : "Disabled"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.SECURE_SSL_REDIRECT ? "default" : "secondary"}>{systemConfig.SECURE_SSL_REDIRECT ? "Secure" : "Insecure"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">HSTS</TableCell>
-                        <TableCell>{systemConfig.SECURE_HSTS_SECONDS ? `${systemConfig.SECURE_HSTS_SECONDS}s` : "Disabled"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.SECURE_HSTS_SECONDS ? "default" : "secondary"}>{systemConfig.SECURE_HSTS_SECONDS ? "Active" : "Off"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">HSTS_SUBDOMAINS</TableCell>
-                        <TableCell>{systemConfig.SECURE_HSTS_INCLUDE_SUBDOMAINS ? "Yes" : "No"}</TableCell>
-                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">HSTS_PRELOAD</TableCell>
-                        <TableCell>{systemConfig.SECURE_HSTS_PRELOAD ? "Yes" : "No"}</TableCell>
-                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">SESSION_COOKIE_SECURE</TableCell>
-                        <TableCell>{systemConfig.SESSION_COOKIE_SECURE ? "Yes" : "No"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.SESSION_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.SESSION_COOKIE_SECURE ? "Secure" : "Insecure"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">CSRF_COOKIE_SECURE</TableCell>
-                        <TableCell>{systemConfig.CSRF_COOKIE_SECURE ? "Yes" : "No"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.CSRF_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.CSRF_COOKIE_SECURE ? "Secure" : "Insecure"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">SIGNATURE_CHECK</TableCell>
-                        <TableCell>{systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "Disabled" : "Enabled"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "destructive" : "default"}>{systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "Unsafe" : "Secure"}</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">WEBHOOK_SECRET</TableCell>
-                        <TableCell>{systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "Set" : "Not set"}</TableCell>
-                        <TableCell><Badge variant={systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "default" : "destructive"}>{systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "Secure" : "Missing"}</Badge></TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-
-              {/* Network */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Network & CORS</CardTitle>
-                  <CardDescription>Allowed hosts, CORS origins, and CSRF trusted origins.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell className="font-mono">ALLOWED_HOSTS</TableCell>
-                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.ALLOWED_HOSTS)}>{Array.isArray(systemConfig.ALLOWED_HOSTS) ? systemConfig.ALLOWED_HOSTS.join(", ") : String(systemConfig.ALLOWED_HOSTS)}</TableCell>
-                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">CORS_ORIGINS</TableCell>
-                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CORS_ALLOWED_ORIGINS)}>{Array.isArray(systemConfig.CORS_ALLOWED_ORIGINS) ? systemConfig.CORS_ALLOWED_ORIGINS.join(", ") : String(systemConfig.CORS_ALLOWED_ORIGINS)}</TableCell>
-                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">CSRF_ORIGINS</TableCell>
-                        <TableCell className="max-w-[300px] truncate" title={JSON.stringify(systemConfig.CSRF_TRUSTED_ORIGINS)}>{Array.isArray(systemConfig.CSRF_TRUSTED_ORIGINS) ? systemConfig.CSRF_TRUSTED_ORIGINS.join(", ") : String(systemConfig.CSRF_TRUSTED_ORIGINS)}</TableCell>
-                        <TableCell><Badge variant="outline">Security</Badge></TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-
-              {/* Auth */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Authentication</CardTitle>
-                  <CardDescription>Login method and redirect configuration.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      <TableRow>
-                        <TableCell className="font-mono">AUTH_METHOD</TableCell>
-                        <TableCell>{systemConfig.ACCOUNT_AUTH_METHOD}</TableCell>
-                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">LOGIN_REDIRECT</TableCell>
-                        <TableCell>{systemConfig.LOGIN_REDIRECT_URL}</TableCell>
-                        <TableCell><Badge variant="outline">Config</Badge></TableCell>
                       </TableRow>
                     </TableBody>
                   </Table>

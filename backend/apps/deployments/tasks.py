@@ -8,6 +8,7 @@ import json
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
+from django.db.models import Sum
 
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
@@ -23,6 +24,12 @@ from apps.deployments.utils import (
     update_stage,
 )
 from services.addon_provisioner import addon_provisioner
+from .services.backup_service import BackupService
+from .services.transfer_service import ServerTransferService
+from apps.billing.services.metering import UsageMeter
+from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
+from .models_backup import BackupSchedule, ServiceBackup
+from .models_transfer import ServerTransfer
 
 logger = logging.getLogger(__name__)
 
@@ -585,3 +592,51 @@ def restore_addon_task(self, backup_id: str):
         addon_provisioner.restore_backup(backup.addon, backup.file_path)
     except Exception as e:
         raise e
+
+@shared_task(bind=True, soft_time_limit=3600, time_limit=3900)
+def create_service_backup_task(self, service_id, backup_type='MANUAL'):
+    service = BackupService()
+    service.backup_service(service_id)
+
+@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
+def create_server_backup_task(self):
+    service = BackupService()
+    service.backup_server()
+
+@shared_task(bind=True, soft_time_limit=3600)
+def restore_service_backup_task(self, backup_id, target_service_id=None):
+    service = BackupService()
+    service.restore_service(backup_id, target_service_id)
+
+@shared_task
+def cleanup_old_backups_task():
+    """Delete backups older than retention_days per schedule."""
+    from datetime import timedelta
+
+    schedules = BackupSchedule.objects.filter(enabled=True)
+    for schedule in schedules:
+        if schedule.service:
+            # Service level
+            cutoff = timezone.now() - timedelta(days=schedule.retention_days)
+            old_backups = ServiceBackup.objects.filter(
+                service=schedule.service,
+                created_at__lt=cutoff
+            )
+            for backup in old_backups:
+                # Delete file
+                if backup.file_path and os.path.exists(backup.file_path):
+                    try:
+                        os.remove(backup.file_path)
+                    except OSError as e:
+                        logger.warning(f"Error deleting backup file {backup.file_path}: {e}")
+                backup.delete()
+
+@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
+def execute_server_transfer_task(self, transfer_id):
+    transfer = ServerTransfer.objects.get(id=transfer_id)
+    ServerTransferService(transfer).execute()
+
+@shared_task(bind=True)
+def rollback_transfer_task(self, transfer_id):
+    transfer = ServerTransfer.objects.get(id=transfer_id)
+    ServerTransferService(transfer).rollback()
