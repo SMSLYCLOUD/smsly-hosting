@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store, Sparkles, Monitor, Radio, Brain } from 'lucide-react';
+import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store, Sparkles, Monitor, Radio, Brain, Archive, Shield } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -14,7 +14,7 @@ export function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = React.useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = React.useState(false);
   const [isScrolled, setIsScrolled] = React.useState(false);
-  const [user, setUser] = React.useState<{email?: string} | null>(null);
+  const [user, setUser] = React.useState<{email?: string; is_staff?: boolean} | null>(null);
   const pathname = usePathname();
   const router = useRouter();
   const userMenuRef = React.useRef<HTMLDivElement>(null);
@@ -33,7 +33,10 @@ export function Navbar() {
           headers: { 'Authorization': `Token ${token}` },
         })
           .then(res => res.ok ? res.json() : Promise.reject())
-          .then(data => setUser({ email: data.email || data.username || 'User' }))
+          .then(data => setUser({
+              email: data.email || data.username || 'User',
+              is_staff: data.is_staff || false
+          }))
           .catch(() => setUser({ email: 'User' }));
     }
 
@@ -78,6 +81,11 @@ export function Navbar() {
     { href: '/billing', label: 'Billing', icon: CreditCard },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
+
+  if (user?.is_staff) {
+      authLinks.push({ href: '/backups', label: 'Backups', icon: Archive });
+      authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield });
+  }
 
   return (
     <nav

@@ -103,6 +103,8 @@ INSTALLED_APPS = [
     'apps.billing',
     'apps.domains',
     'apps.intelligence',
+    'apps.notifications',
+    'apps.addons',
 ]
 
 MIDDLEWARE = [
