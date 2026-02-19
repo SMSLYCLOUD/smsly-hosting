@@ -279,10 +279,100 @@ def _build_uploaded_source(deployment, service) -> str:
 def _is_traefik_not_ready(response: requests.Response) -> bool:
     """
     Detect Traefik's default no-route 404 response.
+
+    In production this response may not include a `Server: traefik` header,
+    so rely on the canonical body + headers rather than `Server` only.
     """
     body = (response.text or "").strip().lower()
-    server = (response.headers.get("Server") or "").lower()
-    return response.status_code == 404 and body == "404 page not found" and "traefik" in server
+    if response.status_code != 404 or body != "404 page not found":
+        return False
+
+    content_type = (response.headers.get("Content-Type") or "").lower()
+    nosniff = (response.headers.get("X-Content-Type-Options") or "").lower()
+    return content_type.startswith("text/plain") and nosniff == "nosniff"
+
+
+def _wait_for_local_container_healthy(
+    deployment,
+    container_id: str,
+    timeout_seconds: int = 90,
+    poll_seconds: int = 3,
+) -> bool:
+    """
+    Wait for a freshly deployed local container to be healthy/running.
+
+    This prevents deployments from being marked ACTIVE when the container
+    immediately crash-loops or fails its Docker health check.
+    """
+    try:
+        import docker
+    except Exception:  # pragma: no cover - import failure is environment-specific
+        append_log(
+            deployment,
+            "[HEALTH-CHECK] Docker SDK unavailable; skipping container health wait.\n",
+        )
+        return True
+
+    try:
+        client = docker.from_env()
+    except Exception as exc:  # pragma: no cover - daemon/socket issues are environment-specific
+        append_log(
+            deployment,
+            f"[HEALTH-CHECK] Docker client unavailable ({exc}); skipping container health wait.\n",
+        )
+        return True
+
+    deadline = time.monotonic() + timeout_seconds
+    last_state = "unknown"
+    while time.monotonic() < deadline:
+        try:
+            container = client.containers.get(container_id)
+            container.reload()
+            state = container.attrs.get("State") or {}
+            status = (state.get("Status") or "").lower()
+            health = ((state.get("Health") or {}).get("Status") or "").lower()
+            last_state = f"status={status or 'unknown'}, health={health or 'n/a'}"
+        except Exception as exc:  # pragma: no cover - container lookups are runtime-dependent
+            last_state = f"lookup_error={exc}"
+            time.sleep(poll_seconds)
+            continue
+
+        if status in {"exited", "dead"}:
+            append_log(
+                deployment,
+                f"[HEALTH-CHECK] Container terminated early ({last_state}).\n",
+            )
+            return False
+
+        if health == "healthy":
+            append_log(
+                deployment,
+                f"[HEALTH-CHECK] Container healthy ({last_state}).\n",
+            )
+            return True
+
+        if health == "unhealthy":
+            append_log(
+                deployment,
+                f"[HEALTH-CHECK] Container unhealthy ({last_state}).\n",
+            )
+            return False
+
+        # No Docker healthcheck configured; consider running container ready.
+        if status == "running" and not health:
+            append_log(
+                deployment,
+                f"[HEALTH-CHECK] Container running without healthcheck ({last_state}).\n",
+            )
+            return True
+
+        time.sleep(poll_seconds)
+
+    append_log(
+        deployment,
+        f"[HEALTH-CHECK] Timed out waiting for container health ({last_state}).\n",
+    )
+    return False
 
 
 def _wait_for_local_route_ready(
@@ -451,6 +541,15 @@ def _deploy_container(deployment, provider, image_name):
             if not route_ready:
                 raise RuntimeError(
                     f"Service route did not become ready for host {service.public_domain}"
+                )
+            container_ready = _wait_for_local_container_healthy(
+                deployment,
+                resource.resource_id,
+                timeout_seconds=120,
+            )
+            if not container_ready:
+                raise RuntimeError(
+                    f"Container failed readiness checks for service {service.name}"
                 )
 
         deployment.status = Deployment.Status.ACTIVE

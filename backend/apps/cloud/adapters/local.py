@@ -166,13 +166,21 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception:
             use_ssl = False
 
+        # In this production architecture Caddy terminates TLS and forwards to
+        # Traefik's plain `web` entrypoint. Keep Traefik TLS routers disabled
+        # unless explicitly enabled for direct-Traefik TLS deployments.
+        enable_traefik_tls = (
+            str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
         labels = {
             'managed_by': 'smsly-hosting',
             'traefik.enable': 'true',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
-        if use_ssl:
+        if use_ssl and enable_traefik_tls:
             labels.update({
                 # HTTP router (redirects to HTTPS)
                 f'traefik.http.routers.{name}-http.rule': host_rule,
@@ -187,7 +195,7 @@ class LocalAdapter(BaseCloudAdapter):
                 f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
             })
         else:
-            # IP Mode / No SSL: simple HTTP router
+            # Caddy-terminated TLS or IP mode: simple HTTP router on Traefik web.
             labels.update({
                 f'traefik.http.routers.{name}.rule': host_rule,
                 f'traefik.http.routers.{name}.entrypoints': 'web',

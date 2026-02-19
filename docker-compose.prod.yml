@@ -214,7 +214,7 @@ services:
       - ./infrastructure/route-fallback/index.html:/usr/share/nginx/html/index.html:ro
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.route-fallback.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.route-fallback.rule=PathPrefix(`/`)"
       - "traefik.http.routers.route-fallback.entrypoints=web"
       - "traefik.http.routers.route-fallback.priority=1"
       - "traefik.http.services.route-fallback.loadbalancer.server.port=80"
