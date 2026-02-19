@@ -513,7 +513,7 @@ def _get_db_settings():
 
 
 def _effective_env_value(db_value: str | None, env_key: str, default: str = "") -> str:
-    if db_value:
+    if db_value is not None:
         return str(db_value)
     return os.environ.get(env_key, default) or default
 
@@ -538,6 +538,8 @@ def _sync_db_to_env():
         val = _effective_env_value(getattr(cfg, attr, None), env_key, default)
         if val:
             os.environ[env_key] = val
+        else:
+            os.environ.pop(env_key, None)
 
 
 # ---------------------------------------------------------------------------

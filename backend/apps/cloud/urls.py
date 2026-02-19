@@ -1,4 +1,5 @@
 """URLs for cloud app."""
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 from apps.cloud.views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
 
@@ -9,4 +10,22 @@ router.register(r'intelligence', IntelligenceViewSet, basename='intelligence')
 # Ecosystem actions are now part of IntelligenceViewSet
 # router.register(r'ecosystem', EcosystemViewSet, basename='ecosystem')
 
-urlpatterns = router.urls
+urlpatterns = [
+    *router.urls,
+    # Backward-compatible ecosystem paths used by the frontend.
+    path(
+        'ecosystem/scan/',
+        IntelligenceViewSet.as_view({'post': 'ecosystem_scan'}),
+        name='ecosystem-scan',
+    ),
+    path(
+        'ecosystem/deploy/',
+        IntelligenceViewSet.as_view({'post': 'ecosystem_deploy'}),
+        name='ecosystem-deploy',
+    ),
+    path(
+        'ecosystem/task_status/',
+        IntelligenceViewSet.as_view({'get': 'task_status'}),
+        name='ecosystem-task-status',
+    ),
+]

@@ -44,7 +44,7 @@ export default function CanvasPage() {
           data: { label: `${service.name}\n(${service.latest_deployment?.status || 'Unknown'})` },
           type: index === 0 ? 'input' : undefined,
           style: {
-            background: service.latest_deployment?.status === 'RUNNING' ? '#10b981' :
+            background: service.latest_deployment?.status === 'ACTIVE' ? '#10b981' :
               service.latest_deployment?.status === 'FAILED' ? '#ef4444' : '#6366f1',
             color: 'white',
             borderRadius: 8

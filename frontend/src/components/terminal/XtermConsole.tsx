@@ -15,6 +15,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
   const term = useRef<Terminal | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const inputBuffer = useRef<string>('');
+  const reconnectAttemptsRef = useRef(0);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -50,50 +51,67 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       };
     }
 
-    let socket: WebSocket;
-    try {
-      socket = new WebSocket(wsUrl);
-    } catch {
-      terminal.writeln(
-        '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
-      );
-      return () => {
-        terminal.dispose();
-        window.removeEventListener('resize', handleResize);
-      };
-    }
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+    const maxReconnectAttempts = 5;
 
-    ws.current = socket;
-    inputBuffer.current = '';
-
-    socket.onopen = () => {
-      terminal.writeln('\x1b[32m[connected]\x1b[0m');
-    };
-
-    socket.onmessage = (event) => {
+    const connectWebSocket = () => {
+      if (disposed) return;
       try {
-        const data = JSON.parse(event.data);
-        if (data && typeof data.message === 'string') {
-          terminal.write(data.message);
-        }
+        socket = new WebSocket(wsUrl);
       } catch {
-        // Ignore non-JSON payloads
+        terminal.writeln(
+          '\x1b[31mConsole unavailable: invalid WebSocket URL.\x1b[0m',
+        );
+        return;
       }
+
+      ws.current = socket;
+      inputBuffer.current = '';
+
+      socket.onopen = () => {
+        reconnectAttemptsRef.current = 0;
+        terminal.writeln('\x1b[32m[connected]\x1b[0m');
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && typeof data.message === 'string') {
+            terminal.write(data.message);
+          }
+        } catch {
+          // Ignore non-JSON payloads
+        }
+      };
+
+      socket.onerror = () => {
+        terminal.writeln('\r\n\x1b[31m[error] websocket connection failed\x1b[0m');
+      };
+
+      socket.onclose = () => {
+        if (disposed) return;
+        terminal.writeln('\r\n\x1b[31m[disconnected]\x1b[0m');
+        if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+          terminal.writeln('\x1b[31m[reconnect limit reached]\x1b[0m');
+          return;
+        }
+        reconnectAttemptsRef.current += 1;
+        const delayMs = Math.min(1500 * reconnectAttemptsRef.current, 5000);
+        terminal.writeln(
+          `\x1b[33m[reconnecting in ${Math.round(delayMs / 1000)}s `
+          + `${reconnectAttemptsRef.current}/${maxReconnectAttempts}]\x1b[0m`,
+        );
+        reconnectTimer = setTimeout(connectWebSocket, delayMs);
+      };
     };
 
-    socket.onerror = () => {
-      terminal.writeln(
-        '\r\n\x1b[31m[error] websocket connection failed\x1b[0m',
-      );
-    };
-
-    socket.onclose = () => {
-      terminal.writeln('\r\n\x1b[31m[disconnected]\x1b[0m');
-    };
+    connectWebSocket();
 
     // Buffer full command and send on Enter. (Server expects full command lines.)
     const onDataDisposable: IDisposable = terminal.onData((data) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
       if (data === '\r') {
         terminal.write('\r\n');
@@ -116,10 +134,15 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
     });
 
     return () => {
+      disposed = true;
+      reconnectAttemptsRef.current = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
       onDataDisposable.dispose();
       terminal.dispose();
       try {
-        socket.close();
+        socket?.close();
       } catch {
         // ignore
       }

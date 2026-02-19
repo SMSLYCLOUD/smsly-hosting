@@ -14,7 +14,9 @@ import {
   Trash2,
   Rocket,
   GitBranch,
-  Cloud
+  Cloud,
+  RefreshCw,
+  RotateCcw
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +34,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   const [actionLoading, setActionLoading] = React.useState<string | null>(null);
 
   const handleDeploy = async (serviceId: string) => {
+    if (!confirm('Trigger a new deployment for this service now?')) return;
     setActionLoading(serviceId);
     try {
       await api.post(`/services/${serviceId}/deploy/`, { ref: 'HEAD' });
@@ -44,12 +47,36 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   };
 
   const handleStop = async (serviceId: string) => {
+    if (!confirm('Stop this service and cancel active deployment activity?')) return;
     setActionLoading(serviceId);
     try {
-      await api.post(`/services/${serviceId}/stop/`);
+      await servicesApi.stop(serviceId);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Stop failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRestart = async (serviceId: string) => {
+    if (!confirm('Restart this service now? A fresh deployment will be queued.')) return;
+    setActionLoading(serviceId);
+    try {
+      await servicesApi.restart(serviceId);
+    } catch (err) {
+      console.error('Restart failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRecheck = async (serviceId: string) => {
+    setActionLoading(serviceId);
+    try {
+      await servicesApi.recheckHealth(serviceId, true);
+    } catch (err) {
+      console.error('Recheck failed:', err);
     } finally {
       setActionLoading(null);
     }
@@ -160,6 +187,16 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               <Button
                 variant="ghost"
                 size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-cyan-500"
+                title="Recheck Health"
+                disabled={actionLoading === service.id}
+                onClick={() => handleRecheck(service.id)}
+              >
+                <RefreshCw size={12} className={actionLoading === service.id ? 'animate-spin' : ''} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 className="h-8 w-8 text-muted-foreground hover:text-emerald-500"
                 title="Redeploy"
                 disabled={actionLoading === service.id}
@@ -167,6 +204,18 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               >
                 <Play size={12} fill="currentColor" />
               </Button>
+              {service.latest_deployment?.status === 'ACTIVE' && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-yellow-500"
+                  title="Restart"
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleRestart(service.id)}
+                >
+                  <RotateCcw size={12} />
+                </Button>
+              )}
               {service.latest_deployment?.status === 'ACTIVE' && (
                 <Button
                   variant="ghost"

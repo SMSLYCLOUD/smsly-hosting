@@ -44,6 +44,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.services.autoscaler.check_autoscale_task',
         'schedule': 30.0,
     },
+    # Intelligence runtime anomaly scan every 3 minutes
+    'detect-runtime-anomalies-every-180s': {
+        'task': 'apps.intelligence.tasks.detect_anomalies_task',
+        'schedule': 180.0,
+    },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {
         'task': 'apps.deployments.tasks_metrics.cleanup_build_cache_task',

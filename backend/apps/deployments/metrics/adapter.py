@@ -3,6 +3,7 @@ import time
 import random
 import logging
 from typing import List, Dict, Any
+from datetime import datetime, timezone
 
 import requests
 from decouple import config
@@ -53,6 +54,43 @@ class MetricsAdapter:
         )
         return data if data else self._generate_mock_data('network', duration)
 
+    def get_disk_history(self, service_id: str,
+                         duration: str = '1h') -> List[Dict[str, Any]]:
+        data = self._query_prometheus(
+            f'(rate(container_fs_reads_bytes_total'
+            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])'
+            f' + rate(container_fs_writes_bytes_total'
+            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])) / 1024',
+            duration,
+        )
+        return data if data else self._generate_mock_data('disk', duration)
+
+    def get_current(self, service_id: str) -> Dict[str, Any]:
+        """
+        Return a current snapshot used by the dashboard cards.
+        Falls back to derived values from mock time-series data.
+        """
+        cpu = self.get_cpu_history(service_id, '1h')
+        memory = self.get_memory_history(service_id, '1h')
+        network = self.get_network_history(service_id, '1h')
+
+        cpu_percent = self._latest_value(cpu)
+        memory_usage = self._latest_value(memory)
+        memory_limit = max(512.0, memory_usage * 1.6)
+        memory_percent = round(
+            (memory_usage / memory_limit) * 100 if memory_limit > 0 else 0.0, 2
+        )
+        network_total = self._latest_value(network)
+
+        return {
+            'cpu_percent': round(cpu_percent, 2),
+            'memory_usage': round(memory_usage, 2),
+            'memory_limit': round(memory_limit, 2),
+            'memory_percent': memory_percent,
+            'network_rx_kb': round(network_total * 0.6, 2),
+            'network_tx_kb': round(network_total * 0.4, 2),
+        }
+
     # ------------------------------------------------------------------
     # Prometheus Query
     # ------------------------------------------------------------------
@@ -94,7 +132,13 @@ class MetricsAdapter:
             values = results[0].get('values', [])
             self._prometheus_ok = True
             return [
-                {'timestamp': int(v[0]), 'value': round(float(v[1]), 2)}
+                {
+                    'timestamp': datetime.fromtimestamp(
+                        int(float(v[0])),
+                        tz=timezone.utc,
+                    ).isoformat(),
+                    'value': round(float(v[1]), 2),
+                }
                 for v in values
             ]
 
@@ -116,7 +160,7 @@ class MetricsAdapter:
         now = int(time.time())
         points = 60
 
-        base = {'cpu': 20, 'memory': 256, 'network': 1024}.get(metric_type, 20)
+        base = {'cpu': 20, 'memory': 256, 'network': 1024, 'disk': 80}.get(metric_type, 20)
 
         for i in range(points):
             timestamp = now - ((points - i) * 60)
@@ -125,11 +169,21 @@ class MetricsAdapter:
             if random.random() > 0.95:
                 value *= 1.5
             data.append({
-                'timestamp': timestamp,
+                'timestamp': datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
                 'value': max(0, round(value, 2)),
             })
 
         return data
+
+    @staticmethod
+    def _latest_value(series: List[Dict[str, Any]]) -> float:
+        if not series:
+            return 0.0
+        latest = series[-1] or {}
+        try:
+            return float(latest.get('value', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 metrics_adapter = MetricsAdapter()

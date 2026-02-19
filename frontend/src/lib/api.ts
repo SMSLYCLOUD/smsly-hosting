@@ -76,6 +76,9 @@ export interface Service {
   branch?: string;
   internal_port?: number;
   public_domain?: string;
+  custom_domains?: string[];
+  domain_verified?: boolean;
+  verification_token?: string;
   created_at?: string;
   cpu_cores?: number;
   memory_mb?: number;
@@ -96,6 +99,10 @@ export interface Service {
   region?: string;    // Deployment region
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'starting';
   restart_policy?: 'always' | 'unless-stopped' | 'on-failure' | 'no';
+  health_check_path?: string;
+  health_check_interval?: number;
+  health_check_timeout?: number;
+  health_check_retries?: number;
   latest_deployment?: {
     id: string;
     status: string;
@@ -169,6 +176,14 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/deploy/`, { ref });
     return response.data;
   },
+  restart: async (id: string): Promise<any> => {
+    const response = await api.post(`/services/${id}/restart/`);
+    return response.data;
+  },
+  stop: async (id: string): Promise<any> => {
+    const response = await api.post(`/services/${id}/stop/`);
+    return response.data;
+  },
 
   // Deployment Management
   getDeployments: async (serviceId: string): Promise<Deployment[]> => {
@@ -212,6 +227,10 @@ export const servicesApi = {
   // Metrics
   getMetrics: async (serviceId: string, duration: string = '1h'): Promise<any> => {
     const response = await api.get(`/services/${serviceId}/metrics/`, { params: { duration } });
+    return response.data;
+  },
+  recheckHealth: async (serviceId: string, reset_backoff: boolean = true): Promise<any> => {
+    const response = await api.post(`/services/${serviceId}/recheck-health/`, { reset_backoff });
     return response.data;
   },
 

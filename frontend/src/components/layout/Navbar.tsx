@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Box, Settings, Layout, Globe, Menu, X, Home, LogOut, Rocket, CreditCard, FileText, Activity, DollarSign, Store, Sparkles, Monitor, Radio, Brain, Archive, Shield } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -89,22 +89,30 @@ export function Navbar() {
     { href: '/status', label: 'Status' },
   ];
 
-  const authLinks = [
-    { href: '/dashboard', label: 'Dashboard', icon: Home },
-    { href: '/services', label: 'Services', icon: Layout },
-    { href: '/deployments', label: 'Deployments', icon: Rocket },
-    { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles },
-    { href: '/servers', label: 'Servers', icon: Monitor },
-    { href: '/tunnels', label: 'Tunnels', icon: Radio },
-    { href: '/intelligence', label: 'Intelligence', icon: Brain },
-    { href: '/billing', label: 'Billing', icon: CreditCard },
-    { href: '/settings', label: 'Settings', icon: Settings },
+  const authLinks: Array<{
+    href: string;
+    label: string;
+    icon: any;
+    tier: 'primary' | 'secondary';
+  }> = [
+    { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
+    { href: '/services', label: 'Services', icon: Layout, tier: 'primary' },
+    { href: '/deployments', label: 'Deployments', icon: Rocket, tier: 'primary' },
+    { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
+    { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
+    { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
+    { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
+    { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'secondary' },
+    { href: '/settings', label: 'Settings', icon: Settings, tier: 'secondary' },
   ];
 
   if (user?.is_staff) {
-      authLinks.push({ href: '/backups', label: 'Backups', icon: Archive });
-      authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield });
+    authLinks.push({ href: '/backups', label: 'Backups', icon: Archive, tier: 'secondary' });
+    authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield, tier: 'secondary' });
   }
+
+  const primaryAuthLinks = authLinks.filter((link) => link.tier === 'primary');
+  const secondaryAuthLinks = authLinks.filter((link) => link.tier === 'secondary');
 
   return (
     <nav
@@ -143,7 +151,7 @@ export function Navbar() {
                     </Link>
                 );
             })}
-            {user && authLinks.map((link) => {
+            {user && primaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
                 return (
@@ -255,6 +263,34 @@ export function Navbar() {
             </button>
         </div>
       </div>
+
+      {user && secondaryAuthLinks.length > 0 && (
+        <div className="hidden md:block border-t border-border/60 bg-card/70">
+          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1.5">
+            <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {secondaryAuthLinks.map((link) => {
+                const Icon = link.icon;
+                const isActive = pathname === link.href;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    prefetch={false}
+                    className={`shrink-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      isActive
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mobile Menu Dropdown */}
       <AnimatePresence>

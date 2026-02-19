@@ -1,7 +1,12 @@
 """Tasks Ai module."""
+import logging
+
 from celery import shared_task
 from .models import Deployment
 from services.ai_engine import DevOpsAgent
+
+logger = logging.getLogger(__name__)
+
 
 @shared_task
 def analyze_failure_task(deployment_id):
@@ -14,7 +19,7 @@ def analyze_failure_task(deployment_id):
 
         # Only analyze if we have logs
         if not deployment.build_logs:
-            return
+            return {"status": "skipped", "reason": "no_build_logs"}
 
         # Call Jules AI
         agent = DevOpsAgent()
@@ -23,8 +28,11 @@ def analyze_failure_task(deployment_id):
         # Update deployment with AI insight
         deployment.ai_diagnosis = diagnosis
         deployment.save(update_fields=['ai_diagnosis'])
+        return {"status": "ok", "deployment_id": str(deployment.id)}
 
     except Deployment.DoesNotExist:
-        pass
-    except Exception as e:
-        print(f"Error in analyze_failure_task: {e}")
+        logger.warning("analyze_failure_task skipped: deployment %s not found", deployment_id)
+        return {"status": "skipped", "reason": "deployment_not_found"}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception("Error in analyze_failure_task for %s: %s", deployment_id, exc)
+        return {"status": "error", "reason": str(exc)}

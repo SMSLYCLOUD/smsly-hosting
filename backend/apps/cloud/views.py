@@ -169,27 +169,27 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def ecosystem_scan(self, request):
         """
-        Scans a GitHub repository for compatible frameworks and generates a deployment plan.
+        Scan all accessible GitHub repositories and generate a zero-click deploy plan.
         """
-        repo_url = request.data.get('repo_url')
-        branch = request.data.get('branch', 'main')
-
-        # Start async task
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
-        task = ecosystem_scan_task.delay(repo_url, branch, request.user.id)
+        task = ecosystem_scan_task.delay(str(request.user.id))
 
         return Response({'task_id': task.id, 'status': 'scanning'})
 
     @action(detail=False, methods=['post'])
     def ecosystem_deploy(self, request):
         """
-        Deploys a repository based on a generated ecosystem plan.
+        Deploy a previously generated ecosystem plan.
         """
-        plan_id = request.data.get('plan_id')
+        plan = request.data.get('plan')
+        if not isinstance(plan, dict):
+            return Response(
+                {'error': 'plan (object) is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Start async deployment
         from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
-        task = ecosystem_deploy_task.delay(plan_id, request.user.id)
+        task = ecosystem_deploy_task.delay(str(request.user.id), plan)
 
         return Response({'task_id': task.id, 'status': 'deploying'})
 
