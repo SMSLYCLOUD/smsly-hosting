@@ -360,12 +360,32 @@ if os.path.exists(services_dir):
         run_args.extend(["-l", f"traefik.http.routers.{name}.rule=Host(`{domain}`)"])
         run_args.extend(["-l", f"traefik.http.services.{name}.loadbalancer.server.port={port}"])
 
-        if config.use_ssl:
-             run_args.extend(["-l", f"traefik.http.routers.{name}.entrypoints=websecure"])
-             run_args.extend(["-l", f"traefik.http.routers.{name}.tls=true"])
-             run_args.extend(["-l", f"traefik.http.routers.{name}.tls.certresolver=letsencrypt"])
+        enable_traefik_tls = (
+            str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
+        if config.use_ssl and enable_traefik_tls:
+            run_args.extend(["-l", f"traefik.http.routers.{name}.entrypoints=websecure"])
+            run_args.extend(["-l", f"traefik.http.routers.{name}.tls=true"])
+            run_args.extend(["-l", f"traefik.http.routers.{name}.tls.certresolver=letsencrypt"])
         else:
-             run_args.extend(["-l", f"traefik.http.routers.{name}.entrypoints=web"])
+            run_args.extend(["-l", f"traefik.http.routers.{name}.entrypoints=web"])
+            if config.use_ssl:
+                middleware_name = f"{name}-forwarded-https"
+                run_args.extend(["-l", f"traefik.http.routers.{name}.middlewares={middleware_name}"])
+                run_args.extend([
+                    "-l",
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto=https",
+                ])
+                run_args.extend([
+                    "-l",
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port=443",
+                ])
+                run_args.extend([
+                    "-l",
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl=on",
+                ])
 
         # Volumes
         if 'volumes' in metadata:
