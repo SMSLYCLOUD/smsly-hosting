@@ -122,7 +122,7 @@ export function Navbar() {
             : 'bg-transparent border-b border-transparent'
         }`}
     >
-      <div className="container flex h-16 items-center max-w-7xl mx-auto px-4 sm:px-6">
+      <div className="container relative flex h-16 items-center max-w-7xl mx-auto px-4 sm:px-6">
 
         {/* Logo - Left */}
         <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
@@ -131,8 +131,8 @@ export function Navbar() {
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
-        <nav className="hidden md:flex flex-1 min-w-0 px-2">
-            <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 w-full max-w-[760px] px-2 justify-center">
+            <div className="flex max-w-full items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
@@ -183,7 +183,7 @@ export function Navbar() {
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
-        <div className="hidden md:flex items-center space-x-3">
+        <div className="hidden md:flex ml-auto items-center space-x-3">
           {user && (
            <Link href="/new" prefetch={false}>
                <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
@@ -267,7 +267,7 @@ export function Navbar() {
       {user && secondaryAuthLinks.length > 0 && (
         <div className="hidden md:block border-t border-border/60 bg-card/70">
           <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1.5">
-            <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {secondaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
