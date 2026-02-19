@@ -35,6 +35,7 @@ class AddonProvisioner:
         'MYSQL': 'mysql:8.0',
         'MONGODB': 'mongo:7.0',
         'QDRANT': 'qdrant/qdrant:v1.12.1',
+        'ELASTICSEARCH': 'docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
     }
 
     # Default ports for each addon
@@ -44,6 +45,7 @@ class AddonProvisioner:
         'MYSQL': 3306,
         'MONGODB': 27017,
         'QDRANT': 6333,
+        'ELASTICSEARCH': 9200,
     }
 
     # Environment variable keys for connection URLs
@@ -53,6 +55,7 @@ class AddonProvisioner:
         'MYSQL': 'MYSQL_URL',
         'MONGODB': 'MONGODB_URI',
         'QDRANT': 'QDRANT_URL',
+        'ELASTICSEARCH': 'ELASTICSEARCH_URL',
     }
 
     def __init__(self):
@@ -127,6 +130,10 @@ class AddonProvisioner:
             )
         elif addon_type == 'QDRANT':
             container_id, connection_url = self._provision_qdrant(
+                container_name, port
+            )
+        elif addon_type == 'ELASTICSEARCH':
+            container_id, connection_url = self._provision_elasticsearch(
                 container_name, port
             )
         else:
@@ -278,6 +285,33 @@ class AddonProvisioner:
         connection_url = f"http://{container_name}:{port}"
 
         self._wait_for_health(container_name, port)
+        return container_id, connection_url
+
+    def _provision_elasticsearch(self, container_name: str,
+                                 port: int) -> Tuple[str, str]:
+        """Provision a single-node Elasticsearch container."""
+        cmd = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+            '-e', 'discovery.type=single-node',
+            '-e', 'xpack.security.enabled=false',
+            '-e', 'ES_JAVA_OPTS=-Xms256m -Xmx256m',
+            '-v', f'{container_name}-data:/usr/share/elasticsearch/data',
+            self.ADDON_IMAGES['ELASTICSEARCH']
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
+        container_id = result.stdout.strip()[:12]
+
+        connection_url = f"http://{container_name}:{port}"
+
+        self._wait_for_health(container_name, port, timeout=90)
         return container_id, connection_url
 
     def _wait_for_health(self, container_name: str,
