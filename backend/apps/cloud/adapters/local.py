@@ -224,13 +224,13 @@ class LocalAdapter(BaseCloudAdapter):
             hc_interval = healthcheck.get('interval', 10)
             hc_timeout = healthcheck.get('timeout', 5)
             hc_retries = healthcheck.get('retries', 3)
-            hc_url = f"http://localhost:{hc_port}{hc_path}"
+            hc_url = f"http://127.0.0.1:{hc_port}{hc_path}"
             hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         else:
             hc_interval = 10
             hc_timeout = 3
             hc_retries = 3
-            hc_url = f"http://localhost:{hc_port}/"
+            hc_url = f"http://127.0.0.1:{hc_port}/"
             hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         docker_healthcheck = docker.types.Healthcheck(
             test=["CMD-SHELL", hc_cmd],
