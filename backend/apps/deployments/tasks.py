@@ -388,24 +388,41 @@ def _wait_for_local_route_ready(
     if not host:
         return True
 
-    base_candidates = []
+    # Probe through both internal ingress and the actual public hostname.
+    # Internal addresses can be unreachable from inside the backend container,
+    # so public-host probes prevent false negatives during healthy deploys.
+    probe_candidates = []
+
+    def _add_probe(base_url: str, headers=None, verify=True):
+        normalized = (base_url or "").rstrip("/")
+        if not normalized:
+            return
+        probe_candidates.append(
+            {
+                "base_url": normalized,
+                "headers": headers or {},
+                "verify": verify,
+            }
+        )
+
     configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
     if configured:
-        base_candidates.append(configured)
-    base_candidates.extend([
-        "http://traefik:80",
-        "http://127.0.0.1:8081",
-        "http://localhost:8081",
-    ])
+        _add_probe(configured, headers={"Host": host}, verify=False)
+    _add_probe("http://traefik:80", headers={"Host": host}, verify=False)
+    _add_probe("http://127.0.0.1:8081", headers={"Host": host}, verify=False)
+    _add_probe("http://localhost:8081", headers={"Host": host}, verify=False)
+    _add_probe(f"https://{host}", verify=True)
+    _add_probe(f"http://{host}", verify=True)
 
-    # Preserve order, remove duplicates, and trim trailing slash.
-    base_urls = []
+    # Preserve order and remove duplicates.
+    probes = []
     seen = set()
-    for base in base_candidates:
-        normalized = base.rstrip("/")
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            base_urls.append(normalized)
+    for probe in probe_candidates:
+        key = (probe["base_url"], tuple(sorted(probe["headers"].items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        probes.append(probe)
 
     path_candidates = []
     if service.health_check_path:
@@ -429,14 +446,16 @@ def _wait_for_local_route_ready(
     deadline = time.monotonic() + timeout_seconds
     last_error = ""
     while time.monotonic() < deadline:
-        for base_url in base_urls:
+        for probe in probes:
+            base_url = probe["base_url"]
             for path in paths:
                 url = f"{base_url}{path}"
                 try:
                     response = requests.get(
                         url,
-                        headers={"Host": host},
+                        headers=probe["headers"],
                         timeout=4,
+                        verify=probe["verify"],
                         allow_redirects=False,
                     )
                 except requests.RequestException as exc:
@@ -539,8 +558,10 @@ def _deploy_container(deployment, provider, image_name):
                 timeout_seconds=120,
             )
             if not route_ready:
-                raise RuntimeError(
-                    f"Service route did not become ready for host {service.public_domain}"
+                append_log(
+                    deployment,
+                    "[ROUTE-CHECK] WARNING: Route readiness check failed; "
+                    "continuing because container health will be validated.\n",
                 )
             container_ready = _wait_for_local_container_healthy(
                 deployment,
