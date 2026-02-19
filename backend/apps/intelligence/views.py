@@ -75,13 +75,17 @@ def ai_providers_update(request):
     for field in updatable_fields:
         if field in request.data:
             value = request.data[field]
-            # Don't overwrite with empty strings for API keys
-            if field.endswith("_api_key") and not value:
-                continue
+            if value is None:
+                value = ""
             setattr(settings, field, value)
             # Mask key for response
             if field.endswith("_api_key"):
-                updated.append(f"{field}: ****{value[-4:]}" if len(value) > 4 else f"{field}: set")
+                if value:
+                    updated.append(
+                        f"{field}: ****{value[-4:]}" if len(value) > 4 else f"{field}: set"
+                    )
+                else:
+                    updated.append(f"{field}: cleared")
             else:
                 updated.append(f"{field}: {value}")
 

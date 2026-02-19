@@ -526,9 +526,17 @@ class PipelineManager:
                     key, scan_result, self.service.name
                 )
                 if should_inject:
+                    key_upper = str(key or "").strip().upper()
+                    is_secret = bool(
+                        re.search(
+                            r"(SECRET|TOKEN|PASSWORD|DSN|PRIVATE_KEY|API_KEY)",
+                            key_upper,
+                        )
+                    )
                     _, created = EnvironmentVariable.objects.get_or_create(
-                        service=self.service, key=key,
-                        defaults={'value': default_val, 'is_secret': True}
+                        service=self.service,
+                        key=key_upper,
+                        defaults={'value': default_val, 'is_secret': is_secret},
                     )
                     if created:
                         injected_count += 1

@@ -206,6 +206,21 @@ services:
   # Traefik - Dynamic reverse proxy for deployed containers
   # Reads Docker labels from deployed containers and routes traffic to them.
   # Caddy handles SSL and proxies *.cloud.smsly.cloud → Traefik:8081
+  route-fallback:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/route-fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infrastructure/route-fallback/index.html:/usr/share/nginx/html/index.html:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.route-fallback.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.route-fallback.entrypoints=web"
+      - "traefik.http.routers.route-fallback.priority=1"
+      - "traefik.http.services.route-fallback.loadbalancer.server.port=80"
+    networks:
+      - smsly-net
+
   traefik:
     image: traefik:v3.6  # v3.6.1+ required for Docker 29 API compatibility
     restart: unless-stopped

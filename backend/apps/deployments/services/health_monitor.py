@@ -48,6 +48,11 @@ STARTUP_GRACE_SECONDS = _env_int("HEALTH_STARTUP_GRACE_SECONDS", 60, minimum=0)
 _MAX_COOLDOWN_SECONDS = int(
     RESTART_COOLDOWN_BASE * (BACKOFF_MULTIPLIER ** max(0, MAX_AUTO_RESTARTS - 1))
 )
+RESTART_CAP_RESET_SECONDS = _env_int(
+    "HEALTH_RESTART_CAP_RESET_SECONDS",
+    max(1800, _MAX_COOLDOWN_SECONDS),
+    minimum=1,
+)
 STATE_TTL_SECONDS = max(3600, _MAX_COOLDOWN_SECONDS * 4)
 
 
@@ -289,13 +294,24 @@ def _should_restart(service, service_key: str) -> bool:
     last_restart = float(state.get("last_restart", 0) or 0)
 
     if restart_count >= MAX_AUTO_RESTARTS:
-        logger.warning(
-            "%s auto-restart cap reached (%d/%d). Manual intervention required.",
-            service.name,
-            restart_count,
-            MAX_AUTO_RESTARTS,
-        )
-        return False
+        elapsed_since_last = max(0.0, time.time() - last_restart)
+        if last_restart and elapsed_since_last >= RESTART_CAP_RESET_SECONDS:
+            logger.info(
+                "%s restart cap window elapsed (%ds); resetting restart counter.",
+                service.name,
+                int(elapsed_since_last),
+            )
+            cache.delete(_restart_key(service_key))
+            restart_count = 0
+            last_restart = 0.0
+        else:
+            logger.warning(
+                "%s auto-restart cap reached (%d/%d). Manual intervention required.",
+                service.name,
+                restart_count,
+                MAX_AUTO_RESTARTS,
+            )
+            return False
 
     if restart_count == 0:
         return True

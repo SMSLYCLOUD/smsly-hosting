@@ -219,6 +219,46 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'deployment': DeploymentSerializer(deployment).data,
         }, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'], url_path='recheck-health')
+    def recheck_health(self, request, pk=None):
+        """
+        Trigger an immediate health re-check for one service.
+        Useful when a route was temporarily unavailable and needs unpark.
+        """
+        service = self.get_object()
+        reset_backoff = _parse_bool(request.data.get('reset_backoff', True))
+
+        try:
+            from apps.deployments.services.health_monitor import (
+                _check_service_health,  # intentional internal call for immediate check
+                reset_restart_state,
+            )
+
+            if reset_backoff:
+                reset_restart_state(str(service.id))
+
+            _check_service_health(service, Deployment)
+            service.refresh_from_db(fields=['health_status', 'updated_at'])
+
+            latest = (
+                service.deployments
+                .order_by('-created_at')
+                .values_list('status', flat=True)
+                .first()
+            )
+            return Response({
+                'service_id': str(service.id),
+                'health_status': service.health_status,
+                'latest_deployment_status': latest,
+                'backoff_reset': reset_backoff,
+            })
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Manual health recheck failed for %s: %s", service.id, exc)
+            return Response(
+                {'error': 'Failed to run health recheck'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=True, methods=['post'])
     def deploy(self, request, pk=None):
         """

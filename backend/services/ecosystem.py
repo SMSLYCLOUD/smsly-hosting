@@ -395,6 +395,10 @@ def analyze_ecosystem(repos_data: List[dict]) -> dict:
         else:
             json_str = response_text.strip()
         plan = json.loads(json_str)
+        if isinstance(plan, dict) and isinstance(plan.get("services"), list):
+            for svc in plan["services"]:
+                if isinstance(svc, dict):
+                    svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
         plan["ai_provider"] = provider
         return plan
     except (json.JSONDecodeError, IndexError) as e:
@@ -402,6 +406,46 @@ def analyze_ecosystem(repos_data: List[dict]) -> dict:
         logger.error("Raw response: %s", response_text[:1000])
         # Fall back to heuristic-only plan
         return _build_heuristic_plan(repos_data, str(e))
+
+
+def _env_plan_map(raw_env: Any) -> Dict[str, str]:
+    """
+    Normalize environment variable payloads to a flat dict.
+
+    Accepts either:
+    - {"KEY": "value"}
+    - [{"key": "KEY", "default": "value", "is_secret": true, ...}, ...]
+    """
+    if isinstance(raw_env, dict):
+        return {
+            str(k).strip().upper(): "" if v is None else str(v)
+            for k, v in raw_env.items()
+            if str(k).strip()
+        }
+
+    env_map: Dict[str, str] = {}
+    if not isinstance(raw_env, list):
+        return env_map
+
+    for entry in raw_env:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key") or "").strip().upper()
+        if not key:
+            continue
+
+        default_val = entry.get("default")
+        if default_val not in (None, ""):
+            env_map[key] = str(default_val)
+            continue
+
+        if entry.get("generate") or entry.get("is_secret"):
+            env_map[key] = "{{GENERATE}}"
+            continue
+
+        env_map[key] = ""
+
+    return env_map
 
 
 def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
@@ -423,7 +467,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
             "port": h.get("port", 3000),
             "build": h.get("build", "nixpacks"),
             "addons": h.get("addons", []),
-            "env_vars": h.get("env_vars", {}),
+            "env_vars": _env_plan_map(h.get("env_vars", {})),
             "depends_on": [],
             "deploy_order": order,
         }

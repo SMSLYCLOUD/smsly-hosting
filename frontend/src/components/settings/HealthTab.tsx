@@ -26,6 +26,7 @@ const STATUS_CONFIG: Record<string, { icon: any; color: string; label: string }>
 export function HealthTab({ serviceId, service: initialService }: HealthTabProps) {
     const [loading, setLoading] = useState(!initialService);
     const [saving, setSaving] = useState(false);
+    const [rechecking, setRechecking] = useState(false);
     const [healthPath, setHealthPath] = useState('/health');
     const [interval, setInterval_] = useState(30);
     const [timeout, setTimeout_] = useState(5);
@@ -83,6 +84,23 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
         }
     };
 
+    const handleRecheck = async () => {
+        setRechecking(true);
+        try {
+            await servicesApi.recheckHealth(serviceId, true);
+            const s = await servicesApi.get(serviceId);
+            applyService(s);
+            toast({
+                title: 'Recheck triggered',
+                description: 'Health checks and restart backoff were reset for this service.',
+            });
+        } catch (err) {
+            toast({ title: 'Recheck failed', variant: 'destructive' });
+        } finally {
+            setRechecking(false);
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading health settings...</div>;
 
     const statusConfig = STATUS_CONFIG[healthStatus] || STATUS_CONFIG.unknown;
@@ -107,10 +125,22 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                             </p>
                         </div>
                     </div>
+                    <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRecheck}
+                        disabled={rechecking}
+                        className="gap-2"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${rechecking ? 'animate-spin' : ''}`} />
+                        {rechecking ? 'Rechecking...' : 'Recheck Now'}
+                    </Button>
                     <Button variant="outline" size="sm" onClick={handleRefresh} className="gap-2">
                         <RefreshCw className="w-4 h-4" />
                         Refresh
                     </Button>
+                    </div>
                 </div>
 
                 {healthStatus === 'unhealthy' && (

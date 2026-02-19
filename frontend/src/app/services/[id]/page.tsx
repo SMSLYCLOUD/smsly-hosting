@@ -24,6 +24,12 @@ import { toast } from '@/components/ui/use-toast';
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
 
+const getAuthTokenFromCookie = (): string | null => {
+    if (typeof document === 'undefined') return null;
+    const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+};
+
 const parseBool = (value: string | undefined, fallback: boolean) => {
     if (typeof value !== 'string') return fallback;
     const normalized = value.trim().toLowerCase();
@@ -143,6 +149,7 @@ export default function ServiceDetailPage() {
 
     const handleRedeploy = async () => {
         if (!service) return;
+        if (!confirm('Trigger a new deployment for this service now?')) return;
         try {
             setRedeploying(true);
             await servicesApi.deploy(service.id);
@@ -162,6 +169,31 @@ export default function ServiceDetailPage() {
         } catch (err) {
             console.error(err);
             toast({ title: 'Redeploy failed', description: 'Could not trigger redeployment.', variant: 'destructive' });
+            setRedeploying(false);
+        }
+    };
+
+    const handleRestart = async () => {
+        if (!service) return;
+        if (!confirm('Restart this service now? A fresh deployment will be queued.')) return;
+        try {
+            setRedeploying(true);
+            await servicesApi.restart(service.id);
+            toast({ title: 'Restart triggered', description: 'A new deployment has been queued.' });
+            setTimeout(async () => {
+                try {
+                    const s = await servicesApi.get(service.id);
+                    setService(s);
+                    if (s.latest_deployment) {
+                        const d = await servicesApi.getDeployment(s.latest_deployment.id);
+                        setDeployment(d);
+                    }
+                } catch (e) { console.error(e); }
+                setRedeploying(false);
+            }, 2000);
+        } catch (err) {
+            console.error(err);
+            toast({ title: 'Restart failed', description: 'Could not trigger restart.', variant: 'destructive' });
             setRedeploying(false);
         }
     };
@@ -204,6 +236,10 @@ export default function ServiceDetailPage() {
     // Simple cost estimation logic (use defaults if not set)
     const hourlyRate = ((service.cpu_cores ?? 1) * 0.04) + (((service.memory_mb ?? 512) / 1024) * 0.02);
     const monthlyEstimate = hourlyRate * 730;
+    const customDomains = Array.isArray(service.custom_domains)
+        ? service.custom_domains.filter((domain) => typeof domain === 'string' && domain.trim())
+        : [];
+    const healthPathLabel = service.health_check_path || '/health';
 
     return (
         <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
@@ -293,6 +329,48 @@ export default function ServiceDetailPage() {
                                     {service.public_domain || `${service.name}.cloud.smsly.cloud`}
                                 </a>
                             </div>
+                            <div className="flex justify-between border-b border-border pb-3 gap-4">
+                                <span className="text-muted-foreground font-medium">Custom Domains</span>
+                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                    {customDomains.length === 0 ? (
+                                        <span className="text-muted-foreground text-xs">Not configured</span>
+                                    ) : (
+                                        customDomains.map((domain) => (
+                                            <a
+                                                key={domain}
+                                                href={`https://${domain}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="font-mono text-xs text-primary hover:underline bg-primary/10 px-2 py-1 rounded"
+                                            >
+                                                {domain}
+                                            </a>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Domain Verification</span>
+                                <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                    service.domain_verified ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-500'
+                                }`}>
+                                    {service.domain_verified ? 'Verified' : 'Pending'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Health Check</span>
+                                <span className="font-mono text-foreground">
+                                    {healthPathLabel} every {service.health_check_interval ?? 30}s
+                                </span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Restart Policy</span>
+                                <span className="font-mono text-foreground">{service.restart_policy || 'unless-stopped'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Deploy Type</span>
+                                <span className="font-mono text-foreground">{service.deploy_type || 'GIT'}</span>
+                            </div>
                         </div>
                     </div>
 
@@ -309,15 +387,23 @@ export default function ServiceDetailPage() {
                                     <span className={`font-bold px-2 py-1 rounded text-xs uppercase ${deployment.status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-500'
                                         }`}>{deployment.status}</span>
                                 </div>
-                                <div className="pt-2 flex gap-2">
+                                <div className="pt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                                     <button
-                                        className="flex-1 border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
+                                        className="border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
                                         onClick={() => setActiveTab('logs')}
                                     >
                                         View Logs
                                     </button>
                                     <button
-                                        className="flex-1 bg-primary hover:bg-primary/90 text-white font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                        className="bg-yellow-500/20 border border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/30 font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                        onClick={handleRestart}
+                                        disabled={redeploying}
+                                    >
+                                        {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+                                        Restart
+                                    </button>
+                                    <button
+                                        className="bg-primary hover:bg-primary/90 text-white font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
                                         onClick={handleRedeploy}
                                         disabled={redeploying}
                                     >
@@ -504,7 +590,7 @@ export default function ServiceDetailPage() {
 
                         const token =
                             typeof window !== 'undefined'
-                                ? localStorage.getItem('auth_token')
+                                ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie())
                                 : null;
 
                         if (!token) {

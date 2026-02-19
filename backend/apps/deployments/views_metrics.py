@@ -42,7 +42,7 @@ class MetricsViewSet(viewsets.GenericViewSet):
         try:
             service = self.queryset.get(pk=service_pk)
             # Check permission
-            if service.owner != request.user:
+            if (not request.user.is_superuser) and service.owner != request.user:
                 return Response(status=status.HTTP_403_FORBIDDEN)
 
             duration = request.query_params.get('duration', '1h')

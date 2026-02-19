@@ -69,7 +69,7 @@ class HealthMonitorServiceTests(TestCase):
             },
             timeout=hm.STATE_TTL_SECONDS,
         )
-        self.assertFalse(hm._should_restart(self.service, service_key))
+        self.assertTrue(hm._should_restart(self.service, service_key))
 
     @patch("apps.deployments.tasks.smart_deploy_task.delay")
     @patch("apps.deployments.services.health_monitor.requests.get")
