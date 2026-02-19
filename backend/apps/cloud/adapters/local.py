@@ -196,10 +196,24 @@ class LocalAdapter(BaseCloudAdapter):
             })
         else:
             # Caddy-terminated TLS or IP mode: simple HTTP router on Traefik web.
-            labels.update({
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'web',
-            })
+            labels.update(
+                {
+                    f'traefik.http.routers.{name}.rule': host_rule,
+                    f'traefik.http.routers.{name}.entrypoints': 'web',
+                }
+            )
+
+            # When Caddy terminates TLS in front of Traefik, Traefik only sees
+            # plain HTTP on `web` and would otherwise forward X-Forwarded-Proto=http.
+            # Force HTTPS forwarding headers so framework-level SSL redirects do not loop.
+            if use_ssl:
+                middleware_name = f'{name}-forwarded-https'
+                labels.update({
+                    f'traefik.http.routers.{name}.middlewares': middleware_name,
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
+                })
 
         # Docker-native healthcheck.
         # Traefik can ignore unhealthy containers, so avoid false negatives.
