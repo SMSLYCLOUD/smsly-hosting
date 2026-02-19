@@ -229,35 +229,42 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full bg-[#060609] overflow-hidden">
-      <div className="absolute top-4 left-4 z-10 bg-black/60 backdrop-blur-md rounded-lg p-3 border border-zinc-800">
-        <div className="text-[10px] text-zinc-400 uppercase tracking-wider mb-2 font-semibold">
-          {services.length} Service{services.length !== 1 ? 's' : ''}
+    <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-[#04070f]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.08),transparent_45%),radial-gradient(circle_at_80%_30%,rgba(59,130,246,0.09),transparent_42%),radial-gradient(circle_at_50%_85%,rgba(99,102,241,0.08),transparent_48%)]" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/30" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
+      <div className="absolute left-4 top-4 z-10 w-44 rounded-xl border border-zinc-800/80 bg-black/55 p-3 backdrop-blur-lg">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+          Fleet Status
         </div>
-        <div className="flex flex-col gap-1">
+        <div className="mb-2 text-[11px] text-zinc-500">
+          {services.length} service{services.length !== 1 ? 's' : ''}
+        </div>
+        <div className="flex flex-col gap-1.5">
           {[
             { color: '#10b981', label: 'Active' },
             { color: '#3b82f6', label: 'Building' },
             { color: '#fbbf24', label: 'Queued' },
             { color: '#ef4444', label: 'Failed' },
           ].map(({ color, label }) => (
-            <div key={label} className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-              <span className="text-[10px] text-zinc-300">{label}</span>
+            <div key={label} className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+              <span className="text-[11px] text-zinc-300">{label}</span>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="absolute bottom-4 right-4 z-10 bg-black/60 backdrop-blur-md rounded-lg px-3 py-2 border border-zinc-800">
-        <div className="text-[10px] text-zinc-500">🖱️ Drag to orbit • Scroll to zoom • Click to open</div>
+      <div className="absolute bottom-4 right-4 z-10 rounded-xl border border-zinc-800/80 bg-black/55 px-3 py-2 backdrop-blur-lg">
+        <div className="text-[10px] text-zinc-400">Drag to orbit | Scroll to zoom | Click node to open</div>
       </div>
 
-      <div className="absolute top-4 right-4 z-10 bg-black/60 backdrop-blur-md rounded-lg p-1.5 border border-zinc-800 flex items-center gap-1.5">
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 rounded-xl border border-zinc-800/80 bg-black/55 p-1.5 backdrop-blur-lg">
+        <span className="px-1 text-[10px] uppercase tracking-[0.14em] text-zinc-500">View</span>
         <button
           type="button"
           onClick={() => zoomCamera(0.82)}
-          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
           title="Zoom in"
           aria-label="Zoom in"
         >
@@ -266,7 +273,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         <button
           type="button"
           onClick={() => zoomCamera(1.22)}
-          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
           title="Zoom out"
           aria-label="Zoom out"
         >
@@ -275,7 +282,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         <button
           type="button"
           onClick={resetCamera}
-          className="w-8 h-8 rounded-md border border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors flex items-center justify-center"
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
           title="Reset view"
           aria-label="Reset view"
         >
@@ -288,7 +295,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         width={dimensions.width}
         height={dimensions.height}
         graphData={graphData}
-        backgroundColor="#060609"
+        backgroundColor="#04070f"
         nodeThreeObject={(node: any) => createServiceNode(node as SvcNode)}
         nodeThreeObjectExtend={false}
         onNodeClick={handleNodeClick}
@@ -301,3 +308,4 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
     </div>
   );
 }
+
