@@ -1,10 +1,15 @@
 """Settings module."""
 import os
+import sys
 from pathlib import Path
 from decouple import config, Csv
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+IS_TESTING = bool(os.environ.get('TESTING')) or any(
+    arg == 'test' or arg.startswith('test')
+    for arg in sys.argv
+)
 
 # SECURITY: No default - service MUST crash if SECRET_KEY is missing
 # Generate with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
@@ -40,7 +45,7 @@ REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 if DEBUG:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
     # Keep local/tests deterministic without weakening production behavior.
-    if os.environ.get('TESTING') and not GITHUB_WEBHOOK_SECRET:
+    if IS_TESTING and not GITHUB_WEBHOOK_SECRET:
         GITHUB_WEBHOOK_SECRET = 'test-github-webhook-secret'
 else:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
@@ -268,17 +273,31 @@ REST_FRAMEWORK = {
         'deployment_burst': '3/minute',
     },
 }
+API_RATE_LIMIT = config('API_RATE_LIMIT', default=1000, cast=int)
+API_RATE_LIMIT_FAIL_CLOSED = config(
+    'API_RATE_LIMIT_FAIL_CLOSED',
+    default=False,
+    cast=bool,
+)
 
 # Celery
 REDIS_PASSWORD = config('REDIS_PASSWORD', default='')
 REDIS_HOST = config('REDIS_HOST', default='redis')
 REDIS_PORT = config('REDIS_PORT', default='6379')
+REDIS_SCHEME = config('REDIS_SCHEME', default='redis')
 
 if REDIS_PASSWORD:
-    _REDIS_BASE_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
-    CELERY_BROKER_URL = f"{_REDIS_BASE_URL}/0"
+    _REDIS_BASE_URL = f"{REDIS_SCHEME}://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 else:
-    CELERY_BROKER_URL = config('REDIS_URL', default='redis://localhost:6379/0')
+    _REDIS_BASE_URL = f"{REDIS_SCHEME}://{REDIS_HOST}:{REDIS_PORT}"
+
+# Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
+CELERY_BROKER_URL = config('REDIS_URL', default=f"{_REDIS_BASE_URL}/0")
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
+    'CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP',
+    default=True,
+    cast=bool,
+)
 
 # Django cache: use Redis (needed for accurate /health cache checks + rate limits).
 # Use a dedicated DB index to avoid colliding with Celery/Channels.
@@ -289,7 +308,7 @@ REDIS_CACHE_URL = (
     )
 )
 
-if os.environ.get('TESTING'):
+if IS_TESTING:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",

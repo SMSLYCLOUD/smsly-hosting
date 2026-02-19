@@ -1,7 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 
 interface CloudProvider {
   id: string;
@@ -26,8 +28,29 @@ interface CloudProvider {
   created_at: string;
 }
 
+const SETTINGS_ROUTE_LINKS = [
+  { href: "/settings", label: "General", icon: SettingsIcon, match: (pathname: string) => pathname === "/settings" },
+  { href: "/settings/ai", label: "AI Engine", icon: Sparkles, match: (pathname: string) => pathname.startsWith("/settings/ai") },
+  { href: "/settings/billing", label: "Billing", icon: Cloud, match: (pathname: string) => pathname.startsWith("/settings/billing") },
+  { href: "/settings/team", label: "Team", icon: Users, match: (pathname: string) => pathname.startsWith("/settings/team") },
+  { href: "/settings/audit-logs", label: "Audit Logs", icon: Shield, match: (pathname: string) => pathname.startsWith("/settings/audit-logs") },
+] as const;
+
+const SETTINGS_SECTIONS = [
+  { value: "profile", label: "Profile", icon: User },
+  { value: "api-keys", label: "API Keys", icon: Key },
+  { value: "team", label: "Team", icon: Users },
+  { value: "notifications", label: "Alerts", icon: Bell },
+  { value: "security", label: "Security", icon: Shield },
+  { value: "providers", label: "Cloud", icon: Cloud },
+  { value: "ai", label: "AI", icon: Sparkles },
+  { value: "oauth", label: "OAuth", icon: Key },
+  { value: "infra", label: "Infra", icon: Server },
+] as const;
+
 export default function SettingsPage() {
   const { toast } = useToast();
+  const pathname = usePathname();
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<CloudProvider[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
@@ -316,7 +339,7 @@ export default function SettingsPage() {
 
   return (
     <DashboardShell>
-      <div className="container mx-auto py-10 max-w-4xl relative z-10">
+      <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:py-10 relative z-10">
       <PageHeader
         title="Settings"
         description="Manage your account and preferences."
@@ -325,39 +348,49 @@ export default function SettingsPage() {
         backHref="/dashboard"
       />
 
+      <div className="sticky top-16 z-30 mb-6 rounded-xl border border-border/70 bg-background/80 p-3 backdrop-blur-md">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Settings Navigation</p>
+        <nav className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          {SETTINGS_ROUTE_LINKS.map((item) => {
+            const Icon = item.icon;
+            const isActive = item.match(pathname);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "inline-flex h-9 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition-colors",
+                  isActive
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border/70 text-muted-foreground hover:border-primary/20 hover:bg-muted/60 hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+
       <Tabs defaultValue="profile" className="space-y-6">
-        <TabsList className="flex flex-wrap w-full gap-1">
-          <TabsTrigger value="profile" className="flex items-center gap-2">
-            <User className="h-4 w-4" /> Profile
-          </TabsTrigger>
-          <TabsTrigger value="api-keys" className="flex items-center gap-2">
-            <Key className="h-4 w-4" /> API Keys
-          </TabsTrigger>
-          <TabsTrigger value="team" className="flex items-center gap-2">
-            <Users className="h-4 w-4" /> Team
-          </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex items-center gap-2">
-            <Bell className="h-4 w-4" /> Alerts
-          </TabsTrigger>
-          <TabsTrigger value="security" className="flex items-center gap-2">
-            <Shield className="h-4 w-4" /> Security
-          </TabsTrigger>
-          <TabsTrigger value="providers" className="flex items-center gap-2">
-            <Cloud className="h-4 w-4" /> Cloud
-          </TabsTrigger>
-          <TabsTrigger value="ai" className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4" /> AI
-          </TabsTrigger>
-          <TabsTrigger value="oauth" className="flex items-center gap-2">
-            <Key className="h-4 w-4" /> OAuth
-          </TabsTrigger>
-          <TabsTrigger value="infra" className="flex items-center gap-2">
-            <Server className="h-4 w-4" /> Infra
-          </TabsTrigger>
-          <TabsTrigger value="system" className="flex items-center gap-2">
-            <SettingsIcon className="h-4 w-4" /> System
-          </TabsTrigger>
-        </TabsList>
+        <div className="rounded-xl border border-border/70 bg-card/80 p-2 backdrop-blur-sm">
+          <TabsList className="h-auto w-full justify-start gap-2 overflow-x-auto bg-transparent p-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            {SETTINGS_SECTIONS.map((section) => {
+              const Icon = section.icon;
+              return (
+                <TabsTrigger
+                  key={section.value}
+                  value={section.value}
+                  className="h-9 shrink-0 items-center gap-2 rounded-md border border-transparent px-3 text-sm data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
+                >
+                  <Icon className="h-4 w-4" />
+                  {section.label}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        </div>
 
         <TabsContent value="profile">
           <Card>
@@ -366,7 +399,7 @@ export default function SettingsPage() {
               <CardDescription>Update your personal information.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>First Name</Label>
                   <Input placeholder="John" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
@@ -412,7 +445,7 @@ export default function SettingsPage() {
                         </div>
                     )}
 
-                    <div className="flex gap-2 items-end">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                         <div className="space-y-2 flex-1">
                             <Label>New Key Name</Label>
                             <Input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="e.g. GitHub Actions" />
@@ -462,12 +495,12 @@ export default function SettingsPage() {
                     <CardDescription>Manage your team and their access levels.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="flex gap-2 items-end">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                         <div className="space-y-2 flex-1">
                             <Label>Email Address</Label>
                             <Input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="colleague@company.com" />
                         </div>
-                        <div className="space-y-2 w-32">
+                        <div className="space-y-2 sm:w-32">
                             <Label>Role</Label>
                             <select
                                 className="w-full h-10 px-3 border rounded-md bg-background"
@@ -557,15 +590,15 @@ export default function SettingsPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label>Current Password</Label>
-                <Input type="password" placeholder="••••••••" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+                <Input type="password" placeholder="********" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>New Password</Label>
-                <Input type="password" placeholder="••••••••" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                <Input type="password" placeholder="********" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>Confirm New Password</Label>
-                <Input type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                <Input type="password" placeholder="********" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
               </div>
               <div className="flex gap-2">
                 <Button onClick={handleChangePassword} disabled={changingPassword}>
@@ -588,7 +621,7 @@ export default function SettingsPage() {
                 <CardDescription>Connect a new cloud infrastructure provider.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div className="space-y-2">
                     <Label>Provider Name</Label>
                     <Input 
@@ -694,21 +727,21 @@ export default function SettingsPage() {
                 </CardTitle>
                 <CardDescription>
                   {aiData?.mode_label || 'Loading...'}
-                  {aiData?.mode === 'senate_committee' && ' — Providers debate and vote on each answer.'}
+                  {aiData?.mode === 'senate_committee' && " - Providers debate and vote on each answer."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Mode Badge */}
                 <div className="flex items-center gap-3">
                   <Badge variant={aiData?.mode === 'senate_committee' ? 'default' : aiData?.mode === 'solo' ? 'secondary' : 'outline'}>
-                    {aiData?.mode === 'senate_committee' ? '🏛️ Senate Committee' : aiData?.mode === 'solo' ? '⚡ Solo Mode' : '🤖 Mock Mode'}
+                    {aiData?.mode === 'senate_committee' ? 'Senate Committee' : aiData?.mode === 'solo' ? 'Solo Mode' : 'Mock Mode'}
                   </Badge>
                   <span className="text-sm text-muted-foreground">
                     {aiData?.active_count || 0} of {aiData?.total_available || 0} active
                   </span>
                 </div>
 
-                {/* Provider Grid — Editable */}
+                {/* Provider Grid - Editable */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {aiData?.providers?.map((p: any) => {
                     const modelOptions: Record<string, string[]> = {
@@ -742,7 +775,7 @@ export default function SettingsPage() {
                           <Label className="text-xs text-muted-foreground">API Key</Label>
                           <Input
                             type="password"
-                            placeholder={p.configured ? '••••••••' : 'Enter API key'}
+                            placeholder={p.configured ? 'Configured key (hidden)' : 'Enter API key'}
                             className="h-8 text-xs"
                             value={aiKeys[p.id] || ''}
                             onChange={(e) => setAiKeys(prev => ({ ...prev, [p.id]: e.target.value }))}
@@ -765,7 +798,7 @@ export default function SettingsPage() {
 
                         {p.balance && (
                           <div className="text-xs text-yellow-500 font-medium">
-                            💰 {p.balance.balance}
+                            Balance: {p.balance.balance}
                           </div>
                         )}
                       </div>
@@ -839,7 +872,7 @@ export default function SettingsPage() {
                   <CardDescription>Configure your domain, SSL certificates, and wildcard subdomains for deployed services.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label>Domain</Label>
                       <Input
@@ -860,7 +893,7 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-6 py-2">
+                  <div className="flex flex-wrap items-center gap-4 py-2">
                     <div className="flex items-center gap-2">
                       <Button
                         variant={domainForm.use_ssl ? "default" : "outline"}
@@ -878,7 +911,7 @@ export default function SettingsPage() {
                         onClick={() => setDomainForm(prev => ({ ...prev, wildcard_subdomains: !prev.wildcard_subdomains }))}
                         disabled={!domainForm.use_ssl}
                       >
-                        {domainForm.wildcard_subdomains ? "✓ Wildcard Subdomains" : "No Wildcard"}
+                        {domainForm.wildcard_subdomains ? "Wildcard Subdomains Enabled" : "Wildcard Subdomains Disabled"}
                       </Button>
                     </div>
                     {domainConfig && (
@@ -894,7 +927,7 @@ export default function SettingsPage() {
                       <div className="flex gap-2">
                         <Input
                           type={showCfToken ? "text" : "password"}
-                          placeholder={domainConfig?.cloudflare_api_token_set ? "••••••••  (already set)" : "Enter Cloudflare API Token"}
+                          placeholder={domainConfig?.cloudflare_api_token_set ? "Configured token (hidden)" : "Enter Cloudflare API Token"}
                           value={domainForm.cloudflare_api_token}
                           onChange={(e) => setDomainForm(prev => ({ ...prev, cloudflare_api_token: e.target.value }))}
                           className="flex-1"
@@ -903,7 +936,7 @@ export default function SettingsPage() {
                           {showCfToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </Button>
                       </div>
-                      <p className="text-xs text-muted-foreground">Required for wildcard SSL. Create at Cloudflare → API Tokens → Edit zone DNS.</p>
+                      <p className="text-xs text-muted-foreground">Required for wildcard SSL. Create in Cloudflare &gt; API Tokens &gt; Edit Zone DNS.</p>
                     </div>
                   )}
 

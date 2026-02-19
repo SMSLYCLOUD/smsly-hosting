@@ -485,6 +485,40 @@ class ServiceViewSet(viewsets.ModelViewSet):
             logger.error("Caddy sync error: %s", e)
             return False
 
+    def _queue_domain_routing_sync(self, service: Service):
+        """
+        Queue a lightweight redeploy so Traefik labels pick up domain changes.
+
+        Caddy updates are immediate, but Traefik host rules are attached to
+        container labels and only refresh when the service container is
+        recreated.
+        """
+        active = (
+            service.deployments
+            .filter(status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+        )
+        if not active:
+            return None
+
+        provider = _resolve_provider_for_service(service)
+        if not provider:
+            logger.warning(
+                "Domain routing sync skipped for %s: no active provider",
+                service.id,
+            )
+            return None
+
+        deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash=active.commit_hash or 'latest',
+            commit_message='Domain routing sync',
+        )
+        smart_deploy_task.delay(str(deployment.id), str(provider.id), skip_review=True)
+        return deployment
+
     @action(detail=True, methods=['post'], url_path='add-domain')
     def add_domain(self, request, pk=None):
         """
@@ -516,12 +550,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # Auto-sync Caddyfile so SSL is provisioned immediately
         caddy_ok = self._sync_caddy()
+        routing_sync = self._queue_domain_routing_sync(service)
 
         return Response({
             'domain': domain,
             'domains': domains,
             'caddy_synced': caddy_ok,
-            'message': f'{domain} added. Configure DNS to point to your server.',
+            'routing_sync_deployment_id': str(routing_sync.id) if routing_sync else None,
+            'message': (
+                f'{domain} added. Configure DNS to point to your server. '
+                'Routing sync has been queued.'
+                if routing_sync else
+                f'{domain} added. Configure DNS to point to your server.'
+            ),
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='delete-domain')
@@ -555,11 +596,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # Auto-sync Caddyfile so stale domain entry is removed
         caddy_ok = self._sync_caddy()
+        routing_sync = self._queue_domain_routing_sync(service)
 
         return Response({
             'domains': domains,
             'caddy_synced': caddy_ok,
-            'message': f'{domain} removed.',
+            'routing_sync_deployment_id': str(routing_sync.id) if routing_sync else None,
+            'message': (
+                f'{domain} removed. Routing sync has been queued.'
+                if routing_sync else
+                f'{domain} removed.'
+            ),
         })
 
 

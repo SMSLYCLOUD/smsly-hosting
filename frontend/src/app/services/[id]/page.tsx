@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
@@ -22,6 +22,14 @@ import { BuildTab } from '@/components/settings/BuildTab';
 import { toast } from '@/components/ui/use-toast';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
+type ServiceEnvMap = Record<string, { id: number; value: string }>;
+
+const parseBool = (value: string | undefined, fallback: boolean) => {
+    if (typeof value !== 'string') return fallback;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    return ['1', 'true', 'yes', 'on', 'enabled'].includes(normalized);
+};
 
 export default function ServiceDetailPage() {
     const params = useParams();
@@ -32,7 +40,106 @@ export default function ServiceDetailPage() {
     const [activeTab, setActiveTab] = useState('overview');
     const [aiKey, setAiKey] = useState('');
     const [redeploying, setRedeploying] = useState(false);
+    const [watchConfigLoading, setWatchConfigLoading] = useState(false);
+    const [watchConfigSaving, setWatchConfigSaving] = useState(false);
+    const [serviceEnvMap, setServiceEnvMap] = useState<ServiceEnvMap>({});
+    const [runtimeWatchEnabled, setRuntimeWatchEnabled] = useState(true);
+    const [notifyInApp, setNotifyInApp] = useState(true);
+    const [notifySms, setNotifySms] = useState(true);
+    const [notifyEmail, setNotifyEmail] = useState(true);
+    const [notifyTelegram, setNotifyTelegram] = useState(false);
+    const [notifyWhatsapp, setNotifyWhatsapp] = useState(false);
+    const [alertEmail, setAlertEmail] = useState('');
+    const [alertPhone, setAlertPhone] = useState('');
+    const [telegramChatId, setTelegramChatId] = useState('');
+    const [whatsappTo, setWhatsappTo] = useState('');
     const logsEndRef = useRef<HTMLDivElement>(null);
+
+    const loadWatchConfig = useCallback(async (serviceId: string) => {
+        setWatchConfigLoading(true);
+        try {
+            const envVars: EnvVar[] = await servicesApi.getEnvVars(serviceId);
+            const map: ServiceEnvMap = {};
+            envVars.forEach((env) => {
+                map[(env.key || '').toUpperCase()] = { id: env.id, value: env.value || '' };
+            });
+            setServiceEnvMap(map);
+
+            setRuntimeWatchEnabled(parseBool(map.JULES_RUNTIME_WATCH?.value, true));
+            setNotifyInApp(parseBool(map.JULES_NOTIFY_IN_APP?.value, true));
+            setNotifySms(parseBool(map.JULES_NOTIFY_SMS?.value, true));
+            setNotifyEmail(parseBool(map.JULES_NOTIFY_EMAIL?.value, true));
+            setNotifyTelegram(parseBool(map.JULES_NOTIFY_TELEGRAM?.value, false));
+            setNotifyWhatsapp(parseBool(map.JULES_NOTIFY_WHATSAPP?.value, false));
+
+            setAlertEmail(map.ALERT_EMAIL?.value || '');
+            setAlertPhone(map.ALERT_PHONE?.value || '');
+            setTelegramChatId(map.ALERT_TELEGRAM_CHAT_ID?.value || '');
+            setWhatsappTo(map.ALERT_WHATSAPP_TO?.value || '');
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: 'Failed to load Jules runtime settings',
+                description: 'Could not read service environment variables.',
+                variant: 'destructive',
+            });
+        } finally {
+            setWatchConfigLoading(false);
+        }
+    }, []);
+
+    const saveEnvPair = async (serviceId: string, key: string, value: string) => {
+        const normalizedKey = key.toUpperCase();
+        const existing = serviceEnvMap[normalizedKey];
+        const trimmed = value.trim();
+
+        if (!trimmed) {
+            if (existing) {
+                await servicesApi.deleteEnvVar(serviceId, existing.id);
+            }
+            return;
+        }
+
+        await servicesApi.createEnvVar(serviceId, {
+            key: normalizedKey,
+            value: trimmed,
+            is_secret: false,
+        });
+    };
+
+    const handleSaveWatchConfig = async () => {
+        if (!service) return;
+        setWatchConfigSaving(true);
+        try {
+            await Promise.all([
+                saveEnvPair(service.id, 'JULES_RUNTIME_WATCH', runtimeWatchEnabled ? 'true' : 'false'),
+                saveEnvPair(service.id, 'JULES_NOTIFY_IN_APP', notifyInApp ? 'true' : 'false'),
+                saveEnvPair(service.id, 'JULES_NOTIFY_SMS', notifySms ? 'true' : 'false'),
+                saveEnvPair(service.id, 'JULES_NOTIFY_EMAIL', notifyEmail ? 'true' : 'false'),
+                saveEnvPair(service.id, 'JULES_NOTIFY_TELEGRAM', notifyTelegram ? 'true' : 'false'),
+                saveEnvPair(service.id, 'JULES_NOTIFY_WHATSAPP', notifyWhatsapp ? 'true' : 'false'),
+                saveEnvPair(service.id, 'ALERT_EMAIL', alertEmail),
+                saveEnvPair(service.id, 'ALERT_PHONE', alertPhone),
+                saveEnvPair(service.id, 'ALERT_TELEGRAM_CHAT_ID', telegramChatId),
+                saveEnvPair(service.id, 'ALERT_WHATSAPP_TO', whatsappTo),
+            ]);
+
+            await loadWatchConfig(service.id);
+            toast({
+                title: 'Jules runtime watch saved',
+                description: 'Deploy once more to apply updated runtime labels and env settings.',
+            });
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: 'Failed to save Jules runtime settings',
+                description: 'Some values could not be persisted.',
+                variant: 'destructive',
+            });
+        } finally {
+            setWatchConfigSaving(false);
+        }
+    };
 
     const handleRedeploy = async () => {
         if (!service) return;
@@ -80,6 +187,11 @@ export default function ServiceDetailPage() {
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
     }, [id]);
+
+    useEffect(() => {
+        if (!id) return;
+        loadWatchConfig(id);
+    }, [id, loadWatchConfig]);
 
     // Support deep-links like `/services/:id?tab=logs`
     const tabParam = searchParams.get('tab');
@@ -270,6 +382,108 @@ export default function ServiceDetailPage() {
                                 </button>
                             </div>
                         </div>
+                    </div>
+
+                    <div className="bg-card border border-border p-6 rounded-xl shadow-sm space-y-6">
+                        <div>
+                            <h3 className="font-bold text-xl mb-1">Jules Runtime Watch</h3>
+                            <p className="text-muted-foreground text-sm">
+                                Enable runtime monitoring and multi-channel alerts for deployment/runtime failures.
+                            </p>
+                        </div>
+
+                        {watchConfigLoading ? (
+                            <p className="text-sm text-muted-foreground">Loading runtime watch configuration...</p>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">Runtime watch active</span>
+                                        <input type="checkbox" checked={runtimeWatchEnabled} onChange={(e) => setRuntimeWatchEnabled(e.target.checked)} />
+                                    </label>
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">In-app notifications</span>
+                                        <input type="checkbox" checked={notifyInApp} onChange={(e) => setNotifyInApp(e.target.checked)} />
+                                    </label>
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">SMS notifications</span>
+                                        <input type="checkbox" checked={notifySms} onChange={(e) => setNotifySms(e.target.checked)} />
+                                    </label>
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">Email notifications</span>
+                                        <input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} />
+                                    </label>
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">Telegram notifications</span>
+                                        <input type="checkbox" checked={notifyTelegram} onChange={(e) => setNotifyTelegram(e.target.checked)} />
+                                    </label>
+                                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                        <span className="text-sm font-medium">WhatsApp notifications</span>
+                                        <input type="checkbox" checked={notifyWhatsapp} onChange={(e) => setNotifyWhatsapp(e.target.checked)} />
+                                    </label>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Alert Email</label>
+                                        <input
+                                            type="email"
+                                            placeholder="alerts@company.com"
+                                            className="w-full p-2 border rounded bg-background"
+                                            value={alertEmail}
+                                            onChange={(e) => setAlertEmail(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Alert Phone (SMS)</label>
+                                        <input
+                                            type="text"
+                                            placeholder="+15551234567"
+                                            className="w-full p-2 border rounded bg-background"
+                                            value={alertPhone}
+                                            onChange={(e) => setAlertPhone(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">Telegram Chat ID</label>
+                                        <input
+                                            type="text"
+                                            placeholder="123456789"
+                                            className="w-full p-2 border rounded bg-background"
+                                            value={telegramChatId}
+                                            onChange={(e) => setTelegramChatId(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-sm font-medium">WhatsApp Target</label>
+                                        <input
+                                            type="text"
+                                            placeholder="+15551234567"
+                                            className="w-full p-2 border rounded bg-background"
+                                            value={whatsappTo}
+                                            onChange={(e) => setWhatsappTo(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <button
+                                        className="bg-primary text-primary-foreground px-4 py-2 rounded font-bold hover:opacity-90 disabled:opacity-60"
+                                        onClick={handleSaveWatchConfig}
+                                        disabled={watchConfigSaving}
+                                    >
+                                        {watchConfigSaving ? 'Saving...' : 'Save Runtime Watch'}
+                                    </button>
+                                    <button
+                                        className="border border-border px-4 py-2 rounded font-semibold hover:bg-muted disabled:opacity-60"
+                                        onClick={() => loadWatchConfig(id)}
+                                        disabled={watchConfigSaving}
+                                    >
+                                        Refresh
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

@@ -1,20 +1,30 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { billingApi } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import api from '@/lib/api';
 
 export default function PnLPage() {
     const [overview, setOverview] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [accessDenied, setAccessDenied] = useState(false);
 
     useEffect(() => {
         async function load() {
             try {
+                await api.get('/system/config/');
                 const data = await billingApi.adminGetOverview();
                 setOverview(data);
+            } catch (err: any) {
+                if (err?.response?.status === 403) {
+                    setAccessDenied(true);
+                } else {
+                    console.error(err);
+                }
             } finally {
                 setLoading(false);
             }
@@ -22,7 +32,31 @@ export default function PnLPage() {
         load();
     }, []);
 
-    if (loading) return <div className="flex justify-center p-10"><Loader2 className="animate-spin" /></div>;
+    if (loading) {
+        return (
+            <DashboardShell>
+                <div className="flex justify-center p-10">
+                    <Loader2 className="animate-spin" />
+                </div>
+            </DashboardShell>
+        );
+    }
+
+    if (accessDenied) {
+        return (
+            <DashboardShell>
+                <div className="container p-6">
+                    <div className="border border-border rounded-xl bg-card p-6 space-y-3">
+                        <h1 className="text-2xl font-bold">Admin Access Required</h1>
+                        <p className="text-muted-foreground">You do not have permission to view this page.</p>
+                        <Link href="/dashboard" className="inline-flex px-4 py-2 rounded-lg bg-primary text-white font-medium">
+                            Go to User Dashboard
+                        </Link>
+                    </div>
+                </div>
+            </DashboardShell>
+        );
+    }
 
     return (
         <DashboardShell>

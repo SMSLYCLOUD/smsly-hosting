@@ -1,251 +1,390 @@
 """
-Health monitor service — monitors container health and auto-restarts unhealthy services.
+Health monitoring with guarded auto-restart.
 
-Checks each service's health_check_path via HTTP request to the container.
-Updates health_status and triggers restart if auto_restart is enabled.
-
-Rate limiting:
-  - Cooldown period: 10 minutes between auto-restarts per service
-  - Max 3 auto-restarts before giving up (requires manual intervention)
-  - Exponential backoff: 10min, 20min, 40min between restarts
+Design goals:
+- Respect each service's health_check_interval.
+- Keep failure/restart state shared across workers (cache-backed).
+- Prevent restart storms with backoff + max restart cap.
+- Avoid duplicate restarts while another deployment is already in progress.
 """
 import logging
 import os
 import time
+
 import requests
 from celery import shared_task
+from django.core.cache import cache
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# Track consecutive failures per service (in-memory, resets on worker restart)
-_failure_counts = {}
 
-# Track restart state per service: {service_id: {"count": N, "last_restart": timestamp}}
-_restart_state = {}
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
 
-# Config
-RESTART_COOLDOWN_BASE = 900       # 15 minutes base cooldown
-MAX_AUTO_RESTARTS = 5             # Give up after 5 restarts (needs manual fix)
-BACKOFF_MULTIPLIER = 2.5          # Exponential backoff: 15m, 37m, 93m, 234m, 585m
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+RESTART_COOLDOWN_BASE = _env_int(
+    "HEALTH_RESTART_COOLDOWN_BASE_SECONDS",
+    600,
+    minimum=1,
+)
+MAX_AUTO_RESTARTS = _env_int("HEALTH_MAX_AUTO_RESTARTS", 3, minimum=1)
+BACKOFF_MULTIPLIER = _env_float("HEALTH_RESTART_BACKOFF_MULTIPLIER", 2.0, minimum=1.0)
+STARTUP_GRACE_SECONDS = _env_int("HEALTH_STARTUP_GRACE_SECONDS", 60, minimum=0)
+
+# Keep state long enough to survive process restarts and long cooldown windows.
+_MAX_COOLDOWN_SECONDS = int(
+    RESTART_COOLDOWN_BASE * (BACKOFF_MULTIPLIER ** max(0, MAX_AUTO_RESTARTS - 1))
+)
+STATE_TTL_SECONDS = max(3600, _MAX_COOLDOWN_SECONDS * 4)
+
+
+def _failure_key(service_id: str) -> str:
+    return f"health:fail:{service_id}"
+
+
+def _restart_key(service_id: str) -> str:
+    return f"health:restart:{service_id}"
+
+
+def _last_check_key(service_id: str) -> str:
+    return f"health:last-check:{service_id}"
+
+
+def _clear_state(service_id: str, clear_restart: bool = False):
+    cache.delete(_failure_key(service_id))
+    if clear_restart:
+        cache.delete(_restart_key(service_id))
+    cache.delete(_last_check_key(service_id))
+
+
+def _normalize_path(path: str) -> str:
+    path = (path or "/health").strip()
+    if not path:
+        path = "/health"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path
+
+
+def _should_verify_tls() -> bool:
+    raw = str(os.environ.get("HEALTH_CHECK_VERIFY_TLS", "true")).strip().lower()
+    return raw not in ("0", "false", "no")
+
+
+def _platform_ssl_enabled() -> bool:
+    try:
+        from apps.deployments.models import PlatformConfig
+
+        return bool(PlatformConfig.load().use_ssl)
+    except Exception:
+        # If config cannot load (migrations/startup), default to HTTPS.
+        return True
+
+
+def _check_due(service) -> bool:
+    interval = max(5, int(service.health_check_interval or 30))
+    now = time.time()
+    key = _last_check_key(str(service.id))
+    last_check = cache.get(key)
+    if last_check is not None:
+        try:
+            if (now - float(last_check)) < interval:
+                return False
+        except (TypeError, ValueError):
+            pass
+
+    cache.set(key, now, timeout=max(3600, interval * 4))
+    return True
+
+
+def _build_targets(service, active_deployment):
+    path = _normalize_path(service.health_check_path)
+    targets = []
+    seen = set()
+
+    def _add(url: str, headers=None, verify=True):
+        header_host = (headers or {}).get("Host", "")
+        key = (url, header_host)
+        if key in seen:
+            return
+        seen.add(key)
+        targets.append({"url": url, "headers": headers or {}, "verify": verify})
+
+    public_domain = (service.public_domain or "").strip()
+    if public_domain:
+        scheme = "https" if _platform_ssl_enabled() else "http"
+        verify = _should_verify_tls() if scheme == "https" else True
+        _add(f"{scheme}://{public_domain}{path}", verify=verify)
+
+        # Internal fallback path avoids DNS/TLS propagation noise.
+        internal_urls = []
+        configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
+        if configured:
+            internal_urls.append(configured.rstrip("/"))
+        internal_urls.extend(
+            [
+                "http://traefik:80",
+                "http://127.0.0.1:8081",
+                "http://localhost:8081",
+            ]
+        )
+        for base_url in internal_urls:
+            _add(
+                f"{base_url}{path}",
+                headers={"Host": public_domain},
+                verify=False,
+            )
+
+    # Last-resort direct container target.
+    container_id = (active_deployment.container_id or "").strip()
+    if container_id:
+        port = service.internal_port or 8000
+        _add(f"http://{container_id[:12]}:{port}{path}", verify=False)
+
+    return targets
 
 
 @shared_task
 def monitor_health_task():
     """
-    Check health for all active services.
+    Check health for all services with configured health paths.
 
-    For each service with a health_check_path, sends an HTTP request
-    to the container and updates health_status accordingly.
+    Uses per-service interval gating to avoid over-checking.
     """
     from apps.deployments.models import Service, Deployment
 
-    services = Service.objects.exclude(health_check_path='')
+    services = Service.objects.exclude(health_check_path="")
     checked = 0
+    skipped = 0
 
     for service in services:
         try:
+            if not _check_due(service):
+                skipped += 1
+                continue
             _check_service_health(service, Deployment)
             checked += 1
-        except Exception as e:
-            logger.error("Health check failed for %s: %s", service.name, e)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Health check failed for %s: %s", service.name, exc)
 
-    logger.debug("Health checked %d services", checked)
+    logger.info("Health monitor checked=%d skipped=%d", checked, skipped)
 
 
 def _check_service_health(service, Deployment):
-    """Check a single service's health via HTTP."""
-    # Find active deployment
-    latest = Deployment.objects.filter(
-        service=service, status=Deployment.Status.ACTIVE
-    ).order_by('-created_at').first()
-
-    if not latest:
-        if service.health_status != 'unknown':
-            service.health_status = 'unknown'
-            service.save(update_fields=['health_status', 'updated_at'])
-        return
-
-    # Build health check URL
-    # Try container_id first (for direct Docker), then domain
-    container_id = latest.container_id
-    port = service.internal_port or 8000
-    path = service.health_check_path
-
-    # Try health check via public domain first, then container
-    health_url = None
-    if service.public_domain:
-        health_url = f"https://{service.public_domain}{path}"
-    elif container_id:
-        # Direct container check via Docker bridge network
-        health_url = f"http://{container_id[:12]}:{port}{path}"
-
-    if not health_url:
-        return
-
+    """Check a single service's health and update service status."""
+    active = (
+        Deployment.objects.filter(service=service, status=Deployment.Status.ACTIVE)
+        .order_by("-created_at")
+        .first()
+    )
     service_key = str(service.id)
-    timeout = service.health_check_timeout or 5
 
-    try:
-        verify_tls = True
-        if health_url.startswith("https://"):
-            verify_tls = str(
-                os.environ.get("HEALTH_CHECK_VERIFY_TLS", "true")
-            ).strip().lower() not in ("0", "false", "no")
-        resp = requests.get(health_url, timeout=timeout, verify=verify_tls)
-        is_healthy = 200 <= resp.status_code < 400
+    if not active:
+        if service.health_status != "unknown":
+            service.health_status = "unknown"
+            service.save(update_fields=["health_status", "updated_at"])
+        _clear_state(service_key, clear_restart=True)
+        return
 
-        if is_healthy:
-            _failure_counts[service_key] = 0
-            # Reset restart state on recovery
-            if service_key in _restart_state:
-                logger.info(
-                    "✓ %s recovered — clearing restart state (was %d restarts)",
-                    service.name, _restart_state[service_key]["count"]
-                )
-                del _restart_state[service_key]
+    # Give fresh deployments a brief warm-up period before failing them.
+    if STARTUP_GRACE_SECONDS > 0 and active.created_at:
+        age = (timezone.now() - active.created_at).total_seconds()
+        if age < STARTUP_GRACE_SECONDS:
+            return
 
-            if service.health_status != 'healthy':
-                service.health_status = 'healthy'
-                service.save(update_fields=['health_status', 'updated_at'])
-                logger.info("✓ %s is healthy", service.name)
-        else:
-            _handle_failure(service, service_key, f"HTTP {resp.status_code}")
-    except requests.Timeout:
-        _handle_failure(service, service_key, "Timeout")
-    except requests.ConnectionError:
-        _handle_failure(service, service_key, "Connection refused")
-    except Exception as e:
-        _handle_failure(service, service_key, str(e))
+    targets = _build_targets(service, active)
+    if not targets:
+        return
+
+    timeout = max(1, int(service.health_check_timeout or 5))
+    failure_reason = "Health target not reachable"
+
+    for target in targets:
+        url = target["url"]
+        try:
+            response = requests.get(
+                url,
+                timeout=timeout,
+                headers=target["headers"],
+                verify=target["verify"],
+                allow_redirects=False,
+            )
+            if 200 <= response.status_code < 400:
+                cache.delete(_failure_key(service_key))
+                restart_state = cache.get(_restart_key(service_key))
+                if restart_state:
+                    logger.info(
+                        "%s recovered; clearing restart state (previous attempts: %s)",
+                        service.name,
+                        restart_state.get("count", 0),
+                    )
+                    cache.delete(_restart_key(service_key))
+                if service.health_status != "healthy":
+                    service.health_status = "healthy"
+                    service.save(update_fields=["health_status", "updated_at"])
+                return
+            failure_reason = f"{url} returned HTTP {response.status_code}"
+        except requests.Timeout:
+            failure_reason = f"{url} timed out"
+        except requests.exceptions.SSLError as exc:
+            failure_reason = f"{url} TLS error: {exc}"
+        except requests.RequestException as exc:
+            failure_reason = f"{url} request failed: {exc}"
+
+    _handle_failure(service, service_key, failure_reason)
 
 
-def _handle_failure(service, service_key, reason):
-    """Handle a health check failure. Auto-restart with rate limiting."""
-    _failure_counts[service_key] = _failure_counts.get(service_key, 0) + 1
-    count = _failure_counts[service_key]
-    retries = service.health_check_retries or 3
+def _handle_failure(service, service_key: str, reason: str):
+    """Handle failed health checks and trigger guarded auto-restart."""
+    failure_key = _failure_key(service_key)
+    current_failures = int(cache.get(failure_key, 0) or 0) + 1
+    cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
 
+    retries = max(1, int(service.health_check_retries or 3))
     logger.warning(
-        "✗ %s health check failed (%d/%d): %s",
-        service.name, count, retries, reason,
+        "%s health check failed (%d/%d): %s",
+        service.name,
+        current_failures,
+        retries,
+        reason,
     )
 
-    if count >= retries:
-        service.health_status = 'unhealthy'
-        service.save(update_fields=['health_status', 'updated_at'])
+    if current_failures < retries:
+        return
 
-        if service.auto_restart:
-            if _should_restart(service, service_key):
-                logger.info("🔄 Auto-restarting unhealthy service: %s", service.name)
-                _trigger_restart(service)
-            else:
-                logger.info(
-                    "⏸️ Skipping auto-restart for %s (cooldown or max restarts reached)",
-                    service.name
-                )
-            _failure_counts[service_key] = 0
+    if service.health_status != "unhealthy":
+        service.health_status = "unhealthy"
+        service.save(update_fields=["health_status", "updated_at"])
+
+    if not service.auto_restart:
+        return
+
+    if not _should_restart(service, service_key):
+        return
+
+    if _trigger_restart(service, service_key):
+        # After scheduling a restart, reset the failure counter for fresh retries.
+        cache.delete(failure_key)
 
 
-def _should_restart(service, service_key):
+def _should_restart(service, service_key: str) -> bool:
     """
-    Rate-limit auto-restarts with exponential backoff and max restart cap.
-
-    Returns True if a restart is allowed, False if in cooldown or exhausted.
+    Restart gate with exponential backoff and max attempt cap.
     """
-    now = time.monotonic()
-    state = _restart_state.get(service_key)
+    state = cache.get(_restart_key(service_key)) or {}
+    restart_count = int(state.get("count", 0) or 0)
+    last_restart = float(state.get("last_restart", 0) or 0)
 
-    if state is None:
-        # First restart — always allowed
-        return True
-
-    restart_count = state["count"]
-    last_restart = state["last_restart"]
-
-    # Max restarts exhausted — give up
     if restart_count >= MAX_AUTO_RESTARTS:
         logger.warning(
-            "🛑 %s has been auto-restarted %d times — giving up. "
-            "Manual intervention required.",
-            service.name, restart_count
+            "%s auto-restart cap reached (%d/%d). Manual intervention required.",
+            service.name,
+            restart_count,
+            MAX_AUTO_RESTARTS,
         )
         return False
 
-    # Exponential backoff: 10min, 20min, 40min
-    cooldown = RESTART_COOLDOWN_BASE * (BACKOFF_MULTIPLIER ** (restart_count - 1))
-    elapsed = now - last_restart
+    if restart_count == 0:
+        return True
 
+    cooldown = RESTART_COOLDOWN_BASE * (BACKOFF_MULTIPLIER ** (restart_count - 1))
+    elapsed = max(0.0, time.time() - last_restart)
     if elapsed < cooldown:
         remaining = int(cooldown - elapsed)
         logger.info(
-            "⏳ %s restart cooldown: %ds remaining (restart %d/%d)",
-            service.name, remaining, restart_count, MAX_AUTO_RESTARTS
+            "%s restart cooldown active: %ds remaining (attempt %d/%d).",
+            service.name,
+            remaining,
+            restart_count,
+            MAX_AUTO_RESTARTS,
         )
         return False
 
     return True
 
 
-def _trigger_restart(service):
-    """Trigger a redeployment of an unhealthy service (with rate tracking)."""
-    service_key = str(service.id)
+def _record_restart_attempt(service_key: str):
+    state = cache.get(_restart_key(service_key)) or {}
+    count = int(state.get("count", 0) or 0) + 1
+    cache.set(
+        _restart_key(service_key),
+        {"count": count, "last_restart": time.time()},
+        timeout=STATE_TTL_SECONDS,
+    )
 
+
+def _trigger_restart(service, service_key: str) -> bool:
+    """Queue a deployment restart if safe to do so."""
     try:
-        from apps.deployments.tasks import smart_deploy_task
-        from apps.deployments.models import Deployment
         from apps.cloud.models import CloudProvider
+        from apps.deployments.models import Deployment
+        from apps.deployments.tasks import smart_deploy_task
 
-        latest = Deployment.objects.filter(
-            service=service, status=Deployment.Status.ACTIVE
-        ).order_by('-created_at').first()
+        # Do not stack restarts while any deployment for this service is in flight.
+        in_flight_statuses = [
+            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+        ]
+        if Deployment.objects.filter(service=service, status__in=in_flight_statuses).exists():
+            logger.info("Skipping auto-restart for %s: deployment already in progress.", service.name)
+            return False
 
-        if latest:
-            provider = service.provider or CloudProvider.objects.filter(
-                is_active=True
-            ).first()
-            if not provider:
-                logger.warning(
-                    "Cannot auto-restart %s: no active cloud provider",
-                    service.name,
-                )
-                return
+        latest = Deployment.objects.filter(service=service).order_by("-created_at").first()
+        if not latest:
+            logger.warning("Skipping auto-restart for %s: no prior deployment found.", service.name)
+            return False
 
-            # Create a new deployment that rebuilds from the same commit
-            new_deployment = Deployment.objects.create(
-                service=service,
-                commit_hash=latest.commit_hash or 'HEAD',
-                status=Deployment.Status.QUEUED,
-            )
-            service.health_status = 'starting'
-            service.save(update_fields=['health_status', 'updated_at'])
+        provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
+        if not provider:
+            logger.warning("Skipping auto-restart for %s: no active cloud provider.", service.name)
+            return False
 
-            smart_deploy_task.delay(
-                str(new_deployment.id),
-                str(provider.id),
-            )
+        new_deployment = Deployment.objects.create(
+            service=service,
+            commit_hash=latest.commit_hash or "HEAD",
+            status=Deployment.Status.QUEUED,
+            commit_message="Auto-restart after health check failure",
+        )
+        service.health_status = "starting"
+        service.save(update_fields=["health_status", "updated_at"])
 
-            # Track restart state
-            state = _restart_state.get(service_key, {"count": 0, "last_restart": 0})
-            state["count"] += 1
-            state["last_restart"] = time.monotonic()
-            _restart_state[service_key] = state
+        smart_deploy_task.delay(str(new_deployment.id), str(provider.id), skip_review=True)
+        _record_restart_attempt(service_key)
 
-            logger.info(
-                "Auto-restart triggered for %s (attempt %d/%d)",
-                service.name, state["count"], MAX_AUTO_RESTARTS
-            )
-    except Exception as e:
-        logger.error("Auto-restart failed for %s: %s", service.name, e)
+        state = cache.get(_restart_key(service_key)) or {}
+        logger.info(
+            "Auto-restart queued for %s (attempt %s/%d).",
+            service.name,
+            state.get("count", 1),
+            MAX_AUTO_RESTARTS,
+        )
+        return True
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error("Auto-restart failed for %s: %s", service.name, exc)
+        return False
 
 
 def reset_restart_state(service_id: str):
     """
-    Clear the restart state for a service.
-    Call this when a user manually deploys or restarts a service.
+    Clear restart/failure state.
+    Call on manual restart/deploy so backoff does not linger.
     """
-    service_key = str(service_id)
-    if service_key in _restart_state:
-        del _restart_state[service_key]
-    if service_key in _failure_counts:
-        del _failure_counts[service_key]
+    key = str(service_id)
+    _clear_state(key, clear_restart=True)
     logger.info("Restart state cleared for service %s", service_id)

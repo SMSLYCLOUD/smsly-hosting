@@ -1,15 +1,17 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Activity, Server, Box, DollarSign, Loader2, RefreshCw } from 'lucide-react';
+import { Activity, Box, DollarSign, Loader2, RefreshCw, Server } from 'lucide-react';
+
 import api from '@/lib/api';
+import { DashboardShell } from '@/components/layout/DashboardShell';
 
 interface PlatformStats {
   total_services: number;
   total_deployments: number;
   active_instances: number;
-  revenue_estimate: number;
+  total_revenue: number;
 }
 
 interface PlatformEvent {
@@ -25,49 +27,75 @@ export default function AdminDashboardPage() {
     total_services: 0,
     total_deployments: 0,
     active_instances: 0,
-    revenue_estimate: 0
+    total_revenue: 0,
   });
   const [events, setEvents] = useState<PlatformEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [accessDenied, setAccessDenied] = useState(false);
 
   const fetchData = async () => {
     try {
-      // Fetch real data from multiple endpoints
-      const [servicesRes, deploymentsRes, billingRes] = await Promise.allSettled([
+      // Admin gate: this endpoint is IsAdminUser on backend.
+      await api.get('/system/config/');
+      setAccessDenied(false);
+
+      const [servicesRes, deploymentsRes, overviewRes] = await Promise.allSettled([
         api.get('/services/'),
         api.get('/deployments/'),
-        api.get('/billing/summary/'),
+        api.get('/billing/admin/analytics/'),
       ]);
 
-      const services = servicesRes.status === 'fulfilled'
-        ? (Array.isArray(servicesRes.value.data) ? servicesRes.value.data : servicesRes.value.data?.results || [])
-        : [];
-      const deployments = deploymentsRes.status === 'fulfilled'
-        ? (Array.isArray(deploymentsRes.value.data) ? deploymentsRes.value.data : deploymentsRes.value.data?.results || [])
-        : [];
-      const billing = billingRes.status === 'fulfilled' ? billingRes.value.data : {};
+      const services =
+        servicesRes.status === 'fulfilled'
+          ? (Array.isArray(servicesRes.value.data)
+              ? servicesRes.value.data
+              : servicesRes.value.data?.results || [])
+          : [];
+      const deployments =
+        deploymentsRes.status === 'fulfilled'
+          ? (Array.isArray(deploymentsRes.value.data)
+              ? deploymentsRes.value.data
+              : deploymentsRes.value.data?.results || [])
+          : [];
+      const overview = overviewRes.status === 'fulfilled' ? overviewRes.value.data : {};
 
-      const activeCount = services.filter((s: any) => s.latest_deployment?.status === 'ACTIVE' || s.latest_deployment?.status === 'RUNNING').length;
+      const activeCount = services.filter(
+        (s: any) =>
+          s.latest_deployment?.status === 'ACTIVE' || s.latest_deployment?.status === 'RUNNING'
+      ).length;
 
       setStats({
         total_services: services.length,
         total_deployments: deployments.length,
         active_instances: activeCount,
-        revenue_estimate: billing?.total_estimated_cost || 0,
+        total_revenue: Number(overview?.total_revenue_period || 0),
       });
 
-      // Build events from recent deployments
-      const recentEvents: PlatformEvent[] = deployments.slice(0, 5).map((d: any) => ({
-        type: d.status === 'ACTIVE' || d.status === 'RUNNING' ? 'success' : d.status === 'FAILED' ? 'error' : 'info',
-        event: d.status === 'ACTIVE' ? 'Deployment Success' : d.status === 'FAILED' ? 'Build Failed' : `Status: ${d.status}`,
-        user: d.triggered_by || d.user || '—',
-        service: d.service_name || d.service?.name || `deploy-${d.id?.slice(0, 8)}`,
-        time: d.created_at ? new Date(d.created_at).toLocaleString() : '—',
+      const recentEvents: PlatformEvent[] = deployments.slice(0, 10).map((d: any) => ({
+        type:
+          d.status === 'ACTIVE' || d.status === 'RUNNING'
+            ? 'success'
+            : d.status === 'FAILED'
+            ? 'error'
+            : 'info',
+        event:
+          d.status === 'ACTIVE'
+            ? 'Deployment Success'
+            : d.status === 'FAILED'
+            ? 'Deployment Failed'
+            : `Status: ${d.status}`,
+        user: d.triggered_by || d.user || '-',
+        service: d.service_name || d.service?.name || `deploy-${String(d.id || '').slice(0, 8)}`,
+        time: d.created_at ? new Date(d.created_at).toLocaleString() : '-',
       }));
       setEvents(recentEvents);
-    } catch (err) {
-      console.error('Failed to fetch admin data:', err);
+    } catch (err: any) {
+      if (err?.response?.status === 403) {
+        setAccessDenied(true);
+      } else {
+        console.error('Failed to fetch admin data:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -88,6 +116,27 @@ export default function AdminDashboardPage() {
       <DashboardShell>
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </DashboardShell>
+    );
+  }
+
+  if (accessDenied) {
+    return (
+      <DashboardShell>
+        <div className="flex-1 p-6 md:p-12 max-w-4xl mx-auto w-full flex items-center">
+          <div className="w-full border border-border rounded-xl bg-card p-8 space-y-3">
+            <h1 className="text-2xl font-bold">Admin Access Required</h1>
+            <p className="text-muted-foreground">
+              Your account does not have admin permissions for this dashboard.
+            </p>
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center px-4 py-2 rounded-lg bg-primary text-white font-medium hover:opacity-90"
+            >
+              Go to User Dashboard
+            </Link>
+          </div>
         </div>
       </DashboardShell>
     );
@@ -128,8 +177,8 @@ export default function AdminDashboardPage() {
             color="border-purple-500"
           />
           <StatsCard
-            title="Est. Cost"
-            value={`$${stats.revenue_estimate.toLocaleString()}`}
+            title="Revenue (30d)"
+            value={`$${stats.total_revenue.toLocaleString()}`}
             icon={<DollarSign size={20} className="text-yellow-500" />}
             color="border-yellow-500"
           />
@@ -152,7 +201,9 @@ export default function AdminDashboardPage() {
               <tbody className="divide-y divide-border">
                 {events.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">No recent events</td>
+                    <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">
+                      No recent events
+                    </td>
                   </tr>
                 ) : (
                   events.map((evt, i) => <EventRow key={i} {...evt} />)
