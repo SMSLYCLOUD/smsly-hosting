@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: "ci-secret-key-must-be-long-enough-for-checks"
+      DEBUG: "False"
+      USE_SSL: "True"
+      DATABASE_URL: "sqlite://:memory:"
+      REDIS_URL: "redis://localhost:6379/0"
+      GITHUB_WEBHOOK_SECRET: "dummy"
+      FIELD_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" # 32 bytes base64
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "backend/requirements.txt" ]; then
+          pip install -r backend/requirements.txt
+        else
+          pip install -r requirements.txt
+        fi
+    - name: Run PIP Check
+      run: pip check
+    - name: Run Django Check
+      working-directory: ./backend
+      run: |
+        python manage.py check
+        python manage.py check --deploy
+    - name: Run Tests
+      working-directory: ./backend
+      run: |
+        python manage.py test
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Node
+      uses: actions/setup-node@v3
+      with:
+        node-version: "20"
+    - name: Install Dependencies
+      working-directory: ./frontend
+      run: npm ci
+    - name: Lint
+      working-directory: ./frontend
+      run: npm run lint
+    - name: Build
+      working-directory: ./frontend
+      env:
+        NEXT_PUBLIC_API_URL: "http://localhost:8000"
+      run: npm run build
+
+  infra-validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Validate Compose Config
+      run: |
+        docker compose -f docker-compose.yml config > /dev/null
+        docker compose -f docker-compose.prod.yml config > /dev/null
