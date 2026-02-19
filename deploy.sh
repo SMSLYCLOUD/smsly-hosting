@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# SMSLY Hosting — One-Command Deploy
-# Pulls, builds, restarts EVERYTHING in the correct order.
+# SMSLY Hosting - One-command deploy
+# Pulls, builds, restarts platform services in safe order.
 # Usage: bash deploy.sh [--no-pull] [--no-build]
 # ============================================================
 set -euo pipefail
@@ -11,75 +11,86 @@ cd "$(dirname "$0")"
 NO_PULL=false
 NO_BUILD=false
 for arg in "$@"; do
-  case $arg in
+  case "$arg" in
     --no-pull)  NO_PULL=true ;;
     --no-build) NO_BUILD=true ;;
   esac
 done
 
-echo "╔══════════════════════════════════════╗"
-echo "║   SMSLY Hosting — Full Deploy        ║"
-echo "╚══════════════════════════════════════╝"
+echo "========================================"
+echo " SMSLY Hosting - Full Deploy"
+echo "========================================"
 
-# 1. Pull latest code
 if [ "$NO_PULL" = false ]; then
   echo ""
-  echo "▸ Pulling latest code..."
+  echo "[1/9] Pulling latest code..."
   git pull origin main
 fi
 
-# 2. Build backend + frontend images
 if [ "$NO_BUILD" = false ]; then
   echo ""
-  echo "▸ Building images (backend + frontend)..."
+  echo "[2/9] Building backend + frontend images..."
   docker compose build backend frontend
 fi
 
-# 3. Bring up infrastructure first (db, redis, socket-proxy, registry)
 echo ""
-echo "▸ Starting infrastructure (db, redis, socket-proxy)..."
-docker compose up -d --remove-orphans db redis socket-proxy registry
+echo "[3/9] Starting core infrastructure (db, redis, socket-proxy, registry)..."
+# Do not use --remove-orphans here; it can unintentionally remove routing services.
+docker compose up -d db redis socket-proxy registry
 
-# 4. Wait for health checks
-echo "▸ Waiting for DB + Redis to be healthy..."
+echo "[4/9] Waiting for db/redis health..."
 sleep 5
 
-# 5. Bring up backend (needs db + redis healthy)
 echo ""
-echo "▸ Starting backend..."
+echo "[5/9] Starting backend..."
 docker compose up -d backend
-echo "▸ Waiting for backend health check..."
+echo "Waiting for backend health..."
 sleep 10
 
-# 6. Restart celery + celery-beat (fixes KeyError:9 / stale Redis FD)
 echo ""
-echo "▸ Restarting Celery worker + beat..."
+echo "[6/9] Starting and recycling celery worker + beat..."
 docker compose up -d celery celery-beat
-docker compose restart celery celery-beat
+docker compose restart celery celery-beat || true
 sleep 3
 
-# 7. Start frontend
 echo ""
-echo "▸ Starting frontend..."
+echo "[7/9] Starting frontend..."
 docker compose up -d frontend
 sleep 5
 
-# 8. Restart reverse proxies (nginx, traefik, caddy — whichever exist)
 echo ""
-echo "▸ Restarting reverse proxies..."
-for proxy in nginx traefik caddy; do
-  container="smsly-hosting-${proxy}-1"
-  if docker ps -a --format '{{.Names}}' | grep -q "$container"; then
-    echo "  ↳ Restarting $container"
-    docker restart "$container"
+echo "[8/9] Starting platform reverse-proxy (nginx)..."
+docker compose up -d nginx
+
+# In production, app domain routing depends on traefik/route-fallback (127.0.0.1:8081).
+# These services live in docker-compose.prod.yml in many deployments.
+if [ -f docker-compose.prod.yml ]; then
+  echo "Ensuring app routing layer (traefik + route-fallback) is running..."
+
+  # Ensure socket-proxy is reachable from smsly-net so traefik can query Docker.
+  if docker network ls --format '{{.Name}}' | grep -q '^smsly-net$'; then
+    if ! docker network inspect smsly-net --format '{{json .Containers}}' | grep -q 'smsly-hosting-socket-proxy-1'; then
+      docker network connect --alias socket-proxy smsly-net smsly-hosting-socket-proxy-1 || true
+    fi
   fi
-done
+
+  docker compose -f docker-compose.prod.yml up -d --no-deps traefik route-fallback || true
+fi
+
+# Caddy is often managed by systemd, not docker compose.
+if systemctl list-unit-files | grep -q '^caddy.service'; then
+  echo "Reloading Caddy..."
+  systemctl reload caddy || systemctl restart caddy
+fi
+
 sleep 2
 
-# 9. Final health check
 echo ""
-echo "▸ Final status:"
+echo "[9/9] Final status:"
 docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+if [ -f docker-compose.prod.yml ]; then
+  docker compose -f docker-compose.prod.yml ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" | grep -E 'traefik|route-fallback' || true
+fi
 
 echo ""
-echo "✅ Deploy complete!"
+echo "Deploy complete."
