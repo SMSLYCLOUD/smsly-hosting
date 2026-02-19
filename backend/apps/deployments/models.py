@@ -428,3 +428,5 @@ class PlatformConfig(models.Model):
     def __str__(self):
         mode = "SSL" if self.use_ssl else "HTTP"
         return f"Platform Config ({self.domain or 'IP-only'} / {mode})"
+from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from .models_transfer import ServerTransfer

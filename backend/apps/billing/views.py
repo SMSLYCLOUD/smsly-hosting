@@ -12,12 +12,21 @@ import stripe
 from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
-from rest_framework import serializers, status
+from rest_framework import serializers, status, viewsets, permissions
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.billing.models import BillingAccount, BillingPayment, UsageRecord
+from apps.billing.models import (
+    BillingAccount, BillingPayment, UsageRecord,
+    PricingPlan, UserSubscription, Invoice, ResourcePrice
+)
+from apps.billing.serializers import (
+    PricingPlanSerializer, UserSubscriptionSerializer, InvoiceSerializer,
+    ResourcePriceSerializer
+)
+from apps.billing.services.metering import UsageMeter
 from apps.billing.services.cryptomus import CryptomusService
 from apps.billing.services.flutterwave import FlutterwaveService
 from apps.billing.services.stripe import StripeService
@@ -535,3 +544,66 @@ class CryptomusWebhookView(APIView):
             payment.save()
 
         return Response({"ok": True})
+
+
+class PricingPlanViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = PricingPlan.objects.filter(is_active=True).order_by('sort_order')
+    serializer_class = PricingPlanSerializer
+    permission_classes = [AllowAny]
+
+
+class SubscriptionViewSet(viewsets.ModelViewSet):
+    serializer_class = UserSubscriptionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserSubscription.objects.filter(user=self.request.user)
+
+    @action(detail=False, methods=['POST'])
+    def subscribe(self, request):
+        # Implementation for subscribing to a plan
+        # This would typically involve redirecting to Stripe checkout
+        # But for now we might just update the subscription if using mock
+        pass
+
+    @action(detail=False, methods=['POST'])
+    def cancel(self, request):
+        sub = self.get_queryset().filter(status='ACTIVE').first()
+        if sub:
+            sub.status = 'CANCELLED'
+            sub.save()
+            return Response({'status': 'Subscription cancelled'})
+        return Response({'error': 'No active subscription'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = InvoiceSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Invoice.objects.filter(user=self.request.user).order_by('-period_end')
+
+
+class UsageViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        meter = UsageMeter()
+        # Period: current month by default
+        now = timezone.now()
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        summary = meter.get_usage_summary(request.user, start, now)
+        return Response(summary)
+
+
+# Admin Views
+class AdminPricingPlanViewSet(viewsets.ModelViewSet):
+    queryset = PricingPlan.objects.all().order_by('sort_order')
+    serializer_class = PricingPlanSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+
+class AdminResourcePriceViewSet(viewsets.ModelViewSet):
+    queryset = ResourcePrice.objects.all()
+    serializer_class = ResourcePriceSerializer
+    permission_classes = [permissions.IsAdminUser]
