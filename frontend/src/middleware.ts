@@ -33,13 +33,14 @@ function isCallbackPage(pathname: string): boolean {
   return pathname.startsWith("/auth/callback");
 }
 
-function hasAuthCookies(request: NextRequest): boolean {
-  // Keep middleware logic fast and robust: only gate by presence of auth
-  // cookies. The client AuthProvider will validate the token with the backend
-  // and clear cookies/localStorage if invalid.
+function hasAuthTokenCookie(request: NextRequest): boolean {
   const authToken = request.cookies.get("auth_token")?.value;
+  return Boolean(authToken && authToken.trim());
+}
+
+function hasSessionCookie(request: NextRequest): boolean {
   const session = request.cookies.get("sessionid")?.value;
-  return Boolean((authToken && authToken.trim()) || (session && session.trim()));
+  return Boolean(session && session.trim());
 }
 
 export async function middleware(request: NextRequest) {
@@ -57,15 +58,18 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const isAuthenticated = hasAuthCookies(request);
+  const hasApiToken = hasAuthTokenCookie(request);
+  const hasSession = hasSessionCookie(request);
 
-  // Protect dashboard routes - redirect to login if not authenticated.
-  if (protectedPage && !isAuthenticated) {
+  // Protect dashboard routes. Allow session-only users through so the client
+  // can exchange session->token without forcing a hard redirect loop.
+  if (protectedPage && !hasApiToken && !hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // If already logged in and visiting login/register, redirect to dashboard.
-  if (authPage && isAuthenticated) {
+  // Redirect auth pages only when API token exists. Session-only state can
+  // happen transiently during OAuth reconnect and should not cause loops.
+  if (authPage && hasApiToken) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

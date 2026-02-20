@@ -45,10 +45,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const exchangeSessionForToken = async (): Promise<string | null> => {
+      try {
+        const response = await fetch("/api/v1/auth/session-token/", {
+          method: "GET",
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          return null;
+        }
+        const data = await response.json();
+        return typeof data?.token === "string" ? data.token : null;
+      } catch {
+        return null;
+      }
+    };
+
     const fetchUser = async () => {
       const path = window.location.pathname;
-      // Only fetch user if there's a token - avoids 403 on public pages
-      const token = localStorage.getItem('auth_token');
+      // Prefer API token, but recover from a valid session after OAuth flows.
+      let token = localStorage.getItem('auth_token');
+      if (!token) {
+        const recovered = await exchangeSessionForToken();
+        if (recovered) {
+          token = recovered;
+          localStorage.setItem('auth_token', recovered);
+          setAuthTokenCookie(recovered);
+        }
+      }
       if (!token) {
         setUser(null);
         setLoading(false);

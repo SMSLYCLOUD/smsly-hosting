@@ -30,13 +30,13 @@ async function fetchSessionToken(): Promise<string | null> {
 
 function CallbackContent() {
   const searchParams = useSearchParams();
+  const queryToken = searchParams.get("auth_token");
 
   useEffect(() => {
     let active = true;
 
     const completeAuth = async () => {
       // Backward-compatible fallback only: older backends may still pass token in query.
-      const queryToken = searchParams.get("auth_token");
       const token = queryToken || await fetchSessionToken();
 
       if (!active) {
@@ -62,7 +62,7 @@ function CallbackContent() {
     return () => {
       active = false;
     };
-  }, [searchParams]);
+  }, [queryToken]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
