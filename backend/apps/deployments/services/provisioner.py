@@ -171,7 +171,9 @@ def provision_server(self, server_id: str):
         _append_log(server, "⚙️ Running CloudNeuron installer (this may take 5-15 minutes)...")
 
         # Build non-interactive environment
-        env_vars = f"NON_INTERACTIVE=1 USE_SSL=false DOMAIN={server.host}"
+        env_vars = (
+            f"NON_INTERACTIVE=1 SKIP_SCREEN=1 USE_SSL=false DOMAIN={server.host}"
+        )
         cmd = f"{env_vars} bash /tmp/smsly-install.sh 2>&1"
 
         # Execute with a channel for streaming output
