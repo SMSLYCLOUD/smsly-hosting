@@ -56,6 +56,20 @@ function isProtectedPath(path: string): boolean {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const statusCode = error?.response?.status;
+    const requestUrl = String(error?.config?.url || '');
+
+    // Deploy actions intentionally return 409 when another deploy is active.
+    // Treat this as a non-fatal app state so callers can display a friendly
+    // "already deploying" message instead of surfacing Axios stack traces.
+    if (
+      statusCode === 409 &&
+      /\/services\/[^/]+\/deploy\/?$/.test(requestUrl) &&
+      error?.response
+    ) {
+      return Promise.resolve(error.response);
+    }
+
     if (error.response?.status === 401 && typeof window !== 'undefined') {
       const path = window.location.pathname;
       // Avoid redirect loops and keep public pages accessible.
