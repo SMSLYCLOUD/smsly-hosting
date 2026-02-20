@@ -9,6 +9,7 @@ Validates:
 """
 from unittest.mock import patch
 from django.contrib.auth.models import User
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework import status as http_status
 from apps.deployments.models import Service, Deployment
@@ -203,6 +204,31 @@ class ServiceDeployActionTests(APITestCase):
         """Deploy action should call smart_deploy_task.delay."""
         url = f'/api/v1/services/{self.service.id}/deploy/'
         self.client.post(url, {}, format='json')
+        mock_task.assert_called_once()
+
+    @patch('apps.deployments.tasks.smart_deploy_task.delay')
+    def test_deploy_action_ignores_stale_queued_older_than_active(self, mock_task):
+        """
+        Deploy guard should cancel stale QUEUED rows once a newer ACTIVE deployment exists.
+        """
+        stale = Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.QUEUED,
+            commit_hash='stale-queued',
+        )
+        Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash='active-latest',
+            finished_at=timezone.now(),
+        )
+
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {}, format='json')
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        stale.refresh_from_db()
+        self.assertEqual(stale.status, Deployment.Status.CANCELLED)
         mock_task.assert_called_once()
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
