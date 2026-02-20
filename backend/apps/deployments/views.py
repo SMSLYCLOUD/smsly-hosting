@@ -31,19 +31,47 @@ class EmptySerializer(serializers.Serializer):
     """Schema placeholder for APIViews without request/response bodies."""
 
 
+_IN_PROGRESS_DEPLOYMENT_STATUSES = [
+    Deployment.Status.QUEUED,
+    Deployment.Status.BUILDING,
+    Deployment.Status.DEPLOYING,
+    'REVIEW',  # Also block if awaiting review
+]
+
+
+def _cancel_stale_in_progress_deployments(service):
+    """
+    Cancel stale in-progress deployments superseded by a newer ACTIVE deploy.
+    This prevents zombie QUEUED rows from permanently blocking new deploys.
+    """
+    latest_active = (
+        service.deployments
+        .filter(status=Deployment.Status.ACTIVE)
+        .order_by('-created_at')
+        .first()
+    )
+    if not latest_active:
+        return 0
+
+    stale_qs = service.deployments.filter(
+        status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES,
+        created_at__lte=latest_active.created_at,
+    )
+    count = stale_qs.count()
+    if count:
+        stale_qs.update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
+    return count
+
+
 def _has_active_deployment(service):
     """
     Check if a service already has an active deployment in progress.
     Returns the existing deployment if found, None otherwise.
     Prevents rapid-fire deployment spam from the dashboard.
     """
+    _cancel_stale_in_progress_deployments(service)
     return service.deployments.filter(
-        status__in=[
-            Deployment.Status.QUEUED,
-            Deployment.Status.BUILDING,
-            Deployment.Status.DEPLOYING,
-            'REVIEW',  # Also block if awaiting review
-        ]
+        status__in=_IN_PROGRESS_DEPLOYMENT_STATUSES
     ).order_by('-created_at').first()
 
 
