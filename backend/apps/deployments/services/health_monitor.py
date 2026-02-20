@@ -157,7 +157,12 @@ def _build_targets(service, active_deployment):
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         port = service.internal_port or 8000
-        _add(f"http://{container_id[:12]}:{port}{path}", verify=False)
+        direct_headers = {"Host": public_domain} if public_domain else {}
+        _add(
+            f"http://{container_id[:12]}:{port}{path}",
+            headers=direct_headers,
+            verify=False,
+        )
 
     return targets
 
