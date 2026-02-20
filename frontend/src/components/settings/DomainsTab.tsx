@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { servicesApi, systemApi, Service } from '@/lib/api';
+import api, { servicesApi, systemApi, Service } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -20,7 +20,6 @@ export function DomainsTab({ service }: { service: Service }) {
     const [domains, setDomains] = useState<DomainStatus[]>([]);
     const [newDomain, setNewDomain] = useState('');
     const [loading, setLoading] = useState(true);
-    const [envVarId, setEnvVarId] = useState<number | null>(null);
     const [adding, setAdding] = useState(false);
     const [serverIp, setServerIp] = useState<string>('');
 
@@ -36,17 +35,11 @@ export function DomainsTab({ service }: { service: Service }) {
     const loadDomains = useCallback(async () => {
         try {
             setLoading(true);
-            const envVars = await servicesApi.getEnvVars(service.id);
-            const customDomainsVar = envVars.find(v => v.key === 'CUSTOM_DOMAINS');
-
-            if (customDomainsVar) {
-                setEnvVarId(customDomainsVar.id);
-                const domainList = customDomainsVar.value.split(',').map(d => d.trim()).filter(Boolean);
-                setDomains(domainList.map(d => ({ domain: d, verified: null, checking: false })));
-            } else {
-                setEnvVarId(null);
-                setDomains([]);
-            }
+            const latest = await servicesApi.get(service.id);
+            const domainList = Array.isArray(latest.custom_domains)
+                ? latest.custom_domains.map(d => String(d || '').trim().toLowerCase()).filter(Boolean)
+                : [];
+            setDomains(domainList.map(d => ({ domain: d, verified: null, checking: false })));
         } catch (err) {
             console.error(err);
         } finally {
@@ -57,25 +50,6 @@ export function DomainsTab({ service }: { service: Service }) {
     useEffect(() => {
         void loadDomains();
     }, [loadDomains]);
-
-    const saveDomains = useCallback(async (newDomainList: string[]) => {
-        try {
-            const value = newDomainList.join(',');
-            if (envVarId) {
-                await servicesApi.deleteEnvVar(service.id, envVarId);
-                if (value) {
-                    await servicesApi.createEnvVar(service.id, { key: 'CUSTOM_DOMAINS', value, is_secret: false });
-                }
-            } else if (value) {
-                await servicesApi.createEnvVar(service.id, { key: 'CUSTOM_DOMAINS', value, is_secret: false });
-            }
-            toast({ title: "Domains updated", description: "Redeploy to apply changes." });
-            await loadDomains();
-        } catch (err) {
-            console.error(err);
-            toast({ title: "Failed to save domains", variant: "destructive" });
-        }
-    }, [envVarId, loadDomains, service.id]);
 
     const handleAdd = async () => {
         const domain = newDomain.trim().toLowerCase();
@@ -90,16 +64,43 @@ export function DomainsTab({ service }: { service: Service }) {
         }
 
         setAdding(true);
-        const updated = [...domains.map(d => d.domain), domain];
-        await saveDomains(updated);
-        setNewDomain('');
-        setAdding(false);
+        try {
+            const res = await api.post(`/services/${service.id}/add-domain/`, { domain });
+            toast({
+                title: "Domain added",
+                description: res.data?.message || "Custom domain saved and routing sync triggered.",
+            });
+            setNewDomain('');
+            await loadDomains();
+        } catch (err: any) {
+            console.error(err);
+            toast({
+                title: "Failed to add domain",
+                description: err?.response?.data?.error || "Could not save custom domain.",
+                variant: "destructive",
+            });
+        } finally {
+            setAdding(false);
+        }
     };
 
     const handleDelete = async (domain: string) => {
         if (!confirm(`Remove ${domain}?`)) return;
-        const updated = domains.filter(d => d.domain !== domain).map(d => d.domain);
-        await saveDomains(updated);
+        try {
+            const res = await api.post(`/services/${service.id}/delete-domain/`, { domain });
+            toast({
+                title: "Domain removed",
+                description: res.data?.message || "Custom domain removed and routing sync triggered.",
+            });
+            await loadDomains();
+        } catch (err: any) {
+            console.error(err);
+            toast({
+                title: "Failed to remove domain",
+                description: err?.response?.data?.error || "Could not remove custom domain.",
+                variant: "destructive",
+            });
+        }
     };
 
     const handleVerify = async (domain: string) => {
@@ -305,8 +306,8 @@ export function DomainsTab({ service }: { service: Service }) {
                 <div className="mt-8 pt-6 border-t border-border flex items-start gap-3">
                     <RefreshCw className="w-5 h-5 text-yellow-500 mt-0.5" />
                     <p className="text-xs text-muted-foreground">
-                        After adding or removing domains, you must <strong className="text-foreground">Redeploy</strong> your service for the routing changes to take effect.
-                        SSL certificates are automatically provisioned on first visit.
+                        Routing and SSL sync are applied immediately after add/remove.
+                        SSL certificates are provisioned automatically when DNS is correct.
                     </p>
                 </div>
             </Card>
