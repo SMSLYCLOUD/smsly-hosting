@@ -8,6 +8,7 @@ Validates:
   - Env var injection during deployment
 """
 from django.test import TestCase
+from django.db import connection
 from django.contrib.auth.models import User
 from rest_framework.test import APITestCase
 from rest_framework import status as http_status
@@ -150,3 +151,43 @@ class EnvironmentVariableAPITests(APITestCase):
             http_status.HTTP_403_FORBIDDEN,
             http_status.HTTP_404_NOT_FOUND,
         ])
+
+    def test_env_var_post_parses_false_secret_flag_correctly(self):
+        """String value 'false' should not be coerced to True."""
+        url = f'/api/v1/services/{self.service.id}/env_vars/'
+        payload = {
+            'key': 'PUBLIC_FLAG',
+            'value': 'enabled',
+            'is_secret': 'false',
+        }
+        response = self.client.post(url, payload, format='json')
+
+        self.assertIn(response.status_code, [
+            http_status.HTTP_200_OK,
+            http_status.HTTP_201_CREATED,
+        ])
+        env_var = EnvironmentVariable.objects.get(service=self.service, key='PUBLIC_FLAG')
+        self.assertFalse(env_var.is_secret)
+
+    def test_env_var_get_handles_corrupted_encrypted_value(self):
+        """Listing env vars should not 500 if a stored value is malformed."""
+        env_var = EnvironmentVariable.objects.create(
+            service=self.service,
+            key='BROKEN_VALUE',
+            value='original'
+        )
+        table = EnvironmentVariable._meta.db_table
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {table} SET value = %s WHERE id = %s",
+                ['not-a-valid-encrypted-token', env_var.id],
+            )
+
+        url = f'/api/v1/services/{self.service.id}/env_vars/'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+
+        items = response.data if isinstance(response.data, list) else response.data.get('results', [])
+        row = next((item for item in items if item.get('key') == 'BROKEN_VALUE'), None)
+        self.assertIsNotNone(row)
+        self.assertIn(row.get('value'), ['', 'not-a-valid-encrypted-token'])

@@ -291,7 +291,30 @@ class ServiceViewSet(viewsets.ModelViewSet):
             commit_message=f"Manual Trigger: {ref}"
         )
 
-        smart_deploy_task.delay(str(deployment.id), str(provider.id))
+        try:
+            smart_deploy_task.delay(str(deployment.id), str(provider.id))
+        except Exception as exc:  # pragma: no cover - broker/runtime failure
+            logger.exception(
+                "Failed to enqueue deploy task for service=%s deployment=%s",
+                service.id,
+                deployment.id,
+            )
+            deployment.status = Deployment.Status.FAILED
+            deployment.finished_at = timezone.now()
+            deployment.build_logs = (
+                (deployment.build_logs or '')
+                + f"\n[ERROR] Failed to queue deployment task: {exc}\n"
+            )
+            deployment.save(
+                update_fields=['status', 'finished_at', 'build_logs', 'updated_at']
+            )
+            return Response(
+                {
+                    'error': 'Failed to queue deployment task. Check Celery/Redis health.',
+                    'deployment': DeploymentSerializer(deployment).data,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response(DeploymentSerializer(deployment).data)
 
     @action(detail=True, methods=['post'], url_path='instant-rollback')
@@ -441,7 +464,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST)
 
         value = str(request.data.get('value', '') or '')
-        is_secret = bool(request.data.get('is_secret', False))
+        is_secret = _parse_bool(request.data.get('is_secret', False))
 
         env_var, created = EnvironmentVariable.objects.update_or_create(
             service=service,

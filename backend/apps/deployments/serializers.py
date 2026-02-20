@@ -1,3 +1,4 @@
+import logging
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
@@ -11,6 +12,9 @@ class RegionSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+logger = logging.getLogger(__name__)
+
+
 class EnvVarSerializer(serializers.ModelSerializer):
     """
     Serializer for Environment Variables.
@@ -21,7 +25,22 @@ class EnvVarSerializer(serializers.ModelSerializer):
         fields = ['id', 'key', 'value', 'is_secret']
 
     def to_representation(self, instance):
-        ret = super().to_representation(instance)
+        try:
+            ret = super().to_representation(instance)
+        except Exception as exc:  # pragma: no cover - depends on corrupted DB data
+            logger.error(
+                "Failed to serialize env var id=%s key=%s service_id=%s: %s",
+                getattr(instance, "id", None),
+                getattr(instance, "key", None),
+                getattr(instance, "service_id", None),
+                exc,
+            )
+            ret = {
+                'id': getattr(instance, 'id', None),
+                'key': getattr(instance, 'key', ''),
+                'value': '',
+                'is_secret': bool(getattr(instance, 'is_secret', False)),
+            }
         # Mask secret values
         if instance.is_secret:
             ret['value'] = '********'

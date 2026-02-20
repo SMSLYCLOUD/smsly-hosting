@@ -205,6 +205,21 @@ class ServiceDeployActionTests(APITestCase):
         self.client.post(url, {}, format='json')
         mock_task.assert_called_once()
 
+    @patch('apps.deployments.tasks.smart_deploy_task.delay')
+    def test_deploy_action_returns_503_when_queue_fails(self, mock_task):
+        """Deploy should fail gracefully if Celery enqueue fails."""
+        mock_task.side_effect = RuntimeError('broker unavailable')
+
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {}, format='json')
+
+        self.assertEqual(response.status_code, http_status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertIn('error', response.data)
+
+        deploy = Deployment.objects.filter(service=self.service).order_by('-created_at').first()
+        self.assertIsNotNone(deploy)
+        self.assertEqual(deploy.status, Deployment.Status.FAILED)
+
 
 class ServiceDeploymentCascadeTests(APITestCase):
     """Test that deleting a service cascades to deployments."""
