@@ -49,9 +49,11 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
 
+    # Zero-click provisioning default: accept first connection host key.
+    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true to enforce known_hosts pinning.
     strict_host_key_check = str(
-        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")
-    ).strip().lower() not in ("0", "false", "no")
+        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")
+    ).strip().lower() in ("1", "true", "yes", "on")
     if strict_host_key_check:
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
     else:
