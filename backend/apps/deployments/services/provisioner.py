@@ -22,6 +22,42 @@ from apps.deployments.models_servers import ManagedServer
 logger = logging.getLogger(__name__)
 
 
+def _load_install_script():
+    """
+    Load the installer script content.
+
+    Priority:
+    1) Local file in the backend image/workdir (for bundled installs)
+    2) Fallback to GitHub raw URL (for minimal backend images)
+    """
+    candidates = [
+        # /app/install.sh if bundled into the backend container
+        os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../../../install.sh")
+        ),
+        os.path.abspath(os.path.join(os.getcwd(), "install.sh")),
+    ]
+
+    for path in candidates:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as install_file:
+                return install_file.read(), f"local:{path}"
+
+    script_url = (
+        os.environ.get(
+            "SMSLY_INSTALL_SCRIPT_URL",
+            "https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh",
+        )
+        .strip()
+    )
+    response = requests.get(script_url, timeout=30)
+    response.raise_for_status()
+    content = response.text
+    if not content.strip():
+        raise ValueError("Downloaded installer script is empty")
+    return content, f"url:{script_url}"
+
+
 def _broadcast_provision_log(server: ManagedServer, message: str):
     """Push a provision log line via WebSocket."""
     try:
@@ -119,16 +155,14 @@ def provision_server(self, server_id: str):
         _append_log(server, "📦 Uploading install script...")
         sftp = ssh.open_sftp()
 
-        # Read the install script from the local filesystem
-        install_script_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            "install.sh",
-        )
-
-        if not os.path.exists(install_script_path):
-            raise FileNotFoundError(f"install.sh not found at {install_script_path}")
-
-        sftp.put(install_script_path, "/tmp/smsly-install.sh")
+        install_script_content, install_script_source = _load_install_script()
+        _append_log(server, f"📥 Installer source: {install_script_source}")
+        remote_script = sftp.open("/tmp/smsly-install.sh", "w")
+        try:
+            remote_script.write(install_script_content)
+            remote_script.flush()
+        finally:
+            remote_script.close()
         sftp.chmod("/tmp/smsly-install.sh", 0o755)
         sftp.close()
         _append_log(server, "✅ Install script uploaded")
