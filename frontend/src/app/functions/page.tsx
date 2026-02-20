@@ -82,7 +82,15 @@ export default function FunctionsPage() {
             function_code: code,
             function_runtime: runtime
         });
-        await servicesApi.deploy(selectedFunction.id);
+        const deployResult = await servicesApi.deploy(selectedFunction.id);
+        if (deployResult?.existing_deployment) {
+          const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
+          toast({
+            title: "Deployment already in progress",
+            description: `Current deployment status: ${statusLabel}.`,
+          });
+          return;
+        }
         toast({ title: "Function updated", description: "Deployment triggered." });
       } else {
         // Create new
@@ -96,7 +104,15 @@ export default function FunctionsPage() {
             memory_mb: 128
         });
         // Trigger deploy
-        await servicesApi.deploy(newService.id);
+        const deployResult = await servicesApi.deploy(newService.id);
+        if (deployResult?.existing_deployment) {
+          const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
+          toast({
+            title: "Deployment already in progress",
+            description: `Current deployment status: ${statusLabel}.`,
+          });
+          return;
+        }
         toast({ title: "Function created", description: "Deployment triggered." });
         setSelectedFunction(newService);
         setIsCreating(false);

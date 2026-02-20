@@ -38,7 +38,16 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const handleRedeploy = async () => {
         try {
             setRedeploying(true);
-            await servicesApi.deploy(serviceId);
+            const deployResult = await servicesApi.deploy(serviceId);
+            if (deployResult?.existing_deployment) {
+                const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
+                toast({
+                    title: "Deployment already in progress",
+                    description: `Current deployment status: ${statusLabel}.`,
+                });
+                setRedeploying(false);
+                return;
+            }
             toast({ title: "Redeployment triggered", description: "A new deployment has started." });
             setTimeout(() => { void loadDeployments(); setRedeploying(false); }, 2000);
         } catch (err) {
@@ -332,4 +341,3 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         </div>
     );
 }
-

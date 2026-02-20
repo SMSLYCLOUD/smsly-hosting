@@ -152,7 +152,16 @@ export default function ServiceDetailPage() {
         if (!confirm('Trigger a new deployment for this service now?')) return;
         try {
             setRedeploying(true);
-            await servicesApi.deploy(service.id);
+            const deployResult = await servicesApi.deploy(service.id);
+            if (deployResult?.existing_deployment) {
+                const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
+                toast({
+                    title: 'Deployment already in progress',
+                    description: `Current deployment status: ${statusLabel}.`,
+                });
+                setRedeploying(false);
+                return;
+            }
             toast({ title: 'Redeployment triggered', description: 'A new deployment has started.' });
             // Refresh service data after a short delay
             setTimeout(async () => {
