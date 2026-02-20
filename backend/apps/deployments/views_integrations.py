@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+from django.conf import settings
+from django.contrib.auth import login
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -17,6 +19,20 @@ def _github_connect_url() -> str:
     # already-authenticated user instead of creating/logging in a new user.
     next_path = quote("/auth/callback", safe="/")
     return f"/accounts/github/login/?process=connect&next={next_path}"
+
+
+def _login_backend_path(user) -> str:
+    """
+    Resolve an auth backend path for django.contrib.auth.login().
+    Token-authenticated users often don't have user.backend populated.
+    """
+    backend = getattr(user, "backend", None)
+    if backend:
+        return backend
+    backends = list(getattr(settings, "AUTHENTICATION_BACKENDS", []) or [])
+    if backends:
+        return backends[0]
+    return "django.contrib.auth.backends.ModelBackend"
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
@@ -75,6 +91,31 @@ def github_connection(request):
                 if account
                 else None
             ),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_connect(request):
+    """
+    Bootstrap a Django session for the currently authenticated API user,
+    then return the allauth GitHub connect URL.
+
+    Why this exists:
+    - The frontend commonly authenticates with DRF token auth.
+    - allauth "process=connect" requires a Django session user.
+    """
+    login(request, request.user, backend=_login_backend_path(request.user))
+    request.session.modified = True
+    request.session.save()
+
+    return Response(
+        {
+            "connect_url": _github_connect_url(),
+            "session_bootstrapped": True,
         },
         status=status.HTTP_200_OK,
     )

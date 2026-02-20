@@ -21,7 +21,9 @@ type GitHubConnection = {
 
 export function GitHubIntegrationCard() {
   const [loading, setLoading] = useState(true);
+  const [connecting, setConnecting] = useState(false);
   const [data, setData] = useState<GitHubConnection | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
     setLoading(true);
@@ -40,6 +42,27 @@ export function GitHubIntegrationCard() {
   }, []);
 
   const connectUrl = data?.connect_url || "/accounts/github/login/?process=connect&next=/auth/callback";
+
+  const startConnectFlow = async () => {
+    setConnectError(null);
+    setConnecting(true);
+    try {
+      const res = await api.get("/integrations/github/connect/");
+      const target =
+        typeof res.data?.connect_url === "string" && res.data.connect_url.trim()
+          ? res.data.connect_url
+          : connectUrl;
+      window.location.assign(target);
+    } catch (e: any) {
+      const message =
+        e?.response?.data?.detail ||
+        e?.response?.data?.error ||
+        "Unable to start GitHub connection flow.";
+      setConnectError(String(message));
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   return (
     <Card>
@@ -89,20 +112,24 @@ export function GitHubIntegrationCard() {
             )}
 
             <div className="flex items-center gap-3">
-              <Button asChild>
-                <a href={connectUrl}>
+              <Button onClick={startConnectFlow} disabled={connecting}>
+                {connecting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
                   <LinkIcon className="mr-2 h-4 w-4" />
-                  {data?.connected ? "Reconnect GitHub" : "Connect GitHub"}
-                </a>
+                )}
+                {connecting ? "Redirecting..." : data?.connected ? "Reconnect GitHub" : "Connect GitHub"}
               </Button>
               <Button variant="outline" onClick={fetchStatus}>
                 Refresh
               </Button>
             </div>
+            {connectError ? (
+              <p className="text-sm text-destructive">{connectError}</p>
+            ) : null}
           </>
         )}
       </CardContent>
     </Card>
   );
 }
-

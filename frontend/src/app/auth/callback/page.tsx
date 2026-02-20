@@ -8,23 +8,38 @@ import { setAuthTokenCookie, clearAuthCookies } from "@/lib/auth-cookies";
 // Prevent static prerendering — this page needs runtime URL params
 export const dynamic = "force-dynamic";
 
-async function fetchSessionToken(): Promise<string | null> {
+function getExistingToken(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const fromStorage = localStorage.getItem("auth_token");
+  if (fromStorage) {
+    return fromStorage;
+  }
+  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+async function fetchSessionToken(
+  fallbackToken: string | null
+): Promise<{ token: string | null; unauthorized: boolean }> {
   try {
     const response = await fetch("/api/v1/auth/session-token/", {
       method: "GET",
       credentials: "include",
       headers: {
         Accept: "application/json",
+        ...(fallbackToken ? { Authorization: `Token ${fallbackToken}` } : {}),
       },
     });
     if (!response.ok) {
-      return null;
+      return { token: null, unauthorized: response.status === 401 || response.status === 403 };
     }
     const data = await response.json();
-    return typeof data?.token === "string" ? data.token : null;
+    return { token: typeof data?.token === "string" ? data.token : null, unauthorized: false };
   } catch (error) {
     console.error("Failed to fetch session token:", error);
-    return null;
+    return { token: null, unauthorized: false };
   }
 }
 
@@ -36,8 +51,19 @@ function CallbackContent() {
     let active = true;
 
     const completeAuth = async () => {
+      const existingToken = getExistingToken();
+
       // Backward-compatible fallback only: older backends may still pass token in query.
-      const token = queryToken || await fetchSessionToken();
+      const sessionResult = queryToken
+        ? { token: null, unauthorized: false }
+        : await fetchSessionToken(existingToken);
+      let token = queryToken || sessionResult.token;
+
+      // During reconnect, keep an existing token if the session exchange failed
+      // for a transient reason (network/proxy race), but never when explicitly unauthorized.
+      if (!token && existingToken && !sessionResult.unauthorized) {
+        token = existingToken;
+      }
 
       if (!active) {
         return;
