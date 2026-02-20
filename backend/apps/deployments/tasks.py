@@ -47,6 +47,36 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     return slug[:63]
 
 
+def _build_runtime_env(service: Service) -> dict:
+    """Assemble runtime env vars with routing domains sourced from Service."""
+    env_vars = {env.key: env.value for env in service.env_vars.all()}
+
+    env_vars.setdefault('PORT', str(service.internal_port or 8000))
+
+    # Routing domains are platform-controlled and must not drift from service state.
+    if service.public_domain:
+        env_vars['PUBLIC_DOMAIN'] = service.public_domain
+    else:
+        env_vars.pop('PUBLIC_DOMAIN', None)
+
+    custom_domains = []
+    for domain in service.custom_domains or []:
+        if not isinstance(domain, str):
+            continue
+        value = domain.strip()
+        if not value:
+            continue
+        if value not in custom_domains:
+            custom_domains.append(value)
+
+    if custom_domains:
+        env_vars['CUSTOM_DOMAINS'] = ",".join(custom_domains)
+    else:
+        env_vars.pop('CUSTOM_DOMAINS', None)
+
+    return env_vars
+
+
 def _resolve_upload_zip_path(repository_url: str) -> str:
     """Extract a local file path from file:// repository URLs."""
     parsed = urlparse(repository_url or "")
@@ -497,16 +527,7 @@ def _deploy_container(deployment, provider, image_name):
         service = deployment.service
         compute = ComputeService(provider)
 
-        env_vars = {env.key: env.value for env in service.env_vars.all()}
-        env_vars.setdefault('PORT', str(service.internal_port or 8000))
-        if service.public_domain:
-            env_vars.setdefault('PUBLIC_DOMAIN', service.public_domain)
-        if service.custom_domains:
-            joined_domains = ",".join(
-                d.strip() for d in service.custom_domains if isinstance(d, str) and d.strip()
-            )
-            if joined_domains:
-                env_vars.setdefault('CUSTOM_DOMAINS', joined_domains)
+        env_vars = _build_runtime_env(service)
 
         # Inject addon connection URLs into deployed container
         from apps.deployments.models_addons import Addon
