@@ -1,377 +1,603 @@
 'use client';
 
 /**
- * TopologyView — 3D force-directed graph of services + addons.
- * Full 360° orbit, zoom, pan. Uses react-force-graph-3d (Three.js).
+ * TopologyView — Railway-style 2D canvas showing services as cards
+ * with connection lines. Supports pan, zoom, and click-to-navigate.
+ * Pure HTML5 Canvas — no Three.js / WebGL dependencies.
  */
 
-import { useEffect, useState, useRef, useCallback } from 'react';
-import api from '@/lib/api';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import dynamic from 'next/dynamic';
-import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
-
-// @ts-ignore — react-force-graph-3d has incomplete types
-const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
+import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 
 /* ── Types ── */
+
 interface TopoNode {
   id: string;
   name: string;
-  type: string;
-  addonType?: string;
-  status?: string;
-  serviceId?: string;
-  x?: number; y?: number; z?: number;
+  status: string;
+  deployType?: string;
+  repoUrl?: string;
+  branch?: string;
+  domain?: string;
+  addons?: string[];
+  // Computed layout positions
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-interface TopoLink {
-  source: string;
-  target: string;
-  type?: string;
+interface TopoEdge {
+  from: string;
+  to: string;
+  type: 'repo' | 'domain' | 'addon';
 }
 
-interface GraphData {
-  nodes: TopoNode[];
-  links: TopoLink[];
-}
+/* ── Constants ── */
 
-/* ── Color Palette ── */
-const NODE_COLORS: Record<string, string> = {
-  service: '#10b981',
-  POSTGRES: '#818cf8',
-  REDIS: '#f87171',
-  MYSQL: '#fbbf24',
-  MONGODB: '#a78bfa',
-  ELASTICSEARCH: '#38bdf8',
-  RABBITMQ: '#fb923c',
-  volume: '#eab308',
-  default: '#6366f1',
+const NODE_W = 220;
+const NODE_H = 90;
+const GAP_X = 80;
+const GAP_Y = 50;
+const PADDING = 60;
+
+const STATUS_COLORS: Record<string, string> = {
+  ACTIVE: '#10b981',
+  BUILDING: '#3b82f6',
+  DEPLOYING: '#818cf8',
+  QUEUED: '#fbbf24',
+  FAILED: '#ef4444',
+  CANCELLED: '#f97316',
+  HEALTH_CHECK: '#06b6d4',
+  REVIEW: '#a78bfa',
 };
 
-const LINK_COLORS: Record<string, string> = {
-  API: '#60a5fa',
-  DATABASE: '#818cf8',
-  CACHE: '#f87171',
-  STORAGE: '#fbbf24',
-  ADDON: '#64748b',
+const DEPLOY_ICONS: Record<string, string> = {
+  GIT: '⎇',
+  DOCKER: '🐳',
+  TEMPLATE: '📄',
 };
 
-function getNodeColor(node: TopoNode): string {
-  if (node.type === 'service') return NODE_COLORS.service;
-  if (node.type === 'addon') return NODE_COLORS[node.addonType?.toUpperCase() || ''] || NODE_COLORS.default;
-  return NODE_COLORS.volume;
+/* ── Helper: status dot color ── */
+function statusColor(s: string): string {
+  return STATUS_COLORS[s] || '#6366f1';
 }
 
-/* ── 3D Node rendering (lazy — only runs client-side) ── */
-function createNodeObject(node: TopoNode): any {
-  const THREE = require('three');
-  const group = new THREE.Group();
-  const color = getNodeColor(node);
+/* ── Layout: grid with 2-pass grouping ── */
+function layoutNodes(services: Service[]): { nodes: TopoNode[]; edges: TopoEdge[] } {
+  if (services.length === 0) return { nodes: [], edges: [] };
 
-  const geometry = node.type === 'service'
-    ? new THREE.IcosahedronGeometry(6, 1)
-    : new THREE.SphereGeometry(4, 16, 16);
-
-  const material = new THREE.MeshPhongMaterial({
-    color: new THREE.Color(color),
-    emissive: new THREE.Color(color),
-    emissiveIntensity: 0.3,
-    transparent: true,
-    opacity: 0.9,
-    shininess: 80,
-  });
-  group.add(new THREE.Mesh(geometry, material));
-
-  if (node.type === 'service') {
-    const ringGeo = new THREE.RingGeometry(7.5, 9.0, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color), transparent: true, opacity: 0.2, side: THREE.DoubleSide,
-    });
-    group.add(new THREE.Mesh(ringGeo, ringMat));
+  // Group by repo owner or standalone
+  const groups = new Map<string, Service[]>();
+  for (const svc of services) {
+    const key = svc.repository_url
+      ? svc.repository_url.replace(/\.git$/, '').replace(/https?:\/\//, '').split('/').slice(0, 2).join('/')
+      : `standalone/${svc.id}`;
+    const arr = groups.get(key) || [];
+    arr.push(svc);
+    groups.set(key, arr);
   }
 
-  // Text label
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
-  canvas.width = 256;
-  canvas.height = 64;
-  ctx.fillStyle = 'transparent';
-  ctx.fillRect(0, 0, 256, 64);
+  const nodes: TopoNode[] = [];
+  const edges: TopoEdge[] = [];
 
-  ctx.font = 'bold 24px Inter, system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(node.name.length > 18 ? node.name.slice(0, 16) + '…' : node.name, 128, 28);
+  // Place groups in rows
+  let cursorY = PADDING;
+  for (const [, groupServices] of Array.from(groups)) {
+    let cursorX = PADDING;
+    const prevIds: string[] = [];
 
-  ctx.font = '16px Inter, system-ui, sans-serif';
-  ctx.fillStyle = color;
-  const label = node.type === 'service' ? 'SERVICE' : (node.addonType || node.type).toUpperCase();
-  ctx.fillText(label, 128, 52);
+    for (const svc of groupServices) {
+      const node: TopoNode = {
+        id: svc.id,
+        name: svc.name,
+        status: svc.latest_deployment?.status || 'UNKNOWN',
+        deployType: svc.deploy_type || 'GIT',
+        repoUrl: svc.repository_url || undefined,
+        branch: svc.branch || undefined,
+        domain: svc.public_domain || undefined,
+        x: cursorX,
+        y: cursorY,
+        w: NODE_W,
+        h: NODE_H,
+      };
+      nodes.push(node);
 
-  const texture = new THREE.CanvasTexture(canvas);
-  const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
-  const sprite = new THREE.Sprite(spriteMat);
-  sprite.scale.set(28, 7, 1);
-  sprite.position.set(0, node.type === 'service' ? -12 : -9, 0);
-  group.add(sprite);
+      // Connect siblings in the same repo group
+      for (const prevId of prevIds) {
+        edges.push({ from: prevId, to: svc.id, type: 'repo' });
+      }
+      prevIds.push(svc.id);
 
-  return group;
+      cursorX += NODE_W + GAP_X;
+    }
+    cursorY += NODE_H + GAP_Y;
+  }
+
+  // Connect services sharing the same domain (proxy connections)
+  const domainMap = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.domain) {
+      const baseDomain = n.domain.split('.').slice(-2).join('.');
+      const arr = domainMap.get(baseDomain) || [];
+      arr.push(n.id);
+      domainMap.set(baseDomain, arr);
+    }
+  }
+  for (const [, ids] of Array.from(domainMap)) {
+    if (ids.length > 1) {
+      for (let i = 1; i < ids.length; i++) {
+        edges.push({ from: ids[0], to: ids[i], type: 'domain' });
+      }
+    }
+  }
+
+  return { nodes, edges };
 }
+
+/* ── Draw functions ── */
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawEdge(
+  ctx: CanvasRenderingContext2D,
+  from: TopoNode, to: TopoNode,
+  type: TopoEdge['type'],
+) {
+  const fromCx = from.x + from.w / 2;
+  const fromCy = from.y + from.h / 2;
+  const toCx = to.x + to.w / 2;
+  const toCy = to.y + to.h / 2;
+
+  // Determine exit/entry points (right/left for horizontal, bottom/top for vertical)
+  let x1: number, y1: number, x2: number, y2: number;
+  if (Math.abs(toCx - fromCx) > Math.abs(toCy - fromCy)) {
+    // Horizontal connection
+    if (toCx > fromCx) {
+      x1 = from.x + from.w; y1 = fromCy;
+      x2 = to.x;            y2 = toCy;
+    } else {
+      x1 = from.x;          y1 = fromCy;
+      x2 = to.x + to.w;     y2 = toCy;
+    }
+  } else {
+    // Vertical connection
+    if (toCy > fromCy) {
+      x1 = fromCx; y1 = from.y + from.h;
+      x2 = toCx;   y2 = to.y;
+    } else {
+      x1 = fromCx; y1 = from.y;
+      x2 = toCx;   y2 = to.y + to.h;
+    }
+  }
+
+  // Railway-style right-angle connection
+  const midX = (x1 + x2) / 2;
+
+  ctx.save();
+  ctx.strokeStyle = type === 'repo' ? '#3b82f640' : type === 'domain' ? '#10b98140' : '#6366f140';
+  ctx.lineWidth = 2;
+  ctx.setLineDash(type === 'domain' ? [6, 4] : []);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(midX, y1);
+  ctx.lineTo(midX, y2);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Connection dot
+  ctx.fillStyle = ctx.strokeStyle.replace('40', 'cc');
+  ctx.beginPath();
+  ctx.arc(x1, y1, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawNode(ctx: CanvasRenderingContext2D, node: TopoNode, hovered: boolean) {
+  const { x, y, w, h, name, status, deployType, repoUrl, branch, domain } = node;
+  const color = statusColor(status);
+
+  ctx.save();
+
+  // Card shadow
+  if (hovered) {
+    ctx.shadowColor = color + '50';
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 4;
+  }
+
+  // Card background
+  drawRoundedRect(ctx, x, y, w, h, 10);
+  ctx.fillStyle = hovered ? '#1a1f2e' : '#11151f';
+  ctx.fill();
+  ctx.strokeStyle = hovered ? color + '90' : '#27272a';
+  ctx.lineWidth = hovered ? 1.5 : 1;
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+
+  // Left status bar
+  drawRoundedRect(ctx, x, y, 4, h, 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  // Status dot
+  ctx.beginPath();
+  ctx.arc(x + 18, y + 18, 5, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  // Pulsing ring for active
+  if (status === 'ACTIVE' || status === 'BUILDING') {
+    ctx.beginPath();
+    ctx.arc(x + 18, y + 18, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = color + '40';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Service name
+  ctx.font = 'bold 13px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#e4e4e7';
+  ctx.textBaseline = 'middle';
+  const displayName = name.length > 22 ? name.slice(0, 20) + '…' : name;
+  ctx.fillText(displayName, x + 30, y + 18);
+
+  // Deploy type icon
+  const icon = DEPLOY_ICONS[deployType || 'GIT'] || '📦';
+  ctx.font = '11px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#71717a';
+  ctx.fillText(icon + ' ' + (deployType || 'GIT'), x + 14, y + 38);
+
+  // Branch
+  if (branch) {
+    ctx.fillText('⎇ ' + (branch.length > 12 ? branch.slice(0, 10) + '…' : branch), x + 100, y + 38);
+  }
+
+  // Status label
+  ctx.font = 'bold 10px Inter, system-ui, sans-serif';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'right';
+  ctx.fillText(status, x + w - 12, y + 18);
+
+  // Domain
+  ctx.textAlign = 'left';
+  ctx.font = '10px Inter, system-ui, sans-serif';
+  ctx.fillStyle = '#52525b';
+  if (domain) {
+    ctx.fillText('🌐 ' + (domain.length > 28 ? domain.slice(0, 26) + '…' : domain), x + 14, y + 56);
+  }
+
+  // Repo (short)
+  if (repoUrl) {
+    const short = repoUrl.replace(/https?:\/\//, '').replace('.git', '');
+    ctx.fillText(short.length > 28 ? short.slice(0, 26) + '…' : short, x + 14, y + 72);
+  }
+
+  ctx.restore();
+}
+
+/* ── Legend ── */
+const LEGEND = [
+  { color: '#10b981', label: 'Active' },
+  { color: '#3b82f6', label: 'Building' },
+  { color: '#fbbf24', label: 'Queued' },
+  { color: '#ef4444', label: 'Failed' },
+  { color: '#6366f1', label: 'Other' },
+];
 
 /* ── Main Component ── */
 export function TopologyView() {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
-  const fgRef = useRef<any>(null);
-  const initialDistanceRef = useRef(180);
-  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
-  const [loading, setLoading] = useState(true);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  const measureContainer = useCallback(() => {
+  // Pan / zoom state
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [scale, setScale] = useState(1);
+  const isPanning = useRef(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const offsetStart = useRef({ x: 0, y: 0 });
+
+  // Fetch services
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await servicesApi.list();
+        setServices(data);
+      } catch (e) {
+        console.error('Topology fetch failed:', e);
+      }
+    };
+    load();
+    const iv = setInterval(load, 15000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Compute layout
+  const { nodes, edges } = useMemo(() => layoutNodes(services), [services]);
+
+  // Find content bounds for fit
+  const bounds = useMemo(() => {
+    if (nodes.length === 0) return { minX: 0, minY: 0, maxX: 800, maxY: 600 };
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + n.w);
+      maxY = Math.max(maxY, n.y + n.h);
+    }
+    return { minX: minX - PADDING, minY: minY - PADDING, maxX: maxX + PADDING, maxY: maxY + PADDING };
+  }, [nodes]);
+
+  // Fit to view
+  const fitToView = useCallback(() => {
     const el = containerRef.current;
-    if (!el) {
-      return;
-    }
-    setDimensions({
-      width: Math.max(el.clientWidth, 400),
-      height: Math.max(el.clientHeight, 400),
+    if (!el || nodes.length === 0) return;
+    const rect = el.getBoundingClientRect();
+    const contentW = bounds.maxX - bounds.minX;
+    const contentH = bounds.maxY - bounds.minY;
+    const scaleX = rect.width / contentW;
+    const scaleY = rect.height / contentH;
+    const newScale = Math.min(scaleX, scaleY, 1.5) * 0.9; // 90% to add some padding
+    setScale(newScale);
+    setOffset({
+      x: (rect.width - contentW * newScale) / 2 - bounds.minX * newScale,
+      y: (rect.height - contentH * newScale) / 2 - bounds.minY * newScale,
     });
+  }, [nodes.length, bounds]);
+
+  // Initial fit
+  useEffect(() => {
+    if (nodes.length > 0) fitToView();
+  }, [nodes.length, fitToView]);
+
+  // Hit test
+  const hitTest = useCallback((clientX: number, clientY: number): TopoNode | null => {
+    const el = containerRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const mx = (clientX - rect.left - offset.x) / scale;
+    const my = (clientY - rect.top - offset.y) / scale;
+    // Reverse order for z-order (topmost first)
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (mx >= n.x && mx <= n.x + n.w && my >= n.y && my <= n.y + n.h) {
+        return n;
+      }
+    }
+    return null;
+  }, [nodes, offset, scale]);
+
+  // Mouse handlers
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    isPanning.current = true;
+    panStart.current = { x: e.clientX, y: e.clientY };
+    offsetStart.current = { x: offset.x, y: offset.y };
+  }, [offset]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isPanning.current) {
+      const dx = e.clientX - panStart.current.x;
+      const dy = e.clientY - panStart.current.y;
+      setOffset({ x: offsetStart.current.x + dx, y: offsetStart.current.y + dy });
+    }
+    const hit = hitTest(e.clientX, e.clientY);
+    setHoveredId(hit?.id || null);
+  }, [hitTest]);
+
+  const handleMouseUp = useCallback(() => {
+    isPanning.current = false;
   }, []);
 
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    const hit = hitTest(e.clientX, e.clientY);
+    if (hit) router.push(`/services/${hit.id}`);
+  }, [hitTest, router]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const factor = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = Math.max(0.2, Math.min(3, scale * factor));
+    setOffset({
+      x: mx - (mx - offset.x) * (newScale / scale),
+      y: my - (my - offset.y) * (newScale / scale),
+    });
+    setScale(newScale);
+  }, [scale, offset]);
+
+  // Draw
   useEffect(() => {
-    measureContainer();
-    if (!containerRef.current) {
-      return;
+    const canvas = canvasRef.current;
+    const el = containerRef.current;
+    if (!canvas || !el) return;
+
+    const rect = el.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    // Background
+    ctx.fillStyle = '#04070f';
+    ctx.fillRect(0, 0, rect.width, rect.height);
+
+    // Grid dots (Railway-style)
+    ctx.save();
+    ctx.translate(offset.x, offset.y);
+    ctx.scale(scale, scale);
+
+    const gridSpacing = 40;
+    const startX = Math.floor(((-offset.x / scale) - 100) / gridSpacing) * gridSpacing;
+    const startY = Math.floor(((-offset.y / scale) - 100) / gridSpacing) * gridSpacing;
+    const endX = startX + (rect.width / scale) + 200;
+    const endY = startY + (rect.height / scale) + 200;
+
+    ctx.fillStyle = '#1a1a2e';
+    for (let gx = startX; gx < endX; gx += gridSpacing) {
+      for (let gy = startY; gy < endY; gy += gridSpacing) {
+        ctx.beginPath();
+        ctx.arc(gx, gy, 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
+    // Draw edges first (behind nodes)
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    for (const edge of edges) {
+      const from = nodeMap.get(edge.from);
+      const to = nodeMap.get(edge.to);
+      if (from && to) drawEdge(ctx, from, to, edge.type);
+    }
+
+    // Draw nodes
+    for (const node of nodes) {
+      drawNode(ctx, node, node.id === hoveredId);
+    }
+
+    ctx.restore();
+
+    // Watermark count
+    ctx.font = '11px Inter, system-ui, sans-serif';
+    ctx.fillStyle = '#52525b';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${nodes.length} service${nodes.length !== 1 ? 's' : ''} · ${edges.length} connection${edges.length !== 1 ? 's' : ''}`, 16, rect.height - 12);
+
+  }, [nodes, edges, offset, scale, hoveredId]);
+
+  // Resize listener
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
     const obs = new ResizeObserver(() => {
-      measureContainer();
+      // Trigger redraw by updating a dep
+      const canvas = canvasRef.current;
+      if (canvas) canvas.width = canvas.width; // Force canvas clear
     });
-    obs.observe(containerRef.current);
-    window.addEventListener('resize', measureContainer);
-
-    return () => {
-      obs.disconnect();
-      window.removeEventListener('resize', measureContainer);
-    };
-  }, [measureContainer]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await api.get('/topology/');
-        const rawNodes = res?.data?.nodes || [];
-        const rawEdges = res?.data?.edges || [];
-
-        const nodes: TopoNode[] = rawNodes
-          .map((n: any) => ({
-            id: String(n?.id || ''),
-            name: String(n?.data?.name || n?.id || ''),
-            type: String(n?.type || 'node'),
-            addonType: n?.data?.addon_type || '',
-            status: n?.data?.status || '',
-            serviceId: n?.data?.service_id || '',
-          }))
-          .filter((n: TopoNode) => n.id);
-
-        const links: TopoLink[] = rawEdges
-          .map((e: any) => ({
-            source: String(e?.source || ''),
-            target: String(e?.target || ''),
-            type: String(e?.type || 'ADDON'),
-          }))
-          .filter((e: TopoLink) => e.source && e.target);
-
-        setGraphData({ nodes, links });
-      } catch (err) {
-        console.error('Topology fetch failed:', err);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    obs.observe(el);
+    return () => obs.disconnect();
   }, []);
-
-  const zoomCamera = useCallback((factor: number) => {
-    const fg = fgRef.current;
-    if (!fg) return;
-    const camera = fg.camera?.();
-    if (!camera?.position) return;
-
-    const { x, y, z } = camera.position;
-    const currentDistance = Math.sqrt(x * x + y * y + z * z) || 1;
-    const nextDistance = Math.max(90, Math.min(2400, currentDistance * factor));
-    const scale = nextDistance / currentDistance;
-
-    fg.cameraPosition(
-      { x: x * scale, y: y * scale, z: z * scale },
-      { x: 0, y: 0, z: 0 },
-      300
-    );
-  }, []);
-
-  const resetCamera = useCallback(() => {
-    const fg = fgRef.current;
-    if (!fg) return;
-    const dist = initialDistanceRef.current;
-    fg.cameraPosition(
-      { x: dist * 0.7, y: dist * 0.5, z: dist },
-      { x: 0, y: 0, z: 0 },
-      450
-    );
-  }, []);
-
-  const fitGraphToViewport = useCallback((duration = 450) => {
-    const fg = fgRef.current;
-    if (!fg || graphData.nodes.length === 0) {
-      return;
-    }
-    if (typeof fg.zoomToFit === 'function') {
-      try {
-        fg.zoomToFit(duration, 120);
-      } catch (error) {
-        console.error('zoomToFit failed:', error);
-      }
-    }
-  }, [graphData.nodes.length]);
-
-  useEffect(() => {
-    if (fgRef.current && graphData.nodes.length > 0) {
-      const fg = fgRef.current;
-      const dist = 150 + graphData.nodes.length * 20;
-      initialDistanceRef.current = dist;
-      fg.cameraPosition({ x: dist * 0.7, y: dist * 0.5, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
-      fg.d3Force('charge')?.strength(-300);
-      fg.d3Force('link')?.distance(80);
-      fg.d3ReheatSimulation?.();
-      const fitTimer = setTimeout(() => fitGraphToViewport(700), 250);
-      return () => {
-        clearTimeout(fitTimer);
-      };
-    }
-  }, [fitGraphToViewport, graphData]);
-
-  useEffect(() => {
-    if (loading || graphData.nodes.length === 0) {
-      return;
-    }
-    const fitTimer = setTimeout(() => fitGraphToViewport(250), 120);
-    return () => {
-      clearTimeout(fitTimer);
-    };
-  }, [loading, dimensions.height, dimensions.width, graphData.nodes.length, fitGraphToViewport]);
-
-  const handleNodeClick = useCallback((node: any) => {
-    if (node.type === 'service') router.push(`/services/${node.id}`);
-  }, [router]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
-          <span>Loading 3D Topology...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (graphData.nodes.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-full text-zinc-500">
-        No topology data available. Deploy a service to begin.
-      </div>
-    );
-  }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full min-h-[500px] overflow-hidden rounded-xl bg-[#04070f]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(16,185,129,0.08),transparent_44%),radial-gradient(circle_at_82%_25%,rgba(56,189,248,0.09),transparent_42%),radial-gradient(circle_at_50%_82%,rgba(99,102,241,0.08),transparent_50%)]" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/30" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[25rem] w-[25rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
-      <div className="absolute left-4 top-4 z-10 w-48 rounded-xl border border-zinc-800/80 bg-black/55 p-3 backdrop-blur-lg">
-        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">Legend</div>
+    <div
+      ref={containerRef}
+      className="relative h-full w-full overflow-hidden bg-[#04070f]"
+      style={{ cursor: hoveredId ? 'pointer' : isPanning.current ? 'grabbing' : 'grab' }}
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onClick={handleClick}
+      onWheel={handleWheel}
+    >
+      <canvas ref={canvasRef} className="absolute inset-0" />
+
+      {/* Legend */}
+      <div className="absolute left-4 top-4 z-10 rounded-xl border border-zinc-800/80 bg-black/70 p-3 backdrop-blur-lg">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+          LEGEND
+        </div>
         <div className="mb-2 text-[11px] text-zinc-500">
-          {graphData.nodes.filter((node) => node.type === 'service').length} services
+          {services.length} service{services.length !== 1 ? 's' : ''}
         </div>
         <div className="flex flex-col gap-1.5">
-          {[
-            { color: NODE_COLORS.service, label: 'Service' },
-            { color: NODE_COLORS.POSTGRES, label: 'PostgreSQL' },
-            { color: NODE_COLORS.REDIS, label: 'Redis' },
-            { color: NODE_COLORS.ELASTICSEARCH, label: 'Elasticsearch' },
-            { color: NODE_COLORS.MYSQL, label: 'MySQL' },
-            { color: NODE_COLORS.MONGODB, label: 'MongoDB' },
-          ].map(({ color, label }) => (
+          {LEGEND.map(({ color, label }) => (
             <div key={label} className="flex items-center gap-2">
               <div className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
               <span className="text-[11px] text-zinc-300">{label}</span>
             </div>
           ))}
         </div>
+        <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="flex items-center gap-2">
+            <div className="w-4 border-t border-blue-500/40" />
+            <span className="text-[10px] text-zinc-400">Same repo</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <div className="w-4 border-t border-dashed border-emerald-500/40" />
+            <span className="text-[10px] text-zinc-400">Same domain</span>
+          </div>
+        </div>
       </div>
 
-      <div className="absolute bottom-4 right-4 z-10 rounded-xl border border-zinc-800/80 bg-black/55 px-3 py-2 backdrop-blur-lg">
-        <div className="text-[10px] text-zinc-400">Drag to orbit | Scroll to zoom | Click service to open</div>
-      </div>
-
+      {/* Controls */}
       <div className="absolute right-4 top-4 z-10 flex items-center gap-1.5 rounded-xl border border-zinc-800/80 bg-black/55 p-1.5 backdrop-blur-lg">
         <span className="px-1 text-[10px] uppercase tracking-[0.14em] text-zinc-500">View</span>
         <button
           type="button"
-          onClick={() => zoomCamera(0.82)}
+          onClick={(e) => { e.stopPropagation(); setScale(Math.min(3, scale * 1.2)); }}
           className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
           title="Zoom in"
-          aria-label="Zoom in"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
         <button
           type="button"
-          onClick={() => zoomCamera(1.22)}
+          onClick={(e) => { e.stopPropagation(); setScale(Math.max(0.2, scale * 0.8)); }}
           className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
           title="Zoom out"
-          aria-label="Zoom out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
         <button
           type="button"
-          onClick={resetCamera}
+          onClick={(e) => { e.stopPropagation(); fitToView(); }}
           className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-900/85 text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white"
-          title="Reset view"
-          aria-label="Reset view"
+          title="Fit to view"
         >
           <Maximize2 className="w-4 h-4" />
         </button>
       </div>
 
-      <ForceGraph3D
-        ref={fgRef}
-        width={dimensions.width}
-        height={dimensions.height}
-        graphData={graphData}
-        backgroundColor="#04070f"
-        nodeThreeObject={(node: any) => createNodeObject(node as TopoNode)}
-        nodeThreeObjectExtend={false}
-        linkColor={(link: any) => LINK_COLORS[link.type] || '#64748b'}
-        linkWidth={1.5}
-        linkOpacity={0.4}
-        linkCurvature={0.15}
-        linkDirectionalParticles={2}
-        linkDirectionalParticleWidth={1.5}
-        linkDirectionalParticleSpeed={0.005}
-        linkDirectionalParticleColor={(link: any) => LINK_COLORS[link.type] || '#64748b'}
-        onNodeClick={handleNodeClick}
-        enableNodeDrag={true}
-        enableNavigationControls={true}
-        showNavInfo={false}
-        warmupTicks={50}
-        cooldownTicks={100}
-        onEngineStop={() => fitGraphToViewport(350)}
-      />
+      {/* Help */}
+      <div className="absolute bottom-4 right-4 z-10 rounded-xl border border-zinc-800/80 bg-black/55 px-3 py-2 backdrop-blur-lg">
+        <div className="text-[10px] text-zinc-400">Drag to pan · Scroll to zoom · Click node to open</div>
+      </div>
+
+      {/* Empty state */}
+      {services.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center text-muted-foreground z-10">
+          No services deployed. Click &ldquo;New Service&rdquo; to get started.
+        </div>
+      )}
     </div>
   );
 }
-

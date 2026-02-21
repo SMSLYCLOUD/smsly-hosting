@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { EnvVarEditor, type EnvVar } from "@/components/dashboard/env-var-editor"
 import { useToast } from "@/components/ui/use-toast"
 import { BuildpackSelector, BuildpackType } from "@/components/deployments/BuildpackSelector"
-import api from "@/lib/api"
+import api, { serversApi, servicesApi, deployApi, projectsApi, ManagedServer, Project } from "@/lib/api"
 import { templatesApi } from "@/lib/api"
 import { motion, AnimatePresence } from "framer-motion"
 
@@ -47,7 +47,8 @@ const STEPS = [
   { id: 1, label: "Select Source", icon: Github },
   { id: 2, label: "AI Analysis", icon: Sparkles },
   { id: 3, label: "Configure", icon: Settings2 },
-  { id: 4, label: "Deploy", icon: Rocket },
+  { id: 4, label: "Review", icon: CheckCircle2 },
+  { id: 5, label: "Target Servers", icon: Server },
 ]
 
 export default function NewServicePage() {
@@ -84,6 +85,16 @@ export default function NewServicePage() {
   // Templates from API
   const [templates, setTemplates] = React.useState<any[]>([])
 
+  // Server selection state
+  const [servers, setServers] = React.useState<ManagedServer[]>([])
+  const [serversLoading, setServersLoading] = React.useState(false)
+  const [selectedServers, setSelectedServers] = React.useState<string[]>([])
+  const [deployResults, setDeployResults] = React.useState<any>(null)
+
+  // Project selection state
+  const [projectsList, setProjectsList] = React.useState<Project[]>([])
+  const [selectedProject, setSelectedProject] = React.useState<string>("")
+
   React.useEffect(() => {
     templatesApi.list().then(setTemplates).catch(() => {})
     setGhLoading(true)
@@ -94,6 +105,8 @@ export default function NewServicePage() {
       })
       .catch(() => setGhConnected(false))
       .finally(() => setGhLoading(false))
+    // Load projects for the project selector
+    projectsApi.list().then(setProjectsList).catch(() => {})
   }, [])
 
   const filteredRepos = ghRepos.filter(r =>
@@ -194,16 +207,39 @@ export default function NewServicePage() {
     }
 
     setStep(step + 1)
+    // Fetch servers when entering Step 5
+    if (step + 1 === 5) fetchServers()
   }
 
   const handleBack = () => {
-    if (step === 4 && deployMode === "auto") {
+    if (step === 5) {
+      setStep(4) // Go back to Review from Target Servers
+    } else if (step === 4 && deployMode === "auto") {
       setStep(2) // Skip config going back
     } else if (step === 3 && sourceType !== "git") {
       setStep(1) // Skip analysis for non-git
     } else {
       setStep(step - 1)
     }
+  }
+
+  // ── Fetch servers when reaching step 5 ────────────────────────────
+  const fetchServers = React.useCallback(async () => {
+    setServersLoading(true)
+    try {
+      const data = await serversApi.list()
+      setServers(data)
+    } catch (err) {
+      console.error('Failed to load servers:', err)
+    } finally {
+      setServersLoading(false)
+    }
+  }, [])
+
+  const toggleServer = (id: string) => {
+    setSelectedServers(prev =>
+      prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+    )
   }
 
   // ── Deploy ─────────────────────────────────────────────────────────────
@@ -227,13 +263,7 @@ export default function NewServicePage() {
 
       const deployType = sourceType === "docker" ? "DOCKER" : "GIT"
 
-      const createRes = await fetch("/api/v1/services/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Token ${token}`
-        },
-        body: JSON.stringify({
+      const service = await servicesApi.create({
           name: finalName,
           deploy_type: deployType,
           buildpack: sourceType === "docker" ? "DOCKER" : buildpack,
@@ -242,45 +272,34 @@ export default function NewServicePage() {
           branch: branch || "main",
           cpu_cores: 0.5,
           memory_mb: 512,
-          regions: []
-        })
+          regions: [],
+          ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {})
       })
-
-      if (!createRes.ok) {
-        const errBody = await createRes.json().catch(() => ({}))
-        const detail = Object.entries(errBody).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('; ')
-        throw new Error(detail || "Failed to create service")
-      }
-      const service = await createRes.json()
 
       // Set Env Vars
       if (envVars.length > 0) {
         for (const v of envVars) {
-          await fetch(`/api/v1/services/${service.id}/env_vars/`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Token ${token}`
-            },
-            body: JSON.stringify({ key: v.key, value: v.value, is_secret: v.isSecret })
-          })
+          await api.post(`/services/${service.id}/env_vars/`, { key: v.key, value: v.value, is_secret: v.isSecret })
         }
       }
 
-      // Trigger Deployment
-      const deployRes = await fetch(`/api/v1/services/${service.id}/deploy/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Token ${token}`
-        },
-        body: JSON.stringify({ ref: branch || "main" })
+      // Trigger Multi-Deploy (local + selected remote servers)
+      const results = await deployApi.multiDeploy(
+        service.id,
+        branch || 'main',
+        selectedServers,
+      )
+      setDeployResults(results)
+
+      const remoteCount = selectedServers.length
+      toast({
+        title: "🚀 Deploying!",
+        description: remoteCount > 0
+          ? `Service created — deploying to local + ${remoteCount} remote server${remoteCount > 1 ? 's' : ''}.`
+          : "Service created — AI is handling the rest.",
       })
-
-      if (!deployRes.ok) throw new Error("Failed to trigger deployment")
-
-      toast({ title: "🚀 Deploying!", description: "Service created — AI is handling the rest." })
-      router.push(`/services/${service.id}`)
+      // Brief delay to let progress show before navigating
+      setTimeout(() => router.push(`/services/${service.id}`), 2000)
     } catch (err) {
       console.error(err)
       toast({ title: "Error", description: "Deployment failed. Check console.", variant: "destructive" })
@@ -780,6 +799,24 @@ export default function NewServicePage() {
                     </Select>
                   </div>
 
+                  {/* Project assignment */}
+                  <div className="grid gap-2">
+                    <Label className="flex items-center gap-1.5">📦 Project <span className="text-xs text-muted-foreground">(optional)</span></Label>
+                    <Select value={selectedProject} onValueChange={setSelectedProject}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="No project (ungrouped)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">No project (ungrouped)</SelectItem>
+                        {projectsList.map(p => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.icon_emoji} {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {sourceType !== "docker" && (
                     <div className="pt-4">
                       <BuildpackSelector value={buildpack} onChange={setBuildpack} />
@@ -868,6 +905,170 @@ export default function NewServicePage() {
                 </Card>
               </motion.div>
             )}
+
+            {/* ── STEP 5: TARGET SERVERS ── */}
+            {step === 5 && (
+              <motion.div
+                key="step5"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-6"
+              >
+                <Card className="border-primary/20">
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <Server className="h-5 w-5 text-primary" />
+                      <CardTitle>Target Servers</CardTitle>
+                    </div>
+                    <CardDescription>
+                      Deploy to your local server by default. Select additional managed servers to fan out the deployment.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {/* Local server — always included */}
+                    <div className="flex items-center gap-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                        <Monitor className="h-4 w-4 text-emerald-500" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">This Server (Local)</p>
+                        <p className="text-xs text-muted-foreground">Primary deployment target</p>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 font-medium">Always included</span>
+                    </div>
+
+                    {/* Remote servers */}
+                    {serversLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        <span className="ml-2 text-sm text-muted-foreground">Loading servers...</span>
+                      </div>
+                    ) : servers.length === 0 ? (
+                      <div className="text-center py-6 text-sm text-muted-foreground">
+                        <Server className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                        <p>No remote servers connected.</p>
+                        <p className="text-xs">Add servers in the Servers tab to deploy across your fleet.</p>
+                      </div>
+                    ) : (
+                      servers.map(server => {
+                        const isOnline = server.status === 'ONLINE'
+                        const isSelected = selectedServers.includes(server.id)
+                        return (
+                          <button
+                            key={server.id}
+                            type="button"
+                            onClick={() => toggleServer(server.id)}
+                            disabled={!isOnline}
+                            className={cn(
+                              "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all",
+                              isSelected && isOnline
+                                ? "border-primary bg-primary/5 shadow-sm"
+                                : isOnline
+                                  ? "border-border hover:border-primary/50 hover:bg-muted/30"
+                                  : "border-border opacity-50 cursor-not-allowed"
+                            )}
+                          >
+                            {/* Checkbox */}
+                            <div className={cn(
+                              "w-5 h-5 rounded border-2 flex items-center justify-center transition-colors",
+                              isSelected ? "bg-primary border-primary" : "border-muted-foreground/40"
+                            )}>
+                              {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-primary-foreground" />}
+                            </div>
+
+                            {/* Server icon */}
+                            <div className={cn(
+                              "w-8 h-8 rounded-lg flex items-center justify-center",
+                              isOnline ? "bg-blue-500/10" : "bg-red-500/10"
+                            )}>
+                              <Server className={cn("h-4 w-4", isOnline ? "text-blue-500" : "text-red-500")} />
+                            </div>
+
+                            {/* Server info */}
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-sm truncate">{server.name}</p>
+                              <p className="text-xs text-muted-foreground truncate">
+                                {server.host} · {server.services_count || 0} services
+                                {server.server_version ? ` · v${server.server_version}` : ''}
+                              </p>
+                            </div>
+
+                            {/* Status */}
+                            <div className="flex items-center gap-1.5">
+                              {isOnline ? (
+                                <Wifi className="h-3.5 w-3.5 text-emerald-500" />
+                              ) : (
+                                <WifiOff className="h-3.5 w-3.5 text-red-500" />
+                              )}
+                              <span className={cn(
+                                "text-[10px] font-medium",
+                                isOnline ? "text-emerald-500" : "text-red-500"
+                              )}>
+                                {isOnline ? 'Online' : 'Offline'}
+                              </span>
+                            </div>
+                          </button>
+                        )
+                      })
+                    )}
+
+                    {selectedServers.length > 0 && (
+                      <div className="flex items-center gap-2 pt-2 text-sm">
+                        <Rocket className="h-4 w-4 text-primary" />
+                        <span>
+                          Deploying to <strong>local + {selectedServers.length} remote</strong> server{selectedServers.length > 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Deploy results (shown after deploying) */}
+                {deployResults && (
+                  <Card className="border-emerald-500/20 bg-emerald-500/5">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Rocket className="h-4 w-4 text-emerald-500" /> Deploy Progress
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {/* Local */}
+                      <div className="flex items-center justify-between text-sm py-1">
+                        <span className="font-medium">Local Server</span>
+                        <span className={cn(
+                          "text-xs px-2 py-0.5 rounded-full font-medium",
+                          deployResults.local?.status === 'queued' ? "bg-emerald-500/10 text-emerald-500" :
+                          deployResults.local?.status === 'error' ? "bg-red-500/10 text-red-500" :
+                          "bg-yellow-500/10 text-yellow-500"
+                        )}>
+                          {deployResults.local?.status || 'pending'}
+                        </span>
+                      </div>
+                      {/* Remotes */}
+                      {deployResults.remotes?.map((r: any) => (
+                        <div key={r.server_id} className="flex items-center justify-between text-sm py-1 border-t border-border/50">
+                          <span className="font-medium">{r.server_name}</span>
+                          <div className="flex items-center gap-2">
+                            {r.auto_created && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">Auto-created</span>
+                            )}
+                            <span className={cn(
+                              "text-xs px-2 py-0.5 rounded-full font-medium",
+                              r.status === 'queued' ? "bg-emerald-500/10 text-emerald-500" :
+                              r.status === 'error' ? "bg-red-500/10 text-red-500" :
+                              "bg-yellow-500/10 text-yellow-500"
+                            )}>
+                              {r.status}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                )}
+              </motion.div>
+            )}
           </AnimatePresence>
 
           {/* ── Navigation Buttons ──────────────────────────── */}
@@ -877,7 +1078,7 @@ export default function NewServicePage() {
                 Back
               </Button>
             )}
-            {step < 4 ? (
+            {step < 5 ? (
               <Button onClick={handleNext} disabled={analyzing || (step === 2 && !deployMode && !analyzing && !!analysis)}>
                 {analyzing ? (
                   <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing...</>
@@ -890,7 +1091,12 @@ export default function NewServicePage() {
             ) : (
               <Button onClick={handleDeploy} disabled={isDeploying} size="lg" className="px-8">
                 {isDeploying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Rocket className="mr-2 h-4 w-4" />}
-                {isDeploying ? "Deploying..." : "🚀 Deploy Service"}
+                {isDeploying
+                  ? "Deploying..."
+                  : selectedServers.length > 0
+                    ? `🚀 Deploy to ${1 + selectedServers.length} Servers`
+                    : "🚀 Deploy Service"
+                }
               </Button>
             )}
           </div>

@@ -16,6 +16,7 @@ from .models_cron import CronJob
 from .models_storage import Volume  # Add this
 from .api_token_auth import APIToken  # CLI token auth
 from .models_servers import ManagedServer  # Multi-server management
+from .models_project import Project  # Project grouping
 # pylint: enable=unused-import
 
 
@@ -106,6 +107,15 @@ class Service(TimeStampedModel):
         null=True,
         blank=True,
         related_name='services')
+
+    # Project grouping (Railway-style)
+    project = models.ForeignKey(
+        'deployments.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='services',
+        help_text="Project this service belongs to (null = ungrouped)")
 
     # Build & Run Config
     build_command = models.CharField(max_length=255, blank=True, null=True)

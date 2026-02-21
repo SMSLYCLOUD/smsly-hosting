@@ -345,6 +345,237 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
         return Response(DeploymentSerializer(deployment).data)
 
+    @action(detail=True, methods=['post'], url_path='multi-deploy')
+    def multi_deploy(self, request, pk=None):
+        """
+        Deploy a service to the local server AND selected remote servers.
+        POST /api/v1/services/{id}/multi-deploy/
+        Body: {
+            "ref": "HEAD",
+            "server_ids": ["uuid1", "uuid2"]
+        }
+
+        For each remote server:
+        1. Check if a service with the same name exists
+        2. If not, auto-create it (same repo_url, branch, buildpack, env vars)
+        3. Trigger deploy on the remote server
+        """
+        import ipaddress
+        from urllib.parse import urlparse
+        import requests as req_lib
+        from .models_servers import ManagedServer
+
+        service = self.get_object()
+        ref = str(request.data.get('ref', 'HEAD'))[:200]     # F7: bound length
+        server_ids = request.data.get('server_ids', [])
+
+        # F3: validate & cap server_ids
+        if not isinstance(server_ids, list):
+            return Response(
+                {'error': 'server_ids must be a list'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(server_ids) > 20:
+            return Response(
+                {'error': 'Maximum 20 remote servers per deploy'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        results = {'local': None, 'remotes': []}
+
+        # ── 1. Local deploy ─────────────────────────────────────
+        existing = _has_active_deployment(service)
+        if existing:
+            results['local'] = {
+                'status': 'skipped',
+                'reason': f'Deployment already in progress ({existing.status})',
+                'deployment': DeploymentSerializer(existing).data,
+            }
+        else:
+            provider = _resolve_provider_for_service(service)
+            if not provider:
+                results['local'] = {
+                    'status': 'error',
+                    'reason': 'No active cloud provider configured',
+                }
+            else:
+                deployment = Deployment.objects.create(
+                    service=service,
+                    status=Deployment.Status.QUEUED,
+                    commit_hash=ref if ref != 'HEAD' else 'latest',
+                    commit_message=f"Multi-deploy: {ref}",
+                )
+                try:
+                    smart_deploy_task.delay(str(deployment.id), str(provider.id))
+                    results['local'] = {
+                        'status': 'queued',
+                        'deployment': DeploymentSerializer(deployment).data,
+                    }
+                except Exception as exc:
+                    logger.exception('multi_deploy: local deploy task failed')
+                    deployment.status = Deployment.Status.FAILED
+                    deployment.finished_at = timezone.now()
+                    deployment.build_logs = f"\n[ERROR] {exc}\n"
+                    deployment.save(
+                        update_fields=['status', 'finished_at', 'build_logs', 'updated_at'])
+                    # F4: sanitize — don't leak raw exception to client
+                    results['local'] = {
+                        'status': 'error',
+                        'reason': 'Failed to queue local deployment. Check server logs.',
+                        'deployment': DeploymentSerializer(deployment).data,
+                    }
+
+        # ── 2. Remote deploys ───────────────────────────────────
+        if server_ids:
+            servers = ManagedServer.objects.filter(
+                id__in=server_ids,
+                owner=request.user,
+            )
+            # Build the service payload for auto-creation
+            svc_payload = {
+                'name': service.name,
+                'deploy_type': service.deploy_type,
+                'repository_url': service.repository_url,
+                'docker_image': service.docker_image or '',
+                'branch': service.branch or 'main',
+                'buildpack': service.buildpack,
+                'cpu_cores': float(service.cpu_cores),
+                'memory_mb': service.memory_mb,
+            }
+            # Collect env vars (unmasked)
+            env_vars = list(
+                service.env_vars.all().values('key', 'value', 'is_secret')
+            )
+
+            for server in servers:
+                remote_result = {
+                    'server_id': str(server.id),
+                    'server_name': server.name,
+                }
+                if not server.api_url:
+                    remote_result['status'] = 'skipped'
+                    remote_result['reason'] = 'No API URL (still provisioning?)'
+                    results['remotes'].append(remote_result)
+                    continue
+
+                # F2: enforce HTTPS for secret transit
+                if not server.api_url.startswith('https://'):
+                    remote_result['status'] = 'error'
+                    remote_result['reason'] = 'Remote server API URL must use HTTPS'
+                    results['remotes'].append(remote_result)
+                    continue
+
+                # F1: SSRF protection — block private/reserved IPs
+                parsed_url = urlparse(server.api_url)
+                hostname = parsed_url.hostname or ''
+                if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+                    remote_result['status'] = 'error'
+                    remote_result['reason'] = 'Loopback addresses are not allowed'
+                    results['remotes'].append(remote_result)
+                    continue
+                try:
+                    ip = ipaddress.ip_address(hostname)
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                        remote_result['status'] = 'error'
+                        remote_result['reason'] = 'Private/reserved IP addresses are not allowed'
+                        results['remotes'].append(remote_result)
+                        continue
+                except ValueError:
+                    pass  # Hostname (not raw IP) — allow
+
+                base_url = server.api_url.rstrip('/')
+                headers = {
+                    'Authorization': f'Bearer {server.api_token}',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                }
+
+                try:
+                    # Step A: Check if service exists on remote
+                    svc_resp = req_lib.get(
+                        f'{base_url}/api/v1/services/',
+                        headers=headers,
+                        timeout=15,
+                    )
+                    remote_services = svc_resp.json()
+                    if isinstance(remote_services, dict):
+                        remote_services = remote_services.get('results', [])
+
+                    # Find matching service by name
+                    matching = [
+                        s for s in remote_services
+                        if s.get('name') == service.name
+                    ]
+                    remote_svc_id = matching[0]['id'] if matching else None
+
+                    # Step B: Auto-create if not found
+                    if not remote_svc_id:
+                        create_resp = req_lib.post(
+                            f'{base_url}/api/v1/services/',
+                            headers=headers,
+                            json=svc_payload,
+                            timeout=15,
+                        )
+                        if create_resp.status_code in (200, 201):
+                            created_svc = create_resp.json()
+                            remote_svc_id = created_svc.get('id')
+                            remote_result['auto_created'] = True
+                            logger.info(
+                                'multi_deploy: auto-created service %s on server %s (%s)',
+                                service.name, server.name, server.id,
+                            )
+
+                            # Set env vars on the new remote service
+                            for ev in env_vars:
+                                req_lib.post(
+                                    f'{base_url}/api/v1/services/{remote_svc_id}/env_vars/',
+                                    headers=headers,
+                                    json=ev,
+                                    timeout=10,
+                                )
+                        else:
+                            # F5: don't leak remote error body to client
+                            logger.error(
+                                'multi_deploy: remote service creation failed on %s — HTTP %s: %s',
+                                server.name, create_resp.status_code, create_resp.text[:500],
+                            )
+                            remote_result['status'] = 'error'
+                            remote_result['reason'] = (
+                                f'Remote server returned HTTP {create_resp.status_code}'
+                            )
+                            results['remotes'].append(remote_result)
+                            continue
+
+                    # Step C: Trigger deploy on remote
+                    deploy_resp = req_lib.post(
+                        f'{base_url}/api/v1/services/{remote_svc_id}/deploy/',
+                        headers=headers,
+                        json={'ref': ref},
+                        timeout=15,
+                    )
+                    if deploy_resp.status_code in (200, 201):
+                        remote_result['status'] = 'queued'
+                        remote_result['deployment'] = deploy_resp.json()
+                    else:
+                        # F5: don't leak remote error body
+                        logger.error(
+                            'multi_deploy: remote deploy failed on %s — HTTP %s: %s',
+                            server.name, deploy_resp.status_code, deploy_resp.text[:500],
+                        )
+                        remote_result['status'] = 'error'
+                        remote_result['reason'] = (
+                            f'Remote deploy returned HTTP {deploy_resp.status_code}'
+                        )
+
+                except req_lib.RequestException as e:
+                    logger.error('multi_deploy: connection to %s failed: %s', server.name, e)
+                    remote_result['status'] = 'error'
+                    remote_result['reason'] = 'Connection to remote server failed'
+
+                results['remotes'].append(remote_result)
+
+        return Response(results, status=status.HTTP_202_ACCEPTED)
+
     @action(detail=True, methods=['post'], url_path='instant-rollback')
     def instant_rollback(self, request, pk=None):
         """
