@@ -11,18 +11,36 @@ import logging
 import os
 import re
 import time
+from datetime import timedelta
 from urllib.parse import quote
 
 import paramiko
 import requests
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.db import transaction
+from django.utils import timezone
 
 from apps.deployments.models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+PROVISION_TIMEOUT_SECONDS = _env_int(
+    "SMSLY_PROVISION_TIMEOUT_SECONDS",
+    1800,
+    minimum=60,
+)
 
 
 def _load_install_script():
@@ -101,7 +119,7 @@ def _broadcast_provision_log(server: ManagedServer, message: str):
 def _append_log(server: ManagedServer, line: str):
     """Append a line to provision_logs and broadcast."""
     server.provision_logs += line + "\n"
-    server.save(update_fields=["provision_logs"])
+    server.save(update_fields=["provision_logs", "updated_at"])
     _broadcast_provision_log(server, line)
 
 
@@ -146,7 +164,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     return client
 
 
-@shared_task(bind=True, max_retries=0, time_limit=1800)
+@shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920)
 def provision_server(self, server_id: str):
     """
     Provision CloudNeuron on a remote server via SSH.
@@ -176,19 +194,24 @@ def provision_server(self, server_id: str):
                     "Another provisioning task is already running for this host. "
                     "Retry after the active install completes.\n"
                 )
-                server.save(update_fields=["provision_status", "provision_logs"])
+                server.save(
+                    update_fields=["provision_status", "provision_logs", "updated_at"]
+                )
                 return
+            # Mark provisioning while holding locks to reduce same-host races.
+            server.provision_status = ManagedServer.ProvisionStatus.PROVISIONING
+            server.provision_logs = ""
+            server.save(
+                update_fields=["provision_status", "provision_logs", "updated_at"]
+            )
     except ManagedServer.DoesNotExist:
         logger.error("Server %s not found", server_id)
         return
 
-    server.provision_status = ManagedServer.ProvisionStatus.PROVISIONING
-    server.provision_logs = ""
-    server.save(update_fields=["provision_status", "provision_logs"])
-
     _append_log(server, "🚀 Starting CloudNeuron provisioning...")
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
+    ssh = None
     try:
         github_token = None
         try:
@@ -238,8 +261,9 @@ def provision_server(self, server_id: str):
         transport = ssh.get_transport()
         channel = transport.open_session()
         channel.set_combine_stderr(True)
-        channel.settimeout(1800)  # 30 min timeout
+        channel.settimeout(PROVISION_TIMEOUT_SECONDS + 60)
         channel.exec_command(cmd)
+        started_at = time.monotonic()
 
         # Stream output in chunks
         buffer = ""
@@ -272,6 +296,16 @@ def provision_server(self, server_id: str):
                     if line.strip():
                         _append_log(server, line.strip())
                 break
+
+            elapsed = time.monotonic() - started_at
+            if elapsed > PROVISION_TIMEOUT_SECONDS:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+                raise TimeoutError(
+                    f"Install script timed out after {PROVISION_TIMEOUT_SECONDS} seconds"
+                )
 
             time.sleep(0.5)
 
@@ -387,15 +421,60 @@ def provision_server(self, server_id: str):
         server.status = ManagedServer.Status.ONLINE
         server.save(update_fields=[
             "api_url", "api_token", "provision_status", "status",
+            "updated_at",
         ])
 
         _append_log(server, "\n✅ CloudNeuron provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
-        ssh.close()
-
+    except SoftTimeLimitExceeded as exc:
+        logger.exception("Provisioning soft-timeout for server %s", server_id)
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.save(update_fields=["provision_status", "updated_at"])
+        _append_log(
+            server,
+            f"\nProvisioning timed out before completion: {exc}",
+        )
     except Exception as exc:
         logger.exception("Provisioning failed for server %s", server_id)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.save(update_fields=["provision_status"])
+        server.save(update_fields=["provision_status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
+    finally:
+        try:
+            if ssh is not None:
+                ssh.close()
+        except Exception:
+            pass
+
+
+@shared_task
+def cleanup_stale_server_provisioning():
+    """
+    Auto-heal stale provisioning rows left behind by interrupted workers.
+
+    This prevents ManagedServer entries from staying in PROVISIONING forever.
+    """
+    stale_after_seconds = max(3600, PROVISION_TIMEOUT_SECONDS * 2)
+    cutoff = timezone.now() - timedelta(seconds=stale_after_seconds)
+    stale_servers = ManagedServer.objects.filter(
+        provision_status=ManagedServer.ProvisionStatus.PROVISIONING,
+        updated_at__lt=cutoff,
+    )
+
+    cleaned = 0
+    for server in stale_servers:
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.save(update_fields=["provision_status", "updated_at"])
+        _append_log(
+            server,
+            (
+                "Provisioning was auto-marked as failed because no updates were "
+                f"received for over {stale_after_seconds} seconds."
+            ),
+        )
+        cleaned += 1
+
+    if cleaned:
+        logger.warning("Auto-cleaned %d stale provisioning records", cleaned)
+    return cleaned
