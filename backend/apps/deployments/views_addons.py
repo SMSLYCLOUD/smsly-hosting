@@ -114,7 +114,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         # Verify backup belongs to addon
         from .models_addons import Backup
         if not Backup.objects.filter(id=backup_id, addon=addon).exists():
-             return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
 
         from .tasks import restore_addon_task
         task = restore_addon_task.delay(backup_id)
@@ -146,7 +146,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         import os
         from django.http import FileResponse
         if not os.path.exists(backup.file_path):
-             return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
-             
+            return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
+
         response = FileResponse(open(backup.file_path, 'rb'), as_attachment=True, filename=os.path.basename(backup.file_path))
         return response
