@@ -9,13 +9,16 @@ import io
 import ipaddress
 import logging
 import os
+import re
 import time
+from urllib.parse import quote
 
 import paramiko
 import requests
 from celery import shared_task
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from django.db import transaction
 
 from apps.deployments.models_servers import ManagedServer
 
@@ -56,6 +59,28 @@ def _load_install_script():
     if not content.strip():
         raise ValueError("Downloaded installer script is empty")
     return content, f"url:{script_url}"
+
+
+def _inject_repo_clone_auth(script_content: str, github_token: str | None):
+    """Inject GitHub auth into installer clone URL for private repos."""
+    if not github_token:
+        return script_content, False
+
+    encoded = quote(github_token, safe="")
+    auth_url = (
+        f"https://x-access-token:{encoded}@github.com/"
+        "SMSLYCLOUD/smsly-hosting.git"
+    )
+    pattern = (
+        r'git clone https://github\.com/SMSLYCLOUD/smsly-hosting\.git "\$INSTALL_DIR"'
+    )
+    replaced = re.sub(
+        pattern,
+        f'git clone {auth_url} "$INSTALL_DIR"',
+        script_content,
+        count=1,
+    )
+    return replaced, replaced != script_content
 
 
 def _broadcast_provision_log(server: ManagedServer, message: str):
@@ -134,7 +159,25 @@ def provision_server(self, server_id: str):
     5. Update ManagedServer with api_url + api_token
     """
     try:
-        server = ManagedServer.objects.get(id=server_id)
+        with transaction.atomic():
+            server = ManagedServer.objects.select_for_update().get(id=server_id)
+            conflict = (
+                ManagedServer.objects.select_for_update()
+                .filter(
+                    host=server.host,
+                    provision_status=ManagedServer.ProvisionStatus.PROVISIONING,
+                )
+                .exclude(id=server.id)
+                .exists()
+            )
+            if conflict:
+                server.provision_status = ManagedServer.ProvisionStatus.FAILED
+                server.provision_logs = (
+                    "Another provisioning task is already running for this host. "
+                    "Retry after the active install completes.\n"
+                )
+                server.save(update_fields=["provision_status", "provision_logs"])
+                return
     except ManagedServer.DoesNotExist:
         logger.error("Server %s not found", server_id)
         return
@@ -147,6 +190,13 @@ def provision_server(self, server_id: str):
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
     try:
+        github_token = None
+        try:
+            from apps.deployments.utils import get_github_oauth_token_for_user
+            github_token = get_github_oauth_token_for_user(server.owner)
+        except Exception as token_exc:  # pragma: no cover
+            logger.debug("Could not resolve GitHub token for provisioning: %s", token_exc)
+
         # ── Step 1: Connect ──
         ssh = _get_ssh_client(server)
         _append_log(server, "✅ SSH connection established")
@@ -156,7 +206,15 @@ def provision_server(self, server_id: str):
         sftp = ssh.open_sftp()
 
         install_script_content, install_script_source = _load_install_script()
+        install_script_content, injected_auth = _inject_repo_clone_auth(
+            install_script_content,
+            github_token,
+        )
         _append_log(server, f"📥 Installer source: {install_script_source}")
+        if injected_auth:
+            _append_log(server, "🔐 Using linked GitHub token for installer repository clone.")
+        elif not github_token:
+            _append_log(server, "ℹ️ No linked GitHub token found; installer will use public clone URL.")
         remote_script = sftp.open("/tmp/smsly-install.sh", "w")
         try:
             remote_script.write(install_script_content)
