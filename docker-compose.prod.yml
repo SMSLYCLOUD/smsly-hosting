@@ -20,7 +20,7 @@ services:
       - smsly-net
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.1
+    image: edoburu/pgbouncer:1.25.1
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-smsly_hosting}
