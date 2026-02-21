@@ -1037,6 +1037,8 @@ docker network create smsly-proxy 2>/dev/null || true
 # Both IP and SSL modes use the same compose stack.
 # Caddy (step 7) handles public-facing HTTP/HTTPS termination.
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
+# Ensure bind-mounted config paths exist before `docker compose up`.
+mkdir -p "$INSTALL_DIR/caddy-config"
 echo -e "${BLUE}  → Starting App Stack...${NC}"
 docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 

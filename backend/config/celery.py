@@ -47,6 +47,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.services.autoscaler.check_autoscale_task',
         'schedule': 30.0,
     },
+    # Mark interrupted/stale server provisioning runs as failed
+    'cleanup-stale-server-provisioning-every-5m': {
+        'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
+        'schedule': 300.0,
+    },
     # Intelligence runtime anomaly scan every 3 minutes
     'detect-runtime-anomalies-every-180s': {
         'task': 'apps.intelligence.tasks.detect_anomalies_task',

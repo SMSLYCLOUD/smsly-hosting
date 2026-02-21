@@ -202,13 +202,35 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         if not task_id:
             return Response({'error': 'task_id required'}, status=status.HTTP_400_BAD_REQUEST)
 
+        import json
         from celery.result import AsyncResult
         result = AsyncResult(task_id)
+
+        payload = None
+        if result.ready():
+            try:
+                payload = result.result
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                payload = {
+                    'error': str(exc),
+                    'exception_type': exc.__class__.__name__,
+                }
+
+            if isinstance(payload, Exception):
+                payload = {
+                    'error': str(payload),
+                    'exception_type': payload.__class__.__name__,
+                }
+            else:
+                try:
+                    json.dumps(payload)
+                except TypeError:
+                    payload = str(payload)
 
         response_data = {
             'task_id': task_id,
             'status': result.status,
-            'result': result.result if result.ready() else None
+            'result': payload,
         }
         return Response(response_data)
 
