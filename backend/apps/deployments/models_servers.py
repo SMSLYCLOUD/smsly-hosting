@@ -58,6 +58,10 @@ class ManagedServer(models.Model):
         max_length=255, blank=True, default="",
         help_text="Bearer token for the remote API (auto-filled after provisioning)",
     )
+    gateway_secret = EncryptedCharField(
+        max_length=255, blank=True, default="",
+        help_text="GATEWAY_SECRET of the remote server (for HMAC V2 auth fallback)",
+    )
 
     # ── SSH credentials (for provisioning) ──
     ssh_port = models.IntegerField(

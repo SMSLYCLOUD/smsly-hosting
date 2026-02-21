@@ -5,7 +5,10 @@ CRUD + health check + proxy + auto-provisioning for controlling
 remote SMSLY Hosting instances.
 """
 
+import hashlib
+import hmac as hmac_mod
 import logging
+import time
 
 import requests
 from django.utils import timezone
@@ -17,6 +20,36 @@ from rest_framework.response import Response
 from .models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+
+def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b""):
+    """
+    Build auth headers for a remote server.
+    Strategy: Bearer token if available, otherwise HMAC V2 signing.
+    """
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+
+    # Prefer Bearer token (DRF auth — skips HMAC on the remote end)
+    if server.api_token:
+        headers["Authorization"] = f"Bearer {server.api_token}"
+        return headers
+
+    # Fallback: HMAC V2 signing (inter-service auth)
+    if server.gateway_secret:
+        timestamp = str(int(time.time()))
+        body_hash = hashlib.sha256(body if isinstance(body, bytes) else b"").hexdigest()
+        payload = f"{method}|{path}|{timestamp}|{body_hash}"
+        signature = hmac_mod.new(
+            server.gateway_secret.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        headers["X-Gateway-Signature-V2"] = signature
+        headers["X-Request-Timestamp"] = timestamp
+        return headers
+
+    # No auth available — try anyway (will likely fail)
+    return headers
 
 
 # ─── Serializers ─────────────────────────────────────────────────────────────
@@ -40,7 +73,7 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
     """For 'Connect Existing' mode — user provides api_url + api_token."""
     class Meta:
         model = ManagedServer
-        fields = ["name", "host", "api_url", "api_token", "ssh_port", "is_primary"]
+        fields = ["name", "host", "api_url", "api_token", "gateway_secret", "ssh_port", "is_primary"]
 
 
 class ManagedServerProvisionSerializer(serializers.ModelSerializer):
@@ -147,15 +180,12 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        api_path = "/api/v1/services/"
+        url = f"{server.api_url.rstrip('/')}{api_path}"
+        headers = _build_remote_headers(server, method="GET", path=api_path)
+
         try:
-            resp = requests.get(
-                f"{server.api_url.rstrip('/')}/api/v1/services/",
-                headers={
-                    "Authorization": f"Bearer {server.api_token}",
-                    "Accept": "application/json",
-                },
-                timeout=10,
-            )
+            resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 services = data.get("results", data) if isinstance(data, dict) else data
@@ -177,15 +207,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         servers = self.get_queryset().exclude(api_url="")
         results = []
         for server in servers:
+            api_path = "/api/v1/services/"
+            url = f"{server.api_url.rstrip('/')}{api_path}"
+            headers = _build_remote_headers(server, method="GET", path=api_path)
             try:
-                resp = requests.get(
-                    f"{server.api_url.rstrip('/')}/api/v1/services/",
-                    headers={
-                        "Authorization": f"Bearer {server.api_token}",
-                        "Accept": "application/json",
-                    },
-                    timeout=10,
-                )
+                resp = requests.get(url, headers=headers, timeout=10)
                 if resp.status_code == 200:
                     data = resp.json()
                     services = data.get("results", data) if isinstance(data, dict) else data
@@ -252,11 +278,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             )
 
         url = f"{server.api_url.rstrip('/')}{path}"
-        headers = {
-            "Authorization": f"Bearer {server.api_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        import json as json_mod
+        body_bytes = json_mod.dumps(body).encode() if body else b""
+        headers = _build_remote_headers(server, method=method, path=path, body=body_bytes)
 
         try:
             resp = requests.request(
@@ -286,15 +310,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def services(self, request, pk=None):
         """Fetch services from a remote server."""
         server = self.get_object()
+        api_path = "/api/v1/services/"
+        url = f"{server.api_url.rstrip('/')}{api_path}"
+        headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
-            resp = requests.get(
-                f"{server.api_url.rstrip('/')}/api/v1/services/",
-                headers={
-                    "Authorization": f"Bearer {server.api_token}",
-                    "Accept": "application/json",
-                },
-                timeout=15,
-            )
+            resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
             return Response(resp.json())
         except requests.RequestException as e:
@@ -307,15 +327,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def deployments(self, request, pk=None):
         """Fetch deployments from a remote server."""
         server = self.get_object()
+        api_path = "/api/v1/deployments/"
+        url = f"{server.api_url.rstrip('/')}{api_path}"
+        headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
-            resp = requests.get(
-                f"{server.api_url.rstrip('/')}/api/v1/deployments/",
-                headers={
-                    "Authorization": f"Bearer {server.api_token}",
-                    "Accept": "application/json",
-                },
-                timeout=15,
-            )
+            resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
             return Response(resp.json())
         except requests.RequestException as e:
@@ -335,15 +351,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        api_path = "/api/v1/services/"
+        url = f"{server.api_url.rstrip('/')}{api_path}"
+        headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
-            resp = requests.get(
-                f"{server.api_url.rstrip('/')}/api/v1/services/",
-                headers={
-                    "Authorization": f"Bearer {server.api_token}",
-                    "Accept": "application/json",
-                },
-                timeout=15,
-            )
+            resp = requests.get(url, headers=headers, timeout=15)
             resp.raise_for_status()
             data = resp.json()
             services = data.get("results", data) if isinstance(data, dict) else data
