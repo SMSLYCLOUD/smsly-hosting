@@ -65,8 +65,8 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
         echo -e "  1) \033[0;32mIP Mode\033[0m (Easy) - http://$_PUB_IP:8090"
         echo -e "  2) \033[0;32mSSL Mode\033[0m (Prod) - https://your-domain.com (Requires DNS A Record pointing to $_PUB_IP)"
 
-        if [ -t 0 ]; then
-            read -p "Enter choice [1]: " _MODE_CHOICE
+        if [ -e /dev/tty ]; then
+            read -p "Enter choice [1]: " _MODE_CHOICE < /dev/tty
             echo ""
             _MODE_CHOICE=${_MODE_CHOICE:-1}
         else
@@ -77,14 +77,14 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
             export USE_SSL="true"
             _DOMAIN=""
             while [ -z "$_DOMAIN" ]; do
-                read -p "  Enter your Domain (e.g., app.example.com): " _DOMAIN
+                read -p "  Enter your Domain (e.g., app.example.com): " _DOMAIN < /dev/tty
             done
             echo ""
             export DOMAIN="$_DOMAIN"
 
             _ACME_EMAIL=""
             while [ -z "$_ACME_EMAIL" ]; do
-                read -p "  Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL
+                read -p "  Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL < /dev/tty
             done
             echo ""
             export ACME_EMAIL="$_ACME_EMAIL"
@@ -95,14 +95,14 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
             echo -e "  This requires a Cloudflare API Token with DNS:Edit permission."
             echo ""
 
-            read -p "  Enable wildcard subdomains? (y/n) [n]: " _WC_CHOICE
+            read -p "  Enable wildcard subdomains? (y/n) [n]: " _WC_CHOICE < /dev/tty
             echo ""
             _WC_CHOICE=${_WC_CHOICE:-n}
             if [[ $_WC_CHOICE =~ ^[Yy]$ ]]; then
                 export WILDCARD_SUBDOMAINS="true"
                 _CF_TOKEN=""
                 while [ -z "$_CF_TOKEN" ]; do
-                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " _CF_TOKEN
+                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " _CF_TOKEN < /dev/tty
                     echo ""
                 done
                 export CLOUDFLARE_API_TOKEN="$_CF_TOKEN"
@@ -475,9 +475,9 @@ wipe_existing_install() {
     fi
 
     if [ "${FORCE_WIPE:-0}" != "1" ]; then
-        if [ -t 0 ]; then
+        if [ -e /dev/tty ]; then
             echo -e "${RED}  WARNING: This permanently deletes containers, volumes, networks, and $INSTALL_DIR${NC}"
-            read -r -p "  Type WIPE to continue: " WIPE_CONFIRM
+            read -r -p "  Type WIPE to continue: " WIPE_CONFIRM < /dev/tty
             if [ "$WIPE_CONFIRM" != "WIPE" ]; then
                 echo -e "${YELLOW}  Wipe cancelled by user.${NC}"
                 exit 1
@@ -757,9 +757,9 @@ if [ -f /etc/os-release ]; then
     echo -e "${BLUE}  Detected: $NAME $VERSION_ID${NC}"
     if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
         echo -e "${YELLOW}⚠ Warning: This script is optimized for Ubuntu/Debian.${NC}"
-        if [ -t 0 ]; then
+        if [ -e /dev/tty ]; then
              echo -e "${YELLOW}  Press ENTER to continue anyway, or Ctrl+C to abort.${NC}"
-             read -r
+             read -r < /dev/tty
         else
              echo -e "${YELLOW}  ⚠ Non-interactive mode: Continuing automatically...${NC}"
         fi
@@ -1615,7 +1615,7 @@ echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
-    if [ -t 0 ] && [ -z "${SKIP_REBOOT:-}" ]; then
+    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ]; then
         echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
         echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
         for i in $(seq 30 -1 1); do
