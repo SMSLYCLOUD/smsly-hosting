@@ -98,7 +98,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         try:
             member = TeamMember.objects.get(team=team, user__id=user_id)
             if member.role == TeamMember.Role.ADMIN and team.members.filter(role=TeamMember.Role.ADMIN).count() == 1:
-                 return Response({'error': 'Cannot remove last admin'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'Cannot remove last admin'}, status=status.HTTP_400_BAD_REQUEST)
             
             member.delete()
             return Response({'status': 'removed'})

@@ -333,7 +333,7 @@ class BackupService:
             logger.error(f"Restore failed: {e}")
             raise
         finally:
-             if temp_dir and os.path.exists(temp_dir):
+            if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
     def backup_server(self):
@@ -467,23 +467,23 @@ class BackupService:
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
-             with tarfile.open(backup.file_path, "r:gz") as tar:
+            with tarfile.open(backup.file_path, "r:gz") as tar:
                 tar.extractall(path=temp_dir)
 
-             # Restore DB?
-             # If we are running this from Django, we can't easily drop/restore the DB we are using.
-             # So we skip DB restore here and assume it's done via CLI or manual steps if needed,
-             # OR we only restore data tables.
-             # For the requirements, "Implement server restore path" likely implies restoring services.
+            # Restore DB?
+            # If we are running this from Django, we can't easily drop/restore the DB we are using.
+            # So we skip DB restore here and assume it's done via CLI or manual steps if needed,
+            # OR we only restore data tables.
+            # For the requirements, "Implement server restore path" likely implies restoring services.
 
-             # Restore Services
-             services_dir = os.path.join(temp_dir, "services")
-             if os.path.exists(services_dir):
-                 for filename in os.listdir(services_dir):
-                     if filename.endswith(".tar.gz"):
-                         # We need to "fake" a ServiceBackup object or just use the logic directly
-                         # Helper to restore from file
-                         self._restore_service_from_file(os.path.join(services_dir, filename))
+            # Restore Services
+            services_dir = os.path.join(temp_dir, "services")
+            if os.path.exists(services_dir):
+                for filename in os.listdir(services_dir):
+                    if filename.endswith(".tar.gz"):
+                        # We need to "fake" a ServiceBackup object or just use the logic directly
+                        # Helper to restore from file
+                        self._restore_service_from_file(os.path.join(services_dir, filename))
 
         finally:
             if temp_dir and os.path.exists(temp_dir):
