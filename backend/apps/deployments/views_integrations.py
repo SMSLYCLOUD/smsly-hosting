@@ -163,7 +163,7 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    origin = request.build_absolute_uri("/").rstrip("/")
+    origin = settings.SITE_URL.rstrip("/")
     callback_url = f"{origin}/auth/github/callback"
 
     scopes = settings.SOCIALACCOUNT_PROVIDERS.get("github", {}).get(
@@ -218,7 +218,7 @@ def github_oauth_callback(request):
         )
 
     # Build the same callback URL the frontend used
-    origin = request.build_absolute_uri("/").rstrip("/")
+    origin = settings.SITE_URL.rstrip("/")
     callback_url = f"{origin}/auth/github/callback"
 
     # ── Step 1: Exchange code for access token ──────────────────────────
