@@ -152,6 +152,16 @@ SOCIALACCOUNT_STORE_TOKENS = True
 LOGIN_REDIRECT_URL = '/auth/callback'
 ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 
+# ── Session cookie security ──────────────────────────────────────────────────
+# 'Strict' is required for allauth v65's _redirect_strict_samesite() workaround:
+# Chrome 145+ doesn't send SameSite=Lax cookies on cross-site redirect chains
+# (GitHub→our callback). 'Strict' triggers allauth to do a self-redirect, making
+# the final callback same-site so the browser sends the session cookie.
+SESSION_COOKIE_SAMESITE = 'Strict'
+SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SECURE = not DEBUG
+
 # Ensure allauth uses HTTPS callback URLs in production (prevents CSRF Referer mismatch)
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG else 'http'
 
