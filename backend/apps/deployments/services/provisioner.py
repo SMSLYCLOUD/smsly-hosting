@@ -67,16 +67,34 @@ def _build_local_source_bundle() -> str:
     fd, archive_path = tempfile.mkstemp(prefix="smsly-src-", suffix=".tar.gz")
     os.close(fd)
 
-    excluded = {".git", "node_modules", ".next", "__pycache__", ".venv", "venv"}
-
-    def _filter(info: tarfile.TarInfo):
-        parts = [p for p in info.name.split("/") if p]
-        if any(part in excluded for part in parts):
-            return None
-        return info
+    excluded = {
+        ".git",
+        "node_modules",
+        ".next",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".env",
+        ".credentials",
+        ".git-credentials",
+    }
 
     with tarfile.open(archive_path, mode="w:gz") as tar:
-        tar.add(source_root, arcname=".", filter=_filter)
+        for root, dirs, files in os.walk(source_root, topdown=True):
+            dirs[:] = [d for d in dirs if d not in excluded]
+            rel_root = os.path.relpath(root, source_root)
+            rel_root = "" if rel_root == "." else rel_root
+
+            for filename in files:
+                if filename in excluded:
+                    continue
+                local_path = os.path.join(root, filename)
+                rel_path = os.path.join(rel_root, filename) if rel_root else filename
+                try:
+                    tar.add(local_path, arcname=rel_path, recursive=False)
+                except (PermissionError, FileNotFoundError, OSError):
+                    # Skip unreadable/transient files in host-mounted source root.
+                    continue
 
     return archive_path
 
