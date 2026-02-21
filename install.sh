@@ -33,12 +33,81 @@ SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 # ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
-# If not already inside a screen session, re-launch inside one.
+# Collect ALL interactive input FIRST (before screen), then re-launch inside
+# a screen session with the collected values as env vars.
 # To reattach after disconnect: screen -r cloudneuron-install
 if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
+    fi
+
+    # ── Pre-collect interactive input (only for fresh installs) ──────────
+    # Skip collection if values are already pre-seeded via env vars, or if
+    # this is an --update / --wipe run (those don't need interactive input).
+    _ARG1="${1:-}"
+    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [ -z "${USE_SSL:-}" ]; then
+        # Detect public IP for the mode selection prompt
+        _detect_ip() {
+            local c="" ep=""
+            for ep in "https://api.ipify.org" "https://ifconfig.me/ip" "https://ipv4.icanhazip.com"; do
+                c="$(curl -4 -fsS -m 5 "$ep" 2>/dev/null | tr -d '\r\n' || true)"
+                if [[ "$c" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "$c"; return 0; fi
+            done
+            c="$(hostname -I 2>/dev/null | awk '{print $1}' | tr -d '\r\n' || true)"
+            if [[ "$c" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "$c"; return 0; fi
+            echo "127.0.0.1"
+        }
+        _PUB_IP="$(_detect_ip)"
+
+        echo ""
+        echo -e "\033[0;34mSelect Deployment Mode:\033[0m"
+        echo -e "  1) \033[0;32mIP Mode\033[0m (Easy) - http://$_PUB_IP:8090"
+        echo -e "  2) \033[0;32mSSL Mode\033[0m (Prod) - https://your-domain.com (Requires DNS A Record pointing to $_PUB_IP)"
+
+        if [ -t 0 ]; then
+            read -p "Enter choice [1]: " _MODE_CHOICE
+            _MODE_CHOICE=${_MODE_CHOICE:-1}
+        else
+            _MODE_CHOICE=1
+        fi
+
+        if [ "$_MODE_CHOICE" -eq "2" ] 2>/dev/null; then
+            export USE_SSL="true"
+            _DOMAIN=""
+            while [ -z "$_DOMAIN" ]; do
+                read -p "Enter your Domain (e.g., app.example.com): " _DOMAIN
+            done
+            export DOMAIN="$_DOMAIN"
+
+            _ACME_EMAIL=""
+            while [ -z "$_ACME_EMAIL" ]; do
+                read -p "Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL
+            done
+            export ACME_EMAIL="$_ACME_EMAIL"
+
+            echo ""
+            echo -e "\033[0;34m  Wildcard subdomains allow deployed services to get automatic SSL.\033[0m"
+            echo -e "  e.g., myapp-abc123.${_DOMAIN} will automatically have HTTPS."
+            echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
+
+            read -p "  Enable wildcard subdomains? (y/n) [y]: " _WC_CHOICE
+            _WC_CHOICE=${_WC_CHOICE:-y}
+            if [[ $_WC_CHOICE =~ ^[Yy]$ ]]; then
+                export WILDCARD_SUBDOMAINS="true"
+                _CF_TOKEN=""
+                while [ -z "$_CF_TOKEN" ]; do
+                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " _CF_TOKEN
+                    echo
+                done
+                export CLOUDFLARE_API_TOKEN="$_CF_TOKEN"
+            else
+                export WILDCARD_SUBDOMAINS="false"
+            fi
+        else
+            export USE_SSL="false"
+            export DOMAIN="$_PUB_IP"
+        fi
     fi
 
     echo -e "\033[1;33m"
@@ -49,8 +118,16 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     echo "═══════════════════════════════════════════════════════════"
     echo -e "\033[0m"
 
+    # Build env string to pass collected values into screen
+    _ENV_PASS="SKIP_SCREEN=1"
+    [ -n "${USE_SSL:-}" ]              && _ENV_PASS="$_ENV_PASS USE_SSL='$USE_SSL'"
+    [ -n "${DOMAIN:-}" ]               && _ENV_PASS="$_ENV_PASS DOMAIN='$DOMAIN'"
+    [ -n "${ACME_EMAIL:-}" ]           && _ENV_PASS="$_ENV_PASS ACME_EMAIL='$ACME_EMAIL'"
+    [ -n "${WILDCARD_SUBDOMAINS:-}" ]  && _ENV_PASS="$_ENV_PASS WILDCARD_SUBDOMAINS='$WILDCARD_SUBDOMAINS'"
+    [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN='$CLOUDFLARE_API_TOKEN'"
+
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; SKIP_SCREEN=1 bash '$SCRIPT_PATH' $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
+    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; $_ENV_PASS bash '$SCRIPT_PATH' $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
 fi
 
 # Ensure we start in a valid directory.
