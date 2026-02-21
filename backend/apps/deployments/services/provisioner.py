@@ -10,6 +10,8 @@ import ipaddress
 import logging
 import os
 import re
+import tarfile
+import tempfile
 import time
 from datetime import timedelta
 from urllib.parse import quote
@@ -41,6 +43,59 @@ PROVISION_TIMEOUT_SECONDS = _env_int(
     1800,
     minimum=60,
 )
+
+
+def _source_root_dir() -> str:
+    """Return backend container path to smsly-hosting source root (/app)."""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+
+
+def _build_local_source_bundle() -> str:
+    """
+    Build a temporary tar.gz bundle of source code for tokenless provisioning.
+
+    Returns local temporary file path.
+    """
+    source_root = _source_root_dir()
+    if not os.path.isdir(source_root):
+        raise FileNotFoundError(f"Source root not found: {source_root}")
+
+    fd, archive_path = tempfile.mkstemp(prefix="smsly-src-", suffix=".tar.gz")
+    os.close(fd)
+
+    excluded = {".git", "node_modules", ".next", "__pycache__", ".venv", "venv"}
+
+    def _filter(info: tarfile.TarInfo):
+        parts = [p for p in info.name.split("/") if p]
+        if any(part in excluded for part in parts):
+            return None
+        return info
+
+    with tarfile.open(archive_path, mode="w:gz") as tar:
+        tar.add(source_root, arcname=".", filter=_filter)
+
+    return archive_path
+
+
+def _is_github_token_known_invalid(token: str | None) -> bool:
+    """
+    Return True when GitHub explicitly reports token is invalid/revoked.
+    """
+    if not token:
+        return False
+    try:
+        response = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10,
+        )
+    except requests.RequestException:
+        # Network/transient failures should not force fallback.
+        return False
+    return response.status_code == 401
 
 
 def _load_install_script():
@@ -212,6 +267,7 @@ def provision_server(self, server_id: str):
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
     ssh = None
+    local_bundle_path = None
     try:
         github_token = None
         try:
@@ -219,6 +275,8 @@ def provision_server(self, server_id: str):
             github_token = get_github_oauth_token_for_user(server.owner)
         except Exception as token_exc:  # pragma: no cover
             logger.debug("Could not resolve GitHub token for provisioning: %s", token_exc)
+        token_known_invalid = _is_github_token_known_invalid(github_token)
+        use_local_bundle = (not github_token) or token_known_invalid
 
         # ── Step 1: Connect ──
         ssh = _get_ssh_client(server)
@@ -229,15 +287,25 @@ def provision_server(self, server_id: str):
         sftp = ssh.open_sftp()
 
         install_script_content, install_script_source = _load_install_script()
-        install_script_content, injected_auth = _inject_repo_clone_auth(
-            install_script_content,
-            github_token,
-        )
+        injected_auth = False
+        if github_token and not token_known_invalid:
+            install_script_content, injected_auth = _inject_repo_clone_auth(
+                install_script_content,
+                github_token,
+            )
         _append_log(server, f"📥 Installer source: {install_script_source}")
         if injected_auth:
             _append_log(server, "🔐 Using linked GitHub token for installer repository clone.")
+        elif token_known_invalid:
+            _append_log(
+                server,
+                "⚠️ Linked GitHub token appears invalid; using local source bundle fallback.",
+            )
         elif not github_token:
-            _append_log(server, "ℹ️ No linked GitHub token found; installer will use public clone URL.")
+            _append_log(
+                server,
+                "ℹ️ No linked GitHub token found; using local source bundle fallback.",
+            )
         remote_script = sftp.open("/tmp/smsly-install.sh", "w")
         try:
             remote_script.write(install_script_content)
@@ -245,6 +313,28 @@ def provision_server(self, server_id: str):
         finally:
             remote_script.close()
         sftp.chmod("/tmp/smsly-install.sh", 0o755)
+
+        run_prefix = ""
+        if use_local_bundle:
+            _append_log(server, "📦 Uploading local source bundle for provisioning fallback...")
+            local_bundle_path = _build_local_source_bundle()
+            sftp.put(local_bundle_path, "/tmp/smsly-hosting-src.tar.gz")
+            extract_cmd = (
+                "rm -rf /tmp/smsly-hosting-src && "
+                "mkdir -p /tmp/smsly-hosting-src && "
+                "tar -xzf /tmp/smsly-hosting-src.tar.gz "
+                "-C /tmp/smsly-hosting-src --strip-components=1"
+            )
+            stdin, stdout, stderr = ssh.exec_command(extract_cmd)
+            extract_exit = stdout.channel.recv_exit_status()
+            extract_err = stderr.read().decode("utf-8", errors="replace").strip()
+            if extract_exit != 0:
+                raise RuntimeError(
+                    "Failed to prepare local source bundle on target: "
+                    f"{extract_err or f'exit {extract_exit}'}"
+                )
+            run_prefix = "cd /tmp/smsly-hosting-src && "
+
         sftp.close()
         _append_log(server, "✅ Install script uploaded")
 
@@ -255,7 +345,7 @@ def provision_server(self, server_id: str):
         env_vars = (
             f"NON_INTERACTIVE=1 SKIP_SCREEN=1 USE_SSL=false DOMAIN={server.host}"
         )
-        cmd = f"{env_vars} bash /tmp/smsly-install.sh 2>&1"
+        cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh 2>&1"
 
         # Execute with a channel for streaming output
         transport = ssh.get_transport()
@@ -441,6 +531,11 @@ def provision_server(self, server_id: str):
         server.save(update_fields=["provision_status", "updated_at"])
         _append_log(server, f"\n❌ Provisioning failed: {exc}")
     finally:
+        if local_bundle_path and os.path.exists(local_bundle_path):
+            try:
+                os.remove(local_bundle_path)
+            except OSError:
+                pass
         try:
             if ssh is not None:
                 ssh.close()
