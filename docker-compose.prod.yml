@@ -20,7 +20,9 @@ services:
       - smsly-net
 
   pgbouncer:
-    image: bitnami/pgbouncer:latest
+    build:
+      context: ./infrastructure/pgbouncer
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POSTGRESQL_HOST: db
