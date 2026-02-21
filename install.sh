@@ -947,8 +947,8 @@ else
     if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
         echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
         MODE_CHOICE=2
-    elif [ -t 0 ]; then
-        read -p "Enter choice [1]: " MODE_CHOICE
+    elif [ -e /dev/tty ]; then
+        read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
         MODE_CHOICE=${MODE_CHOICE:-1}
     else
         echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
@@ -961,16 +961,16 @@ else
 
     if [ "$MODE_CHOICE" -eq "2" ]; then
         USE_SSL="true"
-        if [ ! -t 0 ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+        if [ ! -e /dev/tty ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
             DOMAIN="${PRESET_DOMAIN}"
             ACME_EMAIL="${PRESET_ACME_EMAIL}"
         else
             while [ -z "$DOMAIN" ]; do
-                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN
+                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
             done
 
             while [ -z "$ACME_EMAIL" ]; do
-                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL
+                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL < /dev/tty
             done
         fi
 
@@ -980,8 +980,8 @@ else
             if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
                 echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
                 echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                if [ -t 0 ]; then
-                    read -p "  Continue anyway? (y/n) " -n 1 -r
+                if [ -e /dev/tty ]; then
+                    read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
                     echo
                     if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
                 else
@@ -1013,13 +1013,13 @@ else
             WILDCARD_SUBDOMAINS="$PRESET_WILDCARD"
             CLOUDFLARE_API_TOKEN="$PRESET_CF_TOKEN"
             echo -e "${BLUE}  → Preset detected: wildcard=$WILDCARD_SUBDOMAINS${NC}"
-        elif [ -t 0 ]; then
-            read -p "  Enable wildcard subdomains? (y/n) [y]: " WILDCARD_CHOICE
-            WILDCARD_CHOICE=${WILDCARD_CHOICE:-y}
+        elif [ -e /dev/tty ]; then
+            read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
+            WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
             if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
                 WILDCARD_SUBDOMAINS="true"
                 while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
-                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN
+                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
                     echo
                 done
                 echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
