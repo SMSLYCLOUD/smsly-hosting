@@ -207,9 +207,14 @@ _DATABASE_DEFAULT = 'postgres://postgres:postgres@localhost:5432/smsly_hosting' 
 DATABASES = {
     'default': dj_database_url.config(
         default=config('DATABASE_URL', default=_DATABASE_DEFAULT),
-        conn_max_age=600
+        # PgBouncer (transaction pooling) requires conn_max_age=0
+        # so Django returns connections to the pool after each request.
+        conn_max_age=0,
+        conn_health_checks=False,
     )
 }
+# Disable server-side cursors – incompatible with PgBouncer transaction pooling
+DISABLE_SERVER_SIDE_CURSORS = True
 if not DEBUG and not DATABASES['default'].get('NAME'):
     raise ValueError("DATABASE_URL must be set in production (DEBUG=False)")
 
