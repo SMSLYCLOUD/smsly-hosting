@@ -46,7 +46,11 @@ PROVISION_TIMEOUT_SECONDS = _env_int(
 
 
 def _source_root_dir() -> str:
-    """Return backend container path to smsly-hosting source root (/app)."""
+    """Return container path to smsly-hosting source root."""
+    mounted_root = os.environ.get("SMSLY_PROVISION_SOURCE_ROOT", "/platform-src")
+    if mounted_root and os.path.isdir(mounted_root):
+        return os.path.abspath(mounted_root)
+    # Fallback to backend container project root when full source is unavailable.
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 
 

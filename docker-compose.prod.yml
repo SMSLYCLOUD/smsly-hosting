@@ -71,6 +71,7 @@ services:
       - media_volume:/app/media
       - caddy_config:/caddy-config
       - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
       # SECURITY: Use socket-proxy instead of direct socket mount
       # - /var/run/docker.sock:/var/run/docker.sock  # REMOVED - security risk
     healthcheck:
@@ -107,6 +108,7 @@ services:
     volumes:
       - media_volume:/app/media
       - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
     networks:
       - smsly-net
 

@@ -76,6 +76,7 @@ services:
     volumes:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
     ports:
       - "8000:8000"
     env_file:
@@ -117,6 +118,7 @@ services:
     volumes:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
     env_file:
       - .env
     environment:
