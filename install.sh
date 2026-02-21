@@ -194,12 +194,22 @@ ensure_env_runtime_defaults() {
     fi
 
     if [ -n "$postgres_password" ]; then
-        expected_database_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        # Route through PgBouncer for connection pooling
+        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgbouncer:5432/smsly_hosting"
         current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
 
+        # Migrate legacy @db:5432 URLs to @pgbouncer:5432
+        if [[ "$current_database_url" =~ @db:5432 ]]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgbouncer${NC}"
+            local migrated_url="${current_database_url/@db:5432/@pgbouncer:5432}"
+            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
+            current_database_url="$migrated_url"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgbouncer${NC}"
+        fi
+
         if [ -z "$current_database_url" ]; then
-            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string"
-        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@db:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
+            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgBouncer)"
+        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgbouncer:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
             echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             echo -e "${GREEN}  OK DATABASE_URL password synced${NC}"
@@ -630,13 +640,13 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1; do
+    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
         fi
     done
-    echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db)${NC}"
+    echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
 
     trap - EXIT
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -988,7 +998,7 @@ FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
-DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgbouncer:5432/smsly_hosting
 
 REDIS_PASSWORD=$REDIS_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
@@ -1390,13 +1400,13 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1; do
+for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db)${NC}"
+echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
 
 echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
 
