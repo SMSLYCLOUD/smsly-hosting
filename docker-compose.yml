@@ -102,8 +102,8 @@ services:
         ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 6
+      start_period: 120s
     networks:
       - smsly-net
       - socket-proxy
