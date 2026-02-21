@@ -773,7 +773,11 @@ mkdir -p "$INSTALL_DIR"
 if [ "$(pwd)" != "$INSTALL_DIR" ]; then
     echo -e "${BLUE}  → Setting up installation in $INSTALL_DIR${NC}"
     if [ -f "docker-compose.prod.yml" ]; then
-        cp -rn . "$INSTALL_DIR/" 2>/dev/null || cp -r . "$INSTALL_DIR/"
+        if [ "${SMSLY_FORCE_SOURCE_SYNC:-0}" = "1" ]; then
+            cp -rf . "$INSTALL_DIR/"
+        else
+            cp -rn . "$INSTALL_DIR/" 2>/dev/null || cp -r . "$INSTALL_DIR/"
+        fi
     else
         if [ -d "$INSTALL_DIR/.git" ]; then
              cd "$INSTALL_DIR"
@@ -1534,4 +1538,8 @@ if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
 else
     echo -e "\n${RED}  ⚠ Only $VERIFY_PASS_COUNT/$VERIFY_TOTAL checks passed — skipping auto-reboot.${NC}"
     echo -e "${YELLOW}  Fix the failed checks above, then run: sudo reboot${NC}"
+    if [ "${SMSLY_STRICT_VERIFY:-0}" = "1" ]; then
+        echo -e "${RED}  ✗ Strict verification is enabled; failing installation.${NC}"
+        exit 1
+    fi
 fi
