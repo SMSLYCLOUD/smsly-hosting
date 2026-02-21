@@ -511,32 +511,64 @@ def provision_server(self, server_id: str):
         except ValueError:
             is_ip_domain = False
 
+        candidate_urls: list[str] = []
         if env_domain and env_domain not in ("localhost", "127.0.0.1") and not is_ip_domain:
             scheme = "https" if use_ssl else "http"
-            api_url = f"{scheme}://{env_domain}"
-        else:
-            api_url = f"http://{server.host}:8090"
+            candidate_urls.append(f"{scheme}://{env_domain}")
+        # Control-plane reachable endpoints.
+        candidate_urls.append(f"http://{server.host}")
+        # Legacy compatibility only; some older installs may still expose this.
+        candidate_urls.append(f"http://{server.host}:8090")
+
+        # Preserve order while removing duplicates.
+        seen_urls: set[str] = set()
+        api_urls = []
+        for url in candidate_urls:
+            normalized = url.rstrip("/")
+            if normalized in seen_urls:
+                continue
+            seen_urls.add(normalized)
+            api_urls.append(normalized)
+
+        api_url = api_urls[0] if api_urls else f"http://{server.host}"
 
         # If installer did not emit an API token, exchange admin credentials for one.
         if not api_token and admin_user and admin_password:
-            login_url = f"{api_url.rstrip('/')}/api/v1/auth/login/"
-            try:
-                response = requests.post(
-                    login_url,
-                    json={"username": admin_user, "password": admin_password},
-                    timeout=20,
-                    verify=api_url.startswith("https://"),
-                )
-                if response.ok:
-                    payload = response.json()
-                    api_token = payload.get("key") or payload.get("token", "")
-                else:
-                    _append_log(
-                        server,
-                        f"Warning: Could not mint API token from credentials (HTTP {response.status_code})",
+            token_errors = []
+            for candidate_url in api_urls:
+                login_url = f"{candidate_url}/api/v1/auth/login/"
+                try:
+                    response = requests.post(
+                        login_url,
+                        json={"username": admin_user, "password": admin_password},
+                        timeout=20,
+                        verify=candidate_url.startswith("https://"),
                     )
-            except Exception as token_exc:
-                _append_log(server, f"Warning: API token exchange failed: {token_exc}")
+                    if not response.ok:
+                        token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
+                        continue
+                    payload = response.json()
+                    token_value = payload.get("key") or payload.get("token", "")
+                    if token_value:
+                        api_token = token_value
+                        api_url = candidate_url
+                        break
+                    token_errors.append(f"{candidate_url}:empty token payload")
+                except Exception as token_exc:
+                    token_errors.append(f"{candidate_url}:{token_exc}")
+
+            if not api_token and token_errors:
+                _append_log(
+                    server,
+                    "Warning: API token exchange failed via all candidates: "
+                    + "; ".join(token_errors),
+                )
+
+        if not api_token:
+            raise RuntimeError(
+                "Provisioning completed but no API token was discovered. "
+                "Verify gateway health and credentials, then retry provisioning."
+            )
 
         _append_log(server, f"🌐 API URL: {api_url}")
         _append_log(server, f"🔑 Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
