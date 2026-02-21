@@ -34,6 +34,7 @@ class EcosystemTaskStatusTests(TestCase):
         response = self.client.get(
             "/api/v1/cloud/ecosystem/task_status/",
             {"task_id": "1234"},
+            follow=True,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -42,4 +43,3 @@ class EcosystemTaskStatusTests(TestCase):
             response.data["result"]["exception_type"],
             "NotRegistered",
         )
-
