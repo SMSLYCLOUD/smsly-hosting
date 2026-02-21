@@ -380,6 +380,8 @@ def provision_server(self, server_id: str):
         env_vars = (
             f"NON_INTERACTIVE=1 SKIP_SCREEN=1 USE_SSL=false DOMAIN={server.host}"
         )
+        if use_local_bundle:
+            env_vars = f"SMSLY_INSTALL_WORKDIR=/tmp/smsly-hosting-src {env_vars}"
         cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh 2>&1"
 
         # Execute with a channel for streaming output
