@@ -451,8 +451,42 @@ class PlatformConfig(models.Model):
 
     @classmethod
     def load(cls):
-        """Get or create the singleton config."""
-        obj, _ = cls.objects.get_or_create(pk=1)
+        """Get or create the singleton config.
+
+        On first creation, auto-populate from environment variables so
+        the Settings UI reflects whatever install.sh configured.
+        """
+        import os
+        obj, created = cls.objects.get_or_create(pk=1)
+        if created or (not obj.domain and os.environ.get('DOMAIN')):
+            # Seed from env vars (set by install.sh → .env → docker-compose)
+            env_domain = os.environ.get('DOMAIN', '').strip()
+            env_ssl = os.environ.get('USE_SSL', '').strip().lower()
+            env_wildcard = os.environ.get('WILDCARD_SUBDOMAINS', '').strip().lower()
+            env_cf_token = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
+            env_ip = os.environ.get('PUBLIC_IP', '').strip()
+
+            changed = False
+            if env_domain and not obj.domain:
+                obj.domain = env_domain
+                changed = True
+            if env_ssl in ('true', '1', 'yes') and not obj.use_ssl:
+                obj.use_ssl = True
+                changed = True
+            if env_wildcard in ('true', '1', 'yes'):
+                obj.wildcard_subdomains = True
+                changed = True
+            elif env_wildcard in ('false', '0', 'no'):
+                obj.wildcard_subdomains = False
+                changed = True
+            if env_cf_token and not obj.cloudflare_api_token:
+                obj.cloudflare_api_token = env_cf_token
+                changed = True
+            if env_ip and not obj.server_ip:
+                obj.server_ip = env_ip
+                changed = True
+            if changed:
+                obj.save()
         return obj
 
     def __str__(self):
