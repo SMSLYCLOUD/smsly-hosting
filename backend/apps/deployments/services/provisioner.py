@@ -357,7 +357,8 @@ def provision_server(self, server_id: str):
                 "rm -rf /tmp/smsly-hosting-src && "
                 "mkdir -p /tmp/smsly-hosting-src && "
                 "tar -xzf /tmp/smsly-hosting-src.tar.gz "
-                "-C /tmp/smsly-hosting-src --strip-components=1"
+                "-C /tmp/smsly-hosting-src && "
+                "test -f /tmp/smsly-hosting-src/docker-compose.prod.yml"
             )
             stdin, stdout, stderr = ssh.exec_command(extract_cmd)
             extract_exit = stdout.channel.recv_exit_status()
