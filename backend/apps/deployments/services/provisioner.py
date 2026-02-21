@@ -275,8 +275,15 @@ def provision_server(self, server_id: str):
             github_token = get_github_oauth_token_for_user(server.owner)
         except Exception as token_exc:  # pragma: no cover
             logger.debug("Could not resolve GitHub token for provisioning: %s", token_exc)
-        token_known_invalid = _is_github_token_known_invalid(github_token)
-        use_local_bundle = (not github_token) or token_known_invalid
+        prefer_local_bundle = str(
+            os.environ.get("SMSLY_PROVISION_USE_LOCAL_BUNDLE", "true")
+        ).strip().lower() not in ("0", "false", "no", "off")
+        token_known_invalid = (
+            _is_github_token_known_invalid(github_token)
+            if (github_token and not prefer_local_bundle)
+            else False
+        )
+        use_local_bundle = prefer_local_bundle or (not github_token) or token_known_invalid
 
         # ── Step 1: Connect ──
         ssh = _get_ssh_client(server)
@@ -288,7 +295,7 @@ def provision_server(self, server_id: str):
 
         install_script_content, install_script_source = _load_install_script()
         injected_auth = False
-        if github_token and not token_known_invalid:
+        if github_token and not token_known_invalid and not use_local_bundle:
             install_script_content, injected_auth = _inject_repo_clone_auth(
                 install_script_content,
                 github_token,
@@ -296,6 +303,11 @@ def provision_server(self, server_id: str):
         _append_log(server, f"📥 Installer source: {install_script_source}")
         if injected_auth:
             _append_log(server, "🔐 Using linked GitHub token for installer repository clone.")
+        elif use_local_bundle and prefer_local_bundle:
+            _append_log(
+                server,
+                "ℹ️ Provisioning in local-bundle mode (no GitHub clone required).",
+            )
         elif token_known_invalid:
             _append_log(
                 server,
