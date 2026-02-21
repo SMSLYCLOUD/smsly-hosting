@@ -183,6 +183,12 @@ SOCIALACCOUNT_PROVIDERS = {
     }
 }
 
+# allauth v65+: Skip the intermediate POST confirmation form on social login.
+# Without this, GET /accounts/github/login/ renders a form instead of redirecting
+# to GitHub, breaking the OAuth state flow and causing 401 on the callback.
+SOCIALACCOUNT_LOGIN_ON_GET = True
+SOCIALACCOUNT_STORE_TOKENS = True
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
