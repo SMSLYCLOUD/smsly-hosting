@@ -53,8 +53,14 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; SKIP_SCREEN=1 bash '$SCRIPT_PATH' $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
 fi
 
-# Ensure we start in a valid directory (prevents getcwd errors if CWD was deleted)
-cd /root 2>/dev/null || cd /
+# Ensure we start in a valid directory.
+# Provisioning can pass SMSLY_INSTALL_WORKDIR to use a prepared local source tree.
+if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
+    cd "${SMSLY_INSTALL_WORKDIR}" 2>/dev/null || cd /root 2>/dev/null || cd /
+else
+    # Fallback for interactive/manual installer runs.
+    cd /root 2>/dev/null || cd /
+fi
 
 # Colors
 GREEN='\033[0;32m'
