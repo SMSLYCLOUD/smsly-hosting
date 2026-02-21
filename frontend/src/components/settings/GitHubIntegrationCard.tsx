@@ -47,11 +47,10 @@ export function GitHubIntegrationCard() {
     setConnectError(null);
     setConnecting(true);
     try {
-      const res = await api.get("/integrations/github/connect/");
-      const target =
-        typeof res.data?.connect_url === "string" && res.data.connect_url.trim()
-          ? res.data.connect_url
-          : connectUrl;
+      // API-based flow: get the GitHub OAuth URL from backend, then navigate
+      const res = await api.get("/integrations/github/oauth-url/");
+      const target = res.data?.url;
+      if (!target) throw new Error("No OAuth URL returned");
       window.location.assign(target);
     } catch (e: any) {
       const message =

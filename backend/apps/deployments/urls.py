@@ -19,7 +19,9 @@ from .views_chat import AIChatView
 from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
 from .views_oauth import oauth_providers_status, oauth_credentials
-from .views_integrations import github_connection, github_connect
+from .views_integrations import (
+    github_connection, github_connect, github_oauth_url, github_oauth_callback,
+)
 from .views_github import github_repos
 from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
@@ -80,6 +82,9 @@ urlpatterns = router.urls + [
     path('integrations/github/', github_connection, name='github-connection'),
     path('integrations/github/connect/', github_connect, name='github-connect'),
     path('integrations/github/repos/', github_repos, name='github-repos'),
+    # API-based OAuth (bypasses session cookies for SPA compatibility)
+    path('integrations/github/oauth-url/', github_oauth_url, name='github-oauth-url'),
+    path('integrations/github/oauth-callback/', github_oauth_callback, name='github-oauth-callback'),
     # API Token management (for CLI)
     path('tokens/', list_tokens, name='token-list'),
     path('tokens/create/', create_token, name='token-create'),

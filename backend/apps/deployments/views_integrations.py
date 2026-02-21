@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote
+import logging
+from urllib.parse import quote, urlencode
 
+import requests as http_requests
 from django.conf import settings
 from django.contrib.auth import login
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+logger = logging.getLogger(__name__)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _github_connect_url() -> str:
-    # allauth endpoint. `process=connect` links the social account to the
-    # already-authenticated user instead of creating/logging in a new user.
+    # Legacy allauth endpoint (kept for backward compat / admin panel).
     next_path = quote("/auth/callback", safe="/")
     return f"/accounts/github/login/?process=connect&next={next_path}"
 
@@ -33,6 +39,18 @@ def _login_backend_path(user) -> str:
     if backends:
         return backends[0]
     return "django.contrib.auth.backends.ModelBackend"
+
+
+def _get_github_app():
+    """Return the allauth SocialApp for GitHub, or None."""
+    try:
+        from allauth.socialaccount.models import SocialApp
+        return SocialApp.objects.filter(provider="github").first()
+    except Exception:
+        return None
+
+
+# ── Views ────────────────────────────────────────────────────────────────────
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
@@ -74,7 +92,7 @@ def github_connection(request):
         )
 
     extra = account.extra_data if account and isinstance(account.extra_data, dict) else {}
-    login = extra.get("login") or extra.get("username") or None
+    login_name = extra.get("login") or extra.get("username") or None
     avatar_url = extra.get("avatar_url") or None
 
     return Response(
@@ -85,7 +103,7 @@ def github_connection(request):
             "account": (
                 {
                     "uid": account.uid,
-                    "login": login,
+                    "login": login_name,
                     "avatar_url": avatar_url,
                 }
                 if account
@@ -116,6 +134,202 @@ def github_connect(request):
         {
             "connect_url": _github_connect_url(),
             "session_bootstrapped": True,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+# ── NEW: API-based GitHub OAuth (bypasses session cookies) ───────────────────
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_oauth_url(request):
+    """
+    Return the GitHub OAuth authorization URL.
+
+    The frontend navigates the browser to this URL. After user authorization,
+    GitHub redirects back to the frontend callback page with a `code` param.
+    The frontend then POSTs that code to `github_oauth_callback`.
+
+    This keeps the client_id server-side and constructs the URL properly.
+    """
+    app = _get_github_app()
+    if not app:
+        return Response(
+            {"error": "GitHub OAuth not configured. Add a SocialApp in admin."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Build callback URL pointing to the FRONTEND callback page
+    origin = request.build_absolute_uri("/").rstrip("/")
+    callback_url = f"{origin}/auth/github/callback"
+
+    scopes = settings.SOCIALACCOUNT_PROVIDERS.get("github", {}).get(
+        "SCOPE", ["user", "repo", "read:org"]
+    )
+
+    params = {
+        "client_id": app.client_id,
+        "redirect_uri": callback_url,
+        "scope": " ".join(scopes),
+        "response_type": "code",
+    }
+
+    authorize_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+
+    return Response(
+        {
+            "url": authorize_url,
+            "callback_url": callback_url,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+class GitHubCallbackSerializer(serializers.Serializer):
+    code = serializers.CharField(required=True, help_text="GitHub authorization code")
+
+
+@extend_schema(request=GitHubCallbackSerializer, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def github_oauth_callback(request):
+    """
+    Exchange a GitHub authorization code for an access token, then link
+    the GitHub account to the currently authenticated user.
+
+    This is the SPA-compatible replacement for allauth's browser-based
+    callback. No server-side sessions or cookies needed.
+    """
+    code = request.data.get("code")
+    if not code:
+        return Response(
+            {"error": "Missing 'code' parameter."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    app = _get_github_app()
+    if not app:
+        return Response(
+            {"error": "GitHub OAuth not configured."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Build the same callback URL the frontend used
+    origin = request.build_absolute_uri("/").rstrip("/")
+    callback_url = f"{origin}/auth/github/callback"
+
+    # ── Step 1: Exchange code for access token ──────────────────────────
+    try:
+        token_resp = http_requests.post(
+            "https://github.com/login/oauth/access_token",
+            data={
+                "client_id": app.client_id,
+                "client_secret": app.secret,
+                "code": code,
+                "redirect_uri": callback_url,
+            },
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except Exception as exc:
+        logger.error("GitHub token exchange failed: %s", exc)
+        return Response(
+            {"error": "Failed to exchange code with GitHub."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        error_desc = token_data.get("error_description", token_data.get("error", "unknown"))
+        logger.warning("GitHub token exchange returned error: %s", error_desc)
+        return Response(
+            {"error": f"GitHub rejected the code: {error_desc}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Step 2: Fetch GitHub user profile ───────────────────────────────
+    try:
+        profile_resp = http_requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {access_token}",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        profile_resp.raise_for_status()
+        profile = profile_resp.json()
+    except Exception as exc:
+        logger.error("GitHub profile fetch failed: %s", exc)
+        return Response(
+            {"error": "Failed to fetch GitHub profile."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    github_uid = str(profile.get("id", ""))
+    github_login = profile.get("login", "")
+
+    if not github_uid:
+        return Response(
+            {"error": "GitHub profile missing user ID."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Step 3: Create/update SocialAccount + SocialToken ───────────────
+    try:
+        from allauth.socialaccount.models import SocialAccount, SocialToken
+
+        account, created = SocialAccount.objects.update_or_create(
+            provider="github",
+            uid=github_uid,
+            defaults={
+                "user": request.user,
+                "extra_data": profile,
+            },
+        )
+
+        # If account exists but belongs to another user, re-link it
+        if not created and account.user_id != request.user.id:
+            account.user = request.user
+            account.extra_data = profile
+            account.save()
+
+        # Upsert the token
+        SocialToken.objects.update_or_create(
+            account=account,
+            defaults={
+                "token": access_token,
+                "token_secret": token_data.get("refresh_token", ""),
+                "app": app,
+            },
+        )
+
+        logger.info(
+            "GitHub account linked: user=%s github=%s (created=%s)",
+            request.user.username,
+            github_login,
+            created,
+        )
+    except Exception as exc:
+        logger.error("Failed to save GitHub account: %s", exc)
+        return Response(
+            {"error": "Failed to save GitHub connection."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(
+        {
+            "connected": True,
+            "account": {
+                "uid": github_uid,
+                "login": github_login,
+                "avatar_url": profile.get("avatar_url"),
+            },
         },
         status=status.HTTP_200_OK,
     )
