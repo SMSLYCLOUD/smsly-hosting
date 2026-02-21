@@ -19,6 +19,33 @@ services:
     networks:
       - smsly-net
 
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-smsly_admin}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-smsly_hosting}
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 10
+      MIN_POOL_SIZE: 5
+      MAX_CLIENT_CONN: 10000
+      MAX_DB_CONNECTIONS: 20
+      SERVER_RESET_QUERY: DISCARD ALL
+      AUTH_TYPE: scram-sha-256
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
   redis:
     image: redis:7-alpine
     command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
@@ -60,7 +87,7 @@ services:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375  # Connect via restricted proxy
     depends_on:
-      db:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -99,6 +126,8 @@ services:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       backend:
         condition: service_healthy
       redis:
@@ -120,6 +149,8 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
+      pgbouncer:
+        condition: service_healthy
       backend:
         condition: service_healthy
       redis:
