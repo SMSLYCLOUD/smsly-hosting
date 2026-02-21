@@ -67,6 +67,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
 
         if [ -t 0 ]; then
             read -p "Enter choice [1]: " _MODE_CHOICE
+            echo ""
             _MODE_CHOICE=${_MODE_CHOICE:-1}
         else
             _MODE_CHOICE=1
@@ -76,29 +77,33 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
             export USE_SSL="true"
             _DOMAIN=""
             while [ -z "$_DOMAIN" ]; do
-                read -p "Enter your Domain (e.g., app.example.com): " _DOMAIN
+                read -p "  Enter your Domain (e.g., app.example.com): " _DOMAIN
             done
+            echo ""
             export DOMAIN="$_DOMAIN"
 
             _ACME_EMAIL=""
             while [ -z "$_ACME_EMAIL" ]; do
-                read -p "Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL
+                read -p "  Enter Email for SSL (e.g., admin@example.com): " _ACME_EMAIL
             done
+            echo ""
             export ACME_EMAIL="$_ACME_EMAIL"
 
             echo ""
             echo -e "\033[0;34m  Wildcard subdomains allow deployed services to get automatic SSL.\033[0m"
             echo -e "  e.g., myapp-abc123.${_DOMAIN} will automatically have HTTPS."
-            echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
+            echo -e "  This requires a Cloudflare API Token with DNS:Edit permission."
+            echo ""
 
-            read -p "  Enable wildcard subdomains? (y/n) [y]: " _WC_CHOICE
-            _WC_CHOICE=${_WC_CHOICE:-y}
+            read -p "  Enable wildcard subdomains? (y/n) [n]: " _WC_CHOICE
+            echo ""
+            _WC_CHOICE=${_WC_CHOICE:-n}
             if [[ $_WC_CHOICE =~ ^[Yy]$ ]]; then
                 export WILDCARD_SUBDOMAINS="true"
                 _CF_TOKEN=""
                 while [ -z "$_CF_TOKEN" ]; do
                     read -sp "  Enter Cloudflare API Token (DNS:Edit): " _CF_TOKEN
-                    echo
+                    echo ""
                 done
                 export CLOUDFLARE_API_TOKEN="$_CF_TOKEN"
             else
