@@ -94,6 +94,43 @@ class GitManager:
             msg = str(e)
             if token:
                 msg = msg.replace(token, "<redacted>")
+            auth_markers = (
+                "Authentication failed",
+                "Invalid username or token",
+                "could not read Username",
+                "403",
+            )
+            if token and any(marker in msg for marker in auth_markers):
+                logger.warning(
+                    "Git clone with linked token failed; retrying anonymous clone for %s",
+                    _sanitize_url(repo_url),
+                )
+                try:
+                    if os.path.exists(repo_dir):
+                        shutil.rmtree(repo_dir)
+                    os.makedirs(repo_dir, exist_ok=True)
+                    fallback_env = os.environ.copy()
+                    fallback_env["GIT_TERMINAL_PROMPT"] = "0"
+                    fallback_env.pop("GIT_ASKPASS", None)
+                    fallback_env.pop("SMSLY_GIT_PASSWORD", None)
+                    git.Repo.clone_from(
+                        repo_url,
+                        repo_dir,
+                        branch=branch,
+                        depth=1,
+                        env=fallback_env,
+                    )
+                    logger.info(
+                        "Anonymous clone fallback succeeded for %s",
+                        _sanitize_url(repo_url),
+                    )
+                    return repo_dir
+                except git.GitCommandError as fallback_error:
+                    fallback_msg = str(fallback_error)
+                    logger.error("Anonymous clone fallback failed: %s", fallback_msg)
+                    raise RuntimeError(
+                        f"Failed to clone repository with token and anonymous fallback: {msg} | {fallback_msg}"
+                    ) from fallback_error
             logger.error("Git Clone Failed: %s", msg)
             raise RuntimeError(f"Failed to clone repository: {msg}") from e
 
