@@ -14,7 +14,8 @@ class UsageMeter:
 
     def record_usage(self, user, resource_type, quantity, timestamp=None):
         """Record a usage data point (called by Celery tasks)."""
-        pass
+        # Future implementation
+        return
 
     def get_usage_summary(self, user, period_start, period_end):
         """Aggregate usage for billing period."""
@@ -74,7 +75,8 @@ class UsageMeter:
         # Calculate hours in period for rate limiting context
         # (approx 720 hours/month, but we use actual duration)
         duration_hours = Decimal((period_end - period_start).total_seconds()) / Decimal(3600)
-        if duration_hours < 1: duration_hours = Decimal(1)
+        if duration_hours < 1:
+            duration_hours = Decimal(1)
 
         # 1. CPU Overage
         # Plan limit is "cores", so total allowed core-hours = cores * hours
