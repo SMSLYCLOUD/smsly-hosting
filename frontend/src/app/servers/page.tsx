@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Server, Plus, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2,
@@ -8,6 +9,7 @@ import {
     Terminal, Key, Lock, Zap, Link2
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { toast } from '@/components/ui/use-toast';
 
 interface ManagedServer {
     id: string;
@@ -59,6 +61,7 @@ const PROVISION_STATUS_CONFIG: Record<string, { color: string; label: string; an
 };
 
 export default function ServersPage() {
+    const router = useRouter();
     const [servers, setServers] = useState<ManagedServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAdd, setShowAdd] = useState(false);
@@ -134,7 +137,7 @@ export default function ServersPage() {
             setConnectForm({ name: '', host: '', api_url: '', api_token: '', ssh_port: 22, is_primary: false });
             fetchServers();
         } catch (err: any) {
-            alert(`Failed: ${err.message}`);
+            toast({ title: 'Failed to connect server', description: err.message, variant: 'destructive' });
         }
         setSubmitting(false);
     };
@@ -156,7 +159,7 @@ export default function ServersPage() {
                 setProvisionStatus('PENDING');
             }
         } catch (err: any) {
-            alert(`Failed: ${err.message}`);
+            toast({ title: 'Failed to provision server', description: err.message, variant: 'destructive' });
         }
         setSubmitting(false);
     };
@@ -534,7 +537,8 @@ export default function ServersPage() {
                                         initial={{ opacity: 0, y: 20 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ delay: idx * 0.05 }}
-                                        className={`bg-card border rounded-xl p-5 space-y-4 ${sc.border} hover:shadow-lg transition-shadow`}
+                                        className={`bg-card border rounded-xl p-5 space-y-4 ${sc.border} hover:shadow-lg transition-shadow cursor-pointer`}
+                                        onClick={() => router.push(`/servers/${server.id}`)}
                                     >
                                         {/* Header */}
                                         <div className="flex items-center justify-between">
@@ -586,8 +590,8 @@ export default function ServersPage() {
                                                     <p className="text-[10px] text-muted-foreground uppercase">Services</p>
                                                 </div>
                                                 <div className="bg-muted/30 rounded-lg p-2">
-                                                    <p className="text-lg font-bold">{server.ssh_port}</p>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">SSH Port</p>
+                                                    <p className="text-sm font-bold truncate">{server.server_version || '—'}</p>
+                                                    <p className="text-[10px] text-muted-foreground uppercase">Version</p>
                                                 </div>
                                                 <div className="bg-muted/30 rounded-lg p-2">
                                                     <p className="text-xs font-medium text-muted-foreground mt-1">
@@ -601,7 +605,7 @@ export default function ServersPage() {
                                         )}
 
                                         {/* Actions */}
-                                        <div className="flex items-center justify-between pt-2 border-t border-border">
+                                        <div className="flex items-center justify-between pt-2 border-t border-border" onClick={e => e.stopPropagation()}>
                                             <div className="flex items-center gap-2">
                                                 {server.api_url && (
                                                     <>

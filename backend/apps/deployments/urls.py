@@ -23,6 +23,7 @@ from .views_integrations import github_connection, github_connect
 from .views_github import github_repos
 from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
+from .views_project import ProjectViewSet
 
 # Create main router
 router = DefaultRouter()
@@ -42,6 +43,7 @@ router.register(r'backups', ServiceBackupViewSet, basename='backup')
 router.register(r'server/backups', ServerBackupViewSet, basename='server-backup')
 router.register(r'backup-schedules', BackupScheduleViewSet, basename='backup-schedule')
 router.register(r'transfers', ServerTransferViewSet, basename='transfer')
+router.register(r'projects', ProjectViewSet, basename='project')
 
 # Nested Router
 # /api/v1/services/{service_pk}/metrics/

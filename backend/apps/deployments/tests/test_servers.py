@@ -128,3 +128,71 @@ class ManagedServerViewTests(TestCase):
         resp = self.client.post(f"/api/v1/servers/{server.id}/health_check/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["status"], "OFFLINE")
+
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_domains_aggregation(self, mock_get):
+        """Test that the domains endpoint aggregates custom_domains across services."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {
+                "id": "svc1",
+                "name": "Frontend",
+                "public_domain": "frontend.cloud.smsly.cloud",
+                "custom_domains": ["app.example.com", "www.example.com"],
+                "domain_verified": True,
+                "verification_token": "abc123",
+            },
+            {
+                "id": "svc2",
+                "name": "API",
+                "public_domain": "api.cloud.smsly.cloud",
+                "custom_domains": ["api.example.com"],
+                "domain_verified": False,
+                "verification_token": "def456",
+            },
+            {
+                "id": "svc3",
+                "name": "Worker",
+                "public_domain": "",
+                "custom_domains": [],
+            },
+        ]
+        mock_get.return_value = mock_resp
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="DomTest",
+            host="10.0.0.6",
+            api_url="https://domtest.example.com",
+            api_token="tok",
+        )
+        resp = self.client.get(f"/api/v1/servers/{server.id}/domains/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 3)
+        domains = resp.data["domains"]
+        self.assertEqual(domains[0]["domain"], "app.example.com")
+        self.assertEqual(domains[0]["service_name"], "Frontend")
+        self.assertEqual(domains[0]["verified"], True)
+        self.assertEqual(domains[1]["domain"], "www.example.com")
+        self.assertEqual(domains[2]["domain"], "api.example.com")
+        self.assertEqual(domains[2]["verified"], False)
+
+    def test_update_server_name(self):
+        """Test that a server name can be updated via PATCH."""
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="OldName",
+            host="10.0.0.7",
+            api_url="https://old.example.com",
+            api_token="tok",
+        )
+        resp = self.client.patch(
+            f"/api/v1/servers/{server.id}/",
+            {"name": "NewName"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        server.refresh_from_db()
+        self.assertEqual(server.name, "NewName")
+

@@ -35,6 +35,7 @@ function isProtectedPath(path: string): boolean {
   const protectedPrefixes = [
     '/dashboard',
     '/services',
+    '/projects',
     '/deployments',
     '/new',
     '/project',
@@ -117,12 +118,32 @@ export interface Service {
   health_check_interval?: number;
   health_check_timeout?: number;
   health_check_retries?: number;
+  // Project grouping
+  project?: string | null;
+  project_name?: string | null;
+  project_slug?: string | null;
+  project_emoji?: string | null;
   latest_deployment?: {
     id: string;
     status: string;
     commit_hash?: string;
     created_at: string;
   };
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  icon_emoji: string;
+  color: string;
+  is_default: boolean;
+  services_count: number;
+  latest_deploy_status?: string | null;
+  latest_deploy_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Deployment {
@@ -475,6 +496,73 @@ export const serversApi = {
     const res = await api.get(`/servers/${id}/deployments/`);
     return res.data;
   },
+  remoteDomains: async (id: string): Promise<any> => {
+    const res = await api.get(`/servers/${id}/domains/`);
+    return res.data;
+  },
+  // Remote service management via proxy
+  remoteDeployService: async (id: string, serviceId: string, ref: string = 'HEAD'): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/deploy/`, body: { ref },
+    });
+    return res.data;
+  },
+  remoteStopService: async (id: string, serviceId: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/stop/`,
+    });
+    return res.data;
+  },
+  remoteRestartService: async (id: string, serviceId: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/restart/`,
+    });
+    return res.data;
+  },
+  // Remote domain management via proxy
+  remoteAddDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/add-domain/`, body: { domain },
+    });
+    return res.data;
+  },
+  remoteDeleteDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/delete-domain/`, body: { domain },
+    });
+    return res.data;
+  },
+  remoteVerifyDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/proxy/`, {
+      method: 'POST', path: `/api/v1/services/${serviceId}/verify-domain/`, body: { domain },
+    });
+    return res.data;
+  },
+  provision: async (data: any): Promise<any> => {
+    const res = await api.post('/servers/provision/', data);
+    return res.data;
+  },
+  provisionLogs: async (id: string): Promise<any> => {
+    const res = await api.get(`/servers/${id}/provision-logs/`);
+    return res.data;
+  },
+};
+
+// ─── Multi-Deploy API ───────────────────────────────────────────────────────
+
+export const deployApi = {
+  /** Deploy a service locally + to selected remote servers */
+  multiDeploy: async (
+    serviceId: string,
+    ref: string = 'HEAD',
+    serverIds: string[] = [],
+  ): Promise<any> => {
+    const res = await api.post(`/services/${serviceId}/multi-deploy/`, {
+      ref,
+      server_ids: serverIds,
+    });
+    return res.data;
+  },
 };
 
 // ─── Tokens API ─────────────────────────────────────────────────────────────
@@ -819,3 +907,37 @@ export const addonsApi = {
 };
 
 export default api;
+
+// ── Projects API ────────────────────────────────────────────────────────
+
+export const projectsApi = {
+  list: async (): Promise<Project[]> => {
+    const response = await api.get('/projects/');
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  get: async (id: string): Promise<Project> => {
+    const response = await api.get(`/projects/${id}/`);
+    return response.data;
+  },
+  create: async (data: { name: string; description?: string; icon_emoji?: string; color?: string }): Promise<Project> => {
+    const response = await api.post('/projects/', data);
+    return response.data;
+  },
+  update: async (id: string, data: Partial<Project>): Promise<Project> => {
+    const response = await api.patch(`/projects/${id}/`, data);
+    return response.data;
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/projects/${id}/`);
+  },
+  services: async (id: string): Promise<Service[]> => {
+    const response = await api.get(`/projects/${id}/services/`);
+    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+  },
+  moveService: async (projectId: string, serviceId: string): Promise<void> => {
+    await api.post(`/projects/${projectId}/move-service/`, { service_id: serviceId });
+  },
+  removeService: async (projectId: string, serviceId: string): Promise<void> => {
+    await api.post(`/projects/${projectId}/remove-service/`, { service_id: serviceId });
+  },
+};

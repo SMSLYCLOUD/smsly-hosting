@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Network, Store, Puzzle, GitFork } from 'lucide-react';
@@ -21,10 +21,26 @@ const TopologyView = dynamic(() => import('@/components/topology/TopologyView').
   ssr: false
 });
 
+function buildServiceFingerprint(services: Service[]): string {
+  return services
+    .map((service) => [
+      service.id,
+      service.name,
+      service.public_domain || '',
+      service.branch || '',
+      service.repository_url || '',
+      service.latest_deployment?.id || '',
+      service.latest_deployment?.status || '',
+    ].join(':'))
+    .sort()
+    .join('|');
+}
+
 export default function ServicesPage() {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'GRID' | 'CANVAS' | 'TOPOLOGY' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
+  const fingerprintRef = useRef('');
   const viewTabs: Array<{ id: 'GRID' | 'CANVAS' | 'TOPOLOGY' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
     { id: 'CANVAS', label: 'Canvas', icon: Network },
@@ -32,21 +48,28 @@ export default function ServicesPage() {
     { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const svcs = await servicesApi.list();
-        setServices(svcs);
-      } catch (e) { console.error('Failed to fetch services:', e); }
-    };
-    fetchData();
-    // Auto-refresh every 5 seconds
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+  const fetchData = useCallback(async () => {
+    try {
+      const nextServices = await servicesApi.list();
+      const nextFingerprint = buildServiceFingerprint(nextServices);
+      if (nextFingerprint !== fingerprintRef.current) {
+        fingerprintRef.current = nextFingerprint;
+        setServices(nextServices);
+      }
+    } catch (error) {
+      console.error('Failed to fetch services:', error);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchData();
+    const intervalMs = viewMode === 'GRID' || viewMode === 'ADDONS' ? 5000 : 15000;
+    const interval = setInterval(fetchData, intervalMs);
+    return () => clearInterval(interval);
+  }, [fetchData, viewMode]);
+
   return (
-    <main className="h-screen flex flex-col premium-bg transition-colors duration-500">
+    <main className="h-screen min-h-0 flex flex-col premium-bg transition-colors duration-500">
 
       {/* View Toggle Bar */}
       <div className="z-20 border-b border-zinc-800/60 bg-[#070a12]/85 backdrop-blur-xl">
@@ -104,10 +127,12 @@ export default function ServicesPage() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
-        className="flex-1 relative overflow-hidden bg-dot-pattern"
+        className="relative flex-1 min-h-0 overflow-hidden bg-dot-pattern"
       >
         {viewMode === 'CANVAS' && (
-            <ServiceCanvas services={services} />
+            <div className="h-full min-h-0">
+                <ServiceCanvas services={services} />
+            </div>
         )}
         {viewMode === 'GRID' && (
             <div className="h-full overflow-y-auto">
@@ -115,7 +140,7 @@ export default function ServicesPage() {
             </div>
         )}
         {viewMode === 'TOPOLOGY' && (
-            <div className="h-full">
+            <div className="h-full min-h-0">
                 <TopologyView />
             </div>
         )}

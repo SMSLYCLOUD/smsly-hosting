@@ -55,6 +55,12 @@ class ServiceSerializer(serializers.ModelSerializer):
         queryset=Region.objects.all(), required=False)
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
+    project_name = serializers.CharField(
+        source='project.name', read_only=True, default=None)
+    project_slug = serializers.CharField(
+        source='project.slug', read_only=True, default=None)
+    project_emoji = serializers.CharField(
+        source='project.icon_emoji', read_only=True, default=None)
 
     class Meta:
         model = Service

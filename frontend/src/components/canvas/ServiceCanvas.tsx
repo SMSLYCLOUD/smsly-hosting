@@ -32,6 +32,21 @@ interface SvcLink {
   target: string;
 }
 
+function hashSeed(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function stableMetricWidth(seed: string, min: number, max: number): number {
+  if (max <= min) {
+    return min;
+  }
+  return min + (hashSeed(seed) % (max - min + 1));
+}
+
 /* ── Status colors ── */
 function statusColor(status: string): string {
   switch (status) {
@@ -107,9 +122,9 @@ function createServiceNode(node: SvcNode): any {
   ctx.fillRect(80, barY, 60, 4);
   ctx.fillRect(180, barY, 60, 4);
   ctx.fillStyle = '#3b82f6';
-  ctx.fillRect(80, barY, 30 + Math.random() * 25, 4);
+  ctx.fillRect(80, barY, stableMetricWidth(`${node.id}:cpu`, 30, 55), 4);
   ctx.fillStyle = '#f472b6';
-  ctx.fillRect(180, barY, 20 + Math.random() * 35, 4);
+  ctx.fillRect(180, barY, stableMetricWidth(`${node.id}:ram`, 20, 55), 4);
   ctx.font = '10px Inter, system-ui, sans-serif';
   ctx.fillStyle = '#52525b';
   ctx.fillText('CPU', 60, barY + 4);
@@ -130,18 +145,24 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
+  const hasInitialFitRef = useRef(false);
+  const nodeObjectCacheRef = useRef<Map<string, { key: string; object: any }>>(new Map());
   const initialDistanceRef = useRef(220);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   const measureContainer = useCallback(() => {
     const el = containerRef.current;
     if (!el) {
       return;
     }
-    setDimensions({
-      width: Math.max(el.clientWidth, 400),
-      height: Math.max(el.clientHeight, 400),
-    });
+    const rect = el.getBoundingClientRect();
+    const nextWidth = Math.max(Math.floor(rect.width), 480);
+    const nextHeight = Math.max(Math.floor(rect.height), 420);
+    setDimensions((prev) => (
+      prev.width === nextWidth && prev.height === nextHeight
+        ? prev
+        : { width: nextWidth, height: nextHeight }
+    ));
   }, []);
 
   useEffect(() => {
@@ -155,14 +176,27 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
     });
     obs.observe(containerRef.current);
     window.addEventListener('resize', measureContainer);
+    let rafId = 0;
+    let rafRuns = 0;
+    const pulseMeasure = () => {
+      measureContainer();
+      rafRuns += 1;
+      if (rafRuns < 6) {
+        rafId = window.requestAnimationFrame(pulseMeasure);
+      }
+    };
+    rafId = window.requestAnimationFrame(pulseMeasure);
 
     return () => {
+      window.cancelAnimationFrame(rafId);
       obs.disconnect();
       window.removeEventListener('resize', measureContainer);
     };
   }, [measureContainer]);
 
   const graphData = React.useMemo(() => {
+    nodeObjectCacheRef.current.clear();
+    hasInitialFitRef.current = false;
     const nodes: SvcNode[] = services.map((svc) => ({
       id: svc.id,
       name: svc.name,
@@ -205,7 +239,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
 
   const fitGraphToViewport = useCallback((duration = 450) => {
     const fg = fgRef.current;
-    if (!fg || graphData.nodes.length === 0) {
+    if (!fg || graphData.nodes.length === 0 || dimensions.width === 0 || dimensions.height === 0) {
       return;
     }
     if (typeof fg.zoomToFit === 'function') {
@@ -215,7 +249,18 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         console.error('zoomToFit failed:', error);
       }
     }
-  }, [graphData.nodes.length]);
+  }, [graphData.nodes.length, dimensions.height, dimensions.width]);
+
+  const getServiceNodeObject = useCallback((node: SvcNode) => {
+    const cacheKey = `${node.id}:${node.name}:${node.status}:${node.repoUrl || ''}`;
+    const cached = nodeObjectCacheRef.current.get(node.id);
+    if (cached?.key === cacheKey) {
+      return cached.object;
+    }
+    const object = createServiceNode(node);
+    nodeObjectCacheRef.current.set(node.id, { key: cacheKey, object });
+    return object;
+  }, []);
 
   useEffect(() => {
     if (fgRef.current && graphData.nodes.length > 0) {
@@ -226,15 +271,20 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
       fg.d3Force('charge')?.strength(-250);
       fg.d3ReheatSimulation?.();
-      const fitTimer = setTimeout(() => fitGraphToViewport(700), 250);
+      const fitTimer = setTimeout(() => {
+        if (!hasInitialFitRef.current) {
+          fitGraphToViewport(700);
+          hasInitialFitRef.current = true;
+        }
+      }, 250);
       return () => {
         clearTimeout(fitTimer);
       };
     }
-  }, [fitGraphToViewport, graphData]);
+  }, [fitGraphToViewport, graphData.nodes.length]);
 
   useEffect(() => {
-    if (graphData.nodes.length === 0) {
+    if (graphData.nodes.length === 0 || !hasInitialFitRef.current) {
       return;
     }
     const fitTimer = setTimeout(() => fitGraphToViewport(250), 120);
@@ -256,7 +306,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   }
 
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-[#04070f]">
+    <div ref={containerRef} className="relative h-full w-full min-h-[500px] overflow-hidden bg-[#04070f]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.08),transparent_45%),radial-gradient(circle_at_80%_30%,rgba(59,130,246,0.09),transparent_42%),radial-gradient(circle_at_50%_85%,rgba(99,102,241,0.08),transparent_48%)]" />
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/30" />
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
@@ -317,22 +367,25 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         </button>
       </div>
 
-      <ForceGraph3D
-        ref={fgRef}
-        width={dimensions.width}
-        height={dimensions.height}
-        graphData={graphData}
-        backgroundColor="#04070f"
-        nodeThreeObject={(node: any) => createServiceNode(node as SvcNode)}
-        nodeThreeObjectExtend={false}
-        onNodeClick={handleNodeClick}
-        enableNodeDrag={true}
-        enableNavigationControls={true}
-        showNavInfo={false}
-        warmupTicks={30}
-        cooldownTicks={80}
-        onEngineStop={() => fitGraphToViewport(350)}
-      />
+      <div className="absolute inset-0">
+        {dimensions.width > 0 && dimensions.height > 0 && (
+          <ForceGraph3D
+            ref={fgRef}
+            width={dimensions.width}
+            height={dimensions.height}
+            graphData={graphData}
+            backgroundColor="#04070f"
+            nodeThreeObject={(node: any) => getServiceNodeObject(node as SvcNode)}
+            nodeThreeObjectExtend={false}
+            onNodeClick={handleNodeClick}
+            enableNodeDrag={true}
+            enableNavigationControls={true}
+            showNavInfo={false}
+            warmupTicks={30}
+            cooldownTicks={80}
+          />
+        )}
+      </div>
     </div>
   );
 }

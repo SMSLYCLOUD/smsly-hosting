@@ -323,3 +323,49 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 {"error": str(e)},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+    @action(detail=True, methods=["get"])
+    def domains(self, request, pk=None):
+        """Aggregate all custom domains across all services on a remote server."""
+        server = self.get_object()
+
+        if not server.api_url:
+            return Response(
+                {"error": "Server has no API URL yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            resp = requests.get(
+                f"{server.api_url.rstrip('/')}/api/v1/services/",
+                headers={
+                    "Authorization": f"Bearer {server.api_token}",
+                    "Accept": "application/json",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            services = data.get("results", data) if isinstance(data, dict) else data
+
+            domains = []
+            for svc in (services if isinstance(services, list) else []):
+                svc_id = svc.get("id", "")
+                svc_name = svc.get("name", "")
+                public_domain = svc.get("public_domain", "")
+                for domain in svc.get("custom_domains", []):
+                    domains.append({
+                        "domain": domain,
+                        "service_id": svc_id,
+                        "service_name": svc_name,
+                        "public_domain": public_domain,
+                        "verified": svc.get("domain_verified", False),
+                        "verification_token": svc.get("verification_token", ""),
+                    })
+
+            return Response({"domains": domains, "count": len(domains)})
+        except requests.RequestException as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
