@@ -789,10 +789,14 @@ class PipelineManager:
                         detected_compose_file = name
 
             # --- Auto-detect compose deployment mode ---
-            # Only auto-detect on first deployment. Once compose_file is set
-            # (from prior detection) or deploy_mode is explicitly configured,
-            # respect the user's choice so they can switch to SINGLE mode.
-            if detected_compose_file and not self.service.compose_file:
+            # Only auto-detect on the very first deployment. Once a service
+            # has been deployed at least once, respect the user's deploy_mode.
+            # (Empty string is falsy in Python, so checking compose_file
+            #  doesn't work when user clears it to switch back to SINGLE.)
+            has_prior_deploys = self.service.deployments.exclude(
+                id=self.deployment.id
+            ).exists()
+            if detected_compose_file and not has_prior_deploys:
                 self.service.deploy_mode = 'COMPOSE'
                 self.service.compose_file = detected_compose_file
 
