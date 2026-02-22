@@ -667,6 +667,20 @@ if [ -n "$UPDATE_MODE" ]; then
             ;;
     esac
 
+    # ─── Ensure Local Docker cloud provider exists ──────────────────────────
+    echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
+    echo "
+from apps.cloud.models import CloudProvider
+cp, created = CloudProvider.objects.get_or_create(
+    provider_type='local',
+    defaults={'name': 'Local Docker', 'is_active': True}
+)
+if not created and not cp.is_active:
+    cp.is_active = True
+    cp.save()
+" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Cloud provider ready${NC}"
+
     # ─── CRITICAL FIX: Force-recreate nginx to pick up config mount ──────────
     # Docker 'up -d' does NOT recreate unchanged containers. nginx image doesn't
     # change between updates, but the mounted nginx.conf may have changed.
@@ -1258,6 +1272,23 @@ Password: $ADMIN_PASS
 CREDS
     chmod 600 "$CREDENTIALS_FILE"
 fi
+
+# -----------------------------------------------------------------------------
+# 6b. Ensure Local Cloud Provider exists (required for deployments)
+# -----------------------------------------------------------------------------
+echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
+echo "
+from apps.cloud.models import CloudProvider
+cp, created = CloudProvider.objects.get_or_create(
+    provider_type='local',
+    defaults={'name': 'Local Docker', 'is_active': True}
+)
+if not created and not cp.is_active:
+    cp.is_active = True
+    cp.save()
+print('CREATED' if created else 'EXISTS')
+" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
+echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
 
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
