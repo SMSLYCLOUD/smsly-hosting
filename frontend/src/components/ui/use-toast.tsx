@@ -2,17 +2,19 @@
 
 import * as React from "react"
 
-import { cn } from "@/lib/utils"
-
 const TOAST_LIMIT = 5
 const TOAST_REMOVE_DELAY = 5000
+
+export type ToastVariant = "default" | "destructive" | "success" | "warning" | "info"
 
 type ToasterToast = {
     id: string
     title?: string
     description?: string
     action?: React.ReactNode
-    variant?: "default" | "destructive"
+    variant?: ToastVariant
+    /** Override auto-dismiss duration in ms. Set to 0 to disable auto-dismiss. */
+    duration?: number
 }
 
 const actionTypes = {
@@ -43,15 +45,18 @@ interface State {
 
 const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
 
-const addToRemoveQueue = (toastId: string) => {
+const addToRemoveQueue = (toastId: string, duration?: number) => {
     if (toastTimeouts.has(toastId)) {
         return
     }
 
+    const delay = duration ?? TOAST_REMOVE_DELAY
+    if (delay <= 0) return  // Duration 0 means sticky (no auto-dismiss)
+
     const timeout = setTimeout(() => {
         toastTimeouts.delete(toastId)
         dispatch({ type: "REMOVE_TOAST", toastId })
-    }, TOAST_REMOVE_DELAY)
+    }, delay)
 
     toastTimeouts.set(toastId, timeout)
 }
@@ -142,10 +147,23 @@ function toast({ ...props }: Toast) {
     })
 
     // Auto-remove after delay by default (can still be dismissed manually via X button).
-    addToRemoveQueue(id)
+    addToRemoveQueue(id, props.duration)
 
     return { id, dismiss, update }
 }
+
+// ─── Convenience helpers (import these directly for quick one-liners) ───────
+toast.success = (title: string, description?: string) =>
+    toast({ title, description, variant: "success" })
+
+toast.error = (title: string, description?: string) =>
+    toast({ title, description, variant: "destructive" })
+
+toast.warning = (title: string, description?: string) =>
+    toast({ title, description, variant: "warning" })
+
+toast.info = (title: string, description?: string) =>
+    toast({ title, description, variant: "info" })
 
 function useToast() {
     const [state, setState] = React.useState<State>(memoryState)

@@ -125,8 +125,6 @@ services:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:-dummy_secret_for_ci_validation}
       - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:-dummy_encryption_key_for_ci_validation}
-      - SECRET_KEY=${SECRET_KEY:-dummy_secret_for_ci_validation}
-      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:-dummy_encryption_key_for_ci_validation}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
       - REDIS_HOST=redis
