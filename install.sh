@@ -672,7 +672,7 @@ if [ -n "$UPDATE_MODE" ]; then
     echo "
 from apps.cloud.models import CloudProvider
 cp, created = CloudProvider.objects.get_or_create(
-    provider_type='local',
+    provider_type='LOCAL',
     defaults={'name': 'Local Docker', 'is_active': True}
 )
 if not created and not cp.is_active:
@@ -1280,7 +1280,7 @@ echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
 echo "
 from apps.cloud.models import CloudProvider
 cp, created = CloudProvider.objects.get_or_create(
-    provider_type='local',
+    provider_type='LOCAL',
     defaults={'name': 'Local Docker', 'is_active': True}
 )
 if not created and not cp.is_active:
