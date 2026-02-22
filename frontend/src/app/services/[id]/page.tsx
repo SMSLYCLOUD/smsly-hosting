@@ -245,8 +245,6 @@ export default function ServiceDetailPage() {
     if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
     // Simple cost estimation logic (use defaults if not set)
-    const hourlyRate = ((service.cpu_cores ?? 1) * 0.04) + (((service.memory_mb ?? 512) / 1024) * 0.02);
-    const monthlyEstimate = hourlyRate * 730;
     const customDomains = Array.isArray(service.custom_domains)
         ? service.custom_domains.filter((domain) => typeof domain === 'string' && domain.trim())
         : [];
@@ -304,17 +302,21 @@ export default function ServiceDetailPage() {
                         <p className="text-xs text-muted-foreground mt-2 font-medium">Latest deployment</p>
                     </div>
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
-                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Est. Cost</h4>
-                        <p className="text-3xl font-bold text-foreground">${monthlyEstimate.toFixed(2)}</p>
-                        <p className="text-xs text-muted-foreground mt-2 font-medium">/month (approx)</p>
+                        <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Deploy Mode</h4>
+                        <p className="text-2xl font-bold text-foreground">
+                            {service.deploy_mode === 'COMPOSE' ? 'Compose' : 'Single'}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-2 font-medium">
+                            {service.deploy_mode === 'COMPOSE' ? service.compose_file || 'docker-compose.yml' : 'Dockerfile'}
+                        </p>
                     </div>
 
-                    <div className="col-span-1 md:col-span-3 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
+                    <div className="col-span-1 md:col-span-4 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>
-                        <div className="space-y-5 text-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-5 text-sm">
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Repository</span>
-                                <span className="font-mono text-foreground">{service.repository_url}</span>
+                                <span className="font-mono text-foreground truncate ml-4">{service.repository_url}</span>
                             </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Branch</span>
@@ -370,10 +372,7 @@ export default function ServiceDetailPage() {
                             </div>
                             <div className="flex justify-between items-center border-b border-border pb-3">
                                 <div>
-                                    <span className="text-muted-foreground font-medium">Domain Visibility</span>
-                                    <p className="text-xs text-muted-foreground mt-0.5">
-                                        {service.is_public !== false ? 'Accessible via public URL' : 'Internal only (Docker DNS)'}
-                                    </p>
+                                    <span className="text-muted-foreground font-medium">Visibility</span>
                                 </div>
                                 <button
                                     onClick={async () => {
@@ -439,7 +438,7 @@ export default function ServiceDetailPage() {
                         </div>
                     </div>
 
-                    <div className="bg-card border border-border p-8 rounded-xl shadow-sm">
+                    <div className="col-span-1 md:col-span-4 bg-card border border-border p-8 rounded-xl shadow-sm">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Latest Deployment</h3>
                         {deployment ? (
                             <div className="space-y-5 text-sm">

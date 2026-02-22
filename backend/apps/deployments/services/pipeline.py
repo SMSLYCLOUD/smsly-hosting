@@ -789,7 +789,10 @@ class PipelineManager:
                         detected_compose_file = name
 
             # --- Auto-detect compose deployment mode ---
-            if detected_compose_file:
+            # Only auto-detect on first deployment. Once compose_file is set
+            # (from prior detection) or deploy_mode is explicitly configured,
+            # respect the user's choice so they can switch to SINGLE mode.
+            if detected_compose_file and not self.service.compose_file:
                 self.service.deploy_mode = 'COMPOSE'
                 self.service.compose_file = detected_compose_file
 
@@ -804,10 +807,17 @@ class PipelineManager:
                 self.service.save(update_fields=[
                     'deploy_mode', 'compose_file', 'compose_main_service'
                 ])
+
+            if self.service.deploy_mode == 'COMPOSE':
                 append_log(
                     self.deployment,
-                    f"\n🐳 Compose mode detected: {detected_compose_file}\n"
-                    f"   Main service: {main_service or '(user must select)'}\n"
+                    f"\n🐳 Compose mode detected: {self.service.compose_file}\n"
+                    f"   Main service: {self.service.compose_main_service or '(user must select)'}\n"
+                )
+            elif detected_compose_file:
+                append_log(
+                    self.deployment,
+                    f"\n📦 Single container mode (compose file '{detected_compose_file}' detected but not used)\n"
                 )
 
             if not detected_types:
