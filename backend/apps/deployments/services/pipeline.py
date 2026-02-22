@@ -788,34 +788,13 @@ class PipelineManager:
                     if not detected_compose_file:
                         detected_compose_file = name
 
-            # --- Auto-detect compose deployment mode ---
-            # Only auto-detect on the very first deployment. Once a service
-            # has been deployed at least once, respect the user's deploy_mode.
-            # (Empty string is falsy in Python, so checking compose_file
-            #  doesn't work when user clears it to switch back to SINGLE.)
-            has_prior_deploys = self.service.deployments.exclude(
-                id=self.deployment.id
-            ).exists()
-            if detected_compose_file and not has_prior_deploys:
-                self.service.deploy_mode = 'COMPOSE'
-                self.service.compose_file = detected_compose_file
-
-                # Auto-detect main service: prefer web/frontend/backend/app
-                compose_path = os.path.join(
-                    self.source_dir, detected_compose_file
-                )
-                main_service = self._detect_compose_main_service(compose_path)
-                if main_service:
-                    self.service.compose_main_service = main_service
-
-                self.service.save(update_fields=[
-                    'deploy_mode', 'compose_file', 'compose_main_service'
-                ])
-
+            # --- Deploy mode is user-controlled ---
+            # Never auto-switch to COMPOSE. The user's deploy_mode selection
+            # in the UI is always respected. We only log what we found.
             if self.service.deploy_mode == 'COMPOSE':
                 append_log(
                     self.deployment,
-                    f"\n🐳 Compose mode detected: {self.service.compose_file}\n"
+                    f"\n🐳 Compose mode: {self.service.compose_file}\n"
                     f"   Main service: {self.service.compose_main_service or '(user must select)'}\n"
                 )
             elif detected_compose_file:
