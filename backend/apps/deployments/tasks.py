@@ -70,7 +70,16 @@ def _build_runtime_env(service: Service) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
 
-    env_vars.setdefault('PORT', str(service.internal_port or 8000))
+    # internal_port is the canonical port — override any stale PORT env var.
+    if service.internal_port:
+        env_vars['PORT'] = str(service.internal_port)
+    else:
+        env_vars.setdefault('PORT', '8000')
+
+    # Ensure the app binds to all interfaces so Docker health checks
+    # (which probe 127.0.0.1) can reach it. Next.js standalone, for
+    # example, defaults to binding to the container hostname only.
+    env_vars.setdefault('HOSTNAME', '0.0.0.0')
 
     # Routing domains are platform-controlled and must not drift from service state.
     if service.public_domain:
