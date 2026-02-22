@@ -231,7 +231,11 @@ class LocalAdapter(BaseCloudAdapter):
         # Docker-native healthcheck.
         # Traefik can ignore unhealthy containers, so avoid false negatives.
         # Use a probe that works across minimal images.
-        hc_port = env.get('PORT', '8000')
+        hc_port = (
+            (healthcheck or {}).get('port')
+            or env.get('PORT')
+            or '8000'
+        )
         if healthcheck and healthcheck.get('path'):
             hc_path = _normalize_health_path(healthcheck['path'])
             hc_interval = healthcheck.get('interval', 10)
