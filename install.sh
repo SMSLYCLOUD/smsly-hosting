@@ -1319,15 +1319,27 @@ if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
     else
         echo -e "${BLUE}  → Building Caddy with Cloudflare DNS plugin (xcaddy)...${NC}"
         if ! command -v xcaddy &> /dev/null; then
-            # Install Go if needed for xcaddy
-            if ! command -v go &> /dev/null; then
-                echo -e "${BLUE}  → Installing Go for xcaddy build...${NC}"
-                apt-get install -y golang-go >/dev/null 2>&1 || {
-                    snap install go --classic >/dev/null 2>&1
-                }
+            # xcaddy needs Go 1.21+. Ubuntu apt repos ship Go 1.18 which is
+            # too old (go.mod 'toolchain' directive is unsupported). Use snap
+            # or direct binary download to get a compatible version.
+            _GO_OK=false
+            if command -v go &> /dev/null; then
+                _GO_VER=$(go version | grep -oP 'go1\.(\d+)' | grep -oP '\d+$')
+                [ "${_GO_VER:-0}" -ge 21 ] && _GO_OK=true
             fi
-            go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest 2>/dev/null
-            export PATH="$PATH:$(go env GOPATH)/bin"
+            if [ "$_GO_OK" != "true" ]; then
+                echo -e "${BLUE}  → Installing Go 1.22 (xcaddy requires Go 1.21+)...${NC}"
+                GO_TAR="go1.22.10.linux-amd64.tar.gz"
+                curl -fsSL "https://go.dev/dl/$GO_TAR" -o "/tmp/$GO_TAR"
+                rm -rf /usr/local/go
+                tar -C /usr/local -xzf "/tmp/$GO_TAR"
+                rm -f "/tmp/$GO_TAR"
+                export PATH="/usr/local/go/bin:$PATH"
+                echo -e "${GREEN}  ✓ Go $(go version | awk '{print $3}') installed${NC}"
+            fi
+            export GOPATH="${GOPATH:-/root/go}"
+            export PATH="$PATH:$GOPATH/bin"
+            go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
         fi
 
         # Build custom Caddy with Cloudflare DNS
