@@ -20,7 +20,7 @@ from apps.cloud.services.builder import NixpacksBuilder
 from apps.cloud.services.compute import ComputeService
 from apps.cloud.services.function_provisioner import FunctionProvisioner
 from apps.deployments.services.pipeline import PipelineManager, PipelineError
-from apps.deployments.models import Service, Deployment, EnvironmentVariable
+from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from apps.deployments.models_addons import Addon, Backup
 from apps.deployments.models_storage import Volume
 from apps.deployments.utils import (
@@ -28,6 +28,25 @@ from apps.deployments.utils import (
     broadcast_status,
     update_stage,
 )
+
+
+def _regenerate_caddyfile():
+    """Regenerate and apply the Caddyfile with current service domains.
+
+    Called after successful deployments so new services get Caddy site blocks
+    (and therefore SSL certificates) without requiring a manual Settings save.
+    """
+    try:
+        config = PlatformConfig.load()
+        from services.caddy_manager import generate_caddyfile, apply_caddyfile
+        content = generate_caddyfile(config)
+        result = apply_caddyfile(content)
+        if result.get('ok'):
+            logger.info("Caddyfile regenerated after deployment")
+        else:
+            logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not regenerate Caddyfile: %s", exc)
 from services.addon_provisioner import addon_provisioner
 from .services.backup_service import BackupService
 from .services.transfer_service import ServerTransferService
@@ -562,6 +581,7 @@ def _deploy_container(deployment, provider, image_name):
                 (timezone.now() - start).total_seconds()
             )
             broadcast_status(deployment)
+            _regenerate_caddyfile()
             append_log(
                 deployment,
                 f"[OK] Compose deployment successful. "
@@ -655,6 +675,7 @@ def _deploy_container(deployment, provider, image_name):
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
+        _regenerate_caddyfile()
         append_log(deployment, f"[OK] Deployment successful. ID: {resource.resource_id}\n")
 
         # Post-deploy runtime monitor
