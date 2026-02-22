@@ -366,6 +366,60 @@ export default function ServiceDetailPage() {
                                     {service.domain_verified ? 'Verified' : 'Pending'}
                                 </span>
                             </div>
+                            <div className="flex justify-between items-center border-b border-border pb-3">
+                                <div>
+                                    <span className="text-muted-foreground font-medium">Domain Visibility</span>
+                                    <p className="text-xs text-muted-foreground mt-0.5">
+                                        {service.is_public !== false ? 'Accessible via public URL' : 'Internal only (Docker DNS)'}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        const newVal = !(service.is_public !== false);
+                                        try {
+                                            const updated = await servicesApi.update(service.id, { is_public: newVal });
+                                            setService(updated);
+                                            toast({
+                                                title: newVal ? 'Domain set to Public' : 'Domain set to Private',
+                                                description: newVal
+                                                    ? 'Service is now publicly accessible. Redeploy to apply.'
+                                                    : 'Service is now internal-only. Redeploy to apply.',
+                                            });
+                                        } catch (err) {
+                                            console.error(err);
+                                            toast({ title: 'Failed to update visibility', variant: 'destructive' });
+                                        }
+                                    }}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                                        service.is_public !== false
+                                            ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                                            : 'bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20'
+                                    }`}
+                                >
+                                    {service.is_public !== false ? (
+                                        <><Globe className="w-3.5 h-3.5" /> Public</>
+                                    ) : (
+                                        <><Shield className="w-3.5 h-3.5" /> Private</>
+                                    )}
+                                </button>
+                            </div>
+                            <div className="flex justify-between border-b border-border pb-3">
+                                <span className="text-muted-foreground font-medium">Deploy Mode</span>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-bold px-2 py-1 rounded ${
+                                        service.deploy_mode === 'COMPOSE'
+                                            ? 'bg-blue-500/10 text-blue-400'
+                                            : 'bg-muted text-muted-foreground'
+                                    }`}>
+                                        {service.deploy_mode === 'COMPOSE' ? 'Docker Compose' : 'Single Container'}
+                                    </span>
+                                    {service.deploy_mode === 'COMPOSE' && service.compose_file && (
+                                        <span className="font-mono text-xs text-muted-foreground">
+                                            {service.compose_file}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
                             <div className="flex justify-between border-b border-border pb-3">
                                 <span className="text-muted-foreground font-medium">Health Check</span>
                                 <span className="font-mono text-foreground">

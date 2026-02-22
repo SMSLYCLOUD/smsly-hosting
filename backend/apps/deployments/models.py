@@ -229,6 +229,27 @@ class Service(TimeStampedModel):
         default=list, blank=True,
         help_text="List of custom domains attached to this service")
 
+    # Deploy Mode (single container vs docker-compose)
+    DEPLOY_MODE_CHOICES = [
+        ('SINGLE', 'Single Container'),
+        ('COMPOSE', 'Docker Compose'),
+    ]
+    deploy_mode = models.CharField(
+        max_length=20, choices=DEPLOY_MODE_CHOICES,
+        default='SINGLE',
+        help_text="SINGLE = one container, COMPOSE = docker-compose multi-container")
+    compose_file = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text="Relative path to compose file (e.g. docker-compose.prod.yml)")
+    compose_main_service = models.CharField(
+        max_length=100, blank=True, default='',
+        help_text="Name of the primary service in compose for Traefik routing")
+
+    # Domain Visibility
+    is_public = models.BooleanField(
+        default=True,
+        help_text="If False, Traefik route is disabled; service only reachable via Docker DNS")
+
     def __str__(self):
         return self.name
 

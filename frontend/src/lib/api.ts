@@ -129,6 +129,12 @@ export interface Service {
     commit_hash?: string;
     created_at: string;
   };
+  // Compose deployment
+  deploy_mode?: 'SINGLE' | 'COMPOSE';
+  compose_file?: string;
+  compose_main_service?: string;
+  // Domain visibility
+  is_public?: boolean;
 }
 
 export interface Project {

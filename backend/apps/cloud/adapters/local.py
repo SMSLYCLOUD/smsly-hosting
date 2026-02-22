@@ -151,6 +151,16 @@ class LocalAdapter(BaseCloudAdapter):
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
         port = env.get('PORT', '8000')
 
+        # Check if service should be publicly accessible
+        is_public = True
+        try:
+            from apps.deployments.models import Service
+            svc_obj = Service.objects.filter(name=name).first()
+            if svc_obj is not None:
+                is_public = svc_obj.is_public
+        except Exception:
+            pass
+
         # Build Host rule: primary domain + any custom domains
         all_domains = [domain]
         custom = env.get('CUSTOM_DOMAINS', '')
@@ -176,11 +186,14 @@ class LocalAdapter(BaseCloudAdapter):
 
         labels = {
             'managed_by': 'smsly-hosting',
-            'traefik.enable': 'true',
+            'traefik.enable': 'true' if is_public else 'false',
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
-        if use_ssl and enable_traefik_tls:
+        if not is_public:
+            # Private service: no Traefik routing, only Docker DNS
+            pass
+        elif use_ssl and enable_traefik_tls:
             labels.update({
                 # HTTP router (redirects to HTTPS)
                 f'traefik.http.routers.{name}-http.rule': host_rule,
