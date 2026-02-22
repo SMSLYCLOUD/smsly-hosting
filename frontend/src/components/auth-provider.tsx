@@ -66,10 +66,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const path = window.location.pathname;
       // Prefer API token, but recover from a valid session after OAuth flows.
       let token = localStorage.getItem('auth_token');
+      let tokenFromSession = false;
       if (!token) {
         const recovered = await exchangeSessionForToken();
         if (recovered) {
           token = recovered;
+          tokenFromSession = true;
           localStorage.setItem('auth_token', recovered);
           setAuthTokenCookie(recovered);
         }
@@ -94,13 +96,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           window.location.replace("/dashboard");
         }
       } catch (error) {
-        // Token invalid or expired
+        // Token invalid or expired — clear everything.
         localStorage.removeItem('auth_token');
         clearAuthCookies();
         setUser(null);
 
-        // Only force-login when a protected page is requested.
-        if (isProtectedPath(path)) {
+        // Guard against infinite redirect loops: if a session-exchanged token
+        // immediately fails /auth/user/, don't redirect again as it will just
+        // loop. Also use a sessionStorage flag to prevent rapid re-redirects.
+        const loopKey = '__auth_redirect_ts';
+        const lastRedirect = Number(sessionStorage.getItem(loopKey) || 0);
+        const now = Date.now();
+        const tooRecent = now - lastRedirect < 5000; // within 5 seconds
+
+        if (isProtectedPath(path) && !tokenFromSession && !tooRecent) {
+          sessionStorage.setItem(loopKey, String(now));
           window.location.replace("/login");
         }
       } finally {
