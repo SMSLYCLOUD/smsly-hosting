@@ -33,9 +33,11 @@ import {
 import { Users, UserPlus, Trash2, Mail } from 'lucide-react';
 import { teamsApi, Team, TeamMember } from '@/lib/api';
 import { useAuth } from '@/components/auth-provider';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export default function TeamPage() {
   const { user } = useAuth();
+  const confirm = useConfirm();
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -107,7 +109,7 @@ export default function TeamPage() {
 
   const handleRemove = async (memberId: number) => {
     if (!activeTeamId) return;
-    if (!confirm("Are you sure you want to remove this member?")) return;
+    if (!await confirm({ title: 'Remove team member?', message: 'Are you sure you want to remove this member from the team?', variant: 'destructive', confirmText: 'Remove' })) return;
 
     try {
       await teamsApi.removeMember(activeTeamId, memberId);

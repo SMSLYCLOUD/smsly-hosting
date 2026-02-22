@@ -6,9 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
 
 export function DeploymentsTab({ serviceId }: { serviceId: string }) {
+    const confirm = useConfirm();
     const [deployments, setDeployments] = useState<Deployment[]>([]);
     const [loading, setLoading] = useState(true);
     const [rollingBackId, setRollingBackId] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleRollback = async (deployment: Deployment) => {
-        if (!confirm(`Rollback to commit ${deployment.commit_hash.substring(0, 7)}? This will trigger a new deployment.`)) return;
+        if (!await confirm({ title: 'Rollback deployment?', message: `Rollback to commit ${deployment.commit_hash.substring(0, 7)}? This will trigger a new deployment.`, confirmText: 'Rollback' })) return;
 
         try {
             setRollingBackId(deployment.id);
@@ -74,7 +76,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleCancel = async (deployment: Deployment) => {
-        if (!confirm(`Cancel deployment ${deployment.commit_hash.substring(0, 7)}?`)) return;
+        if (!await confirm({ title: 'Cancel deployment?', message: `Cancel deployment ${deployment.commit_hash.substring(0, 7)}?`, variant: 'destructive', confirmText: 'Cancel Deployment' })) return;
         try {
             setCancellingId(deployment.id);
             await servicesApi.cancelDeployment(deployment.id);

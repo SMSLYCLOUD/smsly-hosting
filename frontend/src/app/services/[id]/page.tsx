@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
 import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner } from 'lucide-react';
@@ -38,6 +39,7 @@ const parseBool = (value: string | undefined, fallback: boolean) => {
 };
 
 export default function ServiceDetailPage() {
+    const confirm = useConfirm();
     const params = useParams();
     const searchParams = useSearchParams();
     const id = params.id as string;
@@ -149,7 +151,7 @@ export default function ServiceDetailPage() {
 
     const handleRedeploy = async () => {
         if (!service) return;
-        if (!confirm('Trigger a new deployment for this service now?')) return;
+        if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
         try {
             setRedeploying(true);
             const deployResult = await servicesApi.deploy(service.id);
@@ -184,7 +186,7 @@ export default function ServiceDetailPage() {
 
     const handleRestart = async () => {
         if (!service) return;
-        if (!confirm('Restart this service now? A fresh deployment will be queued.')) return;
+        if (!await confirm({ title: 'Restart service?', message: 'Restart this service now? A fresh deployment will be queued.', confirmText: 'Restart' })) return;
         try {
             setRedeploying(true);
             await servicesApi.restart(service.id);

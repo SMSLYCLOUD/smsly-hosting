@@ -7,6 +7,7 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", displ
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthProvider } from "@/components/auth-provider";
 import { Toaster } from "@/components/ui/toaster";
+import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 
 export const metadata: Metadata = {
   title: "CloudNeuron - The Intelligent Cloud Platform",
@@ -35,11 +36,13 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <AuthProvider>
+              <ConfirmProvider>
                 <GlobalBackground />
                 <Navbar />
                 {children}
                 <FloatingAI />
                 <Toaster />
+              </ConfirmProvider>
             </AuthProvider>
         </ThemeProvider>
       </body>

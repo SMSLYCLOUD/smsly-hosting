@@ -12,6 +12,7 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { serversApi, ManagedServer } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export default function ServerDetailPage() {
 
     const [server, setServer] = useState<ManagedServer | null>(null);
     const [loading, setLoading] = useState(true);
+    const confirm = useConfirm();
     const [activeTab, setActiveTab] = useState<TabId>('overview');
 
     // Overview state
@@ -244,7 +246,7 @@ export default function ServerDetailPage() {
     };
 
     const handleDeleteDomain = async (serviceId: string, domain: string) => {
-        if (!confirm(`Remove domain ${domain}?`)) return;
+        if (!await confirm({ title: 'Remove domain?', message: `Remove domain ${domain}?`, variant: 'destructive', confirmText: 'Remove' })) return;
         try {
             await serversApi.remoteDeleteDomain(serverId, serviceId, domain);
             toast({ title: `Domain ${domain} removed` });

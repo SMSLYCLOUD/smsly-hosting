@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Globe, Plus, Trash2, CheckCircle, XCircle, ExternalLink, RefreshCw, Copy, Loader2, ArrowRight } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 // CNAME target is derived per service from its public domain
 
@@ -17,6 +18,7 @@ interface DomainStatus {
 }
 
 export function DomainsTab({ service }: { service: Service }) {
+    const confirm = useConfirm();
     const [domains, setDomains] = useState<DomainStatus[]>([]);
     const [newDomain, setNewDomain] = useState('');
     const [loading, setLoading] = useState(true);
@@ -85,7 +87,7 @@ export function DomainsTab({ service }: { service: Service }) {
     };
 
     const handleDelete = async (domain: string) => {
-        if (!confirm(`Remove ${domain}?`)) return;
+        if (!await confirm({ title: 'Remove domain?', message: `Are you sure you want to remove ${domain}?`, variant: 'destructive', confirmText: 'Remove' })) return;
         try {
             const res = await api.post(`/services/${service.id}/delete-domain/`, { domain });
             toast({

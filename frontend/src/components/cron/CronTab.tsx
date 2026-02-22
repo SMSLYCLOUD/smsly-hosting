@@ -7,9 +7,11 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Clock, Plus, Trash2, Play, CheckCircle2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
 
 export function CronTab({ serviceId }: { serviceId: string }) {
+    const confirm = useConfirm();
     const [jobs, setJobs] = useState<CronJob[]>([]);
     const [loading, setLoading] = useState(true);
     const [newName, setNewName] = useState('');
@@ -51,7 +53,7 @@ export function CronTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm('Delete this scheduled task?')) return;
+        if (!await confirm({ title: 'Delete scheduled task?', message: 'Are you sure you want to delete this scheduled task?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await servicesApi.deleteCronJob(serviceId, id);
             await loadJobs();

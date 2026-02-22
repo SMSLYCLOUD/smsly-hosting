@@ -9,8 +9,10 @@ import {
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { tunnelsApi, type Tunnel, type TunnelRequest, type ReservedSubdomain } from '@/lib/api';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export default function TunnelsPage() {
+  const confirm = useConfirm();
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
   const [subdomains, setSubdomains] = useState<ReservedSubdomain[]>([]);
   const [subdomainLimit, setSubdomainLimit] = useState(0);
@@ -73,7 +75,7 @@ export default function TunnelsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Close this tunnel?')) return;
+    if (!await confirm({ title: 'Close tunnel?', message: 'Close this tunnel? Active connections will be dropped.', variant: 'destructive', confirmText: 'Close' })) return;
     try {
       await tunnelsApi.delete(id);
       fetchData();
@@ -123,7 +125,7 @@ export default function TunnelsPage() {
   };
 
   const handleReleaseSubdomain = async (subdomain: string) => {
-    if (!confirm(`Release ${subdomain}.tunnel.smsly.cloud?`)) return;
+    if (!await confirm({ title: 'Release subdomain?', message: `Release ${subdomain}.tunnel.smsly.cloud? You may not be able to reclaim it.`, variant: 'destructive', confirmText: 'Release' })) return;
     try {
       await tunnelsApi.releaseSubdomain(subdomain);
       fetchData();

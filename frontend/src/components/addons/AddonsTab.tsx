@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers } from 'lucide-react';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 interface Addon {
     id: string;
@@ -47,6 +48,7 @@ function apiUrl(path: string) {
 }
 
 export function AddonsTab({ serviceId }: { serviceId?: string }) {
+    const confirm = useConfirm();
     const [addons, setAddons] = useState<Addon[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -103,7 +105,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     };
 
     const handleDeprovision = async (addonId: string) => {
-        if (!confirm('This will permanently delete this addon and all its data. Continue?')) return;
+        if (!await confirm({ title: 'Delete addon?', message: 'This will permanently delete this addon and all its data. Continue?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await fetch(apiUrl(`/addons/${addonId}/deprovision/`), {
                 method: 'POST',

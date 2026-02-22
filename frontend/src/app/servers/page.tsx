@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 interface ManagedServer {
     id: string;
@@ -62,6 +63,7 @@ const PROVISION_STATUS_CONFIG: Record<string, { color: string; label: string; an
 
 export default function ServersPage() {
     const router = useRouter();
+    const confirm = useConfirm();
     const [servers, setServers] = useState<ManagedServer[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAdd, setShowAdd] = useState(false);
@@ -165,7 +167,7 @@ export default function ServersPage() {
     };
 
     const deleteServer = async (id: string) => {
-        if (!confirm('Remove this server?')) return;
+        if (!await confirm({ title: 'Remove server?', message: 'Are you sure you want to remove this server?', variant: 'destructive', confirmText: 'Remove' })) return;
         try {
             await apiFetch(`/api/v1/servers/${id}/`, 'DELETE');
             fetchServers();
