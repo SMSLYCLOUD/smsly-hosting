@@ -194,6 +194,9 @@ class Service(TimeStampedModel):
     health_check_path = models.CharField(
         max_length=255, default='/health', blank=True,
         help_text="HTTP path for health checks (e.g. /health, /api/health)")
+    health_check_port = models.IntegerField(
+        null=True, blank=True,
+        help_text="Port for health checks. Leave blank to auto-detect from PORT env var.")
     health_check_interval = models.IntegerField(
         default=30, help_text="Seconds between health checks")
     health_check_timeout = models.IntegerField(

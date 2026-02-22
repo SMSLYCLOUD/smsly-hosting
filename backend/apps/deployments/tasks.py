@@ -620,6 +620,7 @@ def _deploy_container(deployment, provider, image_name):
         if service.health_check_path:
             healthcheck = {
                 'path': service.health_check_path,
+                'port': service.health_check_port,
                 'interval': service.health_check_interval,
                 'timeout': service.health_check_timeout,
                 'retries': service.health_check_retries

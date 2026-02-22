@@ -28,6 +28,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
     const [saving, setSaving] = useState(false);
     const [rechecking, setRechecking] = useState(false);
     const [healthPath, setHealthPath] = useState('/health');
+    const [healthPort, setHealthPort] = useState<number | ''>('');
     const [interval, setInterval_] = useState(30);
     const [timeout, setTimeout_] = useState(5);
     const [retries, setRetries] = useState(3);
@@ -50,6 +51,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
 
     const applyService = (s: any) => {
         setHealthPath(s.health_check_path ?? '/health');
+        setHealthPort(s.health_check_port ?? '');
         setInterval_(s.health_check_interval ?? 30);
         setTimeout_(s.health_check_timeout ?? 5);
         setRetries(s.health_check_retries ?? 3);
@@ -63,6 +65,7 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
         try {
             await servicesApi.update(serviceId, {
                 health_check_path: healthPath,
+                health_check_port: healthPort === '' ? null : healthPort,
                 health_check_interval: interval,
                 health_check_timeout: timeout,
                 health_check_retries: retries,
@@ -170,6 +173,22 @@ export function HealthTab({ serviceId, service: initialService }: HealthTabProps
                         />
                         <p className="text-xs text-muted-foreground mt-1">
                             HTTP endpoint that returns 2xx when the service is healthy
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="text-sm font-medium mb-2 block">Health Check Port</label>
+                        <Input
+                            type="number"
+                            min={1}
+                            max={65535}
+                            value={healthPort}
+                            onChange={e => setHealthPort(e.target.value ? parseInt(e.target.value) : '')}
+                            placeholder="Auto-detect from PORT env var"
+                            className="font-mono max-w-md"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            Port your app listens on (e.g. 3000 for Next.js, 8000 for Django). Leave blank to use the PORT variable.
                         </p>
                     </div>
 
