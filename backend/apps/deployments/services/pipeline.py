@@ -473,6 +473,19 @@ class PipelineManager:
 
     def _inject_ai_env_vars(self, ai_env_vars: dict):
         """Inject env vars recommended by AI analysis."""
+        import secrets as _secrets
+
+        # Keys where we MUST generate a real random value, never use AI's
+        _SECRET_PATTERNS = re.compile(
+            r'(SECRET_KEY|JWT_SECRET|SESSION_SECRET|COOKIE_SECRET|'
+            r'CSRF_SECRET|SIGNING_KEY|HASH_SALT)',
+            re.IGNORECASE,
+        )
+        _PASSWORD_PATTERNS = re.compile(
+            r'(PASSWORD|PASSWD|DB_PASS)',
+            re.IGNORECASE,
+        )
+
         injected = 0
         warned = 0
 
@@ -485,6 +498,38 @@ class PipelineManager:
             if EnvironmentVariable.objects.filter(
                 service=self.service, key=key
             ).exists():
+                continue
+
+            # For secret keys: ALWAYS generate a real random value
+            if _SECRET_PATTERNS.search(key):
+                real_secret = _secrets.token_urlsafe(50)
+                EnvironmentVariable.objects.create(
+                    service=self.service,
+                    key=key,
+                    value=real_secret,
+                    is_secret=True,
+                )
+                injected += 1
+                append_log(
+                    self.deployment,
+                    f"  🔐 Auto-generated {key} (secure random)\n"
+                )
+                continue
+
+            # For password keys: generate a strong password
+            if _PASSWORD_PATTERNS.search(key):
+                real_pass = _secrets.token_urlsafe(24)
+                EnvironmentVariable.objects.create(
+                    service=self.service,
+                    key=key,
+                    value=real_pass,
+                    is_secret=True,
+                )
+                injected += 1
+                append_log(
+                    self.deployment,
+                    f"  🔐 Auto-generated {key} (secure random)\n"
+                )
                 continue
 
             if default_val and default_val.strip():
