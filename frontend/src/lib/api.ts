@@ -72,13 +72,11 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      const path = window.location.pathname;
-      // Avoid redirect loops and keep public pages accessible.
-      if (isProtectedPath(path) && !path.startsWith('/login') && !path.startsWith('/register')) {
-        localStorage.removeItem('auth_token');
-        clearAuthCookies();
-        window.location.href = '/login';
-      }
+      // Only clear stale credentials. Do NOT redirect here — the AuthProvider
+      // is the single source of truth for login redirects. Having two redirect
+      // paths (interceptor + AuthProvider) causes an infinite redirect loop.
+      localStorage.removeItem('auth_token');
+      clearAuthCookies();
     }
     return Promise.reject(error);
   }
