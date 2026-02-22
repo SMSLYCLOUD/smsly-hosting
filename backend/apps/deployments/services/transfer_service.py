@@ -73,7 +73,7 @@ class ServerTransferService:
         try:
             self.ssh.connect()
         except Exception as e:
-            raise ConnectionError(f"Could not connect to target server: {e}")
+            raise ConnectionError(f"Could not connect to target server: {e}") from e
 
     def _prepare(self):
         """Step 1: create source backup and provision target."""
@@ -97,7 +97,7 @@ class ServerTransferService:
             self.ssh.install_docker()
             time.sleep(5)
             if not self.ssh.check_docker():
-                 raise RuntimeError("Failed to install Docker on target server.")
+                raise RuntimeError("Failed to install Docker on target server.")
 
     def _upload(self):
         """Step 2: upload backup to target."""
@@ -290,10 +290,10 @@ if os.path.exists(services_dir):
 
         try:
             if self.transfer.transfer_type == 'FULL':
-                 url = f"http://{self.transfer.target_server_ip}:8090/health"
-                 try:
-                     requests.get(url, timeout=5)
-                 except: pass
+                url = f"http://{self.transfer.target_server_ip}:8090/health"
+                try:
+                    requests.get(url, timeout=5)
+                except: pass
             else:
                 pass
         except Exception as e:
@@ -406,29 +406,31 @@ if os.path.exists(services_dir):
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
         base_url = "https://api.cloudflare.com/client/v4"
 
-        resp = requests.get(f"{base_url}/zones", headers=headers, params={'name': domain})
-        if not resp.ok: return
+        resp = requests.get(f"{base_url}/zones", headers=headers, params={'name': domain}, timeout=30)
+        if not resp.ok:
+            return
 
         zones = resp.json().get('result')
-        if not zones: return
+        if not zones:
+            return
         zone_id = zones[0]['id']
 
         records_to_update = ['@', '*']
 
         for name in records_to_update:
-             search_name = f"{name}.{domain}" if name != '@' else domain
-             resp = requests.get(f"{base_url}/zones/{zone_id}/dns_records",
-                                 headers=headers,
-                                 params={'type': 'A', 'name': search_name})
-             if resp.ok:
-                 results = resp.json().get('result', [])
-                 for record in results:
-                     update_url = f"{base_url}/zones/{zone_id}/dns_records/{record['id']}"
-                     payload = {
-                         'type': 'A',
-                         'name': record['name'],
-                         'content': ip,
-                         'ttl': record['ttl'],
-                         'proxied': record['proxied']
-                     }
-                     requests.put(update_url, headers=headers, json=payload)
+            search_name = f"{name}.{domain}" if name != '@' else domain
+            resp = requests.get(f"{base_url}/zones/{zone_id}/dns_records",
+                                headers=headers,
+                                params={'type': 'A', 'name': search_name}, timeout=30)
+            if resp.ok:
+                results = resp.json().get('result', [])
+                for record in results:
+                    update_url = f"{base_url}/zones/{zone_id}/dns_records/{record['id']}"
+                    payload = {
+                        'type': 'A',
+                        'name': record['name'],
+                        'content': ip,
+                        'ttl': record['ttl'],
+                        'proxied': record['proxied']
+                    }
+                    requests.put(update_url, headers=headers, json=payload, timeout=30)
