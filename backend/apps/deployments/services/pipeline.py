@@ -617,8 +617,20 @@ class PipelineManager:
             detected_types = set()
 
             # --- Strategy A: scan requirements.txt / Pipfile ---
-            for name in ('requirements.txt', 'requirements/base.txt',
-                         'requirements/production.txt'):
+            req_candidates = [
+                'requirements.txt', 'requirements/base.txt',
+                'requirements/production.txt',
+            ]
+            # Monorepo support: also check 1-level-deep subdirectories
+            try:
+                for subdir in os.listdir(self.source_dir):
+                    subpath = os.path.join(self.source_dir, subdir)
+                    if os.path.isdir(subpath) and not subdir.startswith('.'):
+                        req_candidates.append(os.path.join(subdir, 'requirements.txt'))
+            except OSError:
+                pass
+
+            for name in req_candidates:
                 req_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(req_path):
                     with open(req_path, 'r', encoding='utf-8',
@@ -631,35 +643,58 @@ class PipelineManager:
                             if addon:
                                 detected_types.add(addon)
 
-            # Also check pyproject.toml dependencies
-            pyproject = os.path.join(self.source_dir, 'pyproject.toml')
-            if os.path.isfile(pyproject):
-                with open(pyproject, 'r', encoding='utf-8',
-                          errors='ignore') as f:
-                    content = f.read()
-                    for pkg, addon in self._REQUIREMENTS_ADDON_MAP.items():
-                        if pkg in content:
-                            detected_types.add(addon)
+            # Also check pyproject.toml dependencies (root + subdirs)
+            pyproject_candidates = [os.path.join(self.source_dir, 'pyproject.toml')]
+            try:
+                for subdir in os.listdir(self.source_dir):
+                    subpath = os.path.join(self.source_dir, subdir)
+                    if os.path.isdir(subpath) and not subdir.startswith('.'):
+                        candidate = os.path.join(subpath, 'pyproject.toml')
+                        if os.path.isfile(candidate):
+                            pyproject_candidates.append(candidate)
+            except OSError:
+                pass
 
-            # Check package.json for Node.js apps
-            pkg_json = os.path.join(self.source_dir, 'package.json')
-            if os.path.isfile(pkg_json):
-                import json
+            for pyproject in pyproject_candidates:
+                if os.path.isfile(pyproject):
+                    with open(pyproject, 'r', encoding='utf-8',
+                              errors='ignore') as f:
+                        content = f.read()
+                        for pkg, addon in self._REQUIREMENTS_ADDON_MAP.items():
+                            if pkg in content:
+                                detected_types.add(addon)
+
+            # Check package.json for Node.js apps (root + subdirs)
+            import json
+            pkg_json_paths = [os.path.join(self.source_dir, 'package.json')]
+            try:
+                for subdir in os.listdir(self.source_dir):
+                    subpath = os.path.join(self.source_dir, subdir)
+                    if os.path.isdir(subpath) and not subdir.startswith('.'):
+                        candidate = os.path.join(subpath, 'package.json')
+                        if os.path.isfile(candidate):
+                            pkg_json_paths.append(candidate)
+            except OSError:
+                pass
+
+            node_map = {
+                'pg': 'POSTGRES', 'sequelize': 'POSTGRES',
+                'typeorm': 'POSTGRES', 'prisma': 'POSTGRES',
+                'redis': 'REDIS', 'ioredis': 'REDIS',
+                'bullmq': 'REDIS', 'bull': 'REDIS',
+                'mongoose': 'MONGODB', 'mongodb': 'MONGODB',
+                'mysql2': 'MYSQL',
+                '@qdrant/js-client-rest': 'QDRANT',
+            }
+            for pkg_json in pkg_json_paths:
+                if not os.path.isfile(pkg_json):
+                    continue
                 try:
                     with open(pkg_json, 'r', encoding='utf-8') as f:
                         pkg_data = json.load(f)
                     all_deps = {}
                     all_deps.update(pkg_data.get('dependencies', {}))
                     all_deps.update(pkg_data.get('devDependencies', {}))
-                    node_map = {
-                        'pg': 'POSTGRES', 'sequelize': 'POSTGRES',
-                        'typeorm': 'POSTGRES', 'prisma': 'POSTGRES',
-                        'redis': 'REDIS', 'ioredis': 'REDIS',
-                        'bullmq': 'REDIS', 'bull': 'REDIS',
-                        'mongoose': 'MONGODB', 'mongodb': 'MONGODB',
-                        'mysql2': 'MYSQL',
-                        '@qdrant/js-client-rest': 'QDRANT',
-                    }
                     for dep in all_deps:
                         addon = node_map.get(dep)
                         if addon:
@@ -667,9 +702,13 @@ class PipelineManager:
                 except (json.JSONDecodeError, KeyError):
                     pass
 
-            # --- Strategy B: scan docker-compose.yml ---
+            # --- Strategy B: scan docker-compose.yml (all common variants) ---
             for name in ('docker-compose.yml', 'docker-compose.yaml',
-                         'compose.yml', 'compose.yaml'):
+                         'docker-compose.prod.yml', 'docker-compose.prod.yaml',
+                         'docker-compose.production.yml',
+                         'docker-compose.production.yaml',
+                         'compose.yml', 'compose.yaml',
+                         'compose.prod.yml', 'compose.prod.yaml'):
                 compose_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(compose_path):
                     with open(compose_path, 'r', encoding='utf-8',

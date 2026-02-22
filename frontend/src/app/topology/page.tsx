@@ -1,54 +1,74 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, MouseEvent as ReactMouseEvent } from 'react';
+/**
+ * TopologyPage — Full 3D force graph of ALL services + addons + volumes.
+ * Powered by react-force-graph-3d (Three.js / WebGL).
+ * Full 360° orbit, zoom, pan. Click node to navigate.
+ */
+
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import api from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import {
-    Server, Database, HardDrive, Radio,
-    ExternalLink, RefreshCw, ZoomIn, ZoomOut,
-    Maximize2, GripVertical, Activity, Wifi, X
+    Server, Database, HardDrive, Activity, Wifi,
+    ExternalLink, RefreshCw, ZoomIn, ZoomOut, Maximize2, X, Loader2
 } from 'lucide-react';
+
+// @ts-ignore — dynamic import for SSR-safe WebGL
+const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
 /* ── Types ──────────────────────────────────────────────── */
 interface TopoNode {
     id: string;
     name: string;
-    type: string;
+    nodeType: 'service' | 'addon' | 'volume';
+    subType?: string;
+    status?: string;
+    health?: string;
+    detail?: string;
     data?: any;
-    // Layout position on canvas
-    x: number;
-    y: number;
 }
 
-interface TopoEdge {
+interface TopoLink {
     source: string;
     target: string;
-    type?: string;
+    linkType: string;
 }
 
 /* ── Colors ─────────────────────────────────────────────── */
-const CARD_THEMES: Record<string, {
-    bg: string; border: string; glow: string; icon: string; accent: string;
-}> = {
-    service:      { bg: '#18181b', border: '#3b82f6', glow: '#3b82f620', icon: '#3b82f6', accent: '#3b82f6' },
-    POSTGRES:     { bg: '#18181b', border: '#6366f1', glow: '#6366f120', icon: '#6366f1', accent: '#6366f1' },
-    REDIS:        { bg: '#18181b', border: '#22c55e', glow: '#22c55e20', icon: '#22c55e', accent: '#22c55e' },
-    MYSQL:        { bg: '#18181b', border: '#f59e0b', glow: '#f59e0b20', icon: '#f59e0b', accent: '#f59e0b' },
-    MONGODB:      { bg: '#18181b', border: '#a855f7', glow: '#a855f720', icon: '#a855f7', accent: '#a855f7' },
-    ELASTICSEARCH:{ bg: '#18181b', border: '#06b6d4', glow: '#06b6d420', icon: '#06b6d4', accent: '#06b6d4' },
-    RABBITMQ:     { bg: '#18181b', border: '#f97316', glow: '#f9731620', icon: '#f97316', accent: '#f97316' },
-    volume:       { bg: '#18181b', border: '#eab308', glow: '#eab30820', icon: '#eab308', accent: '#eab308' },
-    default:      { bg: '#18181b', border: '#3b82f6', glow: '#3b82f620', icon: '#3b82f6', accent: '#3b82f6' },
+const NODE_COLORS: Record<string, string> = {
+    service: '#3b82f6',
+    POSTGRES: '#818cf8',
+    REDIS: '#22c55e',
+    MYSQL: '#f59e0b',
+    MONGODB: '#a855f7',
+    ELASTICSEARCH: '#06b6d4',
+    RABBITMQ: '#f97316',
+    MINIO: '#f472b6',
+    QDRANT: '#a78bfa',
+    MEMCACHED: '#94a3b8',
+    CLICKHOUSE: '#facc15',
+    volume: '#eab308',
+    default: '#6366f1',
 };
 
-const EDGE_COLORS: Record<string, string> = {
-    API: '#60a5fa', DATABASE: '#818cf8', CACHE: '#34d399',
-    QUEUE: '#fb923c', SEARCH: '#22d3ee', STORAGE: '#fbbf24', ADDON: '#64748b',
+const LINK_COLORS: Record<string, string> = {
+    API: '#60a5fa',
+    DATABASE: '#818cf8',
+    CACHE: '#34d399',
+    QUEUE: '#fb923c',
+    SEARCH: '#22d3ee',
+    STORAGE: '#fbbf24',
+    ADDON: '#64748b',
 };
 
 const HEALTH_COLORS: Record<string, string> = {
-    healthy: '#22c55e', unhealthy: '#ef4444', starting: '#f59e0b', unknown: '#52525b',
+    healthy: '#22c55e',
+    unhealthy: '#ef4444',
+    starting: '#f59e0b',
+    unknown: '#52525b',
 };
 
 const DEPLOY_LABELS: Record<string, { color: string; label: string }> = {
@@ -60,284 +80,141 @@ const DEPLOY_LABELS: Record<string, { color: string; label: string }> = {
     NONE:      { color: '#52525b', label: 'No Deploy' },
 };
 
-function getTheme(node: TopoNode) {
-    if (node.type === 'service') return CARD_THEMES.service;
-    if (node.type === 'addon') {
-        const t = (node.data?.addon_type || '').toUpperCase();
-        return CARD_THEMES[t] || CARD_THEMES.default;
+function getNodeColor(node: TopoNode): string {
+    if (node.nodeType === 'service') return NODE_COLORS.service;
+    if (node.nodeType === 'addon') return NODE_COLORS[node.subType?.toUpperCase() || ''] || NODE_COLORS.default;
+    return NODE_COLORS.volume;
+}
+
+/* ── 3D Node builder (lazy THREE) ── */
+function createNode3D(node: TopoNode): any {
+    const THREE = require('three');
+    const group = new THREE.Group();
+    const color = getNodeColor(node);
+
+    // Main geometry per node type
+    let geometry;
+    if (node.nodeType === 'service') {
+        geometry = new THREE.IcosahedronGeometry(9, 1);
+    } else if (node.nodeType === 'addon') {
+        geometry = new THREE.OctahedronGeometry(6, 0);
+    } else {
+        geometry = new THREE.BoxGeometry(7, 7, 7);
     }
-    if (node.type === 'volume') return CARD_THEMES.volume;
-    return CARD_THEMES.default;
-}
 
-/* ── Card dimensions ────────────────────────────────────── */
-const CARD_W = 220;
-const CARD_H_SERVICE = 120;
-const CARD_H_ADDON = 80;
-const CARD_H_VOLUME = 80;
-
-function getCardH(node: TopoNode) {
-    if (node.type === 'service') return CARD_H_SERVICE;
-    if (node.type === 'addon') return CARD_H_ADDON;
-    return CARD_H_VOLUME;
-}
-
-/* ── Auto-layout: arrange in a hub-spoke pattern ────────── */
-function autoLayout(nodes: TopoNode[], edges: TopoEdge[]): TopoNode[] {
-    const services = nodes.filter(n => n.type === 'service');
-    const others = nodes.filter(n => n.type !== 'service');
-
-    // Build adjacency: which non-service nodes connect to which service
-    const serviceChildren: Record<string, string[]> = {};
-    services.forEach(s => { serviceChildren[s.id] = []; });
-
-    edges.forEach(e => {
-        if (serviceChildren[e.source]) {
-            serviceChildren[e.source].push(e.target);
-        }
+    const material = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(color),
+        emissive: new THREE.Color(color),
+        emissiveIntensity: 0.35,
+        transparent: true,
+        opacity: 0.9,
+        shininess: 80,
     });
+    group.add(new THREE.Mesh(geometry, material));
 
-    // Layout services horizontally with spacing
-    const SERVICE_GAP = 340;
-    const startX = -(services.length - 1) * SERVICE_GAP / 2;
-
-    services.forEach((svc, i) => {
-        svc.x = startX + i * SERVICE_GAP;
-        svc.y = 0;
-    });
-
-    // Layout children below their parent service
-    const CHILD_GAP_X = 250;
-    const CHILD_OFFSET_Y = 200;
-
-    services.forEach(svc => {
-        const children = serviceChildren[svc.id] || [];
-        const childStartX = svc.x - (children.length - 1) * CHILD_GAP_X / 2;
-
-        children.forEach((childId, j) => {
-            const child = others.find(n => n.id === childId);
-            if (child) {
-                child.x = childStartX + j * CHILD_GAP_X;
-                child.y = svc.y + CHILD_OFFSET_Y;
-            }
+    // Outer glow ring for services
+    if (node.nodeType === 'service') {
+        const ringGeo = new THREE.RingGeometry(12, 14, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(color), transparent: true, opacity: 0.15, side: THREE.DoubleSide,
         });
-    });
+        group.add(new THREE.Mesh(ringGeo, ringMat));
+    }
 
-    // Orphan nodes (not connected) — place to the right
-    const placed = new Set([
-        ...services.map(s => s.id),
-        ...Object.values(serviceChildren).flat(),
-    ]);
-    let orphanX = (services.length > 0 ? services[services.length - 1].x + SERVICE_GAP : 0);
-    others.forEach(n => {
-        if (!placed.has(n.id)) {
-            n.x = orphanX;
-            n.y = 200;
-            orphanX += CHILD_GAP_X;
-        }
-    });
+    // Health/status indicator dot
+    const healthColor = node.health ? (HEALTH_COLORS[node.health] || HEALTH_COLORS.unknown)
+        : node.status === 'ACTIVE' ? '#22c55e'
+        : node.status === 'FAILED' ? '#ef4444'
+        : '#fbbf24';
+    const dotGeo = new THREE.SphereGeometry(1.5, 8, 8);
+    const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(healthColor) });
+    const dot = new THREE.Mesh(dotGeo, dotMat);
+    dot.position.set(node.nodeType === 'service' ? 11 : 7, node.nodeType === 'service' ? 7 : 5, 0);
+    group.add(dot);
 
-    return nodes;
-}
+    // Text label sprite
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = 400;
+    canvas.height = 100;
+    ctx.fillStyle = 'transparent';
+    ctx.fillRect(0, 0, 400, 100);
 
-/* ── Curved path between two cards ──────────────────────── */
-function buildCurve(
-    src: TopoNode, tgt: TopoNode
-): string {
-    const srcH = getCardH(src);
-    const tgtH = getCardH(tgt);
-    const sx = src.x + CARD_W / 2;
-    const sy = src.y + srcH;
-    const tx = tgt.x + CARD_W / 2;
-    const ty = tgt.y;
+    // Name
+    ctx.font = `bold ${node.nodeType === 'service' ? 30 : 24}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    const displayName = node.name.length > 22 ? node.name.slice(0, 20) + '…' : node.name;
+    ctx.fillText(displayName, 200, 36);
 
-    const midY = (sy + ty) / 2;
-    return `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`;
-}
+    // Type label
+    ctx.font = '18px Inter, system-ui, sans-serif';
+    ctx.fillStyle = color;
+    const label = node.nodeType === 'service' ? 'SERVICE'
+        : node.nodeType === 'addon' ? (node.subType || 'ADDON').toUpperCase()
+        : 'VOLUME';
+    ctx.fillText(label, 200, 60);
 
-/* ── Node Card Component ────────────────────────────────── */
-function NodeCard({
-    node, selected, onSelect, onDragStart
-}: {
-    node: TopoNode;
-    selected: boolean;
-    onSelect: (n: TopoNode) => void;
-    onDragStart: (e: ReactMouseEvent, n: TopoNode) => void;
-}) {
-    const theme = getTheme(node);
-    const h = getCardH(node);
-    const isService = node.type === 'service';
-    const health = node.data?.health || 'unknown';
-    const healthColor = HEALTH_COLORS[health] || HEALTH_COLORS.unknown;
-    const deploy = DEPLOY_LABELS[node.data?.deploy_status] || DEPLOY_LABELS.NONE;
+    // Detail / status
+    const statusText = node.nodeType === 'service'
+        ? (node.status || 'UNKNOWN')
+        : node.detail || '';
+    if (statusText) {
+        ctx.font = '14px Inter, system-ui, sans-serif';
+        ctx.fillStyle = '#a1a1aa';
+        ctx.fillText(statusText.length > 30 ? statusText.slice(0, 28) + '…' : statusText, 200, 82);
+    }
 
-    return (
-        <div
-            className="absolute select-none cursor-grab active:cursor-grabbing group"
-            style={{
-                left: node.x,
-                top: node.y,
-                width: CARD_W,
-                height: h,
-                zIndex: selected ? 20 : 10,
-            }}
-            onClick={(e) => { e.stopPropagation(); onSelect(node); }}
-            onMouseDown={(e) => onDragStart(e, node)}
-        >
-            {/* Glow */}
-            <div
-                className="absolute -inset-2 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                style={{ backgroundColor: theme.glow }}
-            />
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(40, 10, 1);
+    sprite.position.set(0, node.nodeType === 'service' ? -17 : -13, 0);
+    group.add(sprite);
 
-            {/* Card */}
-            <div
-                className="relative w-full h-full rounded-xl overflow-hidden transition-all duration-200"
-                style={{
-                    backgroundColor: theme.bg,
-                    border: `1.5px solid ${selected ? theme.border : theme.border + '40'}`,
-                    boxShadow: selected
-                        ? `0 0 20px ${theme.border}30, 0 4px 12px rgba(0,0,0,0.4)`
-                        : '0 2px 8px rgba(0,0,0,0.3)',
-                }}
-            >
-                {/* Top accent bar */}
-                <div className="h-[2px] w-full" style={{ backgroundColor: theme.border }} />
-
-                <div className="p-3 h-full flex flex-col">
-                    {/* Header row */}
-                    <div className="flex items-center gap-2.5">
-                        {/* Icon */}
-                        <div
-                            className="w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center"
-                            style={{ backgroundColor: theme.icon + '15' }}
-                        >
-                            {isService
-                                ? <Server className="w-4 h-4" style={{ color: theme.icon }} />
-                                : node.type === 'addon'
-                                    ? <Database className="w-4 h-4" style={{ color: theme.icon }} />
-                                    : <HardDrive className="w-4 h-4" style={{ color: theme.icon }} />}
-                        </div>
-
-                        {/* Name + type */}
-                        <div className="flex-1 min-w-0">
-                            <div className="text-[13px] font-semibold text-white truncate">
-                                {node.name}
-                            </div>
-                            <div className="text-[10px] text-zinc-500 uppercase tracking-wider">
-                                {isService ? 'Service' : node.data?.addon_type || node.type}
-                            </div>
-                        </div>
-
-                        {/* Health dot (services) */}
-                        {isService && (
-                            <div className="relative flex-shrink-0">
-                                <div
-                                    className="w-2.5 h-2.5 rounded-full"
-                                    style={{ backgroundColor: healthColor }}
-                                />
-                                {health === 'healthy' && (
-                                    <div
-                                        className="absolute inset-0 w-2.5 h-2.5 rounded-full animate-ping"
-                                        style={{ backgroundColor: healthColor, opacity: 0.4 }}
-                                    />
-                                )}
-                            </div>
-                        )}
-
-                        {/* Status dot (addons) */}
-                        {node.type === 'addon' && (
-                            <div
-                                className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                                style={{
-                                    backgroundColor: node.data?.status === 'ACTIVE'
-                                        ? '#22c55e' : node.data?.status === 'FAILED'
-                                            ? '#ef4444' : '#52525b'
-                                }}
-                            />
-                        )}
-                    </div>
-
-                    {/* Service details */}
-                    {isService && (
-                        <div className="mt-auto flex items-center gap-2 pt-2">
-                            {/* Deploy badge */}
-                            <span
-                                className="text-[10px] px-1.5 py-0.5 rounded font-medium"
-                                style={{
-                                    backgroundColor: deploy.color + '15',
-                                    color: deploy.color,
-                                    border: `1px solid ${deploy.color}25`,
-                                }}
-                            >
-                                {deploy.label}
-                            </span>
-
-                            {/* Port */}
-                            {node.data?.port && (
-                                <span className="text-[10px] text-zinc-600 font-mono">
-                                    :{node.data.port}
-                                </span>
-                            )}
-
-                            {/* Commit */}
-                            {node.data?.deploy_commit && (
-                                <span className="text-[10px] text-zinc-600 font-mono ml-auto">
-                                    {node.data.deploy_commit.substring(0, 7)}
-                                </span>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Addon details */}
-                    {node.type === 'addon' && (
-                        <div className="mt-auto flex items-center gap-2 pt-1">
-                            <span className="text-[10px] text-zinc-500 uppercase">
-                                {node.data?.status || 'unknown'}
-                            </span>
-                        </div>
-                    )}
-
-                    {/* Volume details */}
-                    {node.type === 'volume' && (
-                        <div className="mt-auto flex items-center gap-2 pt-1">
-                            <code className="text-[10px] text-zinc-500 font-mono truncate">
-                                {node.data?.mount_path}
-                            </code>
-                            {node.data?.size_gb && (
-                                <span className="text-[10px] text-zinc-600 ml-auto">
-                                    {node.data.size_gb}GB
-                                </span>
-                            )}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
+    return group;
 }
 
 /* ── Main Page ──────────────────────────────────────────── */
 export default function TopologyPage() {
     const router = useRouter();
-    const [nodes, setNodes] = useState<TopoNode[]>([]);
-    const [edges, setEdges] = useState<TopoEdge[]>([]);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const fgRef = useRef<any>(null);
+    const hasInitialFitRef = useRef(false);
+    const nodeObjectCacheRef = useRef<Map<string, { key: string; object: any }>>(new Map());
+
+    const [graphData, setGraphData] = useState<{ nodes: TopoNode[]; links: TopoLink[] }>({ nodes: [], links: [] });
     const [loading, setLoading] = useState(true);
-    const [selectedNode, setSelectedNode] = useState<TopoNode | null>(null);
     const [autoRefresh, setAutoRefresh] = useState(true);
+    const [selectedNode, setSelectedNode] = useState<TopoNode | null>(null);
+    const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
-    // Pan & Zoom state
-    const [pan, setPan] = useState({ x: 0, y: 0 });
-    const [zoom, setZoom] = useState(1);
-    const isPanning = useRef(false);
-    const panStart = useRef({ x: 0, y: 0 });
-    const panOrigin = useRef({ x: 0, y: 0 });
+    /* ── Resize observer ── */
+    const measureContainer = useCallback(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        setDimensions(prev => {
+            const w = Math.max(Math.floor(rect.width), 480);
+            const h = Math.max(Math.floor(rect.height), 420);
+            return (prev.width === w && prev.height === h) ? prev : { width: w, height: h };
+        });
+    }, []);
 
-    // Drag node state
-    const dragNode = useRef<TopoNode | null>(null);
-    const dragOffset = useRef({ x: 0, y: 0 });
-
-    const canvasRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        measureContainer();
+        const el = containerRef.current;
+        if (!el) return;
+        const obs = new ResizeObserver(() => measureContainer());
+        obs.observe(el);
+        window.addEventListener('resize', measureContainer);
+        // Pulse measure a few frames for layout stabilization
+        let rafId = 0;
+        let runs = 0;
+        const pulse = () => { measureContainer(); runs++; if (runs < 6) rafId = requestAnimationFrame(pulse); };
+        rafId = requestAnimationFrame(pulse);
+        return () => { cancelAnimationFrame(rafId); obs.disconnect(); window.removeEventListener('resize', measureContainer); };
+    }, [measureContainer]);
 
     /* ── Load Data ── */
     const loadTopology = useCallback(async () => {
@@ -346,25 +223,38 @@ export default function TopologyPage() {
             const nodesIn = Array.isArray(res?.data?.nodes) ? res.data.nodes : [];
             const edgesIn = Array.isArray(res?.data?.edges) ? res.data.edges : [];
 
-            const topoNodes: TopoNode[] = nodesIn.map((n: any) => ({
-                id: String(n?.id || ''),
-                name: String(n?.data?.name || n?.data?.mount_path || n?.id || 'node'),
-                type: String(n?.type || 'node'),
-                data: n?.data || {},
-                x: 0,
-                y: 0,
-            })).filter((n: TopoNode) => Boolean(n.id));
+            const nodes: TopoNode[] = nodesIn
+                .filter((n: any) => n?.id)
+                .map((n: any) => ({
+                    id: String(n.id),
+                    name: String(n.data?.name || n.data?.mount_path || n.id || 'node'),
+                    nodeType: n.type === 'service' ? 'service' as const
+                        : n.type === 'addon' ? 'addon' as const
+                        : 'volume' as const,
+                    subType: n.data?.addon_type,
+                    status: n.data?.deploy_status || n.data?.status || 'UNKNOWN',
+                    health: n.data?.health,
+                    detail: n.type === 'volume' ? `${n.data?.mount_path || ''} · ${n.data?.size_gb || 0}GB` : undefined,
+                    data: n.data || {},
+                }));
 
-            const topoEdges: TopoEdge[] = edgesIn.map((e: any) => ({
-                source: String(e?.source || ''),
-                target: String(e?.target || ''),
-                type: String(e?.type || 'ADDON'),
-            })).filter((e: TopoEdge) => Boolean(e.source && e.target));
+            const links: TopoLink[] = edgesIn
+                .filter((e: any) => e?.source && e?.target)
+                .map((e: any) => ({
+                    source: String(e.source),
+                    target: String(e.target),
+                    linkType: String(e.type || 'ADDON'),
+                }));
 
-            // Auto-layout
-            autoLayout(topoNodes, topoEdges);
-            setNodes(topoNodes);
-            setEdges(topoEdges);
+            // Only update if data actually changed (prevents 3D graph from re-rendering)
+            setGraphData(prev => {
+                const prevKeys = prev.nodes.map(n => n.id + n.status).join(',');
+                const nextKeys = nodes.map(n => n.id + n.status).join(',');
+                if (prevKeys === nextKeys && prev.links.length === links.length) return prev;
+                nodeObjectCacheRef.current.clear();
+                hasInitialFitRef.current = false;
+                return { nodes, links };
+            });
         } catch (error) {
             console.error('Failed to load topology:', error);
         } finally {
@@ -380,287 +270,226 @@ export default function TopologyPage() {
         return () => clearInterval(iv);
     }, [autoRefresh, loadTopology]);
 
-    /* ── Canvas Pan ── */
-    const handleCanvasMouseDown = useCallback((e: ReactMouseEvent) => {
-        if (dragNode.current) return;
-        isPanning.current = true;
-        panStart.current = { x: e.clientX, y: e.clientY };
-        panOrigin.current = { ...pan };
-    }, [pan]);
+    /* ── Camera ── */
+    useEffect(() => {
+        if (fgRef.current && graphData.nodes.length > 0) {
+            const fg = fgRef.current;
+            const dist = 120 + graphData.nodes.length * 25;
 
-    const handleMouseMove = useCallback((e: ReactMouseEvent) => {
-        if (dragNode.current) {
-            // Dragging a node
-            const newX = (e.clientX - dragOffset.current.x - pan.x) / zoom;
-            const newY = (e.clientY - dragOffset.current.y - pan.y) / zoom;
-            setNodes(prev => prev.map(n =>
-                n.id === dragNode.current!.id ? { ...n, x: newX, y: newY } : n
-            ));
-            return;
+            fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
+            fg.d3Force('charge')?.strength(-350);
+            fg.d3Force('link')?.distance(70);
+            fg.d3ReheatSimulation?.();
+
+            // Auto-orbit
+            let angle = 0;
+            const radius = dist;
+            const rotateInterval = setInterval(() => {
+                angle += 0.003;
+                fg.cameraPosition(
+                    { x: radius * Math.sin(angle), y: 50, z: radius * Math.cos(angle) },
+                    { x: 0, y: 0, z: 0 }
+                );
+            }, 30);
+
+            // Stop orbit on interaction
+            const container = containerRef.current;
+            const stop = () => clearInterval(rotateInterval);
+            container?.addEventListener('mousedown', stop, { once: true });
+            container?.addEventListener('touchstart', stop, { once: true });
+
+            // Fit after settle
+            const fitTimer = setTimeout(() => {
+                if (!hasInitialFitRef.current && typeof fg.zoomToFit === 'function') {
+                    try { fg.zoomToFit(700, 100); } catch { /* ignore */ }
+                    hasInitialFitRef.current = true;
+                }
+            }, 300);
+
+            return () => {
+                clearInterval(rotateInterval);
+                clearTimeout(fitTimer);
+                container?.removeEventListener('mousedown', stop);
+                container?.removeEventListener('touchstart', stop);
+            };
         }
+    }, [graphData]);
 
-        if (isPanning.current) {
-            const dx = e.clientX - panStart.current.x;
-            const dy = e.clientY - panStart.current.y;
-            setPan({ x: panOrigin.current.x + dx, y: panOrigin.current.y + dy });
-        }
-    }, [pan, zoom]);
-
-    const handleMouseUp = useCallback(() => {
-        isPanning.current = false;
-        dragNode.current = null;
+    /* ── Zoom helpers ── */
+    const zoomCamera = useCallback((factor: number) => {
+        const fg = fgRef.current;
+        if (!fg) return;
+        const camera = fg.camera?.();
+        if (!camera?.position) return;
+        const { x, y, z } = camera.position;
+        const dist = Math.sqrt(x * x + y * y + z * z) || 1;
+        const next = Math.max(60, Math.min(2000, dist * factor));
+        const s = next / dist;
+        fg.cameraPosition({ x: x * s, y: y * s, z: z * s }, { x: 0, y: 0, z: 0 }, 300);
     }, []);
 
-    const handleNodeDragStart = useCallback((e: ReactMouseEvent, node: TopoNode) => {
-        e.stopPropagation();
-        dragNode.current = node;
-        dragOffset.current = {
-            x: e.clientX - (node.x * zoom + pan.x),
-            y: e.clientY - (node.y * zoom + pan.y),
-        };
-    }, [pan, zoom]);
+    const resetCamera = useCallback(() => {
+        const fg = fgRef.current;
+        if (!fg) return;
+        const dist = 120 + graphData.nodes.length * 25;
+        fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 450);
+    }, [graphData.nodes.length]);
 
-    /* ── Zoom ── */
-    const handleWheel = useCallback((e: WheelEvent) => {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        const newZoom = Math.max(0.2, Math.min(3, zoom * delta));
+    /* ── Node object with cache ── */
+    const getNodeObject = useCallback((node: any) => {
+        const n = node as TopoNode;
+        const key = `${n.id}:${n.name}:${n.status}:${n.subType || ''}`;
+        const cached = nodeObjectCacheRef.current.get(n.id);
+        if (cached?.key === key) return cached.object;
+        const obj = createNode3D(n);
+        nodeObjectCacheRef.current.set(n.id, { key, object: obj });
+        return obj;
+    }, []);
 
-        // Zoom toward mouse position
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (rect) {
-            const mx = e.clientX - rect.left;
-            const my = e.clientY - rect.top;
-            const newPanX = mx - (mx - pan.x) * (newZoom / zoom);
-            const newPanY = my - (my - pan.y) * (newZoom / zoom);
-            setPan({ x: newPanX, y: newPanY });
-        }
+    /* ── Node click ── */
+    const handleNodeClick = useCallback((node: any) => {
+        const n = node as TopoNode;
+        setSelectedNode(n);
+    }, []);
 
-        setZoom(newZoom);
-    }, [zoom, pan]);
-
-    useEffect(() => {
-        const el = canvasRef.current;
-        if (!el) return;
-        el.addEventListener('wheel', handleWheel, { passive: false });
-        return () => el.removeEventListener('wheel', handleWheel);
-    }, [handleWheel]);
-
-    /* ── Fit to view ── */
-    const fitToView = useCallback(() => {
-        if (nodes.length === 0) return;
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (!rect) return;
-
-        const minX = Math.min(...nodes.map(n => n.x));
-        const minY = Math.min(...nodes.map(n => n.y));
-        const maxX = Math.max(...nodes.map(n => n.x + CARD_W));
-        const maxY = Math.max(...nodes.map(n => n.y + getCardH(n)));
-
-        const graphW = maxX - minX + 100;
-        const graphH = maxY - minY + 100;
-        const scale = Math.min(rect.width / graphW, rect.height / graphH, 1.2);
-        const offsetX = (rect.width - graphW * scale) / 2 - minX * scale + 50 * scale;
-        const offsetY = (rect.height - graphH * scale) / 2 - minY * scale + 50 * scale;
-
-        setZoom(scale);
-        setPan({ x: offsetX, y: offsetY });
-    }, [nodes]);
-
-    // Auto-fit on first load
-    useEffect(() => {
-        if (nodes.length > 0 && !loading) {
-            setTimeout(fitToView, 100);
-        }
-    }, [loading]); // eslint-disable-line react-hooks/exhaustive-deps
+    /* ── Legend data ── */
+    const legendItems = [
+        { color: NODE_COLORS.service, label: 'Service', icon: Server },
+        ...graphData.nodes
+            .filter(n => n.nodeType === 'addon')
+            .map(n => ({ color: getNodeColor(n), label: (n.subType || 'addon').toUpperCase(), icon: Database }))
+            .filter((v, i, a) => a.findIndex(x => x.label === v.label) === i),
+        ...(graphData.nodes.some(n => n.nodeType === 'volume')
+            ? [{ color: NODE_COLORS.volume, label: 'Volume', icon: HardDrive }] : []),
+    ];
 
     /* ── Render ── */
-    const isEmpty = nodes.length === 0;
+    const isEmpty = graphData.nodes.length === 0;
 
     return (
         <DashboardShell>
-            <div className="relative flex-1 bg-[#0a0a0b] overflow-hidden">
+            <div ref={containerRef} className="relative flex-1 bg-[#04070f] overflow-hidden">
+                {/* Ambient glow backgrounds */}
+                <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(59,130,246,0.08),transparent_45%),radial-gradient(circle_at_80%_30%,rgba(99,102,241,0.09),transparent_42%),radial-gradient(circle_at_50%_85%,rgba(16,185,129,0.06),transparent_48%)]" />
+                <div className="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
+                <div className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/10" />
 
-                {/* ── Dot Grid Background ── */}
-                <div
-                    className="absolute inset-0 pointer-events-none"
-                    style={{
-                        backgroundImage: `radial-gradient(circle, #ffffff08 1px, transparent 1px)`,
-                        backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
-                        backgroundPosition: `${pan.x}px ${pan.y}px`,
-                    }}
-                />
-
-                {/* ── Header ── */}
+                {/* Header */}
                 <div className="absolute top-4 left-4 z-30 pointer-events-none">
                     <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-blue-600/15 flex items-center justify-center
-                            border border-blue-600/20">
-                            <Activity className="w-4.5 h-4.5 text-blue-400" />
+                        <div className="w-9 h-9 rounded-xl bg-indigo-600/15 flex items-center justify-center border border-indigo-600/20">
+                            <Activity className="w-4.5 h-4.5 text-indigo-400" />
                         </div>
                         <div>
-                            <h1 className="text-lg font-bold text-white tracking-tight">Canvas</h1>
+                            <h1 className="text-lg font-bold text-white tracking-tight">Topology</h1>
                             <p className="text-[11px] text-zinc-600">
-                                {nodes.filter(n => n.type === 'service').length} services
+                                {graphData.nodes.filter(n => n.nodeType === 'service').length} services
                                 {' · '}
-                                {edges.length} connections
-                                {' · '}
-                                {Math.round(zoom * 100)}%
+                                {graphData.links.length} connections
+                                {' · 3D'}
                             </p>
                         </div>
                     </div>
                 </div>
 
-                {/* ── Controls ── */}
+                {/* Legend */}
+                <div className="absolute left-4 top-16 z-20 w-40 rounded-xl border border-zinc-800/80 bg-black/60 p-3 backdrop-blur-lg">
+                    <div className="text-[9px] text-zinc-400 uppercase tracking-wider mb-1.5 font-semibold">Legend</div>
+                    <div className="flex flex-col gap-1">
+                        {legendItems.map(({ color, label }) => (
+                            <div key={label} className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                                <span className="text-[10px] text-zinc-300">{label}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Controls */}
                 <div className="absolute top-4 right-4 z-30 flex items-center gap-1.5">
-                    {/* Auto-refresh */}
                     <button
                         onClick={() => setAutoRefresh(!autoRefresh)}
                         className={`p-2 rounded-lg border text-xs transition-all ${autoRefresh
                             ? 'bg-emerald-950/50 border-emerald-800/40 text-emerald-400'
                             : 'bg-zinc-900/80 border-zinc-800/50 text-zinc-500'
-                            }`}
-                        title={autoRefresh ? 'Live (15s)' : 'Paused'}>
+                        }`}
+                        title={autoRefresh ? 'Live (15s)' : 'Paused'}
+                    >
                         <Wifi className={`w-3.5 h-3.5 ${autoRefresh ? 'animate-pulse' : ''}`} />
                     </button>
-
                     <button onClick={loadTopology}
-                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50
-                        text-zinc-500 hover:text-white transition-colors"
+                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50 text-zinc-500 hover:text-white transition-colors"
                         title="Refresh">
                         <RefreshCw className="w-3.5 h-3.5" />
                     </button>
-
                     <div className="w-px h-5 bg-zinc-800 mx-1" />
-
-                    <button onClick={() => setZoom(z => Math.min(3, z * 1.2))}
-                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50
-                        text-zinc-500 hover:text-white transition-colors">
+                    <button onClick={() => zoomCamera(0.82)}
+                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50 text-zinc-500 hover:text-white transition-colors"
+                        title="Zoom in" aria-label="Zoom in">
                         <ZoomIn className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => setZoom(z => Math.max(0.2, z * 0.8))}
-                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50
-                        text-zinc-500 hover:text-white transition-colors">
+                    <button onClick={() => zoomCamera(1.22)}
+                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50 text-zinc-500 hover:text-white transition-colors"
+                        title="Zoom out" aria-label="Zoom out">
                         <ZoomOut className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={fitToView}
-                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50
-                        text-zinc-500 hover:text-white transition-colors"
-                        title="Fit to view">
+                    <button onClick={resetCamera}
+                        className="p-2 rounded-lg bg-zinc-900/80 border border-zinc-800/50 text-zinc-500 hover:text-white transition-colors"
+                        title="Reset view" aria-label="Reset view">
                         <Maximize2 className="w-3.5 h-3.5" />
                     </button>
                 </div>
 
-                {/* ── Canvas ── */}
+                {/* Help */}
+                <div className="absolute bottom-4 right-4 z-20 rounded-xl border border-zinc-800/80 bg-black/55 px-3 py-2 backdrop-blur-lg">
+                    <div className="text-[10px] text-zinc-400">Drag to orbit | Scroll to zoom | Click node for details</div>
+                </div>
+
+                {/* Content */}
                 {loading ? (
                     <div className="flex items-center justify-center h-full gap-3">
-                        <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                        <span className="text-zinc-500 text-sm">Loading canvas...</span>
+                        <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                        <span className="text-zinc-500 text-sm">Loading 3D topology...</span>
                     </div>
                 ) : isEmpty ? (
                     <div className="flex flex-col items-center justify-center h-full gap-4">
-                        <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800
-                            flex items-center justify-center">
+                        <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center">
                             <Server className="w-8 h-8 text-zinc-700" />
                         </div>
                         <p className="text-base font-medium text-zinc-500">No services deployed</p>
-                        <p className="text-sm text-zinc-700">Deploy a service to see it here.</p>
+                        <p className="text-sm text-zinc-700">Deploy a service to see the 3D topology.</p>
                     </div>
                 ) : (
-                    <div
-                        ref={canvasRef}
-                        className="w-full h-full cursor-grab active:cursor-grabbing"
-                        onMouseDown={handleCanvasMouseDown}
-                        onMouseMove={handleMouseMove}
-                        onMouseUp={handleMouseUp}
-                        onMouseLeave={handleMouseUp}
-                        onClick={() => setSelectedNode(null)}
-                    >
-                        {/* Transform layer */}
-                        <div
-                            className="origin-top-left"
-                            style={{
-                                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                                willChange: 'transform',
-                            }}
-                        >
-                            {/* ── SVG Connections ── */}
-                            <svg
-                                className="absolute top-0 left-0 pointer-events-none"
-                                style={{
-                                    width: '10000px',
-                                    height: '10000px',
-                                    overflow: 'visible',
-                                }}
-                            >
-                                <defs>
-                                    {/* Animated dash */}
-                                    <style>{`
-                                        @keyframes dashFlow {
-                                            to { stroke-dashoffset: -20; }
-                                        }
-                                    `}</style>
-                                </defs>
-
-                                {edges.map((edge, i) => {
-                                    const src = nodes.find(n => n.id === edge.source);
-                                    const tgt = nodes.find(n => n.id === edge.target);
-                                    if (!src || !tgt) return null;
-
-                                    const color = EDGE_COLORS[edge.type || 'ADDON'] || EDGE_COLORS.ADDON;
-                                    const path = buildCurve(src, tgt);
-
-                                    return (
-                                        <g key={`edge-${i}`}>
-                                            {/* Glow */}
-                                            <path
-                                                d={path}
-                                                fill="none"
-                                                stroke={color}
-                                                strokeWidth={6}
-                                                strokeOpacity={0.08}
-                                            />
-                                            {/* Main line */}
-                                            <path
-                                                d={path}
-                                                fill="none"
-                                                stroke={color}
-                                                strokeWidth={2}
-                                                strokeOpacity={0.5}
-                                                strokeDasharray={edge.type === 'API' ? '6 4' : 'none'}
-                                            />
-                                            {/* Animated flow */}
-                                            <path
-                                                d={path}
-                                                fill="none"
-                                                stroke={color}
-                                                strokeWidth={2}
-                                                strokeOpacity={0.8}
-                                                strokeDasharray="4 16"
-                                                style={{
-                                                    animation: 'dashFlow 1.5s linear infinite',
-                                                }}
-                                            />
-                                        </g>
-                                    );
-                                })}
-                            </svg>
-
-                            {/* ── Node Cards ── */}
-                            {nodes.map(node => (
-                                <NodeCard
-                                    key={node.id}
-                                    node={node}
-                                    selected={selectedNode?.id === node.id}
-                                    onSelect={setSelectedNode}
-                                    onDragStart={handleNodeDragStart}
-                                />
-                            ))}
-                        </div>
+                    <div className="absolute inset-0">
+                        {dimensions.width > 0 && dimensions.height > 0 && (
+                            <ForceGraph3D
+                                ref={fgRef}
+                                width={dimensions.width}
+                                height={dimensions.height}
+                                graphData={graphData}
+                                backgroundColor="#04070f"
+                                nodeThreeObject={getNodeObject}
+                                nodeThreeObjectExtend={false}
+                                onNodeClick={handleNodeClick}
+                                linkColor={(link: any) => LINK_COLORS[link.linkType] || '#64748b'}
+                                linkWidth={2}
+                                linkOpacity={0.5}
+                                linkCurvature={0.2}
+                                linkDirectionalParticles={3}
+                                linkDirectionalParticleWidth={2}
+                                linkDirectionalParticleSpeed={0.006}
+                                linkDirectionalParticleColor={(link: any) => LINK_COLORS[link.linkType] || '#64748b'}
+                                enableNodeDrag={true}
+                                enableNavigationControls={true}
+                                showNavInfo={false}
+                                warmupTicks={30}
+                                cooldownTicks={60}
+                            />
+                        )}
                     </div>
                 )}
 
-                {/* ── Detail Panel ── */}
+                {/* Detail Panel */}
                 {selectedNode && (
                     <div className="absolute top-14 right-4 z-30 w-72 bg-zinc-900/95 backdrop-blur-xl
                         border border-zinc-800/60 rounded-xl shadow-2xl shadow-black/50
@@ -670,41 +499,41 @@ export default function TopologyPage() {
                             <div className="flex items-center gap-2">
                                 <div
                                     className="w-7 h-7 rounded-lg flex items-center justify-center"
-                                    style={{ backgroundColor: getTheme(selectedNode).icon + '15' }}
+                                    style={{ backgroundColor: getNodeColor(selectedNode) + '15' }}
                                 >
-                                    {selectedNode.type === 'service'
-                                        ? <Server className="w-3.5 h-3.5" style={{ color: getTheme(selectedNode).icon }} />
-                                        : selectedNode.type === 'addon'
-                                            ? <Database className="w-3.5 h-3.5" style={{ color: getTheme(selectedNode).icon }} />
-                                            : <HardDrive className="w-3.5 h-3.5" style={{ color: getTheme(selectedNode).icon }} />}
+                                    {selectedNode.nodeType === 'service'
+                                        ? <Server className="w-3.5 h-3.5" style={{ color: getNodeColor(selectedNode) }} />
+                                        : selectedNode.nodeType === 'addon'
+                                            ? <Database className="w-3.5 h-3.5" style={{ color: getNodeColor(selectedNode) }} />
+                                            : <HardDrive className="w-3.5 h-3.5" style={{ color: getNodeColor(selectedNode) }} />
+                                    }
                                 </div>
                                 <div>
                                     <div className="text-xs font-semibold text-white">{selectedNode.name}</div>
-                                    <div className="text-[10px] text-zinc-600 uppercase">{selectedNode.type}</div>
+                                    <div className="text-[10px] text-zinc-600 uppercase">{selectedNode.nodeType}</div>
                                 </div>
                             </div>
                             <button onClick={() => setSelectedNode(null)}
-                                className="w-6 h-6 rounded flex items-center justify-center
-                                    hover:bg-zinc-800 text-zinc-600 hover:text-white transition-colors">
+                                className="w-6 h-6 rounded flex items-center justify-center hover:bg-zinc-800 text-zinc-600 hover:text-white transition-colors">
                                 <X className="w-3.5 h-3.5" />
                             </button>
                         </div>
 
                         <div className="p-3 space-y-2 text-xs">
-                            {selectedNode.type === 'service' && (
+                            {selectedNode.nodeType === 'service' && (
                                 <>
                                     <div className="flex justify-between">
                                         <span className="text-zinc-600">Health</span>
                                         <div className="flex items-center gap-1.5">
                                             <div className="w-1.5 h-1.5 rounded-full"
-                                                style={{ backgroundColor: HEALTH_COLORS[selectedNode.data?.health] || HEALTH_COLORS.unknown }} />
-                                            <span className="text-zinc-300 capitalize">{selectedNode.data?.health || 'unknown'}</span>
+                                                style={{ backgroundColor: HEALTH_COLORS[selectedNode.health || ''] || HEALTH_COLORS.unknown }} />
+                                            <span className="text-zinc-300 capitalize">{selectedNode.health || 'unknown'}</span>
                                         </div>
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-zinc-600">Status</span>
-                                        <span style={{ color: (DEPLOY_LABELS[selectedNode.data?.deploy_status] || DEPLOY_LABELS.NONE).color }}>
-                                            {(DEPLOY_LABELS[selectedNode.data?.deploy_status] || DEPLOY_LABELS.NONE).label}
+                                        <span style={{ color: (DEPLOY_LABELS[selectedNode.status || ''] || DEPLOY_LABELS.NONE).color }}>
+                                            {(DEPLOY_LABELS[selectedNode.status || ''] || DEPLOY_LABELS.NONE).label}
                                         </span>
                                     </div>
                                     {selectedNode.data?.domain && (
@@ -736,19 +565,19 @@ export default function TopologyPage() {
                                     </div>
                                 </>
                             )}
-                            {selectedNode.type === 'addon' && (
+                            {selectedNode.nodeType === 'addon' && (
                                 <>
                                     <div className="flex justify-between">
                                         <span className="text-zinc-600">Type</span>
-                                        <span className="text-zinc-300">{selectedNode.data?.addon_type}</span>
+                                        <span className="text-zinc-300">{selectedNode.subType?.toUpperCase()}</span>
                                     </div>
                                     <div className="flex justify-between">
                                         <span className="text-zinc-600">Status</span>
-                                        <span className="text-zinc-300">{selectedNode.data?.status}</span>
+                                        <span className="text-zinc-300">{selectedNode.status}</span>
                                     </div>
                                 </>
                             )}
-                            {selectedNode.type === 'volume' && (
+                            {selectedNode.nodeType === 'volume' && (
                                 <>
                                     <div className="flex justify-between">
                                         <span className="text-zinc-600">Mount</span>
