@@ -142,23 +142,27 @@ export function ServicesGrid({ services }: ServicesGridProps) {
             </div>
           </div>
 
-          {/* Metrics / Info */}
-          <div className="p-4 space-y-3">
-            <div className="flex justify-between items-center text-xs text-muted-foreground font-mono">
-              <span>CPU</span>
-              <span className="text-foreground">{service.cpu_cores} vCPU</span>
+          {/* Info Row */}
+          <div className="px-4 py-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' :
+                service.latest_deployment?.status === 'FAILED' ? 'bg-red-500/15 text-red-400' :
+                service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500/15 text-blue-400' :
+                'bg-yellow-500/15 text-yellow-400'
+              }`}>
+                {service.latest_deployment?.status || 'PENDING'}
+              </span>
+              {service.deploy_mode === 'COMPOSE' && (
+                <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-violet-500/15 text-violet-400">Compose</span>
+              )}
+              <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>
             </div>
-            <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full" style={{ width: '25%' }} />
-            </div>
-
-            <div className="flex justify-between items-center text-xs text-muted-foreground font-mono">
-              <span>MEM</span>
-              <span className="text-foreground">{service.memory_mb} MB</span>
-            </div>
-            <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-purple-500 rounded-full" style={{ width: '40%' }} />
-            </div>
+            {service.public_domain && (
+              <p className="text-[11px] text-muted-foreground truncate">
+                {service.public_domain}
+              </p>
+            )}
           </div>
 
           {/* Footer / Actions */}
