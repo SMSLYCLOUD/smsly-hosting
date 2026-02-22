@@ -7,7 +7,7 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 IS_TESTING = bool(os.environ.get('TESTING')) or any(
-    arg == 'test' or arg.startswith('test')
+    arg == 'test' or arg.startswith('test') or arg.endswith('pytest')
     for arg in sys.argv
 )
 
@@ -197,7 +197,6 @@ SOCIALACCOUNT_PROVIDERS = {
 # Without this, GET /accounts/github/login/ renders a form instead of redirecting
 # to GitHub, breaking the OAuth state flow and causing 401 on the callback.
 SOCIALACCOUNT_LOGIN_ON_GET = True
-SOCIALACCOUNT_STORE_TOKENS = True
 
 TEMPLATES = [
     {

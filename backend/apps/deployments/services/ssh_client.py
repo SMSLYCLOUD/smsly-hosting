@@ -80,11 +80,13 @@ class SSHClient:
         if self.sftp:
             try:
                 self.sftp.close()
-            except: pass
+            except Exception:
+                pass
         if self.client:
             try:
                 self.client.close()
-            except: pass
+            except Exception:
+                pass
         self.sftp = None
         self.client = None
 
@@ -137,7 +139,8 @@ class SSHClient:
         check_curl = "which curl || (apt-get update && apt-get install -y curl) || (yum install -y curl)"
         try:
             self.exec_command(check_curl)
-        except: pass # Best effort
+        except Exception:
+            pass  # Best effort
 
         cmd = "curl -fsSL https://get.docker.com | sh"
         self.exec_command(cmd)

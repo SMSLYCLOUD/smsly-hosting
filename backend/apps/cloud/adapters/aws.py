@@ -327,7 +327,7 @@ class AWSAdapter(BaseCloudAdapter):
             )
             return response['CertificateArn']
         except ClientError as e:
-            raise
+            raise e
 
     def _get_account_id(self):
         return self.session.client('sts').get_caller_identity()['Account']
