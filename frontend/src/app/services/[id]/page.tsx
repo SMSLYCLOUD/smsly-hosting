@@ -255,7 +255,7 @@ export default function ServiceDetailPage() {
     return (
         <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
             {activeTab === 'overview' && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4">
                     {/* Stats Cards */}
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
                         <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Status</h4>
@@ -309,7 +309,7 @@ export default function ServiceDetailPage() {
                         <p className="text-xs text-muted-foreground mt-2 font-medium">/month (approx)</p>
                     </div>
 
-                    <div className="col-span-1 md:col-span-2 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
+                    <div className="col-span-1 md:col-span-3 bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Configuration</h3>
                         <div className="space-y-5 text-sm">
                             <div className="flex justify-between border-b border-border pb-3">
@@ -439,7 +439,7 @@ export default function ServiceDetailPage() {
                         </div>
                     </div>
 
-                    <div className="bg-card border border-border p-8 rounded-xl shadow-sm h-fit">
+                    <div className="bg-card border border-border p-8 rounded-xl shadow-sm">
                         <h3 className="font-bold mb-6 text-lg text-foreground">Latest Deployment</h3>
                         {deployment ? (
                             <div className="space-y-5 text-sm">

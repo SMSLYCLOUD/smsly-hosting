@@ -304,6 +304,32 @@ class RepoScanner:
                 except Exception: # pylint: disable=broad-exception-caught
                     pass
 
+        # 3. Scan docker-compose files for ${VAR} interpolation
+        compose_pattern = re.compile(
+            r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}'
+        )
+        for root, dirs, files in os.walk(self.source_dir):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            depth = root.replace(self.source_dir, '').count(os.sep)
+            if depth > 2:
+                dirs.clear()
+                continue
+
+            for f in files:
+                if not (f.startswith('docker-compose') and
+                        (f.endswith('.yml') or f.endswith('.yaml'))):
+                    continue
+
+                filepath = os.path.join(root, f)
+                try:
+                    with open(filepath, 'r', errors='ignore',
+                              encoding='utf-8') as fh:
+                        content = fh.read(MAX_FILE_READ)
+                        for match in compose_pattern.finditer(content):
+                            env_vars.add(match.group(1))
+                except Exception:  # pylint: disable=broad-exception-caught
+                    pass
+
         return sorted(env_vars)
 
     # -----------------------------------------------------------------------
