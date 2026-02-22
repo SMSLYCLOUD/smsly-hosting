@@ -702,6 +702,23 @@ if not created and not cp.is_active:
         echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
     fi
 
+    # ─── Caddy: Regenerate Caddyfile from DB (picks up new service domains) ──
+    if command -v caddy &> /dev/null && systemctl is-active --quiet caddy 2>/dev/null; then
+        echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+from services.caddy_manager import generate_caddyfile, apply_caddyfile
+config = PlatformConfig.load()
+content = generate_caddyfile(config)
+result = apply_caddyfile(content)
+print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
+" 2>/dev/null || echo -e "${YELLOW}  ⚠ Caddyfile regeneration skipped (backend not ready)${NC}"
+
+        # Restart caddy-watcher to pick up the new file
+        systemctl restart caddy-watcher 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Caddy config regenerated${NC}"
+    fi
+
     # ─── Verification ────────────────────────────────────────────────────────
     echo -e "${BLUE}  → Verifying containers...${NC}"
     sleep 5
