@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { HardDrive, Plus, Trash2, FolderOpen, FileText, ChevronRight, Download } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
     Dialog,
     DialogContent,
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 
 export function StorageTab({ serviceId }: { serviceId: string }) {
+    const confirm = useConfirm();
     const [volumes, setVolumes] = useState<Volume[]>([]);
     const [loading, setLoading] = useState(true);
     const [newName, setNewName] = useState('');
@@ -61,7 +63,7 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm('Delete this volume? Data will be lost.')) return;
+        if (!await confirm({ title: 'Delete volume?', message: 'Delete this volume? Data will be lost.', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await servicesApi.deleteVolume(serviceId, id);
             await loadVolumes();

@@ -13,11 +13,13 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
 import { DbExplorer } from "@/components/addons/DbExplorer";
 import { useToast } from "@/components/ui/use-toast";
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export default function AddonDetailsPage() {
     const { id } = useParams();
     const router = useRouter();
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [addon, setAddon] = useState<Addon | null>(null);
     const [loading, setLoading] = useState(true);
     const [metrics, setMetrics] = useState<any>(null);
@@ -42,7 +44,7 @@ export default function AddonDetailsPage() {
     }, [id, toast]);
 
     const handleRotate = async () => {
-        if (!confirm("This will disconnect all active sessions. Are you sure?")) return;
+        if (!await confirm({ title: 'Rotate credentials?', message: 'This will disconnect all active sessions. Are you sure?', variant: 'destructive', confirmText: 'Rotate' })) return;
         setRotating(true);
         try {
             await addonsApi.rotateCredentials(id as string);
@@ -58,7 +60,7 @@ export default function AddonDetailsPage() {
     };
 
     const handleDelete = async () => {
-        if (!confirm("Are you sure you want to delete this addon? This action cannot be undone.")) return;
+        if (!await confirm({ title: 'Delete addon?', message: 'Are you sure you want to delete this addon? This action cannot be undone.', variant: 'destructive', confirmText: 'Delete' })) return;
         setDeleting(true);
         try {
             await addonsApi.delete(id as string);

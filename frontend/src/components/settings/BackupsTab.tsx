@@ -7,9 +7,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Loader2, Download, RotateCcw, Trash2, Plus, Clock } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -43,7 +45,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleRestore = async (id: string) => {
-        if (!confirm("Are you sure? This will overwrite the current service state.")) return;
+        if (!await confirm({ title: 'Restore backup?', message: 'Are you sure? This will overwrite the current service state.', variant: 'destructive', confirmText: 'Restore' })) return;
         try {
             await api.post(`/backups/${id}/restore/`);
             toast({ title: "Restore Started", description: "Service will restart once restored." });

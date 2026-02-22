@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 import { DashboardShell } from "@/components/layout/DashboardShell"
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 // Types
 interface Service {
@@ -72,6 +73,7 @@ const ADDON_CATALOG = [
 
 export default function MarketplacePage() {
     const { toast } = useToast()
+    const confirm = useConfirm()
     const [addons, setAddons] = React.useState<Addon[]>([])
     const [services, setServices] = React.useState<Service[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
@@ -219,7 +221,7 @@ export default function MarketplacePage() {
 
     const handleRestore = async (backupId: string) => {
         if (!activeAddon) return
-        if (!confirm("This will overwrite current data. Continue?")) return
+        if (!await confirm({ title: 'Restore backup?', message: 'This will overwrite current data. Continue?', variant: 'destructive', confirmText: 'Restore' })) return
         
         const token = localStorage.getItem("auth_token")
         try {

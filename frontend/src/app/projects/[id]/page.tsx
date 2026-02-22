@@ -16,6 +16,7 @@ import {
   GitBranch, Globe, Layers, Trash2, X, Save,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: '#10b981',
@@ -32,6 +33,7 @@ const COLOR_OPTIONS = ['#6366f1', '#10b981', '#3b82f6', '#ef4444', '#f59e0b', '#
 
 function ProjectDetailContent() {
   const router = useRouter();
+  const confirm = useConfirm();
   const params = useParams();
   const searchParams = useSearchParams();
   const projectId = params.id as string;
@@ -417,7 +419,7 @@ function ProjectDetailContent() {
               <Button
                 variant="destructive"
                 onClick={async () => {
-                  if (!confirm(`Delete "${project.name}"? All services will become ungrouped.`)) return;
+                  if (!await confirm({ title: 'Delete project?', message: `Delete "${project.name}"? All services will become ungrouped.`, variant: 'destructive', confirmText: 'Delete' })) return;
                   try {
                     await projectsApi.delete(projectId);
                     router.push('/projects');

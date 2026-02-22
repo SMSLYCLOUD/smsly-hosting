@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, FolderOpen, Settings2, Trash2, X, Palette } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const EMOJI_OPTIONS = ['📦', '🚀', '🌐', '⚡', '🛡️', '🧪', '🎯', '💎', '🔥', '🧠', '🤖', '📊'];
 const COLOR_OPTIONS = ['#6366f1', '#10b981', '#3b82f6', '#ef4444', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#14b8a6', '#f97316'];
@@ -27,6 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const confirm = useConfirm();
   const { toast } = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,7 +80,7 @@ export default function ProjectsPage() {
 
   const handleDelete = async (e: React.MouseEvent, project: Project) => {
     e.stopPropagation();
-    if (!confirm(`Delete project "${project.name}"? Services will become ungrouped.`)) return;
+    if (!await confirm({ title: 'Delete project?', message: `Delete project "${project.name}"? Services will become ungrouped.`, variant: 'destructive', confirmText: 'Delete' })) return;
     try {
       await projectsApi.delete(project.id);
       setProjects(prev => prev.filter(p => p.id !== project.id));

@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useRouter } from 'next/navigation';
 import {
   Server,
@@ -31,10 +32,11 @@ interface ServicesGridProps {
 
 export function ServicesGrid({ services }: ServicesGridProps) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [actionLoading, setActionLoading] = React.useState<string | null>(null);
 
   const handleDeploy = async (serviceId: string) => {
-    if (!confirm('Trigger a new deployment for this service now?')) return;
+    if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
     setActionLoading(serviceId);
     try {
       await api.post(`/services/${serviceId}/deploy/`, { ref: 'HEAD' });
@@ -47,7 +49,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   };
 
   const handleStop = async (serviceId: string) => {
-    if (!confirm('Stop this service and cancel active deployment activity?')) return;
+    if (!await confirm({ title: 'Stop service?', message: 'Stop this service and cancel active deployment activity?', variant: 'destructive', confirmText: 'Stop' })) return;
     setActionLoading(serviceId);
     try {
       await servicesApi.stop(serviceId);
@@ -60,7 +62,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   };
 
   const handleRestart = async (serviceId: string) => {
-    if (!confirm('Restart this service now? A fresh deployment will be queued.')) return;
+    if (!await confirm({ title: 'Restart service?', message: 'Restart this service now? A fresh deployment will be queued.', confirmText: 'Restart' })) return;
     setActionLoading(serviceId);
     try {
       await servicesApi.restart(serviceId);
@@ -83,7 +85,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   };
 
   const handleDelete = async (service: Service) => {
-    if (!confirm(`Are you sure you want to delete "${service.name}"? This cannot be undone.`)) return;
+    if (!await confirm({ title: 'Delete service?', message: `Are you sure you want to delete "${service.name}"? This cannot be undone.`, variant: 'destructive', confirmText: 'Delete' })) return;
     setActionLoading(service.id);
     try {
       await api.delete(`/services/${service.id}/`);

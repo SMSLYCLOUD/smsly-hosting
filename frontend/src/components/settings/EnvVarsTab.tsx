@@ -7,8 +7,10 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Plus, Trash2, Eye, EyeOff, Lock, RotateCcw, Pencil, Check, X, Rocket, Loader2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export function EnvVarsTab({ serviceId }: { serviceId: string }) {
+    const confirm = useConfirm();
     const [vars, setVars] = useState<EnvVar[]>([]);
     const [loading, setLoading] = useState(true);
     const [newKey, setNewKey] = useState('');
@@ -58,7 +60,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm('Are you sure?')) return;
+        if (!await confirm({ title: 'Delete variable?', message: 'Are you sure you want to delete this environment variable?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await servicesApi.deleteEnvVar(serviceId, id);
             await loadVars();
