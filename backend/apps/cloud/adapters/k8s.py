@@ -64,7 +64,7 @@ class KubernetesAdapter(BaseCloudAdapter):
                 raise
 
         # 2. Create/Update Service
-        svc = self._build_service(service_name)
+        svc = self._build_service(service_name, env_vars)
         try:
             self.k8s_client.create_namespaced_service(
                 namespace=namespace, body=svc)
@@ -201,12 +201,13 @@ class KubernetesAdapter(BaseCloudAdapter):
             )
         )
 
-    def _build_service(self, name):
+    def _build_service(self, name, env=None):
+        target_port = int((env or {}).get('PORT', 8000))
         return client.V1Service(
             metadata=client.V1ObjectMeta(name=name),
             spec=client.V1ServiceSpec(
                 selector={"app": name},
-                ports=[client.V1ServicePort(port=80, target_port=8000)],
+                ports=[client.V1ServicePort(port=80, target_port=target_port)],
                 type="ClusterIP"
             )
         )
