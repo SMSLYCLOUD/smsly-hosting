@@ -630,7 +630,7 @@ if [ -n "$UPDATE_MODE" ]; then
             ;;
         backend)
             echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache backend
+            docker compose -f "$COMPOSE_FILE" build --no-cache backend celery
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
@@ -1345,7 +1345,7 @@ if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
 elif ! command -v caddy &> /dev/null; then
     echo -e "${BLUE}  → Installing Caddy (standard)...${NC}"
     apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
     apt-get update >/dev/null 2>&1
     apt-get install -y caddy >/dev/null 2>&1
