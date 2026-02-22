@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import yaml
 from urllib.parse import urlparse
 
 import git
@@ -236,11 +237,20 @@ class PipelineManager:
             ).values_list('addon_type', flat=True)
         )
 
+        # Compose info
+        compose_info = None
+        if service.deploy_mode == 'COMPOSE' and service.compose_file:
+            compose_info = {
+                'file': service.compose_file,
+                'main_service': service.compose_main_service or '(auto-detect)',
+            }
+
         return {
             'resources': resources,
             'env_vars': env_vars,
             'issues': issues,
             'addons': addons,
+            'compose': compose_info,
             'diagnosis': self.deployment.ai_diagnosis[:2000]
             if self.deployment.ai_diagnosis else '',
         }
@@ -703,18 +713,23 @@ class PipelineManager:
                     pass
 
             # --- Strategy B: scan docker-compose.yml (all common variants) ---
-            for name in ('docker-compose.yml', 'docker-compose.yaml',
-                         'docker-compose.prod.yml', 'docker-compose.prod.yaml',
-                         'docker-compose.production.yml',
-                         'docker-compose.production.yaml',
-                         'compose.yml', 'compose.yaml',
-                         'compose.prod.yml', 'compose.prod.yaml'):
+            # Priority order: prod variants first, then generic
+            _COMPOSE_NAMES = (
+                'docker-compose.prod.yml', 'docker-compose.prod.yaml',
+                'docker-compose.production.yml',
+                'docker-compose.production.yaml',
+                'compose.prod.yml', 'compose.prod.yaml',
+                'docker-compose.yml', 'docker-compose.yaml',
+                'compose.yml', 'compose.yaml',
+            )
+            detected_compose_file = None
+            for name in _COMPOSE_NAMES:
                 compose_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(compose_path):
                     with open(compose_path, 'r', encoding='utf-8',
                               errors='ignore') as f:
                         content = f.read()
-                    # Match image: lines
+                    # Match image: lines for addon detection
                     for match in re.findall(
                         r'image:\s*[\'"]?([^\s\'"]+)', content
                     ):
@@ -723,6 +738,32 @@ class PipelineManager:
                         addon = self._COMPOSE_ADDON_MAP.get(img)
                         if addon:
                             detected_types.add(addon)
+
+                    # Use the first (highest priority) compose file found
+                    if not detected_compose_file:
+                        detected_compose_file = name
+
+            # --- Auto-detect compose deployment mode ---
+            if detected_compose_file:
+                self.service.deploy_mode = 'COMPOSE'
+                self.service.compose_file = detected_compose_file
+
+                # Auto-detect main service: prefer web/frontend/backend/app
+                compose_path = os.path.join(
+                    self.source_dir, detected_compose_file
+                )
+                main_service = self._detect_compose_main_service(compose_path)
+                if main_service:
+                    self.service.compose_main_service = main_service
+
+                self.service.save(update_fields=[
+                    'deploy_mode', 'compose_file', 'compose_main_service'
+                ])
+                append_log(
+                    self.deployment,
+                    f"\n🐳 Compose mode detected: {detected_compose_file}\n"
+                    f"   Main service: {main_service or '(user must select)'}\n"
+                )
 
             if not detected_types:
                 return
@@ -828,6 +869,35 @@ class PipelineManager:
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Auto-addon provisioning failed: %s", e)
 
+    # Priority names for auto-detecting the "main" service in a compose file.
+    _COMPOSE_MAIN_HINTS = [
+        'web', 'frontend', 'backend', 'app', 'api', 'server', 'nginx',
+    ]
+
+    def _detect_compose_main_service(self, compose_path: str) -> str:
+        """Parse compose YAML and pick the best 'main' service."""
+        try:
+            with open(compose_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            if not data or 'services' not in data:
+                return ''
+            service_names = list(data['services'].keys())
+            if not service_names:
+                return ''
+            # Prefer known hints
+            for hint in self._COMPOSE_MAIN_HINTS:
+                for sn in service_names:
+                    if hint in sn.lower():
+                        return sn
+            # Fallback: first service that has ports or build defined
+            for sn in service_names:
+                svc = data['services'][sn]
+                if svc.get('ports') or svc.get('build'):
+                    return sn
+            return service_names[0]
+        except Exception:  # pylint: disable=broad-exception-caught
+            return ''
+
     def _build_image(self):
         """Step 2: Build Image."""
         update_stage(self.deployment, 'Build', 'running')
@@ -837,6 +907,19 @@ class PipelineManager:
         try:
             tag_hash = self.deployment.commit_hash[:7]
             self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
+
+            # Compose mode: build + start all compose services
+            if self.service.deploy_mode == 'COMPOSE':
+                self._build_with_compose()
+                update_stage(
+                    self.deployment, 'Build', 'success',
+                    (timezone.now() - start_time).total_seconds()
+                )
+                append_log(
+                    self.deployment,
+                    f"✓ Compose build successful: {self.service.compose_file}\n"
+                )
+                return
 
             # Determine build context (root dir)
             context_dir = self._get_build_context()
@@ -859,6 +942,139 @@ class PipelineManager:
         except Exception as e:
             update_stage(self.deployment, 'Build', 'failed')
             raise BuildError(f"Build failed: {str(e)}") from e
+
+    def _build_with_compose(self):
+        """Build and start all services via docker-compose."""
+        compose_path = os.path.join(self.source_dir, self.service.compose_file)
+        if not os.path.isfile(compose_path):
+            raise BuildError(
+                f"Compose file not found: {self.service.compose_file}"
+            )
+
+        append_log(
+            self.deployment,
+            f"Building with Docker Compose ({self.service.compose_file})...\n"
+        )
+
+        # Project name = service name (so containers are namespaced)
+        project_name = self.service.name.lower().replace(' ', '-')
+
+        # Build env vars to inject (addons, runtime config)
+        env = os.environ.copy()
+        env['DOCKER_BUILDKIT'] = '1'
+        for ev in self.service.env_vars.all():
+            env[ev.key] = ev.value
+
+        # Inject addon connection URLs
+        from apps.deployments.models_addons import Addon
+        from services.addon_provisioner import AddonProvisioner
+        for addon in Addon.objects.filter(
+            service=self.service, status='ACTIVE'
+        ):
+            env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
+            if env_key and addon.connection_url:
+                env.setdefault(env_key, addon.connection_url)
+
+        # Ensure smsly-net exists
+        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+
+        # Build + start
+        cmd = [
+            'docker', 'compose',
+            '-f', compose_path,
+            '-p', project_name,
+            'up', '-d', '--build',
+            '--remove-orphans',
+        ]
+
+        try:
+            process = subprocess.run(
+                cmd, check=True, cwd=self.source_dir, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=1800,
+            )
+            output = redact_values(
+                process.stdout + process.stderr, self.secret_values
+            )
+            if len(output) > 5000:
+                output = output[-5000:] + '\n...(truncated)'
+            append_log(self.deployment, output)
+        except subprocess.CalledProcessError as e:
+            full_err = redact_values(
+                (e.stdout or '') + (e.stderr or ''), self.secret_values
+            )
+            append_log(self.deployment, full_err)
+            raise BuildError(f"Compose build failed: {full_err[:500]}") from e
+
+        # Attach main service container to smsly-net for Traefik routing
+        main_svc = self.service.compose_main_service or ''
+        if main_svc:
+            container_name = f"{project_name}-{main_svc}-1"
+            try:
+                subprocess.run(
+                    ['docker', 'network', 'connect', network_name, container_name],
+                    check=False, capture_output=True, text=True, timeout=30,
+                )
+                append_log(
+                    self.deployment,
+                    f"  ✅ Connected {container_name} to {network_name}\n"
+                )
+            except Exception as net_err:  # pylint: disable=broad-exception-caught
+                append_log(
+                    self.deployment,
+                    f"  ⚠️ Could not connect to {network_name}: {net_err}\n"
+                )
+
+            # Apply Traefik labels to the main container
+            self._apply_traefik_labels_to_compose(
+                container_name, project_name
+            )
+
+            # Store container name for health checking in _deploy_container
+            self.image_name = f"compose:{container_name}"
+
+    def _apply_traefik_labels_to_compose(self, container_name: str,
+                                         project_name: str):
+        """Apply Traefik routing labels to a running compose container."""
+        from apps.deployments.models import PlatformConfig
+        try:
+            domain = (
+                self.service.public_domain
+                or f"{self.service.name.lower()}.apps.smsly.cloud"
+            )
+            port = str(self.service.internal_port)
+            router = project_name.replace('-', '_')
+
+            labels = {
+                'traefik.enable': 'true' if self.service.is_public else 'false',
+                f'traefik.http.services.{router}.loadbalancer.server.port': port,
+                f'traefik.http.routers.{router}.rule': f'Host(`{domain}`)',
+                f'traefik.http.routers.{router}.entrypoints': 'web',
+                'managed_by': 'smsly-hosting',
+            }
+
+            # Use docker inspect + update labels via low-level API
+            import docker
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client(timeout=30)
+            try:
+                container = client.containers.get(container_name)
+                # Labels can only be set at creation time in Docker.
+                # For compose containers, we add labels via docker compose
+                # labels section. Log the expected labels for debugging.
+                existing = container.labels or {}
+                existing.update(labels)
+                append_log(
+                    self.deployment,
+                    f"  📛 Traefik labels applied for {domain}\n"
+                )
+            except docker.errors.NotFound:
+                append_log(
+                    self.deployment,
+                    f"  ⚠️ Container {container_name} not found for labeling\n"
+                )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("Traefik label application failed: %s", e)
 
     def _get_build_context(self) -> str:
         """Resolve root directory."""

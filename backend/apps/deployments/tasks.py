@@ -525,6 +525,56 @@ def _deploy_container(deployment, provider, image_name):
 
     try:
         service = deployment.service
+
+        # --- Compose mode: containers already running from pipeline ---
+        if service.deploy_mode == 'COMPOSE' and image_name.startswith('compose:'):
+            container_name = image_name.split(':', 1)[1]
+            deployment.status = Deployment.Status.HEALTH_CHECK
+            deployment.container_id = container_name
+            deployment.save(update_fields=['status', 'container_id'])
+            broadcast_status(deployment)
+
+            if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+                # Only check route if public
+                if service.is_public:
+                    route_ready = _wait_for_local_route_ready(
+                        deployment, service, timeout_seconds=120,
+                    )
+                    if not route_ready:
+                        append_log(
+                            deployment,
+                            "[ROUTE-CHECK] WARNING: Route readiness check "
+                            "failed; continuing with container health.\n",
+                        )
+                container_ready = _wait_for_local_container_healthy(
+                    deployment, container_name, timeout_seconds=120,
+                )
+                if not container_ready:
+                    raise RuntimeError(
+                        f"Container failed readiness checks: {container_name}"
+                    )
+
+            deployment.status = Deployment.Status.ACTIVE
+            deployment.finished_at = timezone.now()
+            deployment.save(update_fields=['status', 'finished_at'])
+            update_stage(
+                deployment, 'Deploy', 'success',
+                (timezone.now() - start).total_seconds()
+            )
+            broadcast_status(deployment)
+            append_log(
+                deployment,
+                f"[OK] Compose deployment successful. "
+                f"Container: {container_name}\n"
+            )
+
+            _post_deploy_monitor.delay(
+                str(deployment.id), str(provider.id),
+                container_name, image_name,
+            )
+            return
+
+        # --- Standard single-container deploy ---
         compute = ComputeService(provider)
 
         env_vars = _build_runtime_env(service)
