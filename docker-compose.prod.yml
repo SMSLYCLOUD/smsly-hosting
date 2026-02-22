@@ -143,6 +143,7 @@ services:
       socket-proxy:
         condition: service_started
     volumes:
+      - ./backend:/app
       - media_volume:/app/media
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
@@ -164,6 +165,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./backend:/app
       - media_volume:/app/media
     networks:
       - smsly-net
