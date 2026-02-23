@@ -65,24 +65,36 @@ function createServiceNode(node: SvcNode): any {
   const group = new THREE.Group();
   const color = statusColor(node.status);
 
-  // Main icosahedron
-  const geometry = new THREE.IcosahedronGeometry(7, 1);
+  // Nucleus sphere
+  const geometry = new THREE.SphereGeometry(10, 32, 32);
   const material = new THREE.MeshPhongMaterial({
     color: new THREE.Color(color),
     emissive: new THREE.Color(color),
-    emissiveIntensity: 0.35,
+    emissiveIntensity: 0.5,
     transparent: true,
     opacity: 0.9,
-    shininess: 80,
+    shininess: 120,
   });
   group.add(new THREE.Mesh(geometry, material));
 
-  // Outer glow ring
-  const ringGeo = new THREE.RingGeometry(9, 11, 32);
-  const ringMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(color), transparent: true, opacity: 0.15, side: THREE.DoubleSide,
+  // Outer glow shell
+  const glowGeo = new THREE.SphereGeometry(15, 16, 16);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color), transparent: true, opacity: 0.08, side: THREE.BackSide,
   });
-  group.add(new THREE.Mesh(ringGeo, ringMat));
+  group.add(new THREE.Mesh(glowGeo, glowMat));
+
+  // Electron shell orbits (3 rings at different angles)
+  for (let i = 0; i < 3; i++) {
+    const ringGeo = new THREE.RingGeometry(13 + i * 2.5, 13.5 + i * 2.5, 64);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(color), transparent: true, opacity: 0.12 - i * 0.03, side: THREE.DoubleSide,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = Math.PI / 2 + (i * Math.PI / 4);
+    ring.rotation.y = i * Math.PI / 3;
+    group.add(ring);
+  }
 
   // Status dot
   const dotGeo = new THREE.SphereGeometry(1.5, 8, 8);
@@ -271,6 +283,23 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
       fg.d3Force('charge')?.strength(-250);
       fg.d3ReheatSimulation?.();
+
+      // Auto-orbit camera
+      let angle = 0;
+      const radius = dist;
+      const rotateInterval = setInterval(() => {
+        angle += 0.003;
+        fg.cameraPosition(
+          { x: radius * Math.sin(angle), y: 50, z: radius * Math.cos(angle) },
+          { x: 0, y: 0, z: 0 }
+        );
+      }, 30);
+
+      const container = containerRef.current;
+      const stopRotate = () => clearInterval(rotateInterval);
+      container?.addEventListener('mousedown', stopRotate, { once: true });
+      container?.addEventListener('touchstart', stopRotate, { once: true });
+
       const fitTimer = setTimeout(() => {
         if (!hasInitialFitRef.current) {
           fitGraphToViewport(700);
@@ -278,7 +307,10 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         }
       }, 250);
       return () => {
+        clearInterval(rotateInterval);
         clearTimeout(fitTimer);
+        container?.removeEventListener('mousedown', stopRotate);
+        container?.removeEventListener('touchstart', stopRotate);
       };
     }
   }, [fitGraphToViewport, graphData.nodes.length]);
@@ -308,8 +340,9 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
   return (
     <div ref={containerRef} className="relative h-full w-full min-h-[500px] overflow-hidden bg-[#04070f]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.08),transparent_45%),radial-gradient(circle_at_80%_30%,rgba(59,130,246,0.09),transparent_42%),radial-gradient(circle_at_50%_85%,rgba(99,102,241,0.08),transparent_48%)]" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/30" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[24rem] w-[24rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[40rem] w-[40rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/15" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[30rem] w-[30rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/20" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[20rem] w-[20rem] -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700/25" />
       <div className="absolute left-4 top-4 z-10 w-44 rounded-xl border border-zinc-800/80 bg-black/55 p-3 backdrop-blur-lg">
         <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
           Fleet Status
