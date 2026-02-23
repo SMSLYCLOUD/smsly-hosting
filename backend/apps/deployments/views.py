@@ -802,7 +802,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             from .models import PlatformConfig
             config = PlatformConfig.load()
             content = generate_caddyfile(config)
-            result = apply_caddyfile(content)
+            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+            result = apply_caddyfile(content, cloudflare_token=cf_token)
             if result['ok']:
                 logger.info("Caddy synced after domain change")
             else:
@@ -1479,7 +1480,8 @@ class DomainConfigView(GenericAPIView):
         try:
             from services.caddy_manager import generate_caddyfile, apply_caddyfile
             caddyfile_content = generate_caddyfile(config)
-            result = apply_caddyfile(caddyfile_content)
+            cf_token = (config.cloudflare_api_token or "").strip()
+            result = apply_caddyfile(caddyfile_content, cloudflare_token=cf_token)
             config.caddy_status = 'applied' if result['ok'] else 'error'
             config.save(update_fields=['caddy_status'])
         except Exception as e:
