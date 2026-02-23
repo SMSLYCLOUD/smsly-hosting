@@ -172,30 +172,15 @@ def generate_caddyfile(config) -> str:
 }}"""
             )
 
-    elif domain and not config.use_ssl:
-        # Domain without SSL (HTTP only)
-        sections.append(
-            f"""http://{domain} {{
-    reverse_proxy localhost:8090
-    encode gzip
-}}"""
-        )
-
-    else:
-        # IP-only mode - plain HTTP
-        sections.append(
-            """:80 {
+    # Always include :80 catch-all so the IP always works.
+    # In SSL mode this is a fallback; in IP/HTTP mode this is the only block.
+    # Never generate domain-specific HTTP blocks — they break IP access
+    # because Caddy won't match requests by IP to a domain-named block.
+    sections.append(
+        """:80 {
     reverse_proxy localhost:8090
 }"""
-        )
-
-    # Always add IP fallback if we have a domain (so IP still works)
-    if domain and config.use_ssl:
-        sections.append(
-            """:80 {
-    reverse_proxy localhost:8090
-}"""
-        )
+    )
 
     # Per-service custom domains routed to Traefik.
     # Skip subdomains already covered by the *.domain wildcard.
