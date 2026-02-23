@@ -750,7 +750,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='verify-domain')
     def verify_domain(self, request, pk=None):
         """
-        Verify that a custom domain's DNS points to cname.cloud.smsly.cloud.
+        Verify that a custom domain's DNS points to this service's server.
         POST /api/v1/services/{id}/verify-domain/
         Body: { "domain": "myapp.com" }
         """
@@ -765,13 +765,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        raw_cname_target = os.getenv('CNAME_TARGET', 'cname.cloud.smsly.cloud')
+        # Compare against the service's own public domain which already
+        # resolves to the correct server IP. No hardcoded CNAME needed.
+        cname_target = service.public_domain or ''
+        if not cname_target:
+            return Response({
+                'domain': domain,
+                'verified': False,
+                'cname_target': '',
+                'message': 'Service has no public domain assigned yet.',
+            })
+
         try:
-            cname_target = normalize_domain(raw_cname_target)
-        except ValueError:
-            cname_target = 'cname.cloud.smsly.cloud'
-        try:
-            # Check CNAME or A record
             resolved = socket.getaddrinfo(domain, 443)
             target_ips = socket.getaddrinfo(cname_target, 443)
 
