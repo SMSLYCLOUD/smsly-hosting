@@ -512,6 +512,21 @@ wipe_existing_install() {
         done
     fi
 
+    # Clean up Caddy watcher service (prevents stale config on reinstall)
+    systemctl stop caddy-watcher 2>/dev/null || true
+    systemctl disable caddy-watcher 2>/dev/null || true
+    rm -f /etc/systemd/system/caddy-watcher.service
+
+    # Reset Caddyfile to default (prevents stale routing)
+    if [ -f /etc/caddy/Caddyfile ]; then
+        echo ':80 { respond "Caddy is running" 200 }' > /etc/caddy/Caddyfile
+        systemctl reload caddy 2>/dev/null || true
+    fi
+
+    # Remove Cloudflare token override
+    rm -rf /etc/systemd/system/caddy.service.d
+    systemctl daemon-reload 2>/dev/null || true
+
     rm -rf "$INSTALL_DIR"
     rm -f "$LOG_FILE"
 
@@ -1173,6 +1188,7 @@ docker network create smsly-proxy 2>/dev/null || true
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
 mkdir -p "$INSTALL_DIR/caddy-config"
+chmod 777 "$INSTALL_DIR/caddy-config"
 echo -e "${BLUE}  → Starting App Stack...${NC}"
 docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 
@@ -1437,6 +1453,7 @@ fi
 
 # ─── Create caddy-config volume directory for Settings UI writes ──────────────
 mkdir -p /opt/smsly-hosting/caddy-config
+chmod 777 /opt/smsly-hosting/caddy-config
 
 # ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
 if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
