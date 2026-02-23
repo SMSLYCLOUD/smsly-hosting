@@ -259,7 +259,14 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setShowBulk(!showBulk)} size="sm">
+            <Button variant="outline" onClick={() => {
+              if (!showBulk) {
+                // Pre-fill with existing vars (Railway-style)
+                const existing = vars.map(v => `${v.key}=${v.is_secret && !visibleValues[v.id] ? '••••••••' : v.value}`).join('\n');
+                setBulkText(existing);
+              }
+              setShowBulk(!showBulk);
+            }} size="sm">
               <FileText className="w-4 h-4 mr-2" /> Bulk Import
             </Button>
             <Button variant="outline" onClick={loadVars} size="sm">
