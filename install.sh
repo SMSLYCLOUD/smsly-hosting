@@ -1244,6 +1244,8 @@ docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
 sleep 5
 
 echo -e "${BLUE}  → Running Migrations...${NC}"
+# Generate any pending migration files first (handles uncommitted model changes)
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>/dev/null || true
 MIGRATE_OK=false
 for attempt in 1 2 3; do
     if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
