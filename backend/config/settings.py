@@ -78,6 +78,7 @@ except Exception:
 
 def _patch_allowed_hosts_from_db():
     """Called from AppConfig.ready() to add PlatformConfig.domain."""
+    import config.settings as _settings_module
     try:
         from apps.deployments.models import PlatformConfig
         pc = PlatformConfig.load()
@@ -103,6 +104,13 @@ def _patch_allowed_hosts_from_db():
             cors_origin = f'{scheme}://{pc.domain}'
             if cors_origin not in CORS_ALLOWED_ORIGINS:
                 CORS_ALLOWED_ORIGINS.append(cors_origin)
+        # Patch SITE_URL so OAuth redirects use the correct domain
+        if pc.domain:
+            scheme = 'https' if pc.use_ssl else 'http'
+            new_site_url = f'{scheme}://{pc.domain}'
+            _settings_module.SITE_URL = new_site_url
+            # Also update ACCOUNT_DEFAULT_HTTP_PROTOCOL for allauth
+            _settings_module.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
     except Exception:
         pass  # DB not ready yet (first boot / migrations)
 
