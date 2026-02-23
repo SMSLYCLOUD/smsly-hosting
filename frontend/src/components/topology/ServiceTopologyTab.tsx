@@ -71,29 +71,45 @@ function createNode3D(node: GraphNode): any {
 
   let geometry;
   if (node.nodeType === 'service') {
-    geometry = new THREE.IcosahedronGeometry(8, 1);
+    // Nucleus: large glowing sphere
+    geometry = new THREE.SphereGeometry(10, 32, 32);
   } else if (node.nodeType === 'addon') {
-    geometry = new THREE.OctahedronGeometry(5, 0);
+    // Electron: smaller, faceted
+    geometry = new THREE.SphereGeometry(5, 16, 16);
   } else {
-    geometry = new THREE.BoxGeometry(6, 6, 6);
+    geometry = new THREE.BoxGeometry(5, 5, 5);
   }
 
   const material = new THREE.MeshPhongMaterial({
     color: new THREE.Color(color),
     emissive: new THREE.Color(color),
-    emissiveIntensity: 0.35,
+    emissiveIntensity: node.nodeType === 'service' ? 0.5 : 0.35,
     transparent: true,
     opacity: 0.9,
-    shininess: 80,
+    shininess: 120,
   });
   group.add(new THREE.Mesh(geometry, material));
 
+  // Outer glow shell
+  const glowSize = node.nodeType === 'service' ? 14 : 7;
+  const glowGeo = new THREE.SphereGeometry(glowSize, 16, 16);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color), transparent: true, opacity: 0.08, side: THREE.BackSide,
+  });
+  group.add(new THREE.Mesh(glowGeo, glowMat));
+
   if (node.nodeType === 'service') {
-    const ringGeo = new THREE.RingGeometry(10, 12, 32);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color), transparent: true, opacity: 0.2, side: THREE.DoubleSide,
-    });
-    group.add(new THREE.Mesh(ringGeo, ringMat));
+    // Electron shell rings (3 orbits at different angles)
+    for (let i = 0; i < 3; i++) {
+      const ringGeo = new THREE.RingGeometry(13 + i * 2, 13.5 + i * 2, 64);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(color), transparent: true, opacity: 0.12 - i * 0.03, side: THREE.DoubleSide,
+      });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = Math.PI / 2 + (i * Math.PI / 4);
+      ring.rotation.y = i * Math.PI / 3;
+      group.add(ring);
+    }
   }
 
   // Status indicator
@@ -222,8 +238,8 @@ export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: stri
       const dist = 100 + graphData.nodes.length * 25;
 
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
-      fg.d3Force('charge')?.strength(-400);
-      fg.d3Force('link')?.distance(60);
+      fg.d3Force('charge')?.strength(-300);
+      fg.d3Force('link')?.distance(45);
 
       let angle = 0;
       const radius = dist;
@@ -317,12 +333,12 @@ export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: stri
           nodeThreeObject={(node: any) => createNode3D(node as GraphNode)}
           nodeThreeObjectExtend={false}
           linkColor={(link: any) => LINK_COLORS[link.linkType] || '#64748b'}
-          linkWidth={2}
-          linkOpacity={0.5}
-          linkCurvature={0.2}
-          linkDirectionalParticles={3}
-          linkDirectionalParticleWidth={2}
-          linkDirectionalParticleSpeed={0.006}
+          linkWidth={3.5}
+          linkOpacity={0.6}
+          linkCurvature={0.15}
+          linkDirectionalParticles={5}
+          linkDirectionalParticleWidth={3}
+          linkDirectionalParticleSpeed={0.008}
           linkDirectionalParticleColor={(link: any) => LINK_COLORS[link.linkType] || '#64748b'}
           enableNodeDrag={true}
           enableNavigationControls={true}
