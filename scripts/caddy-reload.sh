@@ -14,6 +14,12 @@ LOG_PREFIX="[caddy-watcher]"
 
 echo "$LOG_PREFIX Starting — watching $WATCH_DIR for changes"
 
+# Load Cloudflare token if available (needed for validation of wildcard configs)
+if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
+    eval "$(grep '^Environment=' /etc/systemd/system/caddy.service.d/override.conf | sed 's/^Environment="//;s/"$//;s/^/export /')"
+    echo "$LOG_PREFIX Loaded Cloudflare env from Caddy service override"
+fi
+
 # Ensure watch directory exists
 mkdir -p "$WATCH_DIR"
 
