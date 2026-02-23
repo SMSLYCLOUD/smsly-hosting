@@ -40,7 +40,8 @@ def _regenerate_caddyfile():
         config = PlatformConfig.load()
         from services.caddy_manager import generate_caddyfile, apply_caddyfile
         content = generate_caddyfile(config)
-        result = apply_caddyfile(content)
+        cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+        result = apply_caddyfile(content, cloudflare_token=cf_token)
         if result.get('ok'):
             logger.info("Caddyfile regenerated after deployment")
         else:

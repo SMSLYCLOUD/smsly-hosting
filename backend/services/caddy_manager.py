@@ -209,10 +209,14 @@ def generate_caddyfile(config) -> str:
     return header + "\n\n".join(sections) + "\n"
 
 
-def apply_caddyfile(content: str) -> dict:
+def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
     """
     Write Caddyfile to the shared volume and create a reload flag.
     The host-side watcher script picks up the flag and reloads Caddy.
+
+    If cloudflare_token is provided, also write it to a token file so
+    the host-side watcher can create the systemd environment override.
+    This enables full SSL setup from the web UI without SSH access.
 
     Returns a status dict.
     """
@@ -223,6 +227,17 @@ def apply_caddyfile(content: str) -> dict:
 
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
+
+        # Write Cloudflare token to shared volume for the host watcher
+        # to sync into Caddy's systemd environment override.
+        token_path = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
+        if cloudflare_token:
+            with open(token_path, "w", encoding="utf-8") as handle:
+                handle.write(cloudflare_token)
+            os.chmod(token_path, 0o600)
+        elif os.path.exists(token_path):
+            # Clean up stale token file if no token provided
+            os.remove(token_path)
 
         # Create reload flag - the host watcher will pick this up
         with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as handle:
@@ -237,3 +252,4 @@ def apply_caddyfile(content: str) -> dict:
         logger.error("Failed to write Caddyfile: %s", exc)
 
     return result
+
