@@ -145,6 +145,7 @@ services:
     volumes:
       - ./backend:/app
       - media_volume:/app/media
+      - caddy_config:/caddy-config
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
     networks:
