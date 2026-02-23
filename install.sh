@@ -1330,55 +1330,65 @@ echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
 
-# ─── Build Caddy with Cloudflare DNS plugin if needed ─────────────────────────
-if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
-    if caddy list-modules 2>/dev/null | grep -q 'dns.providers.cloudflare'; then
-        echo -e "${GREEN}  ✓ Caddy already has cloudflare DNS module${NC}"
-    else
-        echo -e "${BLUE}  → Building Caddy with Cloudflare DNS plugin (xcaddy)...${NC}"
-        if ! command -v xcaddy &> /dev/null; then
-            # xcaddy needs Go 1.21+. Ubuntu apt repos ship Go 1.18 which is
-            # too old (go.mod 'toolchain' directive is unsupported). Use snap
-            # or direct binary download to get a compatible version.
-            _GO_OK=false
-            if command -v go &> /dev/null; then
-                _GO_VER=$(go version | grep -oP 'go1\.(\d+)' | grep -oP '\d+$')
-                [ "${_GO_VER:-0}" -ge 21 ] && _GO_OK=true
-            fi
-            if [ "$_GO_OK" != "true" ]; then
-                echo -e "${BLUE}  → Installing Go 1.22 (xcaddy requires Go 1.21+)...${NC}"
-                GO_TAR="go1.22.10.linux-amd64.tar.gz"
-                curl -fsSL "https://go.dev/dl/$GO_TAR" -o "/tmp/$GO_TAR"
-                rm -rf /usr/local/go
-                tar -C /usr/local -xzf "/tmp/$GO_TAR"
-                rm -f "/tmp/$GO_TAR"
-                export PATH="/usr/local/go/bin:$PATH"
-                echo -e "${GREEN}  ✓ Go $(go version | awk '{print $3}') installed${NC}"
-            fi
-            export GOPATH="${GOPATH:-/root/go}"
-            export PATH="$PATH:$GOPATH/bin"
-            go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-        fi
+# ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
+# Always build custom Caddy with Cloudflare DNS support, even in IP mode.
+# This ensures users can enable SSL + wildcard from the web UI later without SSH.
+if caddy list-modules 2>/dev/null | grep -q 'dns.providers.cloudflare'; then
+    echo -e "${GREEN}  ✓ Caddy already has cloudflare DNS module${NC}"
+elif command -v caddy &> /dev/null; then
+    echo -e "${BLUE}  → Caddy found but missing Cloudflare DNS plugin — rebuilding...${NC}"
+    _BUILD_CADDY=true
+else
+    echo -e "${BLUE}  → Installing Caddy with Cloudflare DNS plugin...${NC}"
+    _BUILD_CADDY=true
+fi
 
-        # Build custom Caddy with Cloudflare DNS
-        CADDY_TMP=$(mktemp -d)
-        cd "$CADDY_TMP"
-        xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5
+if [ "${_BUILD_CADDY:-}" = "true" ]; then
+    if ! command -v xcaddy &> /dev/null; then
+        # xcaddy needs Go 1.21+. Ubuntu apt repos ship Go 1.18 which is
+        # too old (go.mod 'toolchain' directive is unsupported). Use snap
+        # or direct binary download to get a compatible version.
+        _GO_OK=false
+        if command -v go &> /dev/null; then
+            _GO_VER=$(go version | grep -oP 'go1\.(\d+)' | grep -oP '\d+$')
+            [ "${_GO_VER:-0}" -ge 21 ] && _GO_OK=true
+        fi
+        if [ "$_GO_OK" != "true" ]; then
+            echo -e "${BLUE}  → Installing Go 1.22 (xcaddy requires Go 1.21+)...${NC}"
+            GO_TAR="go1.22.10.linux-amd64.tar.gz"
+            curl -fsSL "https://go.dev/dl/$GO_TAR" -o "/tmp/$GO_TAR"
+            rm -rf /usr/local/go
+            tar -C /usr/local -xzf "/tmp/$GO_TAR"
+            rm -f "/tmp/$GO_TAR"
+            export PATH="/usr/local/go/bin:$PATH"
+            echo -e "${GREEN}  ✓ Go $(go version | awk '{print $3}') installed${NC}"
+        fi
+        export GOPATH="${GOPATH:-/root/go}"
+        export PATH="$PATH:$GOPATH/bin"
+        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+    fi
+
+    # Build custom Caddy with Cloudflare DNS
+    CADDY_TMP=$(mktemp -d)
+    cd "$CADDY_TMP"
+    if xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5; then
         # Replace system Caddy
         systemctl stop caddy 2>/dev/null || true
         mv ./caddy /usr/bin/caddy
         chmod +x /usr/bin/caddy
-        cd "$INSTALL_DIR"
-        rm -rf "$CADDY_TMP"
         echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Custom Caddy build failed — falling back to standard Caddy...${NC}"
+        if ! command -v caddy &> /dev/null; then
+            apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+            apt-get update >/dev/null 2>&1
+            apt-get install -y caddy >/dev/null 2>&1
+        fi
     fi
-elif ! command -v caddy &> /dev/null; then
-    echo -e "${BLUE}  → Installing Caddy (standard)...${NC}"
-    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-    apt-get update >/dev/null 2>&1
-    apt-get install -y caddy >/dev/null 2>&1
+    cd "$INSTALL_DIR"
+    rm -rf "$CADDY_TMP"
 fi
 
 # ─── Configure Caddyfile ──────────────────────────────────────────────────────

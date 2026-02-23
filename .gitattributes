@@ -1,0 +1,4 @@
+# Ensure shell scripts always have Unix line endings (LF).
+# Windows CRLF causes 'status=203/EXEC' when running under systemd.
+*.sh text eol=lf
+entrypoint.* text eol=lf
