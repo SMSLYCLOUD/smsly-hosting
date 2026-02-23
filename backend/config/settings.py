@@ -105,12 +105,15 @@ def _patch_allowed_hosts_from_db():
             if cors_origin not in CORS_ALLOWED_ORIGINS:
                 CORS_ALLOWED_ORIGINS.append(cors_origin)
         # Patch SITE_URL so OAuth redirects use the correct domain
+        # IMPORTANT: Must patch django.conf.settings directly (the LazySettings
+        # proxy), not the raw module — Django caches values at init time.
         if pc.domain:
+            from django.conf import settings as django_settings
             scheme = 'https' if pc.use_ssl else 'http'
             new_site_url = f'{scheme}://{pc.domain}'
-            _settings_module.SITE_URL = new_site_url
+            django_settings.SITE_URL = new_site_url
             # Also update ACCOUNT_DEFAULT_HTTP_PROTOCOL for allauth
-            _settings_module.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
+            django_settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
         # ── Critical: Update Django Sites framework ──────────────────────
         # allauth uses Site.objects.get_current().domain to build the OAuth
         # redirect_uri. If the Site record still has the old IP/localhost,
