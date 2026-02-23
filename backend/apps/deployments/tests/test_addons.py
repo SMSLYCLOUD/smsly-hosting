@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Tests for addon provisioning.
 Validates:

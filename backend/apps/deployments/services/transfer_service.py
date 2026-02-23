@@ -244,7 +244,8 @@ if os.path.exists(services_dir):
                 print(f"Restoring volume {{vname}}...")
                 try:
                     run(["docker", "volume", "create", vname])
-                except: pass
+                except:
+                    pass
 
                 run([
                     "docker", "run", "--rm", "-i",
@@ -293,7 +294,8 @@ if os.path.exists(services_dir):
                 url = f"http://{self.transfer.target_server_ip}:8090/health"
                 try:
                     requests.get(url, timeout=5)
-                except: pass
+                except:
+                    pass
             else:
                 pass
         except Exception as e:
