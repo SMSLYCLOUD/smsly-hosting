@@ -173,7 +173,10 @@ export function Starfield() {
           { orbitRadius: minDim * 0.26, angle: rand(0, Math.PI * 2), speed: 0.0004, size: minDim * 0.011, color: [200, 80, 50], glowColor: [230, 100, 60], name: 'Mars' },
           { orbitRadius: minDim * 0.35, angle: rand(0, Math.PI * 2), speed: 0.00025, size: minDim * 0.028, color: [200, 170, 120], glowColor: [220, 190, 140], name: 'Jupiter' },
           { orbitRadius: minDim * 0.43, angle: rand(0, Math.PI * 2), speed: 0.00018, size: minDim * 0.024, color: [210, 190, 140], glowColor: [230, 210, 160], name: 'Saturn', hasRing: true, ringColor: [200, 180, 130] },
-          { orbitRadius: minDim * 0.52, angle: rand(0, Math.PI * 2), speed: 0.00012, size: minDim * 0.018, color: [120, 180, 220], glowColor: [140, 200, 240], name: 'Neptune' },
+          { orbitRadius: minDim * 0.52, angle: rand(0, Math.PI * 2), speed: 0.00012, size: minDim * 0.020, color: [140, 220, 230], glowColor: [160, 240, 250], name: 'Uranus', hasRing: true, ringColor: [150, 210, 220] },
+          { orbitRadius: minDim * 0.60, angle: rand(0, Math.PI * 2), speed: 0.00009, size: minDim * 0.018, color: [60, 100, 220], glowColor: [80, 120, 255], name: 'Neptune' },
+          { orbitRadius: minDim * 0.30, angle: rand(0, Math.PI * 2), speed: 0.00035, size: minDim * 0.006, color: [160, 160, 150], glowColor: [180, 180, 170], name: 'Ceres' },
+          { orbitRadius: minDim * 0.68, angle: rand(0, Math.PI * 2), speed: 0.00007, size: minDim * 0.007, color: [190, 170, 150], glowColor: [210, 190, 170], name: 'Pluto' },
         ],
       };
     };
