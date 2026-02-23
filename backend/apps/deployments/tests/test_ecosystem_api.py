@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """API tests for ecosystem scan/deploy compatibility routes."""
 
 from unittest.mock import patch

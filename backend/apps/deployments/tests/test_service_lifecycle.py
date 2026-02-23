@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Tests for full service lifecycle.
 Validates:

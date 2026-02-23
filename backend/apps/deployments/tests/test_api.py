@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Test Api module."""
 from django.urls import reverse
 from django.contrib.auth.models import User

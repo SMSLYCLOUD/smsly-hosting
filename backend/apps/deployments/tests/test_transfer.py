@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 from django.utils import timezone

@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for ecosystem task status endpoint resilience."""
 
 from unittest.mock import MagicMock, patch
