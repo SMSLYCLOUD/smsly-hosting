@@ -111,6 +111,24 @@ def _patch_allowed_hosts_from_db():
             _settings_module.SITE_URL = new_site_url
             # Also update ACCOUNT_DEFAULT_HTTP_PROTOCOL for allauth
             _settings_module.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
+        # ── Critical: Update Django Sites framework ──────────────────────
+        # allauth uses Site.objects.get_current().domain to build the OAuth
+        # redirect_uri. If the Site record still has the old IP/localhost,
+        # the redirect_uri will be wrong and GitHub will reject it.
+        if pc.domain:
+            from django.contrib.sites.models import Site
+            try:
+                site = Site.objects.get(id=SITE_ID)
+                if site.domain != pc.domain:
+                    site.domain = pc.domain
+                    site.name = f'CloudNeuron ({pc.domain})'
+                    site.save()
+            except Site.DoesNotExist:
+                Site.objects.create(
+                    id=SITE_ID,
+                    domain=pc.domain,
+                    name=f'CloudNeuron ({pc.domain})'
+                )
     except Exception:
         pass  # DB not ready yet (first boot / migrations)
 
