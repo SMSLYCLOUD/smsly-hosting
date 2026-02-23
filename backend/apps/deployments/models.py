@@ -477,40 +477,56 @@ class PlatformConfig(models.Model):
     def load(cls):
         """Get or create the singleton config.
 
-        On first creation, auto-populate from environment variables so
-        the Settings UI reflects whatever install.sh configured.
+        On first creation or when key fields are empty, auto-populate from
+        environment variables so the Settings UI reflects whatever install.sh
+        configured.  This runs on every load (not just creation) to handle
+        the case where a wipe didn't fully clear the DB row.
         """
         import os
         obj, created = cls.objects.get_or_create(pk=1)
-        if created or (not obj.domain and os.environ.get('DOMAIN')):
-            # Seed from env vars (set by install.sh → .env → docker-compose)
-            env_domain = os.environ.get('DOMAIN', '').strip()
-            env_ssl = os.environ.get('USE_SSL', '').strip().lower()
-            env_wildcard = os.environ.get('WILDCARD_SUBDOMAINS', '').strip().lower()
-            env_cf_token = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
-            env_ip = os.environ.get('PUBLIC_IP', '').strip()
 
-            changed = False
-            if env_domain and not obj.domain:
-                obj.domain = env_domain
-                changed = True
-            if env_ssl in ('true', '1', 'yes') and not obj.use_ssl:
-                obj.use_ssl = True
-                changed = True
-            if env_wildcard in ('true', '1', 'yes'):
-                obj.wildcard_subdomains = True
-                changed = True
-            elif env_wildcard in ('false', '0', 'no'):
-                obj.wildcard_subdomains = False
-                changed = True
-            if env_cf_token and not obj.cloudflare_api_token:
-                obj.cloudflare_api_token = env_cf_token
-                changed = True
-            if env_ip and not obj.server_ip:
-                obj.server_ip = env_ip
-                changed = True
-            if changed:
-                obj.save()
+        # Always try to seed empty fields from env vars.
+        # This covers: fresh install, partial wipe, and env var changes.
+        env_domain = os.environ.get('DOMAIN', '').strip()
+        env_ssl = os.environ.get('USE_SSL', '').strip().lower()
+        env_wildcard = os.environ.get('WILDCARD_SUBDOMAINS', '').strip().lower()
+        env_cf_token = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
+        env_ip = os.environ.get('PUBLIC_IP', '').strip()
+
+        changed = False
+
+        # Domain: seed if empty
+        if env_domain and not obj.domain:
+            obj.domain = env_domain
+            changed = True
+
+        # SSL: always sync from env if env says true, because the
+        # BooleanField default is False and would never trigger
+        # "not obj.use_ssl" seeding otherwise.
+        if env_ssl in ('true', '1', 'yes') and not obj.use_ssl:
+            obj.use_ssl = True
+            changed = True
+
+        # Wildcard: sync from env
+        if env_wildcard in ('true', '1', 'yes') and not obj.wildcard_subdomains:
+            obj.wildcard_subdomains = True
+            changed = True
+        elif created and env_wildcard in ('false', '0', 'no'):
+            obj.wildcard_subdomains = False
+            changed = True
+
+        # Cloudflare token: seed if empty
+        if env_cf_token and not obj.cloudflare_api_token:
+            obj.cloudflare_api_token = env_cf_token
+            changed = True
+
+        # Server IP: seed if empty
+        if env_ip and not obj.server_ip:
+            obj.server_ip = env_ip
+            changed = True
+
+        if changed:
+            obj.save()
         return obj
 
     def __str__(self):
