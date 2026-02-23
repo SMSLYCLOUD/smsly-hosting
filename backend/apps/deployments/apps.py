@@ -24,3 +24,12 @@ class DeploymentsConfig(AppConfig):
             from . import signals
         except ImportError:
             pass
+
+        # Dynamically add PlatformConfig.domain to ALLOWED_HOSTS,
+        # CSRF_TRUSTED_ORIGINS, and CORS_ALLOWED_ORIGINS so that domain
+        # changes via the Settings UI work without editing .env files.
+        try:
+            from config.settings import _patch_allowed_hosts_from_db
+            _patch_allowed_hosts_from_db()
+        except Exception:
+            pass
