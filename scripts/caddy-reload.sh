@@ -69,7 +69,11 @@ while true; do
     if [ -f "$RELOAD_FLAG" ]; then
         echo "$LOG_PREFIX Reload flag detected"
 
-        # Sync Cloudflare token BEFORE validation
+        # Always reload token from systemd override (in case it was
+        # updated since watcher startup or by a previous cycle).
+        load_cloudflare_env
+
+        # Sync Cloudflare token from shared volume BEFORE validation
         sync_cloudflare_token
 
         WATCH_CADDY="$WATCH_DIR/Caddyfile"
