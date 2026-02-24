@@ -1029,7 +1029,7 @@ class PipelineManager:
             process = subprocess.run(
                 cmd, check=True, cwd=self.source_dir, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=1800,
+                text=True, timeout=3600,  # 60 minutes max
             )
             output = redact_values(
                 process.stdout + process.stderr, self.secret_values
@@ -1203,7 +1203,7 @@ class PipelineManager:
                 process = subprocess.run(
                     cmd, check=True, cwd=cwd, env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, timeout=1800  # 30 minutes max
+                    text=True, timeout=3600  # 60 minutes max
                 )
                 # Log output (redacted)
                 output = redact_values(process.stdout + process.stderr, self.secret_values)
