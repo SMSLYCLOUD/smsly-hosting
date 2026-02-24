@@ -82,6 +82,42 @@ def _build_runtime_env(service: Service) -> dict:
     # example, defaults to binding to the container hostname only.
     env_vars.setdefault('HOSTNAME', '0.0.0.0')
 
+    # ── Auto-generate critical Django env vars ──────────────────────
+    # SECRET_KEY: generate a secure random key if not explicitly set.
+    # Without this, Django apps crash on startup in production.
+    if 'SECRET_KEY' not in env_vars and 'DJANGO_SECRET_KEY' not in env_vars:
+        import secrets
+        env_vars['SECRET_KEY'] = secrets.token_urlsafe(50)
+
+    # ALLOWED_HOSTS: derive from the service's public domain + custom domains.
+    # Django rejects all requests if ALLOWED_HOSTS is empty in production.
+    if 'ALLOWED_HOSTS' not in env_vars and 'DJANGO_ALLOWED_HOSTS' not in env_vars:
+        hosts = ['localhost', '127.0.0.1', '0.0.0.0']
+        if service.public_domain:
+            hosts.append(service.public_domain)
+        for domain in (service.custom_domains or []):
+            if isinstance(domain, str) and domain.strip():
+                hosts.append(domain.strip())
+        env_vars['ALLOWED_HOSTS'] = ','.join(hosts)
+
+    # ── Inject addon connection URLs (DATABASE_URL, REDIS_URL, etc.) ──
+    # This ensures addon env vars are available in ALL deploy paths.
+    try:
+        from apps.deployments.models_addons import Addon
+        from services.addon_provisioner import AddonProvisioner
+        for addon in Addon.objects.filter(service=service, status='ACTIVE'):
+            env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
+            if env_key and addon.connection_url:
+                env_vars.setdefault(env_key, addon.connection_url)
+                # Qdrant: also set host/port for apps that expect QDRANT_HOST
+                if addon.addon_type == 'QDRANT':
+                    from urllib.parse import urlparse
+                    parsed = urlparse(addon.connection_url)
+                    env_vars.setdefault('QDRANT_HOST', parsed.hostname or 'localhost')
+                    env_vars.setdefault('QDRANT_PORT', str(parsed.port or 6333))
+    except Exception:
+        pass  # Don't block deploy if addon lookup fails
+
     # Routing domains are platform-controlled and must not drift from service state.
     if service.public_domain:
         env_vars['PUBLIC_DOMAIN'] = service.public_domain
@@ -104,6 +140,7 @@ def _build_runtime_env(service: Service) -> dict:
         env_vars.pop('CUSTOM_DOMAINS', None)
 
     return env_vars
+
 
 
 def _resolve_upload_zip_path(repository_url: str) -> str:
