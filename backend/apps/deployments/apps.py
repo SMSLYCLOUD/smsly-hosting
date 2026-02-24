@@ -15,6 +15,8 @@ class DeploymentsConfig(AppConfig):
         from . import models_cron
         from . import models_storage
         from . import models_tunnels
+        from . import models_backup
+        from . import models_transfer
         from . import openapi
 
         # Import signals
