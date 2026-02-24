@@ -28,6 +28,15 @@ from apps.deployments.utils import (
     broadcast_status,
     update_stage,
 )
+from services.addon_provisioner import addon_provisioner
+from apps.billing.services.metering import UsageMeter
+from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
+from .services.backup_service import BackupService
+from .services.transfer_service import ServerTransferService
+from .models_backup import BackupSchedule, ServiceBackup
+from .models_transfer import ServerTransfer
+
+logger = logging.getLogger(__name__)
 
 
 def _regenerate_caddyfile():
@@ -48,15 +57,6 @@ def _regenerate_caddyfile():
             logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not regenerate Caddyfile: %s", exc)
-from services.addon_provisioner import addon_provisioner
-from .services.backup_service import BackupService
-from .services.transfer_service import ServerTransferService
-from apps.billing.services.metering import UsageMeter
-from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
-from .models_backup import BackupSchedule, ServiceBackup
-from .models_transfer import ServerTransfer
-
-logger = logging.getLogger(__name__)
 
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
@@ -751,7 +751,6 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     2. If a pattern matches and has an auto-fix â†’ fix + auto-redeploy
     3. If patterns can't explain â†’ escalate to AI models with code context
     """
-    import time
     import docker
 
     try:

@@ -237,4 +237,3 @@ def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
         logger.error("Failed to write Caddyfile: %s", exc)
 
     return result
-
