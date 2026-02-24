@@ -1,4 +1,4 @@
-﻿"""Tasks module."""
+"""Tasks module."""
 import logging
 import re
 import shutil
@@ -7,27 +7,38 @@ import subprocess
 import os
 import json
 import zipfile
-import time
 from urllib.parse import unquote, urlparse
+
+import docker
+import requests
 from celery import shared_task
+
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Sum
-import requests
 
+from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
+from apps.billing.services.metering import UsageMeter
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.cloud.services.compute import ComputeService
 from apps.cloud.services.function_provisioner import FunctionProvisioner
-from apps.deployments.services.pipeline import PipelineManager, PipelineError
 from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from apps.deployments.models_addons import Addon, Backup
+from apps.deployments.models_backup import BackupSchedule, ServiceBackup
 from apps.deployments.models_storage import Volume
+from apps.deployments.models_transfer import ServerTransfer
+from apps.deployments.services.backup_service import BackupService
+from apps.deployments.services.pipeline import PipelineManager, PipelineError
+from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import (
     append_log,
     broadcast_status,
     update_stage,
 )
+
+from services.addon_provisioner import addon_provisioner
+logger = logging.getLogger(__name__)
 
 
 def _regenerate_caddyfile():
@@ -48,15 +59,6 @@ def _regenerate_caddyfile():
             logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not regenerate Caddyfile: %s", exc)
-from services.addon_provisioner import addon_provisioner
-from .services.backup_service import BackupService
-from .services.transfer_service import ServerTransferService
-from apps.billing.services.metering import UsageMeter
-from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
-from .models_backup import BackupSchedule, ServiceBackup
-from .models_transfer import ServerTransfer
-
-logger = logging.getLogger(__name__)
 
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
@@ -751,7 +753,6 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     2. If a pattern matches and has an auto-fix â†’ fix + auto-redeploy
     3. If patterns can't explain â†’ escalate to AI models with code context
     """
-    import time
     import docker
 
     try:
