@@ -30,6 +30,16 @@ interface Comet {
   tailLen: number; size: number; o: number; color: [number, number, number];
 }
 
+interface Planet {
+  orbitRadius: number; angle: number; speed: number;
+  size: number; color: [number, number, number]; glowColor: [number, number, number];
+  name: string; hasRing?: boolean; ringColor?: [number, number, number];
+}
+
+interface SolarSystem {
+  cx: number; cy: number; starRadius: number; planets: Planet[];
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 const rand = (min: number, max: number) => Math.random() * (max - min) + min;
 
@@ -101,6 +111,7 @@ export function Starfield() {
     let meteors: Meteor[] = [];
     let comets: Comet[] = [];
     let auroras: AuroraBand[] = [];
+    let solar: SolarSystem = { cx: 0, cy: 0, starRadius: 0, planets: [] };
     let lastMeteor = 0;
     let lastComet = 0;
 
@@ -148,6 +159,26 @@ export function Starfield() {
         { y: H * 0.14, amplitude: 35, wavelength: 0.0025, speed: 0.00045, color: [0, 255, 200], opacity: 0.045, thickness: 45, phase: 3 },
         { y: H * 0.22, amplitude: 18, wavelength: 0.006, speed: 0.0005, color: [255, 80, 200], opacity: 0.025, thickness: 30, phase: 4 },
       ];
+
+      // Solar system — big, bold, center-right
+      const minDim = Math.min(W, H);
+      solar = {
+        cx: W * 0.55,
+        cy: H * 0.48,
+        starRadius: minDim * 0.045,
+        planets: [
+          { orbitRadius: minDim * 0.09, angle: rand(0, Math.PI * 2), speed: 0.0008, size: minDim * 0.008, color: [180, 120, 80], glowColor: [200, 150, 100], name: 'Mercury' },
+          { orbitRadius: minDim * 0.14, angle: rand(0, Math.PI * 2), speed: 0.0006, size: minDim * 0.013, color: [220, 180, 100], glowColor: [240, 200, 120], name: 'Venus' },
+          { orbitRadius: minDim * 0.20, angle: rand(0, Math.PI * 2), speed: 0.0005, size: minDim * 0.014, color: [60, 140, 220], glowColor: [80, 160, 255], name: 'Earth' },
+          { orbitRadius: minDim * 0.26, angle: rand(0, Math.PI * 2), speed: 0.0004, size: minDim * 0.011, color: [200, 80, 50], glowColor: [230, 100, 60], name: 'Mars' },
+          { orbitRadius: minDim * 0.35, angle: rand(0, Math.PI * 2), speed: 0.00025, size: minDim * 0.028, color: [200, 170, 120], glowColor: [220, 190, 140], name: 'Jupiter' },
+          { orbitRadius: minDim * 0.43, angle: rand(0, Math.PI * 2), speed: 0.00018, size: minDim * 0.024, color: [210, 190, 140], glowColor: [230, 210, 160], name: 'Saturn', hasRing: true, ringColor: [200, 180, 130] },
+          { orbitRadius: minDim * 0.52, angle: rand(0, Math.PI * 2), speed: 0.00012, size: minDim * 0.020, color: [140, 220, 230], glowColor: [160, 240, 250], name: 'Uranus', hasRing: true, ringColor: [150, 210, 220] },
+          { orbitRadius: minDim * 0.60, angle: rand(0, Math.PI * 2), speed: 0.00009, size: minDim * 0.018, color: [60, 100, 220], glowColor: [80, 120, 255], name: 'Neptune' },
+          { orbitRadius: minDim * 0.30, angle: rand(0, Math.PI * 2), speed: 0.00035, size: minDim * 0.006, color: [160, 160, 150], glowColor: [180, 180, 170], name: 'Ceres' },
+          { orbitRadius: minDim * 0.68, angle: rand(0, Math.PI * 2), speed: 0.00007, size: minDim * 0.007, color: [190, 170, 150], glowColor: [210, 190, 170], name: 'Pluto' },
+        ],
+      };
     };
 
     // ── Drawing functions ──────────────────────────────────────────────────
@@ -331,6 +362,92 @@ export function Starfield() {
       ctx.fill();
     };
 
+    // ── Solar system drawing ─────────────────────────────────────────────
+    const drawSolarSystem = (t: number) => {
+      const { cx, cy, starRadius, planets } = solar;
+
+      // Draw orbit rings
+      for (const p of planets) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, p.orbitRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Draw central star with multi-layer glow
+      const pulse = 0.85 + 0.15 * Math.sin(t * 0.001);
+      // Outermost glow
+      const g3 = ctx.createRadialGradient(cx, cy, 0, cx, cy, starRadius * 6);
+      g3.addColorStop(0, `rgba(255, 200, 50, ${0.06 * pulse})`);
+      g3.addColorStop(0.3, `rgba(255, 150, 30, ${0.03 * pulse})`);
+      g3.addColorStop(1, 'rgba(255, 100, 0, 0)');
+      ctx.beginPath();
+      ctx.arc(cx, cy, starRadius * 6, 0, Math.PI * 2);
+      ctx.fillStyle = g3;
+      ctx.fill();
+      // Mid glow
+      const g2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, starRadius * 3);
+      g2.addColorStop(0, `rgba(255, 220, 100, ${0.15 * pulse})`);
+      g2.addColorStop(0.5, `rgba(255, 160, 40, ${0.08 * pulse})`);
+      g2.addColorStop(1, 'rgba(255, 100, 0, 0)');
+      ctx.beginPath();
+      ctx.arc(cx, cy, starRadius * 3, 0, Math.PI * 2);
+      ctx.fillStyle = g2;
+      ctx.fill();
+      // Core
+      const g1 = ctx.createRadialGradient(cx, cy, 0, cx, cy, starRadius);
+      g1.addColorStop(0, `rgba(255, 255, 220, ${0.35 * pulse})`);
+      g1.addColorStop(0.4, `rgba(255, 220, 80, ${0.25 * pulse})`);
+      g1.addColorStop(0.8, `rgba(255, 160, 30, ${0.15 * pulse})`);
+      g1.addColorStop(1, 'rgba(255, 100, 0, 0)');
+      ctx.beginPath();
+      ctx.arc(cx, cy, starRadius, 0, Math.PI * 2);
+      ctx.fillStyle = g1;
+      ctx.fill();
+
+      // Draw planets
+      for (const p of planets) {
+        p.angle += p.speed;
+        const px = cx + Math.cos(p.angle) * p.orbitRadius;
+        const py = cy + Math.sin(p.angle) * p.orbitRadius * 0.4; // elliptical orbits for perspective
+        const [r, g, b] = p.color;
+        const [gr, gg, gb] = p.glowColor;
+
+        // Planet glow
+        const pg = ctx.createRadialGradient(px, py, 0, px, py, p.size * 3);
+        pg.addColorStop(0, `rgba(${gr}, ${gg}, ${gb}, 0.25)`);
+        pg.addColorStop(1, `rgba(${gr}, ${gg}, ${gb}, 0)`);
+        ctx.beginPath();
+        ctx.arc(px, py, p.size * 3, 0, Math.PI * 2);
+        ctx.fillStyle = pg;
+        ctx.fill();
+
+        // Planet body
+        const pb = ctx.createRadialGradient(px - p.size * 0.3, py - p.size * 0.3, 0, px, py, p.size);
+        pb.addColorStop(0, `rgba(${Math.min(r + 60, 255)}, ${Math.min(g + 60, 255)}, ${Math.min(b + 60, 255)}, 0.6)`);
+        pb.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.4)`);
+        ctx.beginPath();
+        ctx.arc(px, py, p.size, 0, Math.PI * 2);
+        ctx.fillStyle = pb;
+        ctx.fill();
+
+        // Saturn-like ring
+        if (p.hasRing && p.ringColor) {
+          const [rr, rg, rb] = p.ringColor;
+          ctx.save();
+          ctx.translate(px, py);
+          ctx.scale(1, 0.3);
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size * 2, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(${rr}, ${rg}, ${rb}, 0.3)`;
+          ctx.lineWidth = p.size * 0.4;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    };
+
     // ── Main loop ─────────────────────────────────────────────────────────
     const draw = (t: number) => {
       const W = c.width, H = c.height;
@@ -338,6 +455,9 @@ export function Starfield() {
 
       // 1. Aurora (behind everything)
       for (const a of auroras) drawAurora(a, t);
+
+      // 2. Solar system (behind stars, big and bold)
+      drawSolarSystem(t);
 
       // 2. Stars
       for (const s of stars) {

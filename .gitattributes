@@ -1,0 +1,2 @@
+# Force LF line endings for shell scripts — prevents CRLF from breaking shebangs on Linux
+*.sh text eol=lf

@@ -15,6 +15,11 @@ is_web_container() {
 
 run_migrations_with_retry() {
     echo "Running migrations..."
+
+    # Generate any pending migration files first (handles model changes
+    # that weren't committed as migration files to the repo).
+    python manage.py makemigrations --noinput 2>/dev/null || true
+
     max_retries="${MIGRATE_MAX_RETRIES:-5}"
     retry=0
     while [ "$retry" -lt "$max_retries" ]; do

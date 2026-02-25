@@ -59,6 +59,82 @@ ENABLE_LEGACY_TUNNEL_API = config(
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 
+# ---------------------------------------------------------------------------
+# Dynamically include the domain from PlatformConfig (DB) so that domain
+# changes made via the Settings UI take effect after container restart,
+# without requiring manual .env edits.
+# ---------------------------------------------------------------------------
+try:
+    import django
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+    # Only read the DB if migrations have run (avoid startup crash on first boot)
+    import importlib
+    _db_url = config('DATABASE_URL', default='')
+    if _db_url and 'manage.py' not in sys.argv[0:1]:
+        # Defer actual import to avoid circular dependency during startup
+        pass  # Will be handled by the ready() hook below
+except Exception:
+    pass
+
+def _patch_allowed_hosts_from_db():
+    """Called from AppConfig.ready() to add PlatformConfig.domain."""
+    import config.settings as _settings_module
+    try:
+        from apps.deployments.models import PlatformConfig
+        pc = PlatformConfig.load()
+        if pc.domain and pc.domain not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(pc.domain)
+        # Also add wildcard subdomain pattern
+        if pc.domain and pc.wildcard_subdomains:
+            wildcard = f'.{pc.domain}'
+            if wildcard not in ALLOWED_HOSTS:
+                ALLOWED_HOSTS.append(wildcard)
+        # Patch CSRF_TRUSTED_ORIGINS
+        if pc.domain and pc.use_ssl:
+            https_origin = f'https://{pc.domain}'
+            if https_origin not in CSRF_TRUSTED_ORIGINS:
+                CSRF_TRUSTED_ORIGINS.append(https_origin)
+        elif pc.domain:
+            http_origin = f'http://{pc.domain}'
+            if http_origin not in CSRF_TRUSTED_ORIGINS:
+                CSRF_TRUSTED_ORIGINS.append(http_origin)
+        # Patch CORS
+        if pc.domain:
+            scheme = 'https' if pc.use_ssl else 'http'
+            cors_origin = f'{scheme}://{pc.domain}'
+            if cors_origin not in CORS_ALLOWED_ORIGINS:
+                CORS_ALLOWED_ORIGINS.append(cors_origin)
+        # Patch SITE_URL so OAuth redirects use the correct domain
+        # IMPORTANT: Must patch django.conf.settings directly (the LazySettings
+        # proxy), not the raw module — Django caches values at init time.
+        if pc.domain:
+            from django.conf import settings as django_settings
+            scheme = 'https' if pc.use_ssl else 'http'
+            new_site_url = f'{scheme}://{pc.domain}'
+            django_settings.SITE_URL = new_site_url
+            # Also update ACCOUNT_DEFAULT_HTTP_PROTOCOL for allauth
+            django_settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
+        # ── Critical: Update Django Sites framework ──────────────────────
+        # allauth uses Site.objects.get_current().domain to build the OAuth
+        # redirect_uri. If the Site record still has the old IP/localhost,
+        # the redirect_uri will be wrong and GitHub will reject it.
+        if pc.domain:
+            from django.contrib.sites.models import Site
+            try:
+                site = Site.objects.get(id=SITE_ID)
+                if site.domain != pc.domain:
+                    site.domain = pc.domain
+                    site.name = f'CloudNeuron ({pc.domain})'
+                    site.save()
+            except Site.DoesNotExist:
+                Site.objects.create(
+                    id=SITE_ID,
+                    domain=pc.domain,
+                    name=f'CloudNeuron ({pc.domain})'
+                )
+    except Exception:
+        pass  # DB not ready yet (first boot / migrations)
+
 SITE_URL = config(
     'SITE_URL',
     # NOTE: Used for OAuth/billing redirects. Override in env if you terminate TLS elsewhere.
