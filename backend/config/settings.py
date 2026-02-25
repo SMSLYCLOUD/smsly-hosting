@@ -78,7 +78,6 @@ except Exception:
 
 def _patch_allowed_hosts_from_db():
     """Called from AppConfig.ready() to add PlatformConfig.domain."""
-    import config.settings as _settings_module
     try:
         from apps.deployments.models import PlatformConfig
         pc = PlatformConfig.load()
