@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Celery tasks for ecosystem-level deployment.
 

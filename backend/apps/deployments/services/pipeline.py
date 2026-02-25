@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """
 Pipeline Manager Service.
 
@@ -11,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import yaml
-from urllib.parse import urlparse
+from urllib.parse import urlparse as parse_url
 
 import git
 from django.conf import settings
@@ -291,7 +292,7 @@ class PipelineManager:
 
             repo_token = None
             try:
-                parsed = urlparse(self.service.repository_url or "")
+                parsed = parse_url(self.service.repository_url or "")
                 if (parsed.scheme in ("http", "https") and
                         (parsed.hostname or "").lower().endswith("github.com")):
                     repo_token = get_github_oauth_token_for_user(
@@ -476,12 +477,12 @@ class PipelineManager:
         import secrets as _secrets
 
         # Keys where we MUST generate a real random value, never use AI's
-        _SECRET_PATTERNS = re.compile(
+        SECRET_PATTERNS = re.compile(
             r'(SECRET_KEY|JWT_SECRET|SESSION_SECRET|COOKIE_SECRET|'
             r'CSRF_SECRET|SIGNING_KEY|HASH_SALT)',
             re.IGNORECASE,
         )
-        _PASSWORD_PATTERNS = re.compile(
+        PASSWORD_PATTERNS = re.compile(
             r'(PASSWORD|PASSWD|DB_PASS)',
             re.IGNORECASE,
         )
@@ -501,7 +502,7 @@ class PipelineManager:
                 continue
 
             # For secret keys: ALWAYS generate a real random value
-            if _SECRET_PATTERNS.search(key):
+            if SECRET_PATTERNS.search(key):
                 real_secret = _secrets.token_urlsafe(50)
                 EnvironmentVariable.objects.create(
                     service=self.service,
@@ -517,7 +518,7 @@ class PipelineManager:
                 continue
 
             # For password keys: generate a strong password
-            if _PASSWORD_PATTERNS.search(key):
+            if PASSWORD_PATTERNS.search(key):
                 real_pass = _secrets.token_urlsafe(24)
                 EnvironmentVariable.objects.create(
                     service=self.service,
@@ -759,7 +760,7 @@ class PipelineManager:
 
             # --- Strategy B: scan docker-compose.yml (all common variants) ---
             # Priority order: prod variants first, then generic
-            _COMPOSE_NAMES = (
+            COMPOSE_NAMES = (
                 'docker-compose.prod.yml', 'docker-compose.prod.yaml',
                 'docker-compose.production.yml',
                 'docker-compose.production.yaml',
@@ -768,7 +769,7 @@ class PipelineManager:
                 'compose.yml', 'compose.yaml',
             )
             detected_compose_file = None
-            for name in _COMPOSE_NAMES:
+            for name in COMPOSE_NAMES:
                 compose_path = os.path.join(self.source_dir, name)
                 if os.path.isfile(compose_path):
                     with open(compose_path, 'r', encoding='utf-8',
@@ -871,8 +872,8 @@ class PipelineManager:
 
                     # Qdrant: also set QDRANT_HOST/QDRANT_PORT
                     if addon_type == 'QDRANT':
-                        from urllib.parse import urlparse
-                        parsed = urlparse(url)
+                        from urllib.parse import urlparse as parse_url
+                        parsed = parse_url(url)
                         EnvironmentVariable.objects.update_or_create(
                             service=self.service, key='QDRANT_HOST',
                             defaults={
@@ -908,7 +909,7 @@ class PipelineManager:
             logger.warning("Auto-addon provisioning failed: %s", e)
 
     # Priority names for auto-detecting the "main" service in a compose file.
-    _COMPOSE_MAIN_HINTS = [
+    COMPOSE_MAIN_HINTS = [
         'web', 'frontend', 'backend', 'app', 'api', 'server', 'nginx',
     ]
 
@@ -923,7 +924,7 @@ class PipelineManager:
             if not service_names:
                 return ''
             # Prefer known hints
-            for hint in self._COMPOSE_MAIN_HINTS:
+            for hint in self.COMPOSE_MAIN_HINTS:
                 for sn in service_names:
                     if hint in sn.lower():
                         return sn
@@ -1074,7 +1075,7 @@ class PipelineManager:
     def _apply_traefik_labels_to_compose(self, container_name: str,
                                          project_name: str):
         """Apply Traefik routing labels to a running compose container."""
-        from apps.deployments.models import PlatformConfig
+
         try:
             domain = (
                 self.service.public_domain

@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Autoscaler service — scales container replicas based on CPU utilization.
 

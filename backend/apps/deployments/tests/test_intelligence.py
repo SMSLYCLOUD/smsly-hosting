@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Test Intelligence module."""
 from rest_framework.test import APITestCase
 from rest_framework import status

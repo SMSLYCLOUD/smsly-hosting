@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Security-focused tests for SMSLY Hosting API.
 Ensures authentication and authorization are properly enforced.

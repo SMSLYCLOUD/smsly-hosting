@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Tests for deployment rollback functionality.
 Validates that:

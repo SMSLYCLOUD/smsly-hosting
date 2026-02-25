@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for manual health recheck endpoint."""
 
 from unittest.mock import patch

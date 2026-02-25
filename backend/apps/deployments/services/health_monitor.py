@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Health monitoring with guarded auto-restart.
 

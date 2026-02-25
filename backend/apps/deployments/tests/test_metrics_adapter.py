@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Unit tests for deployments metrics adapter."""
 
 from unittest.mock import patch
