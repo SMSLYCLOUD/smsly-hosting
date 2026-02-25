@@ -19,7 +19,7 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
 
   // Fetch env vars when node changes (only for SERVICE type)
   useEffect(() => {
-    if (node.type?.toUpperCase() === 'SERVICE') {
+    if (node.type === 'SERVICE') {
       setLoadingEnv(true);
       servicesApi.getEnvVars(node.id)
         .then(setEnvVars)
@@ -58,8 +58,8 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
       {/* Header */}
       <div className="p-4 border-b border-zinc-800 flex justify-between items-start bg-zinc-900/50">
         <div className="flex items-center gap-3">
-           <div className={`p-2 rounded-lg border border-zinc-700/50 ${node.type?.toUpperCase() === 'SERVICE' ? 'bg-blue-500/10 text-blue-400' : 'bg-purple-500/10 text-purple-400'}`}>
-              {node.type?.toUpperCase() === 'SERVICE' ? <Server className="w-5 h-5" /> : <Database className="w-5 h-5" />}
+           <div className={`p-2 rounded-lg border border-zinc-700/50 ${node.type === 'SERVICE' ? 'bg-blue-500/10 text-blue-400' : 'bg-purple-500/10 text-purple-400'}`}>
+              {node.type === 'SERVICE' ? <Server className="w-5 h-5" /> : <Database className="w-5 h-5" />}
            </div>
            <div>
               <h2 className="font-semibold text-zinc-100 truncate max-w-[180px]" title={node.data.name}>
@@ -83,7 +83,7 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
         <div className="p-4 space-y-6">
 
           {/* Quick Actions */}
-          {node.type?.toUpperCase() === 'SERVICE' && (
+          {node.type === 'SERVICE' && (
             <div className="grid grid-cols-2 gap-2">
                <Button variant="outline" size="sm" className="w-full text-xs h-8 border-zinc-700 hover:bg-zinc-800 hover:text-white" onClick={() => window.open(`/services/${node.id}`, '_blank')}>
                  <Activity className="w-3.5 h-3.5 mr-2" />
@@ -126,7 +126,7 @@ export function ServiceSidePanel({ node, onClose }: ServiceSidePanelProps) {
           </div>
 
           {/* Environment Variables */}
-          {node.type?.toUpperCase() === 'SERVICE' && (
+          {node.type === 'SERVICE' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                  <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Environment Variables</h4>

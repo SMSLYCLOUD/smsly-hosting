@@ -28,6 +28,10 @@ from services.addon_provisioner import addon_provisioner
 logger = logging.getLogger(__name__)
 
 
+class TransferError(Exception):
+    """Raised when transfer fails."""
+
+
 class TransferEngine:
     def __init__(self, transfer: ServerTransfer):
         self.transfer = transfer
@@ -57,8 +61,8 @@ class TransferEngine:
         self._log("Starting rollback...")
         try:
             # Revert DNS
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
-            from apps.deployments.models import PlatformConfig
+            # from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            # from apps.deployments.models import PlatformConfig
 
             # Restart source if stopped (not implemented yet, assuming it's still running)
 
@@ -77,15 +81,11 @@ class TransferEngine:
         # Create backup
         from apps.deployments.services.backup_service import BackupService
         bs = BackupService()
-        backup_path = bs.backup_service(self.service.id, backup_type='PRE_TRANSFER')
-
-        self.source_backup = ServiceBackup.objects.filter(
-            service=self.service,
-            backup_type='PRE_TRANSFER'
-        ).order_by('-created_at').first()
+        # bs.backup_service returns the Backup object, not path
+        self.source_backup = bs.backup_service(self.service.id, backup_type='PRE_TRANSFER')
 
         if not self.source_backup or self.source_backup.status == 'FAILED':
-            raise Exception("Backup generation failed")
+            raise TransferError("Backup generation failed")
 
         self.transfer.source_backup = self.source_backup
         self.transfer.save()
@@ -127,8 +127,6 @@ class TransferEngine:
         self.transfer.save()
 
         # Call target API to restore
-        # Note: This assumes target has an API token or we use SSH to trigger restore command
-        # For simplicity, we'll use SSH to run restore management command
 
         key_file = tempfile.NamedTemporaryFile(delete=False)
         key_file.write(self.transfer.target_ssh_key.encode())
@@ -149,7 +147,7 @@ class TransferEngine:
             exit_status = stdout.channel.recv_exit_status()
 
             if exit_status != 0:
-                raise Exception(f"Remote restore failed: {stderr.read().decode()}")
+                raise TransferError(f"Remote restore failed: {stderr.read().decode()}")
 
             ssh.close()
             self._log("Remote restore complete")
@@ -162,19 +160,8 @@ class TransferEngine:
         self._log("Updating DNS/Caddy routing...")
         self.transfer.save()
 
-        # Update service to point to new server?
-        # Actually, in a multi-server setup, the main Caddy loads config for all services.
-        # If the service is now on a different server (IP), Caddy needs to proxy to THAT IP.
-        # But `PlatformConfig` usually assumes single server or cluster.
-        # Assuming we just need to update where the platform thinks the service lives.
-        # But `Service` model doesn't have `server_ip` field (it has `provider`).
-        # If we transfer to another SMSLY instance, it's a migration.
-        # This part depends on how multi-server is architected.
-        # Prompt says: "Update Caddy config to route to target".
-
-        # We will assume updating the PlatformConfig or Service metadata is enough
-        # or triggering Caddy regeneration.
-        pass
+        # Placeholder for DNS cutover logic
+        logger.info("DNS cutover placeholder")
 
     def _verify_health(self):
         self.transfer.status = 'VERIFYING'
@@ -182,10 +169,8 @@ class TransferEngine:
         self._log("Verifying health on target...")
         self.transfer.save()
 
-        # Check health URL on target IP
-        target_url = f"http://{self.transfer.target_server_ip}:80"
-        # Real check would use Host header
-        pass
+        # Placeholder for health check
+        logger.info("Health check placeholder")
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'

@@ -80,7 +80,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
 
-  dagreGraph.setGraph({ rankdir: direction, nodesep: 60, ranksep: 80 });
+  dagreGraph.setGraph({ rankdir: direction });
 
   nodes.forEach((node) => {
     dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
@@ -122,10 +122,9 @@ export function CanvasSchematic() {
       try {
         const initialNodes: any[] = data.nodes.map((n: TopologyNode) => ({
           id: n.id,
-          type: 'custom',
+          type: 'custom', // custom node type
           data: {
               ...(n.data || {}),
-              label: n.data?.name || n.id,
               originalType: n.type,
               originalId: n.id,
           },
@@ -137,12 +136,12 @@ export function CanvasSchematic() {
           source: e.source,
           target: e.target,
           type: 'smoothstep',
-          animated: e.type === 'API' || e.type === 'HTTP_DEPENDENCY',
+          animated: e.type === 'CONNECTS_TO',
           label: e.data?.protocol,
-          style: { stroke: e.type === 'STORAGE' ? '#52525b' : '#3b82f6', strokeWidth: 2 },
+          style: { stroke: e.type === 'OWNS' ? '#52525b' : '#3b82f6', strokeWidth: 2 },
           markerEnd: {
               type: MarkerType.ArrowClosed,
-              color: e.type === 'STORAGE' ? '#52525b' : '#3b82f6',
+              color: e.type === 'OWNS' ? '#52525b' : '#3b82f6',
           },
         }));
 
