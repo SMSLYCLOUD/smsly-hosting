@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for API Token authentication (model + DRF backend + views)."""
 
 from django.contrib.auth import get_user_model

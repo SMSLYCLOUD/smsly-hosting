@@ -85,6 +85,7 @@ class LocalAdapter(BaseCloudAdapter):
     def authenticate(self) -> bool:
         return self.docker_client is not None or self.k8s_client is not None
 
+        # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, **kwargs) -> str:

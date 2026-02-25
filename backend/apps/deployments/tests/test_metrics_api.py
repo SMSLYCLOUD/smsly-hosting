@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """API tests for service metrics endpoint."""
 
 from unittest.mock import patch

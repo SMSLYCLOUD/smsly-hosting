@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for intelligence runtime anomaly task."""
 
 from unittest.mock import patch

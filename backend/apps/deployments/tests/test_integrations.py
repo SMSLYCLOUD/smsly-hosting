@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Integration API tests (GitHub connect bootstrap flow)."""
 
 from django.contrib.auth import get_user_model

@@ -72,6 +72,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Create dummy env
+      run: |
+        echo "REDIS_PASSWORD=dummy" >> .env
+        echo "POSTGRES_PASSWORD=dummy" >> .env
+        echo "FIELD_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" >> .env
     - name: Validate Compose Config
       run: |
         touch .env

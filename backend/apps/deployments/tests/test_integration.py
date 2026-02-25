@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """
 Integration tests for SMSLY Hosting deployment pipeline.
 Tests the complete flow from service creation to deployment.
