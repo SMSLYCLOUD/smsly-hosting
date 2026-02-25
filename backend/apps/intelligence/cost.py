@@ -1,7 +1,7 @@
 """Cost module."""
 from typing import Dict, List, Any
 from decimal import Decimal
-
+from .providers import ask_with_fallback
 
 class CostAdvisor:
     """
@@ -40,3 +40,30 @@ class CostAdvisor:
             estimates[provider] = total
 
         return estimates
+
+    def ai_cost_analysis(self, service_config: dict) -> str:
+        """Use AI to provide detailed cost optimization recommendations."""
+        prompt = (
+            f"Given this service configuration:\n"
+            f"- CPU: {service_config.get('cpu_cores', 1)} cores\n"
+            f"- Memory: {service_config.get('memory_mb', 512)}MB\n"
+            f"- Stack: {service_config.get('stack', 'unknown')}\n"
+            f"- Current provider: {service_config.get('provider', 'unknown')}\n\n"
+            f"Provide 3 specific cost optimization recommendations. "
+            f"Compare AWS vs GCP vs Railway pricing. Be concise."
+        )
+        try:
+            response, provider = ask_with_fallback(prompt)
+            return f"[{provider}] {response}"
+        except Exception:
+            return self._fallback_advice(service_config)
+
+    def _fallback_advice(self, config: dict) -> str:
+        estimates = self.estimate_monthly_cost(
+            float(config.get('cpu_cores', 1)),
+            float(config.get('memory_mb', 512)) / 1024
+        )
+        if not estimates:
+            return "No estimates available."
+        cheapest = min(estimates, key=estimates.get)
+        return f"Cheapest option: {cheapest} at ${estimates[cheapest]}/mo"

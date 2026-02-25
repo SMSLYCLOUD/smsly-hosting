@@ -194,7 +194,10 @@ INSTALLED_APPS = [
     'apps.intelligence',
     'apps.notifications',
     'apps.addons',
+    'apps.autoscaler',
 ]
+
+AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
