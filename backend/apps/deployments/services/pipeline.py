@@ -35,6 +35,16 @@ from services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 logger = logging.getLogger(__name__)
 
+# Persistent build directory root.
+# Uses env var or a sensible default. Avoids /tmp which the OS may clean
+# between the analysis and build phases of a 2-phase deploy.
+_BUILDS_ROOT = os.environ.get(
+    'SMSLY_BUILDS_DIR',
+    '/opt/smsly-hosting/builds' if os.path.isdir('/opt') else
+    os.path.join(tempfile.gettempdir(), 'smsly-builds'),
+)
+os.makedirs(_BUILDS_ROOT, exist_ok=True)
+
 
 # pylint: disable=too-few-public-methods
 class PipelineError(Exception):
@@ -154,21 +164,15 @@ class PipelineManager:
 
     def _setup_for_resume(self):
         """Re-initialise state for phase 2 (build) from saved deployment data."""
-        import glob
-
-        # Find the build directory from phase 1
-        tmp_base = tempfile.gettempdir()
-        tmp_pattern = os.path.join(
-            tmp_base, f"build_{self.deployment.id}_*"
-        )
-        matches = glob.glob(tmp_pattern)
-        if not matches:
+        # Deterministic path — no glob needed, no /tmp cleanup race.
+        self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
+        if not os.path.isdir(self.build_dir):
             raise InfraError(
                 "Build directory from analysis phase not found. "
-                "The deployment may need to be restarted."
+                "The deployment may need to be restarted. "
+                f"Expected: {self.build_dir}"
             )
 
-        self.build_dir = matches[0]
 
         # Find the cloned repo dir: look for a dir containing .git
         subdirs = [
@@ -258,7 +262,12 @@ class PipelineManager:
 
     def _setup(self):
         """Initialize build environment."""
-        self.build_dir = tempfile.mkdtemp(prefix=f"build_{self.deployment.id}_")
+        # Deterministic path keyed by deployment ID — survives OS temp cleanup
+        # and can be found again by _setup_for_resume() without glob.
+        self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
+        if os.path.exists(self.build_dir):
+            shutil.rmtree(self.build_dir)  # Clean slate for fresh build
+        os.makedirs(self.build_dir, exist_ok=True)
         self.deployment.pipeline_stages = []
         update_stage(self.deployment, 'Clone', 'pending')
         update_stage(self.deployment, 'Build', 'pending')
@@ -487,8 +496,40 @@ class PipelineManager:
             re.IGNORECASE,
         )
 
+        # Vars that will be auto-resolved at deploy time by _build_runtime_env.
+        # Don't warn about these — they're platform-managed.
+        DEPLOY_TIME_VARS = {
+            # Domain-aware (resolved from service.public_domain)
+            'PUBLIC_DOMAIN', 'ALLOWED_HOSTS', 'DJANGO_ALLOWED_HOSTS',
+            'MARKETER_ALLOWED_HOSTS', 'API_INTERNAL_URL',
+            # Database (derived from DATABASE_URL after addon provisioning)
+            'DB_HOST', 'DB_PORT', 'DB_USER', 'DB_NAME', 'DB_PASSWORD',
+            'DB_URL', 'MARKETER_DB_PASSWORD', 'SQL_HOST', 'DATABASE',
+            'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_USER',
+            'POSTGRES_DB', 'POSTGRES_PASSWORD',
+            # Redis (derived from REDIS_URL after addon provisioning)
+            'CELERY_BROKER_URL', 'CELERY_RESULT_BACKEND', 'CACHE_URL',
+            # Core platform vars
+            'DATABASE_URL', 'REDIS_URL', 'PORT', 'HOSTNAME',
+            # Cross-service discovery (resolved by ecosystem linker)
+            'SMSLY_BACKEND_URL', 'BACKEND_URL',
+            'IDENTITY_SERVICE_URL', 'PLATFORM_API_URL',
+            'AUDIT_SERVICE_URL', 'TRANSACTION_CHAIN_URL',
+            'SECURITY_GATEWAY_URL', 'POLICY_SERVICE_URL',
+            'RATE_LIMIT_SERVICE_URL', 'VIDEO_SERVICE_URL',
+            'VOICE_SERVICE_URL', 'HOSTING_SERVICE_URL',
+            'NEXT_PUBLIC_API_URL',
+            # Shared infra (ecosystem linker or addon provisioning)
+            'RABBITMQ_URL', 'RABBITMQ_DEFAULT_USER', 'RABBITMQ_DEFAULT_PASS',
+            'S3_ENDPOINT_URL', 'S3_ACCESS_KEY', 'S3_SECRET_KEY',
+            'S3_BUCKET_NAME', 'AWS_STORAGE_BUCKET_NAME',
+            # Propagated secrets (from sibling services)
+            'INTERNAL_API_SECRET', 'GATEWAY_SECRET', 'JWT_SECRET',
+        }
+
         injected = 0
         warned = 0
+        deferred = 0
 
         for key, default_val in ai_env_vars.items():
             key = key.strip().upper()
@@ -499,6 +540,11 @@ class PipelineManager:
             if EnvironmentVariable.objects.filter(
                 service=self.service, key=key
             ).exists():
+                continue
+
+            # Skip platform-managed vars — they'll be injected at deploy time
+            if key in DEPLOY_TIME_VARS:
+                deferred += 1
                 continue
 
             # For secret keys: ALWAYS generate a real random value
@@ -559,6 +605,12 @@ class PipelineManager:
             append_log(
                 self.deployment,
                 f"\n  ✅ Auto-injected {injected} env var(s) from AI analysis.\n"
+            )
+        if deferred:
+            append_log(
+                self.deployment,
+                f"  🔄 {deferred} env var(s) will be auto-resolved at deploy time "
+                f"(domain, database, redis).\n"
             )
         if warned:
             append_log(
