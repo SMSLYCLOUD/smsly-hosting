@@ -11,7 +11,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 COPY package.json package-lock.json* ./
 RUN npm install
 COPY . .
-RUN NODE_OPTIONS="--max-old-space-size=512" npm run build
+RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Stage 2: Runner (standalone mode for production + middleware support)
 FROM node:20-alpine AS runner

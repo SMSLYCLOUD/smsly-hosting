@@ -133,7 +133,7 @@ def ai_test_prompt(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUser])
 def ai_analyze_logs(request):
     """
     POST /api/v1/ai/analyze/
@@ -165,7 +165,7 @@ def ai_analyze_logs(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdminUser])
 def ai_cost_estimate(request):
     """
     POST /api/v1/ai/cost-estimate/

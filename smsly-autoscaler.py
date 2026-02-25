@@ -71,6 +71,9 @@ WORKER_MEMORY_MB = 120
 # API Port
 API_PORT = int(os.environ.get('AUTOSCALER_API_PORT', '9876'))
 
+# API auth token — POST endpoints require this. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+API_TOKEN = os.environ.get('AUTOSCALER_API_TOKEN', '')
+
 # Container groups — maps container names to their roles
 SERVICE_GROUPS = {
     # smsly-helper
@@ -451,11 +454,25 @@ def _scale_celery(container: str, target_workers: int):
 # =============================================================================
 
 class AutoscalerAPIHandler(BaseHTTPRequestHandler):
+    def log_request(self, code='-', size='-'):
+        """Suppress per-request logging to avoid log spam."""
+        pass
+
     def _send_json(self, data, status=200):
         self.send_response(status)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def _check_auth(self) -> bool:
+        """Verify bearer token on mutating endpoints."""
+        if not API_TOKEN:
+            return True  # No token configured — allow (dev mode)
+        auth_header = self.headers.get('Authorization', '')
+        if auth_header == f'Bearer {API_TOKEN}':
+            return True
+        self._send_json({'error': 'Unauthorized'}, 401)
+        return False
 
     def do_GET(self):
         if self.path == '/api/status':
@@ -572,6 +589,8 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == '/api/config':
+            if not self._check_auth():
+                return
             content_len = int(self.headers.get('Content-Length', 0))
             post_body = self.rfile.read(content_len)
             try:
@@ -598,11 +617,11 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': str(e)}, 400)
 
         elif self.path == '/api/trigger':
-            # Force run
+            if not self._check_auth():
+                return
+            # Force run, then return latest status
             try:
                 run_once()
-                self.do_GET() # Return status after run
-                # Hack: modify path so do_GET returns /api/status logic
                 self.path = '/api/status'
                 self.do_GET()
             except Exception as e:
@@ -613,9 +632,10 @@ class AutoscalerAPIHandler(BaseHTTPRequestHandler):
 
 
 def run_api_server():
-    server_address = ('0.0.0.0', API_PORT)
+    bind_addr = os.environ.get('AUTOSCALER_API_BIND', '127.0.0.1')
+    server_address = (bind_addr, API_PORT)
     httpd = HTTPServer(server_address, AutoscalerAPIHandler)
-    logger.info(f"API Server running on port {API_PORT}")
+    logger.info(f"API Server running on {bind_addr}:{API_PORT}")
     httpd.serve_forever()
 
 

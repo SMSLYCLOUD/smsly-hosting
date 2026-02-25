@@ -1036,10 +1036,10 @@ export interface AutoscalerStatus {
     timestamp: string;
     container: string;
     action: string;
-    workers_before: number;
-    workers_after: number;
-    memory_before_mb: number;
-    memory_after_mb: number;
+    current_workers: number;
+    target_workers: number;
+    current_memory_mb: number;
+    target_memory_mb: number;
     reason: string;
   }[];
 }
@@ -1060,19 +1060,19 @@ export interface AutoscalerHistory {
 
 export const autoscalerApi = {
   getStatus: async (): Promise<AutoscalerStatus> => {
-    const { data } = await api.get('/api/v1/autoscaler/status/');
+    const { data } = await api.get('/autoscaler/status/');
     return data;
   },
   getHistory: async (minutes: number = 60): Promise<AutoscalerHistory> => {
-    const { data } = await api.get('/api/v1/autoscaler/history/', { params: { minutes } });
+    const { data } = await api.get('/autoscaler/history/', { params: { minutes } });
     return data;
   },
   updateConfig: async (config: any): Promise<any> => {
-    const { data } = await api.post('/api/v1/autoscaler/config/', config);
+    const { data } = await api.post('/autoscaler/config/', config);
     return data;
   },
   trigger: async (): Promise<AutoscalerStatus> => {
-    const { data } = await api.post('/api/v1/autoscaler/trigger/');
+    const { data } = await api.post('/autoscaler/trigger/');
     return data;
   },
 };
