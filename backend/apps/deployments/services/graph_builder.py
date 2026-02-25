@@ -167,13 +167,13 @@ class GraphBuilder:
             # 4. Heuristic substring match for known services
             # Only do this if key implies a host/url to avoid false positives in random config
             if '_HOST' in key or '_URL' in key or '_BROKER' in key:
-                 for candidate in known_names:
-                     # Avoid matching "db" in "db-prod" if "db" is a service name (substring issue)
-                     # We require word boundaries or exact match
-                     if candidate == val:
-                         self._match_and_link(service, candidate, 'custom', key)
-                     elif f"://{candidate}" in val or f"@{candidate}" in val:
-                         self._match_and_link(service, candidate, 'custom', key)
+                for candidate in known_names:
+                    # Avoid matching "db" in "db-prod" if "db" is a service name (substring issue)
+                    # We require word boundaries or exact match
+                    if candidate == val:
+                        self._match_and_link(service, candidate, 'custom', key)
+                    elif f"://{candidate}" in val or f"@{candidate}" in val:
+                        self._match_and_link(service, candidate, 'custom', key)
 
     def _match_and_link(self, source_service: Service, target_name: str, protocol: str, env_key: str):
         """Creates an edge if target_name matches a known node."""
