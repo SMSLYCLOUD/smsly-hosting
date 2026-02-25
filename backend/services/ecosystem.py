@@ -122,8 +122,16 @@ BUILD_STRATEGY = {
 }
 
 
-def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
-    """Fast local analysis without AI calls. Optionally scans cloned files for env vars."""
+def heuristic_analysis(files: List[str], clone_dir: str = None,
+                       scan_depth: int = 30) -> dict:
+    """
+    Local analysis without AI calls.
+
+    scan_depth controls how deep we go:
+      10 = Quick scan: filenames only (heuristics + env var detection)
+      20 = Deep scan: + docker-compose parser, DB identity, cross-service refs
+      30 = Full scan: same as 20 (AI is triggered separately in scan_and_analyze)
+    """
     languages = []
     port = 3000
     addons = set()
@@ -168,6 +176,25 @@ def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
     # ── Env Var Detection ──
     env_vars = _detect_env_vars(files, stack, port, clone_dir)
 
+    # ── Deep Code Scanning (Layer 1: "inside the code") ──
+    # Only runs at scan_depth >= 20 (skipped for Tier 10 quick scans)
+    if scan_depth >= 20 and clone_dir:
+        compose_info = _scan_docker_compose(files, clone_dir)
+        db_identity = _detect_database_identity(files, clone_dir)
+        service_refs = _detect_cross_service_refs(files, clone_dir)
+    else:
+        compose_info = {}
+        db_identity = {}
+        service_refs = {}
+
+    # Merge addons discovered from docker-compose
+    for addon_type in compose_info.get('addons', []):
+        addons.add(addon_type)
+
+    # Override port if docker-compose specifies one
+    if compose_info.get('port'):
+        port = compose_info['port']
+
     return {
         "stack": stack,
         "languages": languages,
@@ -175,6 +202,13 @@ def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
         "build": build,
         "addons": list(addons),
         "env_vars": env_vars,
+        # Deep scan results (used by ecosystem linker at deploy time)
+        "database_name": db_identity.get('db_name', ''),
+        "database_user": db_identity.get('db_user', ''),
+        "database_driver": db_identity.get('db_driver', 'postgresql'),
+        "env_format": db_identity.get('env_format', 'url'),
+        "service_refs": service_refs,
+        "compose_services": compose_info.get('services', {}),
     }
 
 
@@ -306,6 +340,354 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Deep Code Scanners — "inside the code everywhere and everytime"
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scan_docker_compose(files: List[str], clone_dir: str) -> dict:
+    """
+    Parse docker-compose.yml to extract service topology.
+
+    Reads the actual YAML to understand:
+    - Service definitions (names, ports, depends_on)
+    - Environment variables (inline and from x-common-env anchors)
+    - Cross-service internal URLs (http://container:port patterns)
+    - Database and Redis connection strings
+    - Shared infrastructure signals (postgres, redis, rabbitmq images)
+
+    Returns:
+        {
+            'services': {
+                'backend': {'port': 8001, 'depends': ['db', 'redis'], 'env': {...}},
+            },
+            'addons': ['POSTGRES', 'REDIS'],
+            'port': 8001,
+            'shared_env': {'DATABASE_URL': '...'},
+            'service_urls': {'BACKEND_URL': 'backend:8001'},
+        }
+    """
+    import re as _re
+
+    result: Dict[str, Any] = {
+        'services': {},
+        'addons': [],
+        'port': None,
+        'shared_env': {},
+        'service_urls': {},
+    }
+
+    # Find docker-compose files
+    compose_files = [f for f in files if 'docker-compose' in f.lower()
+                     and (f.endswith('.yml') or f.endswith('.yaml'))]
+    if not compose_files:
+        return result
+
+    try:
+        import yaml
+    except ImportError:
+        logger.debug("PyYAML not available — skipping docker-compose scan")
+        return result
+
+    addons = set()
+
+    for cf in compose_files:
+        try:
+            full_path = os.path.join(clone_dir, cf)
+            with open(full_path, 'r', errors='replace') as fh:
+                content = fh.read()
+
+            # Parse YAML (use safe_load to avoid code execution)
+            data = yaml.safe_load(content)
+            if not isinstance(data, dict):
+                continue
+
+            # Extract x-common-env (YAML anchor for shared env)
+            for key, val in data.items():
+                if key.startswith('x-') and isinstance(val, dict):
+                    result['shared_env'].update(val)
+
+            services_block = data.get('services', {})
+            if not isinstance(services_block, dict):
+                continue
+
+            for svc_name, svc_def in services_block.items():
+                if not isinstance(svc_def, dict):
+                    continue
+
+                svc_info: Dict[str, Any] = {
+                    'port': None,
+                    'depends': [],
+                    'env': {},
+                    'image': '',
+                }
+
+                # Image → detect infra
+                image = svc_def.get('image', '')
+                if isinstance(image, str):
+                    svc_info['image'] = image
+                    img_lower = image.lower()
+                    if 'postgres' in img_lower:
+                        addons.add('POSTGRES')
+                    if 'redis' in img_lower:
+                        addons.add('REDIS')
+                    if 'rabbitmq' in img_lower or 'rabbit' in img_lower:
+                        addons.add('RABBITMQ')
+                    if 'mongo' in img_lower:
+                        addons.add('MONGODB')
+                    if 'mysql' in img_lower or 'mariadb' in img_lower:
+                        addons.add('MYSQL')
+
+                # Ports
+                ports = svc_def.get('ports', [])
+                if isinstance(ports, list) and ports:
+                    for p in ports:
+                        port_str = str(p)
+                        # Parse "8001:8001" or "8001"
+                        parts = port_str.split(':')
+                        try:
+                            container_port = int(parts[-1].split('/')[0])
+                            svc_info['port'] = container_port
+                            # Use last non-infra service port as main port
+                            if not any(infra in svc_name.lower()
+                                       for infra in ('postgres', 'redis', 'rabbit', 'mongo')):
+                                result['port'] = container_port
+                        except (ValueError, IndexError):
+                            pass
+
+                # depends_on
+                depends = svc_def.get('depends_on', [])
+                if isinstance(depends, list):
+                    svc_info['depends'] = depends
+                elif isinstance(depends, dict):
+                    svc_info['depends'] = list(depends.keys())
+
+                # Environment → extract env vars
+                env_block = svc_def.get('environment', {})
+                if isinstance(env_block, dict):
+                    svc_info['env'] = {
+                        str(k): str(v) for k, v in env_block.items()
+                        if k and v is not None
+                    }
+                elif isinstance(env_block, list):
+                    for item in env_block:
+                        if '=' in str(item):
+                            k, v = str(item).split('=', 1)
+                            svc_info['env'][k.strip()] = v.strip()
+
+                # Detect internal service URLs in env values
+                for env_key, env_val in svc_info['env'].items():
+                    if isinstance(env_val, str):
+                        # Match http://service-name:port patterns
+                        url_match = _re.search(
+                            r'https?://([a-z0-9_-]+):(\d+)',
+                            env_val, _re.IGNORECASE,
+                        )
+                        if url_match and env_key.upper().endswith(('_URL', '_HOST', '_SERVICE')):
+                            result['service_urls'][env_key] = env_val
+
+                result['services'][svc_name] = svc_info
+
+        except Exception as exc:
+            logger.debug("Failed to parse %s: %s", cf, exc)
+            continue
+
+    result['addons'] = list(addons)
+    return result
+
+
+def _detect_database_identity(files: List[str], clone_dir: str) -> dict:
+    """
+    Determine which specific database this service uses.
+
+    Reads settings.py, docker-compose.yml, and .env files to find:
+    - The database NAME (e.g., 'marketer', 'lina', 'smsly_backend')
+    - The database USER
+    - The database DRIVER (postgresql, postgresql+asyncpg, mysql)
+    - Whether the app expects DATABASE_URL or individual POSTGRES_* vars
+
+    Returns:
+        {
+            'db_name': 'marketer',
+            'db_user': 'marketer',
+            'db_driver': 'postgresql',
+            'env_format': 'url',  # 'url' or 'individual'
+        }
+    """
+    import re as _re
+
+    result: Dict[str, Any] = {
+        'db_name': '',
+        'db_user': '',
+        'db_driver': 'postgresql',
+        'env_format': 'url',
+    }
+
+    # Strategy 1: Parse DATABASE_URL from docker-compose or .env files
+    db_url_pattern = _re.compile(
+        r'DATABASE_URL\s*[:=]\s*["\']?'
+        r'(postgres(?:ql)?(?:\+asyncpg)?://([^:]+):([^@]*)@[^/]+/([^"\'\s]+))',
+        _re.IGNORECASE,
+    )
+
+    # Strategy 2: Check for individual POSTGRES_* vars (env_format = 'individual')
+    individual_pattern = _re.compile(
+        r'POSTGRES_DB\s*[:=]\s*["\']?([a-zA-Z0-9_]+)',
+        _re.IGNORECASE,
+    )
+    individual_user_pattern = _re.compile(
+        r'POSTGRES_USER\s*[:=]\s*["\']?([a-zA-Z0-9_]+)',
+        _re.IGNORECASE,
+    )
+
+    # Strategy 3: Check settings.py for env format detection
+    uses_dj_database_url = False
+    uses_individual_vars = False
+
+    # Scan config files in priority order
+    config_files = []
+    for f in files:
+        basename = os.path.basename(f).lower()
+        if basename in ('settings.py', 'config.py'):
+            config_files.insert(0, f)  # highest priority
+        elif 'docker-compose' in basename and (f.endswith('.yml') or f.endswith('.yaml')):
+            config_files.append(f)
+        elif basename in ('.env', '.env.example', '.env.production', '.env.sample'):
+            config_files.append(f)
+
+    for cf in config_files:
+        try:
+            full_path = os.path.join(clone_dir, cf)
+            with open(full_path, 'r', errors='replace') as fh:
+                content = fh.read()
+
+            # Check for dj_database_url usage → env_format = 'url'
+            if 'dj_database_url' in content or 'DATABASE_URL' in content:
+                uses_dj_database_url = True
+
+            # Check for individual POSTGRES_* usage → env_format = 'individual'
+            if 'POSTGRES_HOST' in content or 'POSTGRES_DB' in content:
+                if 'os.environ' in content or 'os.getenv' in content:
+                    uses_individual_vars = True
+
+            # Extract DATABASE_URL
+            match = db_url_pattern.search(content)
+            if match:
+                full_url, user, _, db_name = match.groups()
+                if not result['db_name']:
+                    result['db_name'] = db_name.strip("'\"")
+                if not result['db_user'] and user:
+                    result['db_user'] = user.strip("'\"")
+                # Detect async driver
+                if '+asyncpg' in full_url:
+                    result['db_driver'] = 'postgresql+asyncpg'
+
+            # Extract individual POSTGRES_DB
+            match = individual_pattern.search(content)
+            if match and not result['db_name']:
+                result['db_name'] = match.group(1)
+
+            match = individual_user_pattern.search(content)
+            if match and not result['db_user']:
+                result['db_user'] = match.group(1)
+
+        except Exception:
+            continue
+
+    # Determine env_format
+    if uses_individual_vars and not uses_dj_database_url:
+        result['env_format'] = 'individual'
+    elif uses_dj_database_url:
+        result['env_format'] = 'url'
+
+    return result
+
+
+def _detect_cross_service_refs(files: List[str], clone_dir: str) -> dict:
+    """
+    Find environment variables that reference other services.
+
+    Scans settings.py, .env files, and docker-compose for patterns like:
+    - SMSLY_BACKEND_URL = os.environ.get('SMSLY_BACKEND_URL', 'http://localhost:8000')
+    - BACKEND_URL: http://smsly-backend:8001
+    - NEXT_PUBLIC_API_URL=http://api.example.com
+
+    Returns:
+        {
+            'SMSLY_BACKEND_URL': {
+                'default': 'http://localhost:8000',
+                'references_service': 'smsly-backend',
+            },
+            ...
+        }
+    """
+    import re as _re
+
+    refs: Dict[str, dict] = {}
+
+    # Patterns for URL env vars
+    url_var_pattern = _re.compile(
+        r"""
+        (?:                                          # Match context
+            os\.(?:environ\.get|getenv)\s*\(\s*      #   os.environ.get( or os.getenv(
+            ['"]([A-Z_]+_URL|[A-Z_]+_HOST)['"]       #   'VAR_NAME'
+            (?:\s*,\s*['"]?(https?://[^'")\s]+))?    #   , 'default_value' (optional)
+        |                                            # OR
+            ([A-Z_]+_URL|[A-Z_]+_SERVICE_URL)        #   VAR_NAME
+            \s*[:=]\s*                               #   = or :
+            ['"]?(https?://[a-z0-9._-]+(?::\d+)?)   #   http://hostname:port
+        )
+        """,
+        _re.VERBOSE | _re.IGNORECASE,
+    )
+
+    # Service name pattern in URLs
+    service_name_pattern = _re.compile(r'https?://([a-z][a-z0-9_-]+)(?::\d+)?', _re.IGNORECASE)
+
+    # Scan relevant files
+    scan_files = [f for f in files if os.path.basename(f).lower() in (
+        'settings.py', 'config.py', '.env', '.env.example',
+        '.env.sample', '.env.production', '.env.template',
+    ) or 'docker-compose' in f.lower()]
+
+    for sf in scan_files:
+        try:
+            full_path = os.path.join(clone_dir, sf)
+            with open(full_path, 'r', errors='replace') as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    matches = url_var_pattern.findall(line)
+                    for match in matches:
+                        # match is a tuple from the groups
+                        var_name = match[0] or match[2]
+                        url_value = match[1] or match[3]
+
+                        if not var_name:
+                            continue
+
+                        var_name = var_name.upper()
+                        ref_info: Dict[str, Any] = {}
+
+                        if url_value:
+                            ref_info['default'] = url_value
+                            # Extract service name from URL
+                            svc_match = service_name_pattern.match(url_value)
+                            if svc_match:
+                                hostname = svc_match.group(1)
+                                # Filter out localhost/127.0.0.1
+                                if hostname not in ('localhost', '127', '0'):
+                                    ref_info['references_service'] = hostname
+
+                        if var_name not in refs:
+                            refs[var_name] = ref_info
+        except Exception:
+            continue
+
+    return refs
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -318,6 +700,16 @@ For each repo, determine:
 4. Required addons (POSTGRES, REDIS, MONGODB, etc.)
 5. Essential environment variables it needs
 6. Which OTHER repos it depends on (e.g., a frontend that needs a backend API URL)
+7. Parse docker-compose.yml files to understand:
+   - Which services share a database server (one Postgres, multiple databases)
+   - Internal service URLs (http://container-name:port patterns)
+   - Shared environment variable blocks (x-common-env anchors)
+   - Redis database number isolation (redis://host:6379/0 vs /1 vs /4)
+8. For ecosystems with shared infrastructure:
+   - Identify the "infra layer" (postgres, redis, rabbitmq)
+   - Map each service to its SPECIFIC database on the shared Postgres
+   - Detect init-databases.sql or similar bootstrap scripts
+   - Track which services share the same database vs have their own
 
 Then determine the overall deployment order (databases/addons first, then backends, then frontends).
 
@@ -333,7 +725,12 @@ Return ONLY valid JSON matching this exact structure:
       "addons": ["POSTGRES"],
       "env_vars": {"DATABASE_URL": "{{POSTGRES_URL}}", "SECRET_KEY": "{{GENERATE}}"},
       "depends_on": ["other-repo-name"],
-      "deploy_order": 1
+      "deploy_order": 1,
+      "database_name": "marketer",
+      "database_user": "marketer",
+      "redis_db": 4,
+      "consumes_services": {"SMSLY_BACKEND_URL": "smsly-backend"},
+      "exposes_as": {"BACKEND_URL": "http://{self}:8001"}
     }
   ],
   "addons": [
@@ -507,13 +904,18 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str) -> dict:
+def scan_and_analyze(token: str, scan_depth: int = 30) -> dict:
     """
-    Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
+    Full pipeline: fetch all repos → analyze each → deploy plan.
+
+    scan_depth controls accuracy vs speed:
+      10 = Quick scan (~1s): heuristics only, no AI
+      20 = Deep scan (~3s): heuristics + code parsing, no AI
+      30 = Full AI scan (~15s): everything + AI ecosystem analysis
 
     Returns the deploy plan dict ready for the frontend.
     """
-    logger.info("Starting ecosystem scan...")
+    logger.info("Starting ecosystem scan (depth=%d)...", scan_depth)
 
     # 1. Fetch all repos
     all_repos = fetch_all_repos(token)
@@ -536,8 +938,8 @@ def scan_and_analyze(token: str) -> dict:
         if not files:
             continue
 
-        # Quick heuristic analysis
-        heuristic = heuristic_analysis(files)
+        # Heuristic analysis (depth-controlled)
+        heuristic = heuristic_analysis(files, scan_depth=scan_depth)
 
         repos_data.append({
             "repo": full_name,
@@ -557,10 +959,13 @@ def scan_and_analyze(token: str) -> dict:
             "message": "No deployable repositories found.",
         }
 
-    logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
-
-    # 3. AI ecosystem analysis
-    plan = analyze_ecosystem(repos_data)
+    # 3. AI ecosystem analysis (only at depth 30)
+    if scan_depth >= 30:
+        logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
+        plan = analyze_ecosystem(repos_data)
+    else:
+        logger.info("Analyzed %d repos (depth=%d, skipping AI)", len(repos_data), scan_depth)
+        plan = _build_heuristic_plan(repos_data, error=f"Scan depth {scan_depth}: AI analysis skipped")
 
     # 4. Enrich with metadata
     plan["total_repos_scanned"] = len(all_repos)
