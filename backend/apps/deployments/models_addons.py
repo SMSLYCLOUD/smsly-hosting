@@ -38,6 +38,29 @@ class Addon(TimeStampedModel):
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True,
                                     help_text="UUID of the database in Coolify")
 
+    @property
+    def parsed_credentials(self) -> dict:
+        """Parse connection_url into individual credential components."""
+        from urllib.parse import urlparse
+        if not self.connection_url:
+            return {}
+        parsed = urlparse(self.connection_url)
+        slug = self.name.upper().replace('-', '_').replace(' ', '_')
+        result = {
+            f'{slug}_URL': self.connection_url,
+        }
+        if parsed.hostname:
+            result[f'{slug}_HOST'] = parsed.hostname
+        if parsed.port:
+            result[f'{slug}_PORT'] = str(parsed.port)
+        if parsed.username:
+            result[f'{slug}_USER'] = parsed.username
+        if parsed.password:
+            result[f'{slug}_PASSWORD'] = parsed.password
+        if parsed.path and parsed.path != '/':
+            result[f'{slug}_DATABASE'] = parsed.path.lstrip('/')
+        return result
+
     def __str__(self):
         return f"{self.addon_type} for {self.service.name}"
 
