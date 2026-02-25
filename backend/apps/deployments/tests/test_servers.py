@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for ManagedServer model and views."""
 
 from unittest.mock import patch, MagicMock

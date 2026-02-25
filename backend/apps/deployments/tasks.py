@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """Tasks module."""
 import logging
 import re
@@ -37,6 +38,16 @@ from apps.deployments.utils import (
     broadcast_status,
     update_stage,
 )
+from apps.billing.services.metering import UsageMeter
+from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
+from services.addon_provisioner import addon_provisioner
+from .services.backup_service import BackupService
+from .services.transfer_service import ServerTransferService
+from .models_backup import BackupSchedule, ServiceBackup
+from .models_transfer import ServerTransfer
+
+logger = logging.getLogger(__name__)
+
 from services.addon_provisioner import addon_provisioner
 
 logger = logging.getLogger(__name__)
