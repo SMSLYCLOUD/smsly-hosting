@@ -25,11 +25,13 @@ interface SvcNode {
   repoUrl?: string;
   status: string;
   framework?: string;
+  deployType?: string;
 }
 
 interface SvcLink {
   source: string;
   target: string;
+  type: 'repo' | 'domain';
 }
 
 function hashSeed(value: string): number {
@@ -59,17 +61,33 @@ function statusColor(status: string): string {
   }
 }
 
+/* ── Deploy-type accent colors (matches topology) ── */
+function deployTypeColor(dt: string): string {
+  switch (dt) {
+    case 'GIT': return '#3b82f6';
+    case 'DOCKER': return '#06b6d4';
+    case 'TEMPLATE': return '#a78bfa';
+    default: return '#6366f1';
+  }
+}
+
+const LINK_COLORS: Record<string, string> = {
+  repo: '#3b82f6',
+  domain: '#10b981',
+};
+
 /* ── 3D Node (lazy THREE) ── */
 function createServiceNode(node: SvcNode): any {
   const THREE = require('three');
   const group = new THREE.Group();
-  const color = statusColor(node.status);
+  const sColor = statusColor(node.status);
+  const dtColor = deployTypeColor(node.deployType || 'GIT');
 
-  // Nucleus sphere
+  // Nucleus sphere — uses deploy-type color for the main body
   const geometry = new THREE.SphereGeometry(10, 32, 32);
   const material = new THREE.MeshPhongMaterial({
-    color: new THREE.Color(color),
-    emissive: new THREE.Color(color),
+    color: new THREE.Color(dtColor),
+    emissive: new THREE.Color(dtColor),
     emissiveIntensity: 0.5,
     transparent: true,
     opacity: 0.9,
@@ -77,18 +95,19 @@ function createServiceNode(node: SvcNode): any {
   });
   group.add(new THREE.Mesh(geometry, material));
 
-  // Outer glow shell
+  // Outer glow shell — blends deploy-type and status colors
   const glowGeo = new THREE.SphereGeometry(15, 16, 16);
   const glowMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(color), transparent: true, opacity: 0.08, side: THREE.BackSide,
+    color: new THREE.Color(sColor), transparent: true, opacity: 0.1, side: THREE.BackSide,
   });
   group.add(new THREE.Mesh(glowGeo, glowMat));
 
-  // Electron shell orbits (3 rings at different angles)
+  // Electron shell orbits — gradient from deploy color to status color
+  const ringColors = [dtColor, sColor, dtColor];
   for (let i = 0; i < 3; i++) {
     const ringGeo = new THREE.RingGeometry(13 + i * 2.5, 13.5 + i * 2.5, 64);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(color), transparent: true, opacity: 0.12 - i * 0.03, side: THREE.DoubleSide,
+      color: new THREE.Color(ringColors[i]), transparent: true, opacity: 0.15 - i * 0.03, side: THREE.DoubleSide,
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = Math.PI / 2 + (i * Math.PI / 4);
@@ -96,9 +115,9 @@ function createServiceNode(node: SvcNode): any {
     group.add(ring);
   }
 
-  // Status dot
-  const dotGeo = new THREE.SphereGeometry(1.5, 8, 8);
-  const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color) });
+  // Status dot — small bright sphere showing current status
+  const dotGeo = new THREE.SphereGeometry(2, 8, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(sColor) });
   const dot = new THREE.Mesh(dotGeo, dotMat);
   dot.position.set(9, 6, 0);
   group.add(dot);
@@ -125,8 +144,13 @@ function createServiceNode(node: SvcNode): any {
   }
 
   ctx.font = 'bold 14px Inter, system-ui, sans-serif';
-  ctx.fillStyle = color;
-  ctx.fillText(node.status, 160, 74);
+  ctx.fillStyle = sColor;
+  ctx.fillText(node.status, 160, 68);
+
+  // Deploy type indicator
+  ctx.font = '12px Inter, system-ui, sans-serif';
+  ctx.fillStyle = dtColor;
+  ctx.fillText((node.deployType || 'GIT'), 160, 86);
 
   // CPU/RAM bars
   const barY = 82;
@@ -215,8 +239,48 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
       repoUrl: svc.repository_url,
       status: svc.latest_deployment?.status || 'UNKNOWN',
       framework: svc.buildpack,
+      deployType: svc.deploy_type || 'GIT',
     }));
+
+    // Build links between services sharing repos or domains
     const links: SvcLink[] = [];
+
+    // Connect services from same repo
+    const repoGroups = new Map<string, string[]>();
+    for (const svc of services) {
+      if (svc.repository_url) {
+        const key = svc.repository_url.replace(/\.git$/, '').replace(/https?:\/\//, '').split('/').slice(0, 2).join('/');
+        const arr = repoGroups.get(key) || [];
+        arr.push(svc.id);
+        repoGroups.set(key, arr);
+      }
+    }
+    for (const [, ids] of Array.from(repoGroups)) {
+      if (ids.length > 1) {
+        for (let i = 1; i < ids.length; i++) {
+          links.push({ source: ids[0], target: ids[i], type: 'repo' });
+        }
+      }
+    }
+
+    // Connect services sharing the same base domain
+    const domainGroups = new Map<string, string[]>();
+    for (const svc of services) {
+      if (svc.public_domain) {
+        const base = svc.public_domain.split('.').slice(-2).join('.');
+        const arr = domainGroups.get(base) || [];
+        arr.push(svc.id);
+        domainGroups.set(base, arr);
+      }
+    }
+    for (const [, ids] of Array.from(domainGroups)) {
+      if (ids.length > 1) {
+        for (let i = 1; i < ids.length; i++) {
+          links.push({ source: ids[0], target: ids[i], type: 'domain' });
+        }
+      }
+    }
+
     return { nodes, links };
   }, [services]);
 
@@ -358,10 +422,40 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
             { color: '#ef4444', label: 'Failed' },
           ].map(({ color, label }) => (
             <div key={label} className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+              <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
               <span className="text-[11px] text-zinc-300">{label}</span>
             </div>
           ))}
+        </div>
+        <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            DEPLOY TYPE
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {[
+              { color: '#3b82f6', label: 'Git Deploy' },
+              { color: '#06b6d4', label: 'Docker' },
+              { color: '#a78bfa', label: 'Template' },
+            ].map(({ color, label }) => (
+              <div key={label} className="flex items-center gap-2">
+                <div className="h-2 w-4 rounded-sm" style={{ backgroundColor: color }} />
+                <span className="text-[11px] text-zinc-300">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            CONNECTIONS
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-4 border-t-2 border-blue-500/70" />
+            <span className="text-[10px] text-zinc-400">Same repo</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <div className="w-4 border-t-2 border-dashed border-emerald-500/70" />
+            <span className="text-[10px] text-zinc-400">Same domain</span>
+          </div>
         </div>
       </div>
 
@@ -416,6 +510,12 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
             showNavInfo={false}
             warmupTicks={30}
             cooldownTicks={80}
+            linkColor={(link: any) => (LINK_COLORS[(link as SvcLink).type] || '#6366f1') + 'b3'}
+            linkWidth={2}
+            linkOpacity={0.7}
+            linkDirectionalParticles={2}
+            linkDirectionalParticleSpeed={0.005}
+            linkDirectionalParticleWidth={2}
           />
         )}
       </div>
