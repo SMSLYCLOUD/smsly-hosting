@@ -22,7 +22,7 @@ class EnvVarSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = EnvironmentVariable
-        fields = ['id', 'key', 'value', 'is_secret']
+        fields = ['id', 'key', 'value', 'is_secret', 'source']
 
     def to_representation(self, instance):
         try:
@@ -40,6 +40,7 @@ class EnvVarSerializer(serializers.ModelSerializer):
                 'key': getattr(instance, 'key', ''),
                 'value': '',
                 'is_secret': bool(getattr(instance, 'is_secret', False)),
+                'source': getattr(instance, 'source', 'USER'),
             }
         # Mask secret values
         if instance.is_secret:

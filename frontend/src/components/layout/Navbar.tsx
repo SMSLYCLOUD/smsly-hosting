@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -101,6 +101,7 @@ export function Navbar() {
     { href: '/deployments', label: 'Deployments', icon: Rocket, tier: 'primary' },
     { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
     { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
+    { href: '/activity', label: 'Activity', icon: Activity, tier: 'secondary' },
     { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'secondary' },

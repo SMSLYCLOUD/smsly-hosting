@@ -169,6 +169,7 @@ export interface EnvVar {
   key: string;
   value: string;
   is_secret: boolean;
+  source?: 'USER' | 'ADDON' | 'SHORTCODE';
 }
 
 export interface CronJob {
@@ -954,7 +955,11 @@ export const addonsApi = {
     runQuery: async (id: string, query: string): Promise<{ results: any[], columns: string[], error?: string }> => {
         const res = await api.post(`/addons/${id}/query/`, { query });
         return res.data;
-    }
+    },
+    addonCredentials: async (addonId: string): Promise<Record<string, string>> => {
+      const res = await api.get(`/addons/${addonId}/credentials/`);
+      return res.data;
+    },
 };
 
 export default api;

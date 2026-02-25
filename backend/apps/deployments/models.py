@@ -14,6 +14,7 @@ from apps.cloud.models import CloudProvider
 from .models_audit import AuditLog
 from .models_cron import CronJob
 from .models_storage import Volume  # Add this
+from .models_updates import PlatformUpdate  # Platform update tracking
 from .api_token_auth import APIToken  # CLI token auth
 from .models_servers import ManagedServer  # Multi-server management
 from .models_project import Project  # Project grouping
@@ -338,6 +339,15 @@ class EnvironmentVariable(TimeStampedModel):
     key = models.CharField(max_length=255)
     value = EncryptedCharField(max_length=255, blank=True, default='')
     is_secret = models.BooleanField(default=False)
+    SOURCE_CHOICES = [
+        ('USER', 'User Defined'),
+        ('ADDON', 'Addon Auto-Injected'),
+        ('SHORTCODE', 'Shortcode Resolved'),
+    ]
+    source = models.CharField(
+        max_length=20, choices=SOURCE_CHOICES,
+        default='USER',
+        help_text="Origin of this env var")
 
     class Meta:
         unique_together = ('service', 'key')

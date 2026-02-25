@@ -361,6 +361,9 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                   className={`flex-1 font-mono font-bold text-sm min-w-[120px] ${v.value?.startsWith("CHANGE_ME") ? "text-red-500" : "text-primary"}`}
                 >
                   {v.key}
+                  {v.source === 'ADDON' && (
+                    <span className="ml-2 text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded">ADDON</span>
+                  )}
                   {v.value?.startsWith("CHANGE_ME") && (
                     <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-medium normal-case">
                       needs value
@@ -421,15 +424,17 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                 {editingId !== v.id && (
                   <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                     {/* Edit Button */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-primary"
-                      onClick={() => startEdit(v)}
-                      title="Edit value"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
+                    {v.source !== 'ADDON' && (
+                        <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-primary"
+                        onClick={() => startEdit(v)}
+                        title="Edit value"
+                        >
+                        <Pencil className="w-4 h-4" />
+                        </Button>
+                    )}
 
                     {/* Show/Hide Secret */}
                     {v.is_secret && (
@@ -448,14 +453,16 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                     )}
 
                     {/* Delete */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => handleDelete(v.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    {v.source !== 'ADDON' && (
+                        <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => handleDelete(v.id)}
+                        >
+                        <Trash2 className="w-4 h-4" />
+                        </Button>
+                    )}
                   </div>
                 )}
               </div>

@@ -66,6 +66,16 @@ class AddonViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['get'])
+    def credentials(self, request, pk=None):
+        """Return parsed connection credentials for this addon."""
+        addon = self.get_object()
+        if addon.status != 'ACTIVE':
+            return Response(
+                {'error': 'Addon not active'},
+                status=status.HTTP_400_BAD_REQUEST)
+        return Response(addon.parsed_credentials)
+
+    @action(detail=True, methods=['get'])
     def status_check(self, request, pk=None):
         """Check current addon container status."""
         addon = self.get_object()
