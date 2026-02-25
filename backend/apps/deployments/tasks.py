@@ -8,6 +8,7 @@ import subprocess
 import os
 import json
 import zipfile
+import secrets
 from urllib.parse import unquote, urlparse
 
 import docker
@@ -48,6 +49,7 @@ from .models_transfer import ServerTransfer
 logger = logging.getLogger(__name__)
 
 from services.addon_provisioner import addon_provisioner
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,7 +100,6 @@ def _build_runtime_env(service: Service) -> dict:
     # SECRET_KEY: generate a secure random key if not explicitly set.
     # Without this, Django apps crash on startup in production.
     if 'SECRET_KEY' not in env_vars and 'DJANGO_SECRET_KEY' not in env_vars:
-        import secrets
         env_vars['SECRET_KEY'] = secrets.token_urlsafe(50)
 
     # ALLOWED_HOSTS: derive from the service's public domain + custom domains.
@@ -115,7 +116,6 @@ def _build_runtime_env(service: Service) -> dict:
     # ── Inject addon connection URLs (DATABASE_URL, REDIS_URL, etc.) ──
     # This ensures addon env vars are available in ALL deploy paths.
     try:
-        from apps.deployments.models_addons import Addon
         from services.addon_provisioner import AddonProvisioner
         for addon in Addon.objects.filter(service=service, status='ACTIVE'):
             env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
@@ -123,7 +123,6 @@ def _build_runtime_env(service: Service) -> dict:
                 env_vars.setdefault(env_key, addon.connection_url)
                 # Qdrant: also set host/port for apps that expect QDRANT_HOST
                 if addon.addon_type == 'QDRANT':
-                    from urllib.parse import urlparse
                     parsed = urlparse(addon.connection_url)
                     env_vars.setdefault('QDRANT_HOST', parsed.hostname or 'localhost')
                     env_vars.setdefault('QDRANT_PORT', str(parsed.port or 6333))
@@ -187,12 +186,6 @@ def _safe_extract_zip(zip_path: str, destination: str):
                 raise ValueError("Archive contains unsafe file paths")
         zf.extractall(dest_root)
 
-# AI diagnosis task â€” imported at top level to avoid circular import issues
-try:
-    from apps.deployments.tasks_ai import analyze_failure_task
-except ImportError:
-    analyze_failure_task = None
-
 
 @shared_task(
     bind=True,
@@ -231,10 +224,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
             if deployment.is_rollback or skip_review:
                 image_name = manager.run()
             else:
-                # Fresh manual deploy â†’ analysis only, pause for review
+                # Fresh manual deploy → analysis only, pause for review
                 manager.run_analysis_only()
                 broadcast_status(deployment)
-                return  # Paused at REVIEW â€” user must approve
+                return  # Paused at REVIEW → user must approve
 
         elif service.deploy_type == 'FUNCTION':
             image_name = _build_function(deployment, service)
@@ -413,7 +406,8 @@ def _wait_for_local_container_healthy(
     immediately crash-loops or fails its Docker health check.
     """
     try:
-        import docker
+        # Check if docker is available (it should be, imported at top level)
+        pass
     except Exception:  # pragma: no cover - import failure is environment-specific
         append_log(
             deployment,
@@ -659,7 +653,6 @@ def _deploy_container(deployment, provider, image_name):
         env_vars = _build_runtime_env(service)
 
         # Inject addon connection URLs into deployed container
-        from apps.deployments.models_addons import Addon
         from services.addon_provisioner import AddonProvisioner
         for addon in Addon.objects.filter(service=service, status='ACTIVE'):
             env_key = AddonProvisioner.ENV_KEY_MAP.get(addon.addon_type)
@@ -667,7 +660,6 @@ def _deploy_container(deployment, provider, image_name):
                 env_vars.setdefault(env_key, addon.connection_url)
                 # Qdrant: also set host/port for apps that expect QDRANT_HOST
                 if addon.addon_type == 'QDRANT':
-                    from urllib.parse import urlparse
                     parsed = urlparse(addon.connection_url)
                     env_vars.setdefault('QDRANT_HOST', parsed.hostname or 'localhost')
                     env_vars.setdefault('QDRANT_PORT', str(parsed.port or 6333))
@@ -760,11 +752,9 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
 
     Watches container logs for 30s after deploy. If the container crashes:
     1. Pattern resolver scans logs instantly for known errors (no API call)
-    2. If a pattern matches and has an auto-fix â†’ fix + auto-redeploy
-    3. If patterns can't explain â†’ escalate to AI models with code context
+    2. If a pattern matches and has an auto-fix → fix + auto-redeploy
+    3. If patterns can't explain → escalate to AI models with code context
     """
-    import docker
-
     try:
         deployment = Deployment.objects.get(id=deployment_id)
         service = deployment.service
@@ -777,13 +767,13 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         logger.warning("Docker not available for post-deploy monitor")
         return
 
-    append_log(deployment, "\nðŸ” Post-deploy health monitor active (30s)...\n")
+    append_log(deployment, "\n🔍 Post-deploy health monitor active (30s)...\n")
     broadcast_status(deployment)
 
     # Poll container status for 30 seconds
     crash_detected = False
     container_logs = ""
-    for check in range(6):  # 6 checks Ã— 5s = 30s
+    for check in range(6):  # 6 checks × 5s = 30s
         time.sleep(5)
 
         try:
@@ -797,7 +787,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                 crash_detected = True
                 append_log(
                     deployment,
-                    f"\nðŸ”´ Container crashed (status: {status}) "
+                    f"\n🔴 Container crashed (status: {status}) "
                     f"after {(check + 1) * 5}s\n"
                 )
                 break
@@ -808,21 +798,21 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
                     crash_detected = True
                     append_log(
                         deployment,
-                        f"\nðŸ”´ Container stuck in restart loop "
+                        f"\n🔴 Container stuck in restart loop "
                         f"after {(check + 1) * 5}s\n"
                     )
                     break
 
         except docker.errors.NotFound:
             crash_detected = True
-            append_log(deployment, "\nðŸ”´ Container disappeared after deploy\n")
+            append_log(deployment, "\n🔴 Container disappeared after deploy\n")
             break
         except Exception as e:
             logger.warning("Monitor check failed: %s", e)
             continue
 
     if not crash_detected:
-        append_log(deployment, "âœ… Container healthy after 30s monitoring.\n")
+        append_log(deployment, "✅ Container healthy after 30s monitoring.\n")
         broadcast_status(deployment)
         return
 
@@ -835,7 +825,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     except Exception as alert_err:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to queue runtime crash alert: %s", alert_err)
 
-    # â”€â”€ CRASH DETECTED â€” Run real-time diagnosis â”€â”€
+    # ── CRASH DETECTED — Run real-time diagnosis ──
     deployment.refresh_from_db()
 
     # Step 1: Pattern resolver (instant, no API call)
@@ -850,10 +840,10 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     auto_fixed = [r for r in results if r.get('auto_fixed')]
 
     if auto_fixed:
-        # Auto-fix applied â€” trigger automatic redeploy
+        # Auto-fix applied → trigger automatic redeploy
         append_log(
             deployment,
-            f"\nðŸ”§ {len(auto_fixed)} issue(s) auto-fixed. "
+            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed. "
             f"Triggering automatic redeploy...\n"
         )
         deployment.status = 'FAILED'
@@ -875,7 +865,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         )
         return
 
-    # Step 2: No pattern match â€” escalate to AI models
+    # Step 2: No pattern match → escalate to AI models
     _escalate_to_ai(deployment, service, container_logs)
 
     # Mark deployment as failed
@@ -930,7 +920,7 @@ def _escalate_to_ai(deployment, service, container_logs):
 
         append_log(
             deployment,
-            f"\nðŸ¤– AI Diagnosis ({provider_name}):\n{response[:2000]}\n"
+            f"\n🤖 AI Diagnosis ({provider_name}):\n{response[:2000]}\n"
         )
 
         # Try to parse and auto-apply AI suggestions
@@ -942,12 +932,12 @@ def _escalate_to_ai(deployment, service, container_logs):
             import re as _re
             action = _apply_fix(fix, _re.match('', ''), '', service, deployment)
             if action:
-                append_log(deployment, f"  âœ… AI-suggested fix applied: {action}\n")
+                append_log(deployment, f"  ✅ AI-suggested fix applied: {action}\n")
 
     except Exception as e:
         logger.warning("AI escalation failed for deployment %s: %s",
                        deployment.id, e)
-        append_log(deployment, f"\nðŸ¤– AI diagnosis unavailable: {e}\n")
+        append_log(deployment, f"\n🤖 AI diagnosis unavailable: {e}\n")
 
 
 def _handle_failure(task, deployment, error_msg, reason):
@@ -959,7 +949,7 @@ def _handle_failure(task, deployment, error_msg, reason):
         if deployment.status != 'CANCELLED':
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
-            deployment.build_logs += f"\nâœ— {reason}: {error_msg}\n"
+            deployment.build_logs += f"\n✗ {reason}: {error_msg}\n"
             deployment.save()
             broadcast_status(deployment)
 
@@ -984,8 +974,13 @@ def _handle_failure(task, deployment, error_msg, reason):
                 logger.warning("Pattern resolver failed: %s", e)
 
             # Step 2: AI diagnosis (async)
-            if analyze_failure_task:
+            try:
+                from apps.deployments.tasks_ai import analyze_failure_task
                 analyze_failure_task.delay(str(deployment.id))
+            except ImportError:
+                pass  # Ignore if module cannot be imported
+            except Exception as e: # pylint: disable=broad-exception-caught
+                logger.warning("Failed to trigger AI failure task: %s", e)
 
     raise task.retry(exc=Exception(error_msg), countdown=30)
 

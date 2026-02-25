@@ -58,6 +58,7 @@ ENABLE_LEGACY_TUNNEL_API = config(
 )
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
+APPEND_SLASH = False
 
 # ---------------------------------------------------------------------------
 # Dynamically include the domain from PlatformConfig (DB) so that domain
