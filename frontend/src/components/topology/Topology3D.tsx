@@ -44,7 +44,7 @@ function getNodeColor(status: string) {
 export function Topology3D() {
   const { data, loading, error, refresh } = useGraphData(10000);
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
-  const fgRef = useRef<any>();
+  const fgRef = useRef<any>(null);
 
   // Camera focus on node click
   const handleNodeClick = useCallback((node: any) => {
