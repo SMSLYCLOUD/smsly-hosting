@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Network, Scaling } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -105,6 +105,8 @@ export function Navbar() {
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'secondary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'secondary' },
+    { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
+    { href: '/autoscaler', label: 'Auto-Scaler', icon: Scaling, tier: 'secondary' },
   ];
 
   if (user?.is_staff) {
