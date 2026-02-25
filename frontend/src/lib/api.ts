@@ -395,6 +395,53 @@ export const aiApi = {
     });
     return response.data;
   },
+
+  /** Analyze logs with AI */
+  analyzeLogs: async (logs: string, context: string = 'deployment'): Promise<{
+    diagnosis: string;
+    issues: { type: string; confidence: number; pattern: string }[];
+    recommendations: string[];
+    provider: string;
+  }> => {
+    const res = await api.post('/ai/analyze/', { logs, context });
+    return res.data;
+  },
+
+  /** Get cost estimates with AI recommendations */
+  costEstimate: async (config: {
+    cpu_cores: number;
+    memory_mb: number;
+    stack?: string;
+    provider?: string;
+  }): Promise<{
+    estimates: Record<string, number>;
+    ai_recommendations: string;
+  }> => {
+    const res = await api.post('/ai/cost-estimate/', config);
+    return res.data;
+  },
+
+  /** Get latest intelligence report */
+  getReport: async (): Promise<any> => {
+    const res = await api.get('/ai/report/');
+    return res.data;
+  },
+
+  /** Get anomaly detection history */
+  getAnomalies: async (): Promise<{
+    anomalies: {
+      id: string;
+      service_name: string;
+      issue_type: string;
+      severity: string;
+      detected_at: string;
+      auto_fixed: boolean;
+      fix_result: string;
+    }[];
+  }> => {
+    const res = await api.get('/ai/anomalies/');
+    return res.data;
+  },
 };
 
 // ─── Teams API ──────────────────────────────────────────────────────────────
@@ -943,5 +990,89 @@ export const projectsApi = {
   },
   removeService: async (projectId: string, serviceId: string): Promise<void> => {
     await api.post(`/projects/${projectId}/remove-service/`, { service_id: serviceId });
+  },
+};
+
+// =============================================================================
+// Autoscaler (VPS-level cross-service)
+// =============================================================================
+
+export interface AutoscalerService {
+  type: 'gunicorn' | 'celery' | 'daphne';
+  app: string;
+  priority: number;
+  status: string;
+  demand_score: number;
+  cpu_percent: number;
+  memory_mb: number;
+  memory_limit_mb: number;
+  memory_percent: number;
+  net_rx_mb: number;
+  net_tx_mb: number;
+  pids: number;
+  current_workers: number;
+  min_workers: number;
+  max_workers: number;
+  last_action: string;
+  last_action_at: string;
+}
+
+export interface AutoscalerBudget {
+  total_system_mb: number;
+  infra_reserve_mb: number;
+  app_budget_mb: number;
+  used_mb: number;
+  free_mb: number;
+}
+
+export interface AutoscalerStatus {
+  status: string;
+  uptime_seconds: number;
+  check_interval: number;
+  last_check_at: string;
+  budget: AutoscalerBudget;
+  services: Record<string, AutoscalerService>;
+  recent_decisions: {
+    timestamp: string;
+    container: string;
+    action: string;
+    workers_before: number;
+    workers_after: number;
+    memory_before_mb: number;
+    memory_after_mb: number;
+    reason: string;
+  }[];
+}
+
+export interface AutoscalerHistory {
+  timestamps: string[];
+  services: Record<string, {
+    cpu: number[];
+    memory_mb: number[];
+    demand_score: number[];
+    workers: number[];
+  }>;
+  budget: {
+    used_mb: number[];
+    free_mb: number[];
+  };
+}
+
+export const autoscalerApi = {
+  getStatus: async (): Promise<AutoscalerStatus> => {
+    const { data } = await api.get('/api/v1/autoscaler/status/');
+    return data;
+  },
+  getHistory: async (minutes: number = 60): Promise<AutoscalerHistory> => {
+    const { data } = await api.get('/api/v1/autoscaler/history/', { params: { minutes } });
+    return data;
+  },
+  updateConfig: async (config: any): Promise<any> => {
+    const { data } = await api.post('/api/v1/autoscaler/config/', config);
+    return data;
+  },
+  trigger: async (): Promise<AutoscalerStatus> => {
+    const { data } = await api.post('/api/v1/autoscaler/trigger/');
+    return data;
   },
 };

@@ -3,6 +3,8 @@ import re
 import logging
 from typing import List, Dict
 
+from .providers import ask_with_fallback
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +28,62 @@ class LogAnalyzer:
         'CRASH_LOOP': [
             r"Back-off restarting failed container",
             r"Error: EADDRINUSE"
-        ]
+        ],
+        'SSL_CERT_EXPIRED': [
+            r"SSL_ERROR_EXPIRED_CERT_ALERT",
+            r"certificate has expired",
+            r"SSL certificate problem: certificate has expired",
+        ],
+        'DISK_FULL': [
+            r"No space left on device",
+            r"ENOSPC",
+            r"disk quota exceeded",
+        ],
+        'PORT_CONFLICT': [
+            r"EADDRINUSE",
+            r"address already in use",
+            r"port is already allocated",
+        ],
+        'DNS_FAILURE': [
+            r"EAI_NONAME",
+            r"Name or service not known",
+            r"NXDOMAIN",
+            r"getaddrinfo failed",
+        ],
+        'DEPENDENCY_MISSING': [
+            r"ModuleNotFoundError",
+            r"ImportError",
+            r"Cannot find module",
+            r"Module not found",
+        ],
+        'BUILD_FAILURE': [
+            r"ERROR: failed to solve",
+            r"npm ERR!",
+            r"pip install.*failed",
+            r"cargo build.*error",
+            r"SyntaxError",
+        ],
+        'PERMISSION_DENIED': [
+            r"Permission denied",
+            r"EACCES",
+            r"Operation not permitted",
+        ],
+        'TIMEOUT': [
+            r"TimeoutError",
+            r"context deadline exceeded",
+            r"request timeout",
+            r"ETIMEDOUT",
+        ],
+        'RATE_LIMITED': [
+            r"429 Too Many Requests",
+            r"rate limit exceeded",
+            r"RateLimitError",
+        ],
+        'HEALTH_CHECK_FAIL': [
+            r"health check failed",
+            r"unhealthy",
+            r"readiness probe failed",
+        ],
     }
 
     def analyze_logs(self, logs: str) -> List[Dict[str, str]]:
@@ -54,27 +111,32 @@ class LogAnalyzer:
         """
         issues = self.analyze_logs(logs)
         if issues:
-            descriptions = []
-            for issue in issues:
-                if issue['type'] == 'OOM_KILLED':
-                    descriptions.append(
-                        "The application ran out of memory. Consider upgrading the plan."
-                    )
-                elif issue['type'] == 'DB_CONNECTION_TIMEOUT':
-                    descriptions.append(
-                        "Database connection failed. Check your credentials or pool size."
-                    )
-                elif issue['type'] == 'CRASH_LOOP':
-                    descriptions.append(
-                        "The application is crashing repeatedly on startup."
-                    )
-            return " ".join(descriptions)
+            return self._format_known_issues(issues)
 
-        # LLM Simulation for complex cases
-        if "traceback" in logs.lower() or "error" in logs.lower():
-            return (
-                "AI Diagnosis: It appears your application is throwing an unhandled exception. "
-                "Check line 42 of your main loop."
-            )
+        # For unknown issues, use real AI analysis
+        if len(logs) > 200:  # Only call AI if there's substantial log content
+            try:
+                prompt = (
+                    f"Analyze these deployment logs and diagnose the issue. "
+                    f"Be concise (max 3 sentences):\n\n{logs[-5000:]}"
+                )
+                response, provider = ask_with_fallback(prompt)
+                return f"[{provider}] {response}"
+            except Exception as e:
+                logger.warning("AI diagnosis failed: %s", e)
 
-        return "No obvious issues detected. Check standard output."
+        return "No obvious issues detected."
+
+    def _format_known_issues(self, issues: List[Dict[str, str]]) -> str:
+        descriptions = []
+        for issue in issues:
+            t = issue['type']
+            if t == 'OOM_KILLED':
+                descriptions.append("The application ran out of memory. Consider upgrading the plan.")
+            elif t == 'DB_CONNECTION_TIMEOUT':
+                descriptions.append("Database connection failed. Check your credentials or pool size.")
+            elif t == 'CRASH_LOOP':
+                descriptions.append("The application is crashing repeatedly on startup.")
+            else:
+                descriptions.append(f"Detected {t.replace('_', ' ').lower()} issue.")
+        return " ".join(descriptions)

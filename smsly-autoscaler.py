@@ -30,8 +30,12 @@ import os
 import signal
 import sys
 import logging
-from dataclasses import dataclass
+import collections
+import threading
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,6 +68,9 @@ CHECK_INTERVAL = int(os.environ.get('AUTOSCALER_INTERVAL', '30'))
 # Gunicorn worker memory (MB per worker)
 WORKER_MEMORY_MB = 120
 
+# API Port
+API_PORT = int(os.environ.get('AUTOSCALER_API_PORT', '9876'))
+
 # Container groups — maps container names to their roles
 SERVICE_GROUPS = {
     # smsly-helper
@@ -81,6 +88,12 @@ SERVICE_GROUPS = {
     'ignite-web': {'type': 'gunicorn', 'app': 'marketer', 'priority': 1, 'min_workers': 2, 'max_workers': 4},
     'ignite-celery': {'type': 'celery', 'app': 'marketer', 'priority': 1, 'min_workers': 1, 'max_workers': 4},
 }
+
+# State history for API
+HISTORY = collections.deque(maxlen=120)  # 1 hour at 30s intervals
+HISTORY_LOCK = threading.Lock()
+RUN_LOCK = threading.Lock()
+LATEST_STATE = {}
 
 
 @dataclass
@@ -104,6 +117,7 @@ class ScalingDecision:
     current_memory_mb: float
     target_memory_mb: float
     reason: str
+    timestamp: str = ""  # Added for API response
 
 
 # =============================================================================
@@ -251,6 +265,7 @@ def make_scaling_decisions(
     - Scale memory limits with worker count
     """
     decisions = []
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     # Calculate total demand
     total_demand = sum(demand_scores.values())
@@ -278,7 +293,8 @@ def make_scaling_decisions(
                 target_workers=1,
                 current_memory_mb=s.memory_limit_mb,
                 target_memory_mb=target_mem,
-                reason=f'demand={demand:.2f}'
+                reason=f'demand={demand:.2f}',
+                timestamp=now_iso
             ))
             continue
 
@@ -325,7 +341,8 @@ def make_scaling_decisions(
             target_workers=target_workers,
             current_memory_mb=s.memory_limit_mb,
             target_memory_mb=target_mem,
-            reason=f'demand={demand:.2f}, cpu={s.cpu_percent:.1f}%, mem={s.memory_percent:.1f}%'
+            reason=f'demand={demand:.2f}, cpu={s.cpu_percent:.1f}%, mem={s.memory_percent:.1f}%',
+            timestamp=now_iso
         ))
 
     return decisions
@@ -430,11 +447,198 @@ def _scale_celery(container: str, target_workers: int):
 
 
 # =============================================================================
+# HTTP API Server
+# =============================================================================
+
+class AutoscalerAPIHandler(BaseHTTPRequestHandler):
+    def _send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def do_GET(self):
+        if self.path == '/api/status':
+            with HISTORY_LOCK:
+                # Construct status from latest state
+                if not LATEST_STATE:
+                    self._send_json({'status': 'initializing'}, 200)
+                    return
+
+                # Enrich service data with current config
+                services_data = {}
+                stats = LATEST_STATE.get('stats', {})
+                decisions = LATEST_STATE.get('decisions', [])
+                demand_scores = LATEST_STATE.get('demand_scores', {})
+
+                for name, config in SERVICE_GROUPS.items():
+                    s = stats.get(name)
+                    if not s:
+                        continue
+
+                    # Find last decision for this service
+                    last_decision = next((d for d in decisions if d.container == name), None)
+
+                    services_data[name] = {
+                        **config,
+                        'status': 'running',
+                        'demand_score': demand_scores.get(name, 0.0),
+                        'cpu_percent': s.cpu_percent,
+                        'memory_mb': s.memory_mb,
+                        'memory_limit_mb': s.memory_limit_mb,
+                        'memory_percent': s.memory_percent,
+                        'net_rx_mb': s.net_rx_mb,
+                        'net_tx_mb': s.net_tx_mb,
+                        'pids': s.pids,
+                        'current_workers': last_decision.current_workers if last_decision else 0,
+                        'last_action': last_decision.action if last_decision else 'none',
+                        'last_action_at': last_decision.timestamp if last_decision else None
+                    }
+
+                total_used = sum(s.memory_mb for s in stats.values() if s.name in SERVICE_GROUPS)
+
+                response = {
+                    "status": "running",
+                    "uptime_seconds": int(time.time() - START_TIME),
+                    "check_interval": CHECK_INTERVAL,
+                    "last_check_at": LATEST_STATE.get('timestamp'),
+                    "budget": {
+                        "total_system_mb": TOTAL_SYSTEM_MB,
+                        "infra_reserve_mb": INFRA_RESERVE_MB,
+                        "app_budget_mb": APP_BUDGET_MB,
+                        "used_mb": total_used,
+                        "free_mb": max(0, APP_BUDGET_MB - total_used)
+                    },
+                    "services": services_data,
+                    "recent_decisions": [asdict(d) for d in decisions if d.action != 'none']
+                }
+                self._send_json(response)
+
+        elif self.path.startswith('/api/history'):
+            try:
+                # Parse query params
+                query = self.path.split('?')[1] if '?' in self.path else ''
+                params = dict(q.split('=') for q in query.split('&') if '=' in q)
+                minutes = int(params.get('minutes', 60))
+            except ValueError:
+                minutes = 60
+
+            limit = minutes * 2  # 2 checks per minute
+
+            with HISTORY_LOCK:
+                history_slice = list(HISTORY)[-limit:]
+
+                timestamps = [h['timestamp'] for h in history_slice]
+                services_ts = {}
+                budget_used = []
+                budget_free = []
+
+                for h in history_slice:
+                    stats = h['stats']
+                    scores = h['demand_scores']
+                    decs = h['decisions']
+
+                    # Aggregate budget
+                    used = sum(s.memory_mb for s in stats.values() if s.name in SERVICE_GROUPS)
+                    budget_used.append(used)
+                    budget_free.append(max(0, APP_BUDGET_MB - used))
+
+                    # Aggregate per-service
+                    for name in SERVICE_GROUPS:
+                        if name not in services_ts:
+                            services_ts[name] = {'cpu': [], 'memory_mb': [], 'demand_score': [], 'workers': []}
+
+                        s = stats.get(name)
+                        score = scores.get(name, 0.0)
+                        d = next((x for x in decs if x.container == name), None)
+
+                        services_ts[name]['cpu'].append(s.cpu_percent if s else 0)
+                        services_ts[name]['memory_mb'].append(s.memory_mb if s else 0)
+                        services_ts[name]['demand_score'].append(score)
+                        services_ts[name]['workers'].append(d.current_workers if d else 0)
+
+                response = {
+                    "timestamps": timestamps,
+                    "services": services_ts,
+                    "budget": {
+                        "used_mb": budget_used,
+                        "free_mb": budget_free
+                    }
+                }
+                self._send_json(response)
+
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path == '/api/config':
+            content_len = int(self.headers.get('Content-Length', 0))
+            post_body = self.rfile.read(content_len)
+            try:
+                new_config = json.loads(post_body)
+
+                # Update globals
+                global TOTAL_SYSTEM_MB, INFRA_RESERVE_MB, CHECK_INTERVAL, APP_BUDGET_MB
+                if 'total_system_mb' in new_config:
+                    TOTAL_SYSTEM_MB = int(new_config['total_system_mb'])
+                if 'infra_reserve_mb' in new_config:
+                    INFRA_RESERVE_MB = int(new_config['infra_reserve_mb'])
+                if 'check_interval' in new_config:
+                    CHECK_INTERVAL = int(new_config['check_interval'])
+
+                APP_BUDGET_MB = TOTAL_SYSTEM_MB - INFRA_RESERVE_MB
+
+                if 'services' in new_config:
+                    for name, cfg in new_config['services'].items():
+                        if name in SERVICE_GROUPS:
+                            SERVICE_GROUPS[name].update(cfg)
+
+                self._send_json({'status': 'updated'})
+            except Exception as e:
+                self._send_json({'error': str(e)}, 400)
+
+        elif self.path == '/api/trigger':
+            # Force run
+            try:
+                run_once()
+                self.do_GET() # Return status after run
+                # Hack: modify path so do_GET returns /api/status logic
+                self.path = '/api/status'
+                self.do_GET()
+            except Exception as e:
+                self._send_json({'error': str(e)}, 500)
+
+        else:
+            self.send_error(404)
+
+
+def run_api_server():
+    server_address = ('0.0.0.0', API_PORT)
+    httpd = HTTPServer(server_address, AutoscalerAPIHandler)
+    logger.info(f"API Server running on port {API_PORT}")
+    httpd.serve_forever()
+
+
+# =============================================================================
 # Main Loop
 # =============================================================================
 
+START_TIME = time.time()
+
 def run_once():
     """Single autoscaler iteration."""
+    # Prevent concurrent runs (e.g. main loop vs API trigger)
+    if not RUN_LOCK.acquire(blocking=False):
+        logger.warning("Autoscaler cycle already in progress — skipping")
+        return
+
+    try:
+        _run_once_implementation()
+    finally:
+        RUN_LOCK.release()
+
+
+def _run_once_implementation():
     stats = get_docker_stats()
     if not stats:
         logger.warning("No container stats available — skipping cycle")
@@ -444,7 +648,7 @@ def run_once():
     managed = {k: v for k, v in stats.items() if k in SERVICE_GROUPS}
     if not managed:
         logger.debug("No managed containers running — skipping cycle")
-        return
+        # Still record history even if empty
 
     # Calculate demand and make decisions
     demand_scores = calculate_demand_scores(stats)
@@ -458,10 +662,28 @@ def run_once():
     else:
         logger.debug("All containers balanced — no changes needed")
 
+    # Update history and state
+    now_iso = datetime.now(timezone.utc).isoformat()
+    state_snapshot = {
+        'timestamp': now_iso,
+        'stats': stats,
+        'demand_scores': demand_scores,
+        'decisions': decisions
+    }
+
+    with HISTORY_LOCK:
+        HISTORY.append(state_snapshot)
+        global LATEST_STATE
+        LATEST_STATE = state_snapshot
+
 
 def main():
     """Main loop — runs until killed."""
     logger.info(f"SMSLY Autoscaler started (budget={APP_BUDGET_MB}MB, interval={CHECK_INTERVAL}s)")
+
+    # Start API Server in background thread
+    api_thread = threading.Thread(target=run_api_server, daemon=True)
+    api_thread.start()
 
     # Handle graceful shutdown
     def shutdown(signum, frame):
