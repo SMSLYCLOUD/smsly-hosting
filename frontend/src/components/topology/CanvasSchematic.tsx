@@ -137,12 +137,12 @@ export function CanvasSchematic() {
           source: e.source,
           target: e.target,
           type: 'smoothstep',
-          animated: e.type === 'CONNECTS_TO',
+          animated: e.type === 'API' || e.type === 'HTTP_DEPENDENCY',
           label: e.data?.protocol,
-          style: { stroke: e.type === 'OWNS' ? '#52525b' : '#3b82f6', strokeWidth: 2 },
+          style: { stroke: e.type === 'STORAGE' ? '#52525b' : '#3b82f6', strokeWidth: 2 },
           markerEnd: {
               type: MarkerType.ArrowClosed,
-              color: e.type === 'OWNS' ? '#52525b' : '#3b82f6',
+              color: e.type === 'STORAGE' ? '#52525b' : '#3b82f6',
           },
         }));
 
