@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for AI provider update/clear behavior."""
 
 import os

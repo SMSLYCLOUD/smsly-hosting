@@ -35,6 +35,7 @@ class AWSAdapter(BaseCloudAdapter):
         except (ClientError, NoCredentialsError):
             return False
 
+        # pylint: disable=too-many-positional-arguments,arguments-differ
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
         """

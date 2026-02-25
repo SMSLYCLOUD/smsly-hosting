@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 from django.db.models import Sum, Count
 from django.utils import timezone
 from datetime import timedelta

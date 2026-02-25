@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Regression tests for deployment runtime domain env assembly."""
 
 from django.contrib.auth.models import User

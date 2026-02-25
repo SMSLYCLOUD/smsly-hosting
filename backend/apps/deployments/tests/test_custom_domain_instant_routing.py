@@ -1,3 +1,4 @@
+# pylint: disable=invalid-name
 """Tests for instant custom-domain routing without redeploy."""
 
 from types import SimpleNamespace
