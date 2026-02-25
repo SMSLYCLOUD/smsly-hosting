@@ -51,10 +51,15 @@ def _build_service_domain_block(domain: str, upstream_host: str) -> str:
     return "\n".join(lines)
 
 
-def _get_service_domain_blocks() -> list:
+def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     """
     Query all services and generate Caddy blocks for routable app domains.
-    Includes both service.public_domain and service.custom_domains.
+
+    Includes service.custom_domains (external domains needing their own blocks)
+    but SKIPS service.public_domain entries that are subdomains of the platform
+    wildcard (e.g. *.pcloud.linadeluxe.com) because those are already covered
+    by the wildcard block.  Adding duplicate explicit blocks for them triggers
+    conflicting ACME cert provisioning that breaks Caddy during reload.
     """
     blocks = []
     seen = set()
@@ -73,9 +78,22 @@ def _get_service_domain_blocks() -> list:
                         service.id,
                     )
 
+            # Skip public_domain if it's covered by the wildcard block.
+            # e.g. "abc.pcloud.linadeluxe.com" is already routed by
+            # "*.pcloud.linadeluxe.com" — adding an explicit block would
+            # trigger a separate HTTP-01 cert and break existing SSL.
             if public_domain and public_domain not in seen:
-                seen.add(public_domain)
-                blocks.append(_build_service_domain_block(public_domain, public_domain))
+                if wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
+                    logger.debug(
+                        "Skipping %s — covered by wildcard *.%s",
+                        public_domain,
+                        wildcard_domain,
+                    )
+                else:
+                    seen.add(public_domain)
+                    blocks.append(
+                        _build_service_domain_block(public_domain, public_domain)
+                    )
 
             for domain in (service.custom_domains or []):
                 value = domain.strip() if isinstance(domain, str) else ""
@@ -91,6 +109,14 @@ def _get_service_domain_blocks() -> list:
                     )
                     continue
                 if value in seen:
+                    continue
+                # Also skip custom domains covered by the wildcard
+                if wildcard_domain and value.endswith(f".{wildcard_domain}"):
+                    logger.debug(
+                        "Skipping custom domain %s — covered by wildcard *.%s",
+                        value,
+                        wildcard_domain,
+                    )
                     continue
                 seen.add(value)
                 target_host = public_domain or value
@@ -133,46 +159,34 @@ def generate_caddyfile(config) -> str:
 }}"""
         )
 
-        # Wildcard subdomains for deployed services
+        # Wildcard subdomains for deployed services.
+        # Use {env.CLOUDFLARE_API_TOKEN} (Caddy env syntax) instead of the
+        # raw token to match install.sh and avoid embedding secrets in files.
         if config.wildcard_subdomains and cloudflare_token:
             sections.append(
                 f"""*.{domain} {{
     tls {{
-        dns cloudflare {cloudflare_token}
+        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}
     }}
     reverse_proxy localhost:8081
 }}"""
             )
 
-    elif domain and not config.use_ssl:
-        # Domain without SSL (HTTP only)
-        sections.append(
-            f"""http://{domain} {{
-    reverse_proxy localhost:8090
-    encode gzip
-}}"""
-        )
-
-    else:
-        # IP-only mode - plain HTTP
-        sections.append(
-            """:80 {
+    # Always include :80 catch-all so the IP always works.
+    # In SSL mode this is a fallback; in IP/HTTP mode this is the only block.
+    # Never generate domain-specific HTTP blocks — they break IP access
+    # because Caddy won't match requests by IP to a domain-named block.
+    sections.append(
+        """:80 {
     reverse_proxy localhost:8090
 }"""
-        )
+    )
 
-    # Always add IP fallback if we have a domain (so IP still works)
-    if domain and config.use_ssl:
-        sections.append(
-            """:80 {
-    reverse_proxy localhost:8090
-}"""
-        )
-
-    # Per-service domains (public + custom) routed to Traefik.
-    # Do not force DNS challenge here; many custom domains are not in our
-    # Cloudflare account, so HTTP-01/TLS-ALPN must remain available.
-    service_blocks = _get_service_domain_blocks()
+    # Per-service custom domains routed to Traefik.
+    # Skip subdomains already covered by the *.domain wildcard.
+    # Custom domains (external) get their own blocks for HTTP-01 SSL.
+    wildcard_base = domain if (config.use_ssl and config.wildcard_subdomains and cloudflare_token) else ""
+    service_blocks = _get_service_domain_blocks(wildcard_domain=wildcard_base)
     sections.extend(service_blocks)
 
     header = "# CloudNeuron Caddyfile - Auto-generated by Settings UI\n"
@@ -180,10 +194,14 @@ def generate_caddyfile(config) -> str:
     return header + "\n\n".join(sections) + "\n"
 
 
-def apply_caddyfile(content: str) -> dict:
+def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
     """
     Write Caddyfile to the shared volume and create a reload flag.
     The host-side watcher script picks up the flag and reloads Caddy.
+
+    If cloudflare_token is provided, also write it to a token file so
+    the host-side watcher can create the systemd environment override.
+    This enables full SSL setup from the web UI without SSH access.
 
     Returns a status dict.
     """
@@ -194,6 +212,17 @@ def apply_caddyfile(content: str) -> dict:
 
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
+
+        # Write Cloudflare token to shared volume for the host watcher
+        # to sync into Caddy's systemd environment override.
+        token_path = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
+        if cloudflare_token:
+            with open(token_path, "w", encoding="utf-8") as handle:
+                handle.write(cloudflare_token)
+            os.chmod(token_path, 0o600)
+        elif os.path.exists(token_path):
+            # Clean up stale token file if no token provided
+            os.remove(token_path)
 
         # Create reload flag - the host watcher will pick this up
         with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as handle:
