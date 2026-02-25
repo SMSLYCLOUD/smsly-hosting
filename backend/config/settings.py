@@ -79,7 +79,6 @@ except Exception:
 
 def _patch_allowed_hosts_from_db():
     """Called from AppConfig.ready() to add PlatformConfig.domain."""
-    import config.settings as _settings_module
     try:
         from apps.deployments.models import PlatformConfig
         pc = PlatformConfig.load()
@@ -195,7 +194,10 @@ INSTALLED_APPS = [
     'apps.intelligence',
     'apps.notifications',
     'apps.addons',
+    'apps.autoscaler',
 ]
+
+AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio
+  ExternalLink, Radio, Scaling
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -50,6 +50,7 @@ export function Sidebar() {
 
   const infraRoutes = [
     { label: "Servers",      icon: Server, href: "/servers" },
+    { label: "Autoscaler",   icon: Scaling, href: "/autoscaler" },
     { label: "Tunnels",      icon: Radio,  href: "/tunnels" },
     { label: "Ecosystem",    icon: Globe,  href: "/ecosystem" },
     { label: "Intelligence", icon: Brain,  href: "/intelligence" },
