@@ -246,9 +246,14 @@ export function Navbar() {
                 </AnimatePresence>
              </div>
           ) : (
-            <Link href="/login" prefetch={false}>
-                <Button variant="ghost" size="sm">Login</Button>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href="/login" prefetch={false}>
+                  <Button variant="ghost" size="sm">Login</Button>
+              </Link>
+              <Link href="/register" prefetch={false}>
+                  <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold shadow-sm shadow-emerald-500/20 hover:from-emerald-400 hover:to-teal-500">Sign Up</Button>
+              </Link>
+            </div>
           )}
         </div>
 
@@ -336,9 +341,14 @@ export function Navbar() {
                                 <LogOut className="mr-2 h-4 w-4" /> Log out
                              </Button>
                         ) : (
-                            <Link href="/login" prefetch={false} onClick={() => setIsMenuOpen(false)}>
-                                <Button variant="outline" className="w-full">Login</Button>
-                            </Link>
+                            <div className="flex flex-col gap-2">
+                                <Link href="/register" prefetch={false} onClick={() => setIsMenuOpen(false)}>
+                                    <Button className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold h-11">Create Account</Button>
+                                </Link>
+                                <Link href="/login" prefetch={false} onClick={() => setIsMenuOpen(false)}>
+                                    <Button variant="outline" className="w-full">Login</Button>
+                                </Link>
+                            </div>
                         )}
                     </div>
                 </div>
