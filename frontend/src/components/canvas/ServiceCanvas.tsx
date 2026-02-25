@@ -345,7 +345,8 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
       initialDistanceRef.current = dist;
 
       fg.cameraPosition({ x: dist * 0.6, y: dist * 0.4, z: dist }, { x: 0, y: 0, z: 0 }, 1500);
-      fg.d3Force('charge')?.strength(-250);
+      fg.d3Force('charge')?.strength(-800);
+      fg.d3Force('link')?.distance(200);
       fg.d3ReheatSimulation?.();
 
       // Auto-orbit camera

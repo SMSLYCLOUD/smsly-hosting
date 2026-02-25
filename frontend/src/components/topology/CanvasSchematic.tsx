@@ -80,7 +80,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
 
-  dagreGraph.setGraph({ rankdir: direction });
+  dagreGraph.setGraph({ rankdir: direction, nodesep: 60, ranksep: 80 });
 
   nodes.forEach((node) => {
     dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
@@ -122,9 +122,10 @@ export function CanvasSchematic() {
       try {
         const initialNodes: any[] = data.nodes.map((n: TopologyNode) => ({
           id: n.id,
-          type: 'custom', // custom node type
+          type: 'custom',
           data: {
               ...(n.data || {}),
+              label: n.data?.name || n.id,
               originalType: n.type,
               originalId: n.id,
           },
