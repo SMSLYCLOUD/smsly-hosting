@@ -6,11 +6,18 @@ import {
   Brain, Cpu, Zap, Shield, Eye, Activity, BarChart3, Sparkles,
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
-  Target, Lightbulb, DollarSign, Clock, ArrowUpRight
+  Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { aiApi, type AIProvidersResponse } from '@/lib/api';
 import api from '@/lib/api';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { useToast } from '@/components/ui/use-toast';
+import { cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -20,6 +27,16 @@ interface DeploymentInsight {
   status: string;
   ai_diagnosis: string | null;
   created_at: string;
+}
+
+interface Anomaly {
+  id: string;
+  service_name: string;
+  issue_type: string;
+  severity: string;
+  detected_at: string;
+  auto_fixed: boolean;
+  fix_result: string;
 }
 
 const MODE_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode; description: string }> = {
@@ -33,21 +50,38 @@ const MODE_CONFIG: Record<string, { label: string; color: string; icon: React.Re
 export default function IntelligencePage() {
   const [providers, setProviders] = useState<AIProvidersResponse | null>(null);
   const [deployments, setDeployments] = useState<DeploymentInsight[]>([]);
+  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
+  const [report, setReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatResponse, setChatResponse] = useState<string | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatProvider, setChatProvider] = useState<string | null>(null);
+  const { toast } = useToast();
+
+  // Config State
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configData, setConfigData] = useState<Record<string, string>>({});
+
+  // Cost Estimate State
+  const [costConfig, setCostConfig] = useState({ cpu: 1, ram: 512 });
+  const [costEstimates, setCostEstimates] = useState<any>(null);
+  const [costAnalysis, setCostAnalysis] = useState<string | null>(null);
+  const [costLoading, setCostLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const [prov, deps] = await Promise.all([
+      const [prov, deps, anoms, rep] = await Promise.all([
         aiApi.getProviders(true),
         api.get('/deployments/', { params: { page_size: 20 } }).then(r => r.data?.results || r.data || []).catch(() => []),
+        aiApi.getAnomalies().then(r => r.anomalies).catch(() => []),
+        aiApi.getReport().catch(() => null)
       ]);
       setProviders(prov);
-      // Filter deployments that have AI diagnosis or are failed
+      setAnomalies(anoms);
+      setReport(rep);
+
       const insights = (deps as DeploymentInsight[]).filter(
         d => d.ai_diagnosis || d.status === 'FAILED'
       ).slice(0, 10);
@@ -62,7 +96,7 @@ export default function IntelligencePage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -86,6 +120,36 @@ export default function IntelligencePage() {
       setChatResponse(`Error: ${err.message || 'AI request failed'}`);
     } finally {
       setChatLoading(false);
+    }
+  };
+
+  const handleUpdateProviders = async () => {
+    try {
+      await aiApi.updateProviders(configData);
+      toast({ title: "Providers Updated", description: "AI settings saved successfully." });
+      setConfigOpen(false);
+      setConfigData({});
+      fetchData();
+    } catch (err) {
+      toast({ title: "Update Failed", description: "Could not save AI settings.", variant: "destructive" });
+    }
+  };
+
+  const handleCostAnalysis = async () => {
+    setCostLoading(true);
+    try {
+      const res = await aiApi.costEstimate({
+        cpu_cores: costConfig.cpu,
+        memory_mb: costConfig.ram,
+        stack: "Generic",
+        provider: "Comparison"
+      });
+      setCostEstimates(res.estimates);
+      setCostAnalysis(res.ai_recommendations);
+    } catch (err) {
+      toast({ title: "Analysis Failed", variant: "destructive" });
+    } finally {
+      setCostLoading(false);
     }
   };
 
@@ -122,27 +186,64 @@ export default function IntelligencePage() {
                 Intelligence
               </h1>
               <p className="text-muted-foreground mt-1">
-                AI operations dashboard — monitor providers, insights, and platform intelligence
+                AI operations dashboard — autonomous DevOps brain
               </p>
             </div>
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="px-4 py-2 rounded-lg border border-border text-sm flex items-center gap-2 hover:bg-muted/50 transition-colors"
-            >
-              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              Refresh
-            </button>
+            <div className="flex gap-2">
+               <Button variant="outline" onClick={() => setConfigOpen(!configOpen)}>
+                 <Settings className="w-4 h-4 mr-2" /> Configure
+               </Button>
+               <Button onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon">
+                 <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
+               </Button>
+            </div>
           </div>
+
+          {/* ── Configuration Panel ────────────────────────────────── */}
+          <AnimatePresence>
+            {configOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <Card className="bg-muted/20 border-purple-500/20 mb-8">
+                  <CardContent className="p-6">
+                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                       <Shield className="text-purple-500" size={18} /> Configure AI Providers
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                       {["openai", "grok", "gemini", "claude"].map(provider => (
+                         <div key={provider} className="space-y-2">
+                           <label className="text-sm font-medium uppercase text-muted-foreground">{provider} API Key</label>
+                           <Input
+                             type="password"
+                             placeholder={`Enter ${provider} key...`}
+                             onChange={e => setConfigData({...configData, [`${provider}_api_key`]: e.target.value})}
+                           />
+                           <Input
+                             placeholder={`Model (default)`}
+                             className="text-xs"
+                             onChange={e => setConfigData({...configData, [`${provider}_model`]: e.target.value})}
+                           />
+                         </div>
+                       ))}
+                    </div>
+                    <div className="flex justify-end mt-4">
+                      <Button onClick={handleUpdateProviders} className="bg-purple-600 hover:bg-purple-700">
+                        <Save className="w-4 h-4 mr-2" /> Save Configuration
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* ── Stats Row ──────────────────────────────────────────── */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.05 }}
-              className="bg-card border border-border rounded-xl p-4"
-            >
+            <motion.div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
                   <CircuitBoard className="text-purple-500" size={18} />
@@ -153,227 +254,253 @@ export default function IntelligencePage() {
               <p className="text-xs text-muted-foreground mt-0.5">{modeConfig.description}</p>
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="bg-card border border-border rounded-xl p-4"
-            >
+            <motion.div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
                   <Zap className="text-emerald-500" size={18} />
                 </div>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Providers</span>
+                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Active Providers</span>
               </div>
               <p className="text-lg font-bold">{providers?.active_count || 0} <span className="text-sm text-muted-foreground font-normal">/ {providers?.total_available || 0}</span></p>
-              <p className="text-xs text-muted-foreground mt-0.5">{activeProviders.length} configured and ready</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Ready for consensus</p>
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15 }}
-              className="bg-card border border-border rounded-xl p-4"
-            >
+            <motion.div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
-                  <Lightbulb className="text-amber-500" size={18} />
+                  <AlertTriangle className="text-amber-500" size={18} />
                 </div>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Diagnoses</span>
+                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Anomalies</span>
               </div>
-              <p className="text-lg font-bold">{diagnosedDeploys.length}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">AI-diagnosed deployments</p>
+              <p className="text-lg font-bold">{anomalies.length}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Detected in last 24h</p>
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="bg-card border border-border rounded-xl p-4"
-            >
+            <motion.div className="bg-card border border-border rounded-xl p-4">
               <div className="flex items-center gap-3 mb-2">
-                <div className="w-9 h-9 rounded-lg bg-red-500/10 flex items-center justify-center">
-                  <AlertTriangle className="text-red-500" size={18} />
+                <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                  <Target className="text-blue-500" size={18} />
                 </div>
-                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Failures</span>
+                <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Success Rate</span>
               </div>
-              <p className="text-lg font-bold">{failedDeploys.length}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Recent failed deploys</p>
+              <p className="text-lg font-bold">{report?.success_rate || "N/A"}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{report?.total_deployments || 0} deployments today</p>
             </motion.div>
           </div>
 
-          {/* ── Main Grid ──────────────────────────────────────────── */}
-          <div className="grid grid-cols-3 gap-6">
+          <Tabs defaultValue="dashboard" className="w-full">
+            <TabsList className="grid w-full grid-cols-4 bg-muted/20">
+              <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+              <TabsTrigger value="anomalies">Anomalies</TabsTrigger>
+              <TabsTrigger value="cost">Cost Intelligence</TabsTrigger>
+              <TabsTrigger value="chat">AI Chat</TabsTrigger>
+            </TabsList>
 
-            {/* AI Providers */}
-            <div className="col-span-2 bg-card border border-border rounded-xl p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-lg flex items-center gap-2">
-                  <Cpu size={18} className="text-purple-500" />
-                  AI Providers
-                </h2>
-                <a href="/settings/ai" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition">
-                  Configure <ArrowUpRight size={12} />
-                </a>
-              </div>
-
-              {providers?.providers?.length ? (
-                <div className="space-y-3">
-                  {providers.providers.map(prov => (
-                    <div key={prov.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${prov.configured ? 'bg-emerald-500/10' : 'bg-zinc-500/10'}`}>
-                        {prov.configured
-                          ? <CheckCircle2 size={16} className="text-emerald-500" />
-                          : <XCircle size={16} className="text-zinc-500" />
-                        }
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-sm">{prov.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {prov.configured ? `Model: ${prov.model}` : 'Not configured'}
-                        </p>
-                      </div>
-                      {prov.balance && (
-                        <div className="text-right">
-                          <p className="text-sm font-bold flex items-center gap-1">
-                            <DollarSign size={12} className="text-emerald-500" />
-                            {prov.balance.balance}
-                          </p>
-                          <p className="text-[10px] text-muted-foreground">{prov.balance.currency}</p>
+            {/* ── Dashboard Tab ──────────────────────────────────────── */}
+            <TabsContent value="dashboard" className="space-y-6 mt-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Daily Report */}
+                <Card>
+                   <CardHeader>
+                     <CardTitle className="flex items-center gap-2">
+                       <BarChart3 className="text-emerald-500" /> Daily Intelligence Report
+                     </CardTitle>
+                   </CardHeader>
+                   <CardContent>
+                      {report ? (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                             <div className="p-3 bg-muted/30 rounded-lg">
+                               <div className="text-sm text-muted-foreground">Total Deploys</div>
+                               <div className="text-2xl font-bold">{report.total_deployments}</div>
+                             </div>
+                             <div className="p-3 bg-muted/30 rounded-lg">
+                               <div className="text-sm text-muted-foreground">Failed</div>
+                               <div className="text-2xl font-bold text-red-500">{report.failed_deployments}</div>
+                             </div>
+                          </div>
+                          <div className="p-3 bg-muted/30 rounded-lg">
+                             <div className="text-sm text-muted-foreground mb-1">Anomalies Detected</div>
+                             <div className="text-2xl font-bold text-amber-500">{report.anomalies_detected}</div>
+                          </div>
+                          <div className="text-xs text-muted-foreground text-right">
+                            Generated at: {new Date(report.generated_at).toLocaleString()}
+                          </div>
                         </div>
+                      ) : (
+                        <div className="text-center py-8 text-muted-foreground">No report generated for today yet.</div>
                       )}
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${prov.configured ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
-                        {prov.configured ? 'Active' : 'Inactive'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No AI providers detected.</p>
-              )}
-            </div>
+                   </CardContent>
+                </Card>
 
-            {/* AI Mode Card */}
-            <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-              <h2 className="font-bold text-lg flex items-center gap-2">
-                <Gauge size={18} className="text-blue-500" />
-                AI Mode
-              </h2>
-              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${modeConfig.color} text-sm font-bold`}>
-                {modeConfig.icon}
-                {modeConfig.label}
+                {/* Recent Diagnoses */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Brain className="text-purple-500" /> Recent AI Diagnoses
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                     {diagnosedDeploys.length === 0 && <div className="text-center py-4 text-muted-foreground">No diagnoses found.</div>}
+                     {diagnosedDeploys.slice(0, 3).map(dep => (
+                       <div key={dep.id} className="p-3 bg-muted/20 rounded-lg border-l-2 border-purple-500">
+                          <div className="font-bold text-sm mb-1">{dep.service_name}</div>
+                          <div className="text-xs text-muted-foreground line-clamp-3">{dep.ai_diagnosis}</div>
+                       </div>
+                     ))}
+                  </CardContent>
+                </Card>
               </div>
-              <p className="text-sm text-muted-foreground">{modeConfig.description}</p>
+            </TabsContent>
 
-              <div className="border-t border-border pt-3 space-y-2">
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Capabilities</h3>
-                <div className="space-y-1.5">
-                  {[
-                    { icon: <Eye size={14} />, label: 'Build failure diagnosis', active: true },
-                    { icon: <Target size={14} />, label: 'Repo analysis & stack detection', active: true },
-                    { icon: <Sparkles size={14} />, label: 'Ecosystem AI scanning', active: true },
-                    { icon: <BarChart3 size={14} />, label: 'Deployment recommendations', active: providers?.active_count ? true : false },
-                    { icon: <Flame size={14} />, label: 'Multi-provider consensus', active: providers?.mode === 'senate_committee' },
-                  ].map((cap, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
-                      <span className={cap.active ? 'text-emerald-500' : 'text-zinc-600'}>{cap.icon}</span>
-                      <span className={cap.active ? '' : 'text-muted-foreground line-through'}>{cap.label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
+            {/* ── Anomalies Tab ──────────────────────────────────────── */}
+            <TabsContent value="anomalies" className="mt-6">
+              <Card>
+                <CardHeader>
+                   <CardTitle>Detected Anomalies & Auto-Remediation</CardTitle>
+                   <CardDescription>History of AI-detected issues and autonomous fixes</CardDescription>
+                </CardHeader>
+                <CardContent>
+                   <div className="space-y-2">
+                     {anomalies.length === 0 && <div className="text-center py-8 text-muted-foreground">No anomalies detected recently.</div>}
+                     {anomalies.map(anom => (
+                       <div key={anom.id} className="flex items-center justify-between p-4 bg-muted/20 rounded-lg border border-border/50">
+                          <div className="flex items-center gap-4">
+                             <div className={cn(
+                               "p-2 rounded-lg",
+                               anom.severity === 'CRITICAL' ? "bg-red-500/10 text-red-500" : "bg-amber-500/10 text-amber-500"
+                             )}>
+                               <AlertTriangle size={20} />
+                             </div>
+                             <div>
+                               <div className="font-bold">{anom.service_name}</div>
+                               <div className="text-xs text-muted-foreground">{anom.issue_type} • {new Date(anom.detected_at).toLocaleString()}</div>
+                             </div>
+                          </div>
+                          <div className="text-right">
+                             {anom.auto_fixed ? (
+                               <div className="flex items-center gap-2 text-emerald-500 text-sm font-bold">
+                                 <CheckCircle2 size={16} /> Auto-Fixed
+                               </div>
+                             ) : (
+                               <div className="flex items-center gap-2 text-zinc-500 text-sm font-bold">
+                                 <XCircle size={16} /> Reported
+                               </div>
+                             )}
+                             <div className="text-[10px] text-muted-foreground mt-1 max-w-[200px] truncate">
+                               {anom.fix_result}
+                             </div>
+                          </div>
+                       </div>
+                     ))}
+                   </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
 
-          {/* ── AI Chat ──────────────────────────────────────────── */}
-          <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-            <h2 className="font-bold text-lg flex items-center gap-2">
-              <MessageSquare size={18} className="text-cyan-500" />
-              Ask the AI
-              <span className="text-xs text-muted-foreground font-normal ml-1">— infrastructure & deployment questions</span>
-            </h2>
+            {/* ── Cost Tab ───────────────────────────────────────────── */}
+            <TabsContent value="cost" className="mt-6">
+               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                 <Card>
+                    <CardHeader>
+                      <CardTitle>Cost Estimator</CardTitle>
+                      <CardDescription>Compare monthly costs across providers</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                       <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-xs font-bold uppercase text-muted-foreground">CPU Cores</label>
+                            <Input
+                              type="number" min={0.1} step={0.1}
+                              value={costConfig.cpu}
+                              onChange={e => setCostConfig({...costConfig, cpu: parseFloat(e.target.value)})}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs font-bold uppercase text-muted-foreground">RAM (MB)</label>
+                            <Input
+                              type="number" min={128} step={128}
+                              value={costConfig.ram}
+                              onChange={e => setCostConfig({...costConfig, ram: parseInt(e.target.value)})}
+                            />
+                          </div>
+                       </div>
+                       <Button onClick={handleCostAnalysis} disabled={costLoading} className="w-full">
+                         {costLoading ? <Loader2 className="animate-spin mr-2" /> : <DollarSign className="mr-2 h-4 w-4" />}
+                         Analyze Costs
+                       </Button>
+                    </CardContent>
+                 </Card>
 
-            <div className="flex gap-3">
-              <input
-                value={chatInput}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleChat()}
-                placeholder="How do I set up a reverse proxy for my Django app?"
-                className="flex-1 px-4 py-2.5 rounded-lg bg-background border border-border text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/30"
-              />
-              <button
-                onClick={handleChat}
-                disabled={chatLoading || !chatInput.trim()}
-                className="px-5 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold flex items-center gap-2 shadow-lg shadow-purple-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {chatLoading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                Ask
-              </button>
-            </div>
+                 <Card>
+                    <CardHeader>
+                      <CardTitle>AI Analysis</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                       {costAnalysis ? (
+                         <div className="space-y-4">
+                           <div className="text-sm bg-muted/30 p-4 rounded-lg whitespace-pre-wrap leading-relaxed border-l-2 border-emerald-500">
+                             {costAnalysis}
+                           </div>
+                           {costEstimates && (
+                             <div className="space-y-2">
+                                {Object.entries(costEstimates).map(([prov, cost]) => (
+                                  <div key={prov} className="flex justify-between items-center text-sm p-2 rounded bg-muted/20">
+                                    <span className="font-bold">{prov}</span>
+                                    <span>${cost as number}/mo</span>
+                                  </div>
+                                ))}
+                             </div>
+                           )}
+                         </div>
+                       ) : (
+                         <div className="text-center py-12 text-muted-foreground">Run analysis to see AI recommendations.</div>
+                       )}
+                    </CardContent>
+                 </Card>
+               </div>
+            </TabsContent>
 
-            <AnimatePresence>
-              {chatResponse && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="p-4 rounded-lg bg-muted/30 border border-border/50"
-                >
-                  <div className="flex items-center gap-2 mb-2">
-                    <Bot size={14} className="text-purple-500" />
-                    <span className="text-xs font-semibold text-muted-foreground">
-                      AI Response {chatProvider && `(${chatProvider})`}
-                    </span>
-                  </div>
-                  <div className="text-sm whitespace-pre-wrap leading-relaxed">{chatResponse}</div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+            {/* ── Chat Tab ───────────────────────────────────────────── */}
+            <TabsContent value="chat" className="mt-6">
+               <Card className="h-[500px] flex flex-col">
+                  <CardHeader>
+                     <CardTitle className="flex items-center gap-2">
+                       <MessageSquare className="text-cyan-500" /> AI Ops Chat
+                     </CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex-1 flex flex-col gap-4">
+                     <div className="flex-1 overflow-y-auto p-4 bg-muted/10 rounded-lg space-y-4">
+                        {chatResponse && (
+                          <div className="flex gap-3">
+                             <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
+                               <Bot size={16} className="text-purple-500" />
+                             </div>
+                             <div className="bg-muted/30 p-4 rounded-lg rounded-tl-none border border-border/50 text-sm leading-relaxed whitespace-pre-wrap">
+                               <div className="text-xs font-bold text-muted-foreground mb-1">{chatProvider || 'AI'}</div>
+                               {chatResponse}
+                             </div>
+                          </div>
+                        )}
+                        {!chatResponse && <div className="text-center text-muted-foreground mt-20">Ask me anything about your infrastructure.</div>}
+                     </div>
 
-          {/* ── Deployment Insights ──────────────────────────────── */}
-          {deployments.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-              <h2 className="font-bold text-lg flex items-center gap-2">
-                <Activity size={18} className="text-amber-500" />
-                Deployment Insights
-                <span className="text-xs text-muted-foreground font-normal ml-1">— recent AI diagnoses</span>
-              </h2>
+                     <div className="flex gap-2">
+                        <Input
+                          value={chatInput}
+                          onChange={e => setChatInput(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && handleChat()}
+                          placeholder="Ask about logs, costs, or configuration..."
+                        />
+                        <Button onClick={handleChat} disabled={chatLoading}>
+                          {chatLoading ? <Loader2 className="animate-spin" /> : <Send size={16} />}
+                        </Button>
+                     </div>
+                  </CardContent>
+               </Card>
+            </TabsContent>
 
-              <div className="space-y-3">
-                {deployments.map(dep => (
-                  <div key={dep.id} className="p-3 rounded-lg bg-muted/30 border border-border/50">
-                    <div className="flex items-center gap-2 mb-1">
-                      {dep.status === 'FAILED'
-                        ? <XCircle size={14} className="text-red-500" />
-                        : <CheckCircle2 size={14} className="text-emerald-500" />
-                      }
-                      <span className="font-semibold text-sm">{dep.service_name || 'Unknown Service'}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                        dep.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
-                        dep.status === 'SUCCESS' ? 'bg-emerald-500/10 text-emerald-500' :
-                        'bg-yellow-500/10 text-yellow-500'
-                      }`}>
-                        {dep.status}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground ml-auto flex items-center gap-1">
-                        <Clock size={10} />
-                        {new Date(dep.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                    {dep.ai_diagnosis && (
-                      <div className="mt-2 pl-5 text-xs text-muted-foreground border-l-2 border-purple-500/30">
-                        <span className="flex items-center gap-1 mb-0.5 text-purple-400 font-semibold">
-                          <Brain size={10} /> AI Diagnosis
-                        </span>
-                        {dep.ai_diagnosis}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          </Tabs>
 
         </motion.div>
       </div>
