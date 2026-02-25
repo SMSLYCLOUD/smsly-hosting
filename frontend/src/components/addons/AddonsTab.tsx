@@ -369,6 +369,42 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 </div>
                                             </div>
                                         )}
+                                        {/* Connection Variables */}
+                                        <div>
+                                            <h5 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Connection Variables</h5>
+                                            <div className="space-y-1.5">
+                                                {(() => {
+                                                    const addonType = addon.addon_type.toLowerCase();
+                                                    const defaultPort = addonType === 'postgres' ? '5432' : addonType === 'mysql' || addonType === 'mariadb' ? '3306' : addonType === 'redis' || addonType === 'memcached' ? '6379' : addonType === 'mongodb' ? '27017' : addonType === 'elasticsearch' ? '9200' : addonType === 'rabbitmq' ? '5672' : addonType === 'clickhouse' ? '8123' : addonType === 'minio' ? '9000' : addonType === 'qdrant' ? '6333' : '5432';
+                                                    const isKV = ['redis', 'memcached'].includes(addonType);
+                                                    const vars = [
+                                                        { key: `${addon.addon_type}_HOST`, value: addon.name },
+                                                        { key: `${addon.addon_type}_PORT`, value: defaultPort },
+                                                        ...(!isKV ? [
+                                                            { key: `${addon.addon_type}_USER`, value: addon.name.replace(/-/g, '_') },
+                                                            { key: `${addon.addon_type}_PASSWORD`, value: '••••••••' },
+                                                            { key: `${addon.addon_type}_DB`, value: addon.name.replace(/-/g, '_') },
+                                                        ] : []),
+                                                        { key: `${addon.addon_type}_URL`, value: `${addonType}://${addon.name.replace(/-/g, '_')}:****@${addon.name}:${defaultPort}/${addon.name.replace(/-/g, '_')}` },
+                                                    ];
+                                                    return vars.map(v => (
+                                                        <div key={v.key} className="flex items-center justify-between p-2 bg-background rounded-lg border border-border group">
+                                                            <div className="flex-1 min-w-0">
+                                                                <span className="text-[10px] text-muted-foreground font-mono">{v.key}</span>
+                                                                <p className="text-xs text-foreground font-mono truncate">{v.value}</p>
+                                                            </div>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(v.value); }}
+                                                                className="ml-2 p-1.5 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-all"
+                                                                title="Copy"
+                                                            >
+                                                                <Layers size={12} />
+                                                            </button>
+                                                        </div>
+                                                    ));
+                                                })()}
+                                            </div>
+                                        </div>
 
                                         {/* Backups */}
                                         <div>

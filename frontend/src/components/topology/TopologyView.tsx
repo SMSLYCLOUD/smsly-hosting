@@ -54,6 +54,19 @@ const STATUS_COLORS: Record<string, string> = {
   REVIEW: '#a78bfa',
 };
 
+/* ── Deploy-type accent colors (card border + glow) ── */
+const DEPLOY_TYPE_COLORS: Record<string, string> = {
+  GIT: '#3b82f6',       // Blue
+  DOCKER: '#06b6d4',    // Cyan
+  TEMPLATE: '#a78bfa',  // Purple
+};
+
+const EDGE_COLORS: Record<string, string> = {
+  repo: '#3b82f6',     // Blue
+  domain: '#10b981',   // Green
+  addon: '#a78bfa',    // Purple
+};
+
 const DEPLOY_ICONS: Record<string, string> = {
   GIT: '⎇',
   DOCKER: '🐳',
@@ -63,6 +76,10 @@ const DEPLOY_ICONS: Record<string, string> = {
 /* ── Helper: status dot color ── */
 function statusColor(s: string): string {
   return STATUS_COLORS[s] || '#6366f1';
+}
+
+function deployAccent(dt: string): string {
+  return DEPLOY_TYPE_COLORS[dt] || '#6366f1';
 }
 
 /* ── Layout: grid with 2-pass grouping ── */
@@ -189,13 +206,19 @@ function drawEdge(
     }
   }
 
-  // Railway-style right-angle connection
+  const edgeColor = EDGE_COLORS[type] || '#6366f1';
   const midX = (x1 + x2) / 2;
 
   ctx.save();
-  ctx.strokeStyle = type === 'repo' ? '#3b82f640' : type === 'domain' ? '#10b98140' : '#6366f140';
-  ctx.lineWidth = 2;
+  // Much more visible lines: 70% opacity instead of 25%
+  ctx.strokeStyle = edgeColor + 'b3';
+  ctx.lineWidth = 2.5;
   ctx.setLineDash(type === 'domain' ? [6, 4] : []);
+
+  // Glow effect for connections
+  ctx.shadowColor = edgeColor + '60';
+  ctx.shadowBlur = 6;
+
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(midX, y1);
@@ -203,13 +226,24 @@ function drawEdge(
   ctx.lineTo(x2, y2);
   ctx.stroke();
 
-  // Connection dot
-  ctx.fillStyle = ctx.strokeStyle.replace('40', 'cc');
+  ctx.shadowBlur = 0;
+
+  // Colored connection dots (larger, matching edge color)
+  ctx.fillStyle = edgeColor;
   ctx.beginPath();
-  ctx.arc(x1, y1, 3, 0, Math.PI * 2);
+  ctx.arc(x1, y1, 4, 0, Math.PI * 2);
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(x2, y2, 3, 0, Math.PI * 2);
+  ctx.arc(x2, y2, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Corner dot at the bend point
+  ctx.fillStyle = edgeColor + '80';
+  ctx.beginPath();
+  ctx.arc(midX, y1, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(midX, y2, 2.5, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
@@ -217,45 +251,62 @@ function drawEdge(
 
 function drawNode(ctx: CanvasRenderingContext2D, node: TopoNode, hovered: boolean) {
   const { x, y, w, h, name, status, deployType, repoUrl, branch, domain } = node;
-  const color = statusColor(status);
+  const sColor = statusColor(status);
+  const accent = deployAccent(deployType || 'GIT');
 
   ctx.save();
 
-  // Card shadow
+  // Card shadow + type-colored glow
   if (hovered) {
-    ctx.shadowColor = color + '50';
-    ctx.shadowBlur = 20;
+    ctx.shadowColor = accent + '60';
+    ctx.shadowBlur = 24;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 4;
+  } else {
+    // Subtle ambient glow based on deploy type
+    ctx.shadowColor = accent + '18';
+    ctx.shadowBlur = 12;
   }
 
-  // Card background
+  // Card background with type-tinted fill (vibrant but not overwhelming)
   drawRoundedRect(ctx, x, y, w, h, 10);
-  ctx.fillStyle = hovered ? '#1a1f2e' : '#11151f';
+  // Base fill with deploy-type color tint
+  const bgGrad = ctx.createLinearGradient(x, y, x + w, y + h);
+  if (hovered) {
+    bgGrad.addColorStop(0, accent + '25');  // Type color tint at 15%
+    bgGrad.addColorStop(1, '#1a1f2e');
+  } else {
+    bgGrad.addColorStop(0, accent + '15');  // Type color tint at 8%
+    bgGrad.addColorStop(1, '#0d1117');
+  }
+  ctx.fillStyle = bgGrad;
   ctx.fill();
-  ctx.strokeStyle = hovered ? color + '90' : '#27272a';
-  ctx.lineWidth = hovered ? 1.5 : 1;
+  ctx.strokeStyle = hovered ? accent + 'cc' : accent + '50';
+  ctx.lineWidth = hovered ? 2 : 1.2;
   ctx.stroke();
 
   ctx.shadowBlur = 0;
   ctx.shadowColor = 'transparent';
 
-  // Left status bar
+  // Left accent bar (deploy type color, not just status)
   drawRoundedRect(ctx, x, y, 4, h, 2);
-  ctx.fillStyle = color;
+  const gradient = ctx.createLinearGradient(x, y, x, y + h);
+  gradient.addColorStop(0, accent);
+  gradient.addColorStop(1, sColor);
+  ctx.fillStyle = gradient;
   ctx.fill();
 
-  // Status dot
+  // Status dot (status color)
   ctx.beginPath();
   ctx.arc(x + 18, y + 18, 5, 0, Math.PI * 2);
-  ctx.fillStyle = color;
+  ctx.fillStyle = sColor;
   ctx.fill();
 
   // Pulsing ring for active
   if (status === 'ACTIVE' || status === 'BUILDING') {
     ctx.beginPath();
     ctx.arc(x + 18, y + 18, 8, 0, Math.PI * 2);
-    ctx.strokeStyle = color + '40';
+    ctx.strokeStyle = sColor + '50';
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
@@ -267,27 +318,28 @@ function drawNode(ctx: CanvasRenderingContext2D, node: TopoNode, hovered: boolea
   const displayName = name.length > 22 ? name.slice(0, 20) + '…' : name;
   ctx.fillText(displayName, x + 30, y + 18);
 
-  // Deploy type icon
+  // Deploy type icon (colored by type)
   const icon = DEPLOY_ICONS[deployType || 'GIT'] || '📦';
   ctx.font = '11px Inter, system-ui, sans-serif';
-  ctx.fillStyle = '#71717a';
+  ctx.fillStyle = accent + 'cc';
   ctx.fillText(icon + ' ' + (deployType || 'GIT'), x + 14, y + 38);
 
   // Branch
   if (branch) {
+    ctx.fillStyle = '#71717a';
     ctx.fillText('⎇ ' + (branch.length > 12 ? branch.slice(0, 10) + '…' : branch), x + 100, y + 38);
   }
 
-  // Status label
+  // Status label (colored badge)
   ctx.font = 'bold 10px Inter, system-ui, sans-serif';
-  ctx.fillStyle = color;
+  ctx.fillStyle = sColor;
   ctx.textAlign = 'right';
   ctx.fillText(status, x + w - 12, y + 18);
 
   // Domain
   ctx.textAlign = 'left';
   ctx.font = '10px Inter, system-ui, sans-serif';
-  ctx.fillStyle = '#52525b';
+  ctx.fillStyle = '#71717a';
   if (domain) {
     ctx.fillText('🌐 ' + (domain.length > 28 ? domain.slice(0, 26) + '…' : domain), x + 14, y + 56);
   }
@@ -295,6 +347,7 @@ function drawNode(ctx: CanvasRenderingContext2D, node: TopoNode, hovered: boolea
   // Repo (short)
   if (repoUrl) {
     const short = repoUrl.replace(/https?:\/\//, '').replace('.git', '');
+    ctx.fillStyle = '#52525b';
     ctx.fillText(short.length > 28 ? short.slice(0, 26) + '…' : short, x + 14, y + 72);
   }
 
@@ -302,12 +355,18 @@ function drawNode(ctx: CanvasRenderingContext2D, node: TopoNode, hovered: boolea
 }
 
 /* ── Legend ── */
-const LEGEND = [
+const STATUS_LEGEND = [
   { color: '#10b981', label: 'Active' },
   { color: '#3b82f6', label: 'Building' },
   { color: '#fbbf24', label: 'Queued' },
   { color: '#ef4444', label: 'Failed' },
   { color: '#6366f1', label: 'Other' },
+];
+
+const TYPE_LEGEND = [
+  { color: '#3b82f6', label: 'Git Deploy' },
+  { color: '#06b6d4', label: 'Docker' },
+  { color: '#a78bfa', label: 'Template' },
 ];
 
 /* ── Main Component ── */
@@ -533,26 +592,42 @@ export function TopologyView() {
       {/* Legend */}
       <div className="absolute left-4 top-4 z-10 rounded-xl border border-zinc-800/80 bg-black/70 p-3 backdrop-blur-lg">
         <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-          LEGEND
+          FLEET STATUS
         </div>
         <div className="mb-2 text-[11px] text-zinc-500">
           {services.length} service{services.length !== 1 ? 's' : ''}
         </div>
         <div className="flex flex-col gap-1.5">
-          {LEGEND.map(({ color, label }) => (
+          {STATUS_LEGEND.map(({ color, label }) => (
             <div key={label} className="flex items-center gap-2">
-              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+              <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
               <span className="text-[11px] text-zinc-300">{label}</span>
             </div>
           ))}
         </div>
         <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            DEPLOY TYPE
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {TYPE_LEGEND.map(({ color, label }) => (
+              <div key={label} className="flex items-center gap-2">
+                <div className="h-2 w-4 rounded-sm" style={{ backgroundColor: color }} />
+                <span className="text-[11px] text-zinc-300">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-3 border-t border-zinc-800 pt-2">
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            CONNECTIONS
+          </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 border-t border-blue-500/40" />
+            <div className="w-4 border-t-2 border-blue-500/70" />
             <span className="text-[10px] text-zinc-400">Same repo</span>
           </div>
           <div className="flex items-center gap-2 mt-1">
-            <div className="w-4 border-t border-dashed border-emerald-500/40" />
+            <div className="w-4 border-t-2 border-dashed border-emerald-500/70" />
             <span className="text-[10px] text-zinc-400">Same domain</span>
           </div>
         </div>
