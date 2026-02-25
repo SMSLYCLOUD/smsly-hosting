@@ -26,7 +26,8 @@ DEBUG = config('DEBUG', default=False, cast=bool)
 SMSLY_DISABLE_SIGNATURE_CHECK = config('SMSLY_DISABLE_SIGNATURE_CHECK', default=False, cast=bool)
 
 # Security hardening
-if not DEBUG:
+# Force insecure settings when running tests to prevent 301 redirects
+if not DEBUG and not IS_TESTING:
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
@@ -34,6 +35,15 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = config('USE_SSL', default=False, cast=bool)
     CSRF_COOKIE_SECURE = config('USE_SSL', default=False, cast=bool)
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+else:
+    # Explicitly disable for tests and debug mode
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_PROXY_SSL_HEADER = None
 
 # Container Registry
 CONTAINER_REGISTRY_URL = config(
@@ -78,6 +88,11 @@ except Exception:
 
 def _patch_allowed_hosts_from_db():
     """Called from AppConfig.ready() to add PlatformConfig.domain."""
+    # Ensure IS_TESTING is detected here as well if needed, though settings load first.
+    # Do not patch anything during tests to ensure predictable environment.
+    if IS_TESTING:
+        return
+
     try:
         from apps.deployments.models import PlatformConfig
         pc = PlatformConfig.load()
@@ -236,12 +251,12 @@ ACCOUNT_LOGOUT_REDIRECT_URL = '/login'
 # (GitHub→our callback). 'Strict' triggers allauth to do a self-redirect, making
 # the final callback same-site so the browser sends the session cookie.
 SESSION_COOKIE_SAMESITE = 'Strict'
-SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG and not IS_TESTING
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG and not IS_TESTING
 
 # Ensure allauth uses HTTPS callback URLs in production (prevents CSRF Referer mismatch)
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG else 'http'
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if not DEBUG and not IS_TESTING else 'http'
 
 # Custom allauth adapters (callback redirect behavior)
 ACCOUNT_ADAPTER = 'apps.deployments.adapters.CustomAccountAdapter'
