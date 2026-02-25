@@ -130,9 +130,42 @@ def _build_runtime_env(service: Service) -> dict:
     except Exception:
         pass  # Don't block deploy if addon lookup fails
 
+    # ── Ecosystem linking: cross-service URLs, shared DB routing ──
+    # This is the god-level intelligence: it reads the live ecosystem graph,
+    # finds deployed siblings, wires cross-service URLs, rewrites DATABASE_URL
+    # to the correct per-service database, propagates shared secrets, and
+    # isolates Redis DB numbers. Must run BEFORE smart derivation.
+    _link_ecosystem(service, env_vars)
+
+    # ── Smart derivation: parse compound URLs into individual vars ──
+    # Many apps expect individual DB_HOST/DB_NAME/etc. instead of DATABASE_URL.
+    # Parse the URL and inject individual vars so apps don't crash.
+    _smart_derive_database_vars(env_vars)
+    _smart_derive_redis_vars(env_vars)
+
+    # ── Domain-aware injection ──
     # Routing domains are platform-controlled and must not drift from service state.
     if service.public_domain:
         env_vars['PUBLIC_DOMAIN'] = service.public_domain
+
+        # Derive DJANGO_ALLOWED_HOSTS / MARKETER_ALLOWED_HOSTS from domain
+        all_hosts = ['localhost', '127.0.0.1', '0.0.0.0']
+        all_hosts.append(service.public_domain)
+        for d in (service.custom_domains or []):
+            if isinstance(d, str) and d.strip():
+                all_hosts.append(d.strip())
+        hosts_csv = ','.join(all_hosts)
+
+        # Set any *_ALLOWED_HOSTS variant the app might use
+        env_vars.setdefault('DJANGO_ALLOWED_HOSTS', hosts_csv)
+        env_vars.setdefault('MARKETER_ALLOWED_HOSTS', hosts_csv)
+
+        # API_INTERNAL_URL: the internal URL the app can call itself at
+        port = env_vars.get('PORT', '8000')
+        env_vars.setdefault('API_INTERNAL_URL', f'http://127.0.0.1:{port}')
+
+        # SMSLY_BACKEND_URL: for apps that proxy to their own backend
+        env_vars.setdefault('SMSLY_BACKEND_URL', f'http://127.0.0.1:{port}')
     else:
         env_vars.pop('PUBLIC_DOMAIN', None)
 
@@ -152,6 +185,272 @@ def _build_runtime_env(service: Service) -> dict:
         env_vars.pop('CUSTOM_DOMAINS', None)
 
     return env_vars
+
+
+def _smart_derive_database_vars(env_vars: dict):
+    """Parse DATABASE_URL into individual DB_* vars for apps that need them."""
+    db_url = env_vars.get('DATABASE_URL', '')
+    if not db_url:
+        return
+
+    try:
+        parsed = urlparse(db_url)
+        if not parsed.hostname:
+            return
+
+        env_vars.setdefault('DB_HOST', parsed.hostname)
+        env_vars.setdefault('DB_PORT', str(parsed.port or 5432))
+        env_vars.setdefault('DB_USER', parsed.username or 'postgres')
+        env_vars.setdefault('DB_NAME', parsed.path.lstrip('/') or 'postgres')
+
+        if parsed.password:
+            env_vars.setdefault('DB_PASSWORD', parsed.password)
+            env_vars.setdefault('MARKETER_DB_PASSWORD', parsed.password)
+
+        # Postgres-specific aliases some frameworks use
+        env_vars.setdefault('POSTGRES_HOST', parsed.hostname)
+        env_vars.setdefault('POSTGRES_PORT', str(parsed.port or 5432))
+        env_vars.setdefault('POSTGRES_USER', parsed.username or 'postgres')
+        env_vars.setdefault('POSTGRES_DB', parsed.path.lstrip('/') or 'postgres')
+        if parsed.password:
+            env_vars.setdefault('POSTGRES_PASSWORD', parsed.password)
+    except Exception:
+        pass  # Don't block deploy if URL parsing fails
+
+
+def _smart_derive_redis_vars(env_vars: dict):
+    """Parse REDIS_URL into Celery broker/backend vars."""
+    redis_url = env_vars.get('REDIS_URL', '')
+    if not redis_url:
+        return
+
+    try:
+        # Celery broker and result backend default to the Redis URL
+        env_vars.setdefault('CELERY_BROKER_URL', redis_url)
+        env_vars.setdefault('CELERY_RESULT_BACKEND', redis_url)
+
+        # Some apps use numbered Redis databases for separation
+        parsed = urlparse(redis_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+
+        # If broker is on /0, put result backend on /1
+        if not parsed.path or parsed.path == '/' or parsed.path == '/0':
+            if env_vars.get('CELERY_BROKER_URL') == redis_url:
+                env_vars['CELERY_BROKER_URL'] = f"{base}/0"
+            if env_vars.get('CELERY_RESULT_BACKEND') == redis_url:
+                env_vars['CELERY_RESULT_BACKEND'] = f"{base}/1"
+
+        # Cache URL alias
+        env_vars.setdefault('CACHE_URL', redis_url)
+    except Exception:
+        pass  # Don't block deploy if URL parsing fails
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ecosystem Intelligence — cross-service auto-wiring
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Known cross-service URL patterns.  Maps env-var names to a pattern
+# that should match a deployed sibling's name.
+# Format: {'ENV_VAR': ['substring-match-1', 'substring-match-2']}
+_SERVICE_URL_PATTERNS = {
+    'SMSLY_BACKEND_URL':      ['smsly-backend', 'smsly-platform-api', 'backend'],
+    'BACKEND_URL':            ['smsly-backend', 'backend'],
+    'IDENTITY_SERVICE_URL':   ['smsly-identity', 'identity'],
+    'PLATFORM_API_URL':       ['smsly-platform-api', 'platform-api'],
+    'AUDIT_SERVICE_URL':      ['smsly-audit', 'audit'],
+    'TRANSACTION_CHAIN_URL':  ['smsly-transaction-chain', 'transaction-chain', 'txchain'],
+    'SECURITY_GATEWAY_URL':   ['smsly-gateway', 'gateway'],
+    'POLICY_SERVICE_URL':     ['smsly-policy', 'policy'],
+    'RATE_LIMIT_SERVICE_URL': ['smsly-rate-limit', 'rate-limit'],
+    'VIDEO_SERVICE_URL':      ['smsly-video', 'video-service'],
+    'VOICE_SERVICE_URL':      ['smsly-voice', 'voice'],
+    'HOSTING_SERVICE_URL':    ['smsly-hosting', 'hosting'],
+    'NEXT_PUBLIC_API_URL':    ['backend', 'api', 'platform-api'],
+}
+
+# Secrets that should propagate across sibling services.
+_PROPAGATED_SECRETS = {
+    'INTERNAL_API_SECRET',
+    'GATEWAY_SECRET',
+    'JWT_SECRET',
+}
+
+# Known per-service database names.  The heuristic checks in order:
+# 1. Analysis result metadata (from AI/code scan)
+# 2. This static map (from docker-compose / init-databases.sql knowledge)
+# 3. Sanitized service name as fallback
+_SERVICE_DB_MAP = {
+    'smsly-backend':            'smsly_backend',
+    'smsly-platform-api':       'smsly_backend',
+    'smsly-hosting-backend':    'smsly_hosting',
+    'smsly-identity':           'smsly_identity',
+    'smsly-audit':              'smsly_audit',
+    'smsly-transaction-chain':  'smsly_txchain',
+    'smsly-helper':             'ainav',
+    'lina-deluxe':              'lina',
+    'fegloire':                 'buyforfront',
+    'buyforfront':              'buyforfront',
+    'smsly-marketer':           'marketer',
+}
+
+# Known per-service Redis DB numbers.
+_SERVICE_REDIS_DB = {
+    'smsly-helper':     1,
+    'smsly-marketer':   4,
+}
+
+
+def _link_ecosystem(service: Service, env_vars: dict):
+    """
+    God-level ecosystem linking.
+
+    Reads the live ecosystem graph (all deployed siblings by same owner),
+    then autonomously:
+      1. Rewrites DATABASE_URL to the correct per-service database
+      2. Resolves cross-service URLs from deployed siblings' live domains
+      3. Propagates shared secrets (INTERNAL_API_SECRET, etc.)
+      4. Isolates Redis DB numbers per service
+
+    Runs AFTER addon provisioning, BEFORE smart derivation.
+    Failures are logged but never block deployment.
+    """
+    try:
+        from services.ecosystem_graph import (
+            build_ecosystem_graph,
+            rewrite_database_url,
+            resolve_service_url,
+            get_sibling_env_value,
+            set_redis_db,
+        )
+    except ImportError:
+        logger.warning("ecosystem_graph module not available — skipping linking")
+        return
+
+    try:
+        graph = build_ecosystem_graph(service)
+    except Exception as exc:
+        logger.warning("Failed to build ecosystem graph: %s", exc)
+        return
+
+    deployed = graph.get('deployed', {})
+    shared_addons = graph.get('shared_addons', {})
+    svc_name = (service.name or '').lower().strip()
+
+    # ── 1. Database routing ──────────────────────────────────────────
+    # If this service has a DATABASE_URL from its own addon, rewrite it
+    # to target the correct per-service database.
+    db_name = _infer_database_name(service)
+    if db_name and 'DATABASE_URL' in env_vars:
+        try:
+            old_url = env_vars['DATABASE_URL']
+            new_url = rewrite_database_url(old_url, db_name)
+            if new_url != old_url:
+                env_vars['DATABASE_URL'] = new_url
+                logger.info(
+                    "Ecosystem: rewrote DATABASE_URL for '%s' → db=%s",
+                    service.name, db_name,
+                )
+        except Exception as exc:
+            logger.warning("Failed to rewrite DATABASE_URL: %s", exc)
+
+    # If this service has NO DATABASE_URL but a sibling shares Postgres,
+    # derive one from the shared addon.
+    if 'DATABASE_URL' not in env_vars and 'POSTGRES' in shared_addons:
+        try:
+            base_url = shared_addons['POSTGRES']
+            if db_name:
+                env_vars['DATABASE_URL'] = rewrite_database_url(base_url, db_name)
+                logger.info(
+                    "Ecosystem: injected shared DATABASE_URL for '%s' → db=%s",
+                    service.name, db_name,
+                )
+        except Exception as exc:
+            logger.warning("Failed to inject shared DATABASE_URL: %s", exc)
+
+    # ── 2. Cross-service URL resolution ──────────────────────────────
+    for env_key, match_patterns in _SERVICE_URL_PATTERNS.items():
+        if env_key in env_vars:
+            continue  # Don't override explicit values
+
+        for pattern in match_patterns:
+            matched_sib = None
+            for sib_name, sib_info in deployed.items():
+                if pattern in sib_name.lower():
+                    matched_sib = sib_info
+                    break
+
+            if matched_sib:
+                url = resolve_service_url(matched_sib)
+                env_vars[env_key] = url
+                logger.info(
+                    "Ecosystem: %s=%s (from sibling '%s')",
+                    env_key, url, matched_sib['name'],
+                )
+                break  # Resolved, move to next env_key
+
+    # ── 3. Shared secret propagation ─────────────────────────────────
+    for secret_key in _PROPAGATED_SECRETS:
+        if secret_key in env_vars:
+            continue  # Already set
+
+        for sib_name in deployed:
+            try:
+                sib_val = get_sibling_env_value(service, sib_name, secret_key)
+                if sib_val:
+                    env_vars[secret_key] = sib_val
+                    logger.info(
+                        "Ecosystem: propagated %s from sibling '%s'",
+                        secret_key, sib_name,
+                    )
+                    break
+            except Exception:
+                continue
+
+    # ── 4. Redis DB isolation ────────────────────────────────────────
+    redis_url = env_vars.get('REDIS_URL', '')
+    if redis_url:
+        # Check if this service has a known Redis DB number
+        known_db = _SERVICE_REDIS_DB.get(svc_name)
+        if known_db is not None:
+            env_vars['REDIS_URL'] = set_redis_db(redis_url, known_db)
+            logger.info(
+                "Ecosystem: set Redis DB to /%d for '%s'",
+                known_db, service.name,
+            )
+
+    logger.info(
+        "Ecosystem linking complete for '%s': %d siblings checked",
+        service.name, len(deployed),
+    )
+
+
+def _infer_database_name(service: Service) -> str:
+    """
+    Determine which database this service needs on the shared Postgres.
+
+    Priority:
+      1. Analysis result metadata (AI or deep code scan stored 'database_name')
+      2. Static map (from docker-compose / init-databases.sql knowledge)
+      3. Sanitized service name as reasonable fallback
+    """
+    # 1. From analysis metadata
+    try:
+        last_deploy = service.deployments.order_by('-created_at').first()
+        if last_deploy and isinstance(last_deploy.analysis_result, dict):
+            db_name = last_deploy.analysis_result.get('database_name')
+            if db_name:
+                return db_name
+    except Exception:
+        pass
+
+    # 2. From static service-to-DB map
+    svc_name = (service.name or '').lower().strip()
+    if svc_name in _SERVICE_DB_MAP:
+        return _SERVICE_DB_MAP[svc_name]
+
+    # 3. Sanitized service name
+    return re.sub(r'[^a-z0-9_]', '_', svc_name)[:63]
 
 
 
