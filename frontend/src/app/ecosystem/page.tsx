@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2,
-    Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
-    Gauge, Brain, Eye
+    Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
@@ -103,7 +102,6 @@ export default function EcosystemPage() {
     const [deployTaskId, setDeployTaskId] = useState<string | null>(null);
     const [deployResults, setDeployResults] = useState<DeployResult[]>([]);
     const [error, setError] = useState<string | null>(null);
-    const [scanDepth, setScanDepth] = useState<10 | 20 | 30>(30);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
 
     // Poll for scan task completion
@@ -135,7 +133,7 @@ export default function EcosystemPage() {
         setScanProgress('Connecting to GitHub...');
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { scan_depth: scanDepth });
+            const data = await apiPost('/api/v1/cloud/ecosystem/scan/');
             setScanTaskId(data.task_id);
             setScanProgress('Scanning repositories...');
 
@@ -268,105 +266,6 @@ export default function EcosystemPage() {
                                 detect stacks, map dependencies, and deploy everything
                                 to your server — <strong>zero configuration needed</strong>.
                             </p>
-
-                            {/* Scanner Depth Selector */}
-                            <div className="max-w-2xl mx-auto mb-10">
-                                <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-4 flex items-center justify-center gap-2">
-                                    <Gauge size={14} /> Scan Depth
-                                </p>
-                                <div className="grid grid-cols-3 gap-3">
-                                    {/* Tier 10: Quick */}
-                                    <button
-                                        onClick={() => setScanDepth(10)}
-                                        className={`relative p-4 rounded-xl border-2 transition-all text-left group ${
-                                            scanDepth === 10
-                                                ? 'border-blue-500 bg-blue-500/5 shadow-lg shadow-blue-500/10'
-                                                : 'border-border hover:border-blue-500/30 bg-card/50'
-                                        }`}
-                                    >
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Eye size={16} className={scanDepth === 10 ? 'text-blue-400' : 'text-muted-foreground'} />
-                                            <span className={`text-sm font-bold ${scanDepth === 10 ? 'text-blue-400' : ''}`}>
-                                                Quick
-                                            </span>
-                                        </div>
-                                        <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                            Filename heuristics only. Fastest scan with basic stack detection.
-                                        </p>
-                                        <div className="mt-3 flex items-center gap-2">
-                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 font-mono">~1s</span>
-                                            <span className="text-[10px] text-muted-foreground">Low accuracy</span>
-                                        </div>
-                                        {scanDepth === 10 && (
-                                            <div className="absolute top-2 right-2">
-                                                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                                            </div>
-                                        )}
-                                    </button>
-
-                                    {/* Tier 20: Deep */}
-                                    <button
-                                        onClick={() => setScanDepth(20)}
-                                        className={`relative p-4 rounded-xl border-2 transition-all text-left group ${
-                                            scanDepth === 20
-                                                ? 'border-amber-500 bg-amber-500/5 shadow-lg shadow-amber-500/10'
-                                                : 'border-border hover:border-amber-500/30 bg-card/50'
-                                        }`}
-                                    >
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Scan size={16} className={scanDepth === 20 ? 'text-amber-400' : 'text-muted-foreground'} />
-                                            <span className={`text-sm font-bold ${scanDepth === 20 ? 'text-amber-400' : ''}`}>
-                                                Deep
-                                            </span>
-                                        </div>
-                                        <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                            Parses docker-compose, detects DB identity and cross-service refs.
-                                        </p>
-                                        <div className="mt-3 flex items-center gap-2">
-                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-mono">~3s</span>
-                                            <span className="text-[10px] text-muted-foreground">Good accuracy</span>
-                                        </div>
-                                        {scanDepth === 20 && (
-                                            <div className="absolute top-2 right-2">
-                                                <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                                            </div>
-                                        )}
-                                    </button>
-
-                                    {/* Tier 30: Full AI */}
-                                    <button
-                                        onClick={() => setScanDepth(30)}
-                                        className={`relative p-4 rounded-xl border-2 transition-all text-left group ${
-                                            scanDepth === 30
-                                                ? 'border-emerald-500 bg-emerald-500/5 shadow-lg shadow-emerald-500/10'
-                                                : 'border-border hover:border-emerald-500/30 bg-card/50'
-                                        }`}
-                                    >
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Brain size={16} className={scanDepth === 30 ? 'text-emerald-400' : 'text-muted-foreground'} />
-                                            <span className={`text-sm font-bold ${scanDepth === 30 ? 'text-emerald-400' : ''}`}>
-                                                Full AI
-                                            </span>
-                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold uppercase tracking-wider">
-                                                Recommended
-                                            </span>
-                                        </div>
-                                        <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                            AI-powered analysis with full dependency graph and deploy plan.
-                                        </p>
-                                        <div className="mt-3 flex items-center gap-2">
-                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">~15s</span>
-                                            <span className="text-[10px] text-muted-foreground">Max accuracy</span>
-                                        </div>
-                                        {scanDepth === 30 && (
-                                            <div className="absolute top-2 right-2">
-                                                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                                            </div>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-
                             <motion.button
                                 whileHover={{ scale: 1.05 }}
                                 whileTap={{ scale: 0.95 }}
@@ -374,7 +273,7 @@ export default function EcosystemPage() {
                                 className="btn-shimmer px-8 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold shadow-lg shadow-emerald-500/25 flex items-center gap-3 mx-auto text-lg"
                             >
                                 <Scan size={22} />
-                                {scanDepth === 10 ? 'Quick Scan' : scanDepth === 20 ? 'Deep Scan' : 'AI Scan'} My GitHub
+                                Scan My GitHub
                             </motion.button>
                         </motion.div>
                     )}

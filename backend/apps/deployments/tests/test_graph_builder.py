@@ -8,7 +8,6 @@ User = get_user_model()
 
 class GraphBuilderTest(TestCase):
     def setUp(self):
-        # pylint: disable=invalid-name
         self.user = User.objects.create_user(username='testuser', password='password')
         self.region = Region.objects.create(name='Test Region', slug='test-region')
 

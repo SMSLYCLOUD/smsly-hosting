@@ -23,6 +23,11 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+
+class PlatformUpdateError(Exception):
+    """Raised when platform update fails."""
+
+
 INSTALL_DIR = os.environ.get('INSTALL_DIR', '/opt/smsly-hosting')
 COMPOSE_FILE = os.path.join(INSTALL_DIR, 'docker-compose.prod.yml')
 HEALTH_CHECK_URL = 'http://localhost:8090/api/v1/system/config/'
@@ -115,7 +120,7 @@ def perform_update(update_record) -> bool:
 
         ok, output = _run(['git', 'pull', '--ff-only', 'origin', 'main'])
         if not ok:
-            raise Exception(f"Git pull failed: {output}")
+            raise PlatformUpdateError(f"Git pull failed: {output}")
         update_record.append_log(f"Git pull complete: {output[:200]}")
 
         # Get new commit
@@ -135,7 +140,7 @@ def perform_update(update_record) -> bool:
             timeout=600,
         )
         if not ok:
-            raise Exception(f"Docker build failed: {output[-500:]}")
+            raise PlatformUpdateError(f"Docker build failed: {output[-500:]}")
         update_record.append_log('Docker build complete')
 
         # Step 4: Run migrations
@@ -150,7 +155,7 @@ def perform_update(update_record) -> bool:
             'python', 'manage.py', 'migrate', '--noinput',
         ])
         if not ok:
-            raise Exception(f"Migration failed: {output[-500:]}")
+            raise PlatformUpdateError(f"Migration failed: {output[-500:]}")
         update_record.append_log('Migrations complete')
 
         # Step 5: Restart services
@@ -164,7 +169,7 @@ def perform_update(update_record) -> bool:
             'up', '-d', '--remove-orphans',
         ])
         if not ok:
-            raise Exception(f"Restart failed: {output[-500:]}")
+            raise PlatformUpdateError(f"Restart failed: {output[-500:]}")
         update_record.append_log('Services restarted')
 
         # Step 6: Health check
@@ -174,7 +179,7 @@ def perform_update(update_record) -> bool:
         update_record.save()
 
         if not check_health():
-            raise Exception('Health check failed after update')
+            raise PlatformUpdateError('Health check failed after update')
         update_record.append_log('Health check passed!')
 
         # Success

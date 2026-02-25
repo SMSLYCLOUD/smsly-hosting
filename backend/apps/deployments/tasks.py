@@ -4,7 +4,6 @@ import logging
 import re
 import shutil
 import tempfile
-import time
 import subprocess
 import os
 import json
@@ -1173,20 +1172,20 @@ def cleanup_old_backups_task():
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def execute_server_transfer_task(self, transfer_id):
-    from .models_transfer import ServerTransfer
+    from .models_transfer import ServerTransfer as TransferModel
     from services.transfer_engine import TransferEngine
 
-    transfer = ServerTransfer.objects.get(id=transfer_id)
+    transfer = TransferModel.objects.get(id=transfer_id)
     engine = TransferEngine(transfer)
     engine.execute()
 
 
 @shared_task(bind=True)
 def rollback_transfer_task(self, transfer_id):
-    from .models_transfer import ServerTransfer
+    from .models_transfer import ServerTransfer as TransferModel
     from services.transfer_engine import TransferEngine
 
-    transfer = ServerTransfer.objects.get(id=transfer_id)
+    transfer = TransferModel.objects.get(id=transfer_id)
     engine = TransferEngine(transfer)
     engine.rollback()
 
