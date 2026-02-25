@@ -244,7 +244,7 @@ services:
 
 networks:
   smsly-net:
-    driver: bridge
+    external: true
     name: smsly-net
   socket-proxy:
     driver: bridge
