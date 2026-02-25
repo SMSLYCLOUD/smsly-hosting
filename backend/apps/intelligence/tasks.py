@@ -133,7 +133,7 @@ def ai_deployment_review_task(deployment_id: str):
                 metadata={"diagnosis": diagnosis[:500]}
             )
     except Deployment.DoesNotExist:
-        logger.error(f"Deployment {deployment_id} not found for AI review")
+        logger.error("Deployment %s not found for AI review", deployment_id)
 
 
 @shared_task
@@ -178,4 +178,4 @@ def daily_intelligence_report_task():
         metadata=report
     )
 
-    logger.info(f"Daily Intelligence Report generated: {report}")
+    logger.info("Daily Intelligence Report generated: %s", report)

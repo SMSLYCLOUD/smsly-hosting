@@ -297,8 +297,8 @@ export default function AutoscalerPage() {
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {decision.workers_before} → {decision.workers_after} workers •
-                        {Math.round(decision.memory_before_mb)}MB → {Math.round(decision.memory_after_mb)}MB
+                        {decision.current_workers} → {decision.target_workers} workers •
+                        {Math.round(decision.current_memory_mb)}MB → {Math.round(decision.target_memory_mb)}MB
                       </p>
                       <p className="text-[10px] text-zinc-500 font-mono mt-1 bg-zinc-900/50 p-1 rounded w-fit px-2">
                         {decision.reason}

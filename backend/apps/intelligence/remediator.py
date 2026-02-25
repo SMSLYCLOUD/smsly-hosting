@@ -136,7 +136,10 @@ class RemediationEngine:
 
                 if action == 'CLEANUP':
                     try:
-                        subprocess.run(['docker', 'system', 'prune', '-f'], timeout=30)
+                        subprocess.run(
+                            ['docker', 'system', 'prune', '-f'],
+                            capture_output=True, timeout=30, check=True
+                        )
                         AuditLog.objects.create(
                             actor="AI_REMEDIATOR",
                             action="CLEANUP",

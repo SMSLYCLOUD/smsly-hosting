@@ -243,6 +243,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
+    env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     postgres_password="$(env_get_value "$env_file" "POSTGRES_PASSWORD")"
@@ -766,6 +767,24 @@ print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
     docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
         docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
 
+    # ─── Update autoscaler service (picks up code changes + new token) ────────
+    if [ -f "$INSTALL_DIR/smsly-autoscaler.py" ]; then
+        echo -e "${BLUE}  → Updating smsly-autoscaler service...${NC}"
+        mkdir -p /opt/smsly
+        cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py
+        chmod +x /opt/smsly/autoscaler.py
+
+        AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN")"
+        if [ -n "$AUTOSCALER_API_TOKEN" ] && [ -f /etc/systemd/system/smsly-autoscaler.service ]; then
+            # Update token in existing service file
+            sed -i "s|^Environment=AUTOSCALER_API_TOKEN=.*|Environment=AUTOSCALER_API_TOKEN=${AUTOSCALER_API_TOKEN}|" \
+                /etc/systemd/system/smsly-autoscaler.service
+            systemctl daemon-reload
+        fi
+        systemctl restart smsly-autoscaler 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Autoscaler updated${NC}"
+    fi
+
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
     for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
@@ -1092,6 +1111,7 @@ pg_pass = secrets.token_hex(16)
 redis_pass = secrets.token_hex(16)
 gateway_secret = secrets.token_hex(32)
 webhook_secret = secrets.token_hex(32)
+autoscaler_token = secrets.token_hex(32)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -1102,6 +1122,7 @@ print(f'POSTGRES_PASSWORD={pg_pass}')
 print(f'REDIS_PASSWORD={redis_pass}')
 print(f'GATEWAY_SECRET={gateway_secret}')
 print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
+print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -1156,6 +1177,9 @@ WILDCARD_SUBDOMAINS=$WILDCARD_SUBDOMAINS
 CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
 CADDY_CONFIG_DIR=/caddy-config
 PUBLIC_IP=$PUBLIC_IP
+
+# Autoscaler API authentication (shared with smsly-autoscaler.service)
+AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
 EOF
 
     chmod 600 "$INSTALL_DIR/.env"
@@ -1671,6 +1695,43 @@ docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/
     docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
 
 echo -e "\n${BLUE}Verification Score: $VERIFY_PASS_COUNT/$VERIFY_TOTAL${NC}"
+
+# ─── Install Autoscaler as systemd service ──────────────────────────────────
+echo -e "${BLUE}  → Installing smsly-autoscaler systemd service...${NC}"
+cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
+    mkdir -p /opt/smsly
+    cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py
+}
+chmod +x /opt/smsly/autoscaler.py
+
+# Source .env for the token
+AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN")"
+
+cat <<SVCEOF > /etc/systemd/system/smsly-autoscaler.service
+[Unit]
+Description=SMSLY VPS Autoscaler — Cross-Service Resource Manager
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/smsly/autoscaler.py
+Restart=always
+RestartSec=10
+Environment=AUTOSCALER_API_TOKEN=${AUTOSCALER_API_TOKEN}
+Environment=AUTOSCALER_API_BIND=127.0.0.1
+Environment=AUTOSCALER_API_PORT=9876
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable smsly-autoscaler 2>/dev/null || true
+systemctl restart smsly-autoscaler 2>/dev/null || true
+echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
