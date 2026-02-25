@@ -38,12 +38,30 @@ logger = logging.getLogger(__name__)
 # Persistent build directory root.
 # Uses env var or a sensible default. Avoids /tmp which the OS may clean
 # between the analysis and build phases of a 2-phase deploy.
-_BUILDS_ROOT = os.environ.get(
-    'SMSLY_BUILDS_DIR',
-    '/opt/smsly-hosting/builds' if os.path.isdir('/opt') else
-    os.path.join(tempfile.gettempdir(), 'smsly-builds'),
-)
-os.makedirs(_BUILDS_ROOT, exist_ok=True)
+def _resolve_builds_root():
+    """Determine best writable directory for build artifacts."""
+    explicit = os.environ.get('SMSLY_BUILDS_DIR')
+    if explicit:
+        try:
+            os.makedirs(explicit, exist_ok=True)
+            return explicit
+        except OSError:
+            pass
+
+    # Prefer /opt path on Linux servers
+    preferred = '/opt/smsly-hosting/builds'
+    try:
+        os.makedirs(preferred, exist_ok=True)
+        return preferred
+    except OSError:
+        pass
+
+    # Fallback: persistent subdir in system temp
+    fallback = os.path.join(tempfile.gettempdir(), 'smsly-builds')
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+_BUILDS_ROOT = _resolve_builds_root()
 
 
 # pylint: disable=too-few-public-methods
