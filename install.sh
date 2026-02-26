@@ -665,38 +665,40 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-beat
             ;;
         full)
-            echo -e "${BLUE}  → [FULL REBUILD] Tearing down entire PaaS stack...${NC}"
+            echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
-            # 1. Stop and remove all containers + orphans
-            echo -e "${BLUE}    ↳ Stopping all containers...${NC}"
-            docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+            # 1. Only stop PaaS core services — NEVER touch addon containers
+            CORE_SERVICES="frontend backend celery celery-beat nginx traefik"
+            echo -e "${BLUE}    ↳ Stopping core services...${NC}"
+            docker compose -f "$COMPOSE_FILE" stop $CORE_SERVICES 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" rm -f $CORE_SERVICES 2>/dev/null || true
 
-            # 2. Remove old PaaS images (forces full rebuild, no stale layers)
-            echo -e "${BLUE}    ↳ Removing old images...${NC}"
-            COMPOSE_IMAGES=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null || true)
-            if [ -n "$COMPOSE_IMAGES" ]; then
-                echo "$COMPOSE_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
-            fi
+            # 2. Remove old PaaS images (NOT addon images)
+            echo -e "${BLUE}    ↳ Removing old core images...${NC}"
+            for svc in $CORE_SERVICES; do
+                img=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null | grep -i "$svc" || true)
+                if [ -n "$img" ]; then
+                    docker rmi -f "$img" 2>/dev/null || true
+                fi
+            done
 
             # 3. Prune dangling images and build cache
             echo -e "${BLUE}    ↳ Pruning dangling images and build cache...${NC}"
             docker image prune -f 2>/dev/null || true
             docker builder prune -f 2>/dev/null || true
 
-            # 4. Recreate shared networks (clean state)
-            echo -e "${BLUE}    ↳ Recreating networks...${NC}"
-            docker network rm smsly-net 2>/dev/null || true
-            docker network rm smsly-proxy 2>/dev/null || true
+            # 4. Ensure shared networks exist (create if missing, don't destroy)
+            echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             docker network create smsly-net 2>/dev/null || true
             docker network create smsly-proxy 2>/dev/null || true
 
-            # 5. Rebuild all images from scratch
-            echo -e "${BLUE}    ↳ Rebuilding all images (no cache)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache
+            # 5. Rebuild core images from scratch
+            echo -e "${BLUE}    ↳ Rebuilding core images (no cache)...${NC}"
+            docker compose -f "$COMPOSE_FILE" build --no-cache $CORE_SERVICES
 
-            # 6. Start everything fresh
-            echo -e "${BLUE}    ↳ Starting all containers...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate
+            # 6. Start everything (addons stay running, core gets fresh containers)
+            echo -e "${BLUE}    ↳ Starting all services...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
 
             # 7. Run migrations
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
