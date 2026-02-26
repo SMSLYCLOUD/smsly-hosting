@@ -150,8 +150,11 @@ class AddonProvisioner:
                             password: str, port: int,
                             alias_name: str = '') -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
-        db_name = "app_db"
-        db_user = "app_user"
+        # Derive service-specific user/db from alias (e.g. "postgres-myapp")
+        # so each addon gets isolated credentials.
+        safe_suffix = (alias_name or container_name).replace('-', '_')
+        db_user = safe_suffix  # e.g. "postgres_myapp"
+        db_name = safe_suffix  # same — one DB per addon
 
         cmd = [
             'docker', 'run', '-d',
@@ -174,8 +177,10 @@ class AddonProvisioner:
             check=True)
         container_id = result.stdout.strip()[:12]
 
-        # Internal Docker network URL (service-to-service)
-        connection_url = f"postgresql://{db_user}:{password}@{container_name}:{port}/{db_name}"
+        # Use alias_name as hostname so apps reach the DB by friendly name
+        # (e.g. "postgres-myapp" instead of "smsly-addon-postgres-uuid")
+        hostname = alias_name or container_name
+        connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
