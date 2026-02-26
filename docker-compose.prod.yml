@@ -117,6 +117,7 @@ services:
       start_period: 120s
     networks:
       - smsly-net
+      - socket-proxy
     deploy:
       resources:
         limits:
@@ -150,12 +151,13 @@ services:
       - ./:/platform-src:ro
     networks:
       - smsly-net
+      - socket-proxy
 
   celery-beat:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config beat -l info
+    command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -168,6 +170,8 @@ services:
     volumes:
       - ./backend:/app
       - media_volume:/app/media
+    tmpfs:
+      - /tmp
     networks:
       - smsly-net
 
@@ -248,6 +252,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only mount
     networks:
       - smsly-net
+      - socket-proxy
 
   # Traefik - Dynamic reverse proxy for deployed containers
   # Reads Docker labels from deployed containers and routes traffic to them.
@@ -288,6 +293,7 @@ services:
       - no-new-privileges:true
     networks:
       - smsly-net
+      - socket-proxy
     deploy:
       resources:
         limits:
@@ -297,6 +303,9 @@ networks:
   smsly-net:
     external: true
     name: smsly-net
+  socket-proxy:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:
