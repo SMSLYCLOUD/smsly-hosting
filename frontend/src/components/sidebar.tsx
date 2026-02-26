@@ -46,11 +46,11 @@ export function Sidebar() {
     { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
     { label: "Services",  icon: Box,             href: "/services" },
     { label: "Deployments", icon: Rocket,        href: "/deployments" },
+    { label: "Transfers",   icon: ArrowLeftRight, href: "/transfers" },
   ];
 
   const infraRoutes = [
     { label: "Servers",      icon: Server, href: "/servers" },
-    { label: "Transfers",    icon: ArrowLeftRight, href: "/transfers" },
     { label: "Autoscaler",   icon: Scaling, href: "/autoscaler" },
     { label: "Tunnels",      icon: Radio,  href: "/tunnels" },
     { label: "Ecosystem",    icon: Globe,  href: "/ecosystem" },
