@@ -651,15 +651,19 @@ if [ -n "$UPDATE_MODE" ]; then
 
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
             sleep 10  # Wait for backend to start
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py makemigrations --noinput 2>&1 || \
                 echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+
+            # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
+            echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-beat
@@ -700,18 +704,31 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
 
-            # 7. Run migrations
+            # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
+            #    (recreation drops Docker DNS links — causes 502 gateway errors)
+            echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
+            for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
+                docker network connect smsly-proxy "$ctr" 2>/dev/null || true
+            done
+            docker restart smsly-hosting-traefik-1 2>/dev/null || true
+
+            # 8. Run migrations (as root to avoid PermissionError writing migration files)
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
             sleep 10
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py makemigrations --noinput 2>&1 || \
                 echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
-            docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput || {
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput
+                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
             }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+
+            # 9. Clean celerybeat-schedule and restart beat
+            echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" restart celery-beat 2>/dev/null || true
             ;;
     esac
 
