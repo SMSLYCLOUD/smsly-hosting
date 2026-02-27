@@ -35,7 +35,7 @@ def require_tier(*allowed_tiers):
 
             # Load the license singleton
             try:
-                license = PlatformLicense.load()
+                license_obj = PlatformLicense.load()
             except Exception:
                 return Response(
                     {'error': 'license_error', 'message': 'Could not load platform license.'},
@@ -43,10 +43,10 @@ def require_tier(*allowed_tiers):
                 )
 
             # Check if current tier is allowed
-            current_tier = license.tier
+            current_tier = license_obj.tier
 
             # If the license is invalid (expired/tampered), treat as Community
-            if not license.is_valid:
+            if not license_obj.is_valid:
                 current_tier = PlatformTier.COMMUNITY
 
             if current_tier not in allowed_tiers:

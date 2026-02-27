@@ -17,13 +17,11 @@ class LicenseStatusSerializer(serializers.ModelSerializer):
             'features', 'validation_error'
         ]
         extra_kwargs = {
-            'license_key': {'write_only': True} # Don't show full key if sensitive? Actually usually show it masked or full is ok for admin.
+            'license_key': {'write_only': True}
         }
 
     def get_features(self, obj):
-        # Return a dict of features enabled/disabled based on tier
-        # This duplicates logic in frontend but useful for API consumers
-        is_pro = obj.tier in ['pro', 'enterprise'] or (obj.tier == 'community' and False) # Force correct logic
+        is_pro = obj.tier in ['pro', 'enterprise'] or (obj.tier == 'community' and False)
         is_ent = obj.tier == 'enterprise'
 
         return {
@@ -46,3 +44,9 @@ class LicenseStatusSerializer(serializers.ModelSerializer):
 
 class LicenseActivationSerializer(serializers.Serializer):
     license_key = serializers.CharField(required=True)
+
+    def create(self, validated_data):
+        return validated_data
+
+    def update(self, instance, validated_data):
+        return instance
