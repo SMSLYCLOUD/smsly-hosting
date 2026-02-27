@@ -62,6 +62,7 @@ export default function AutoscalerPage() {
   const [status, setStatus] = useState<AutoscalerStatus | null>(null);
   const [history, setHistory] = useState<AutoscalerHistory | null>(null);
   const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [historyDuration, setHistoryDuration] = useState(60); // minutes
@@ -94,18 +95,20 @@ export default function AutoscalerPage() {
           }), {})
         });
       }
-    } catch (err) {
-      console.error('Autoscaler fetch failed:', err);
-      toast({
-        title: "Connection Error",
-        description: "Failed to connect to autoscaler API",
-        variant: "destructive"
-      });
+    } catch (err: any) {
+      // Silently handle 503 (service not installed) — show offline state
+      const is503 = err?.response?.status === 503;
+      if (is503) {
+        setOffline(true);
+        setAutoRefresh(false); // Stop polling when offline
+      } else {
+        console.error('Autoscaler fetch failed:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [historyDuration, toast, localConfig]);
+  }, [historyDuration, localConfig]);
 
   useEffect(() => {
     fetchData();
@@ -146,6 +149,28 @@ export default function AutoscalerPage() {
       <DashboardShell>
         <div className="flex-1 flex items-center justify-center">
           <RotateCw className="animate-spin text-muted-foreground" size={32} />
+        </div>
+      </DashboardShell>
+    );
+  }
+
+  if (offline && !status) {
+    return (
+      <DashboardShell>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center space-y-4 max-w-md">
+            <div className="p-4 bg-amber-500/10 rounded-full w-fit mx-auto">
+              <AlertTriangle className="h-10 w-10 text-amber-500" />
+            </div>
+            <h2 className="text-xl font-bold">Autoscaler Not Installed</h2>
+            <p className="text-muted-foreground text-sm">
+              The autoscaler service is not running on this VPS. It&apos;s an optional systemd service
+              that automatically adjusts worker counts based on resource usage.
+            </p>
+            <Button variant="outline" onClick={() => { setOffline(false); setLoading(true); fetchData(); }}>
+              <RotateCw className="mr-2 h-4 w-4" /> Retry Connection
+            </Button>
+          </div>
         </div>
       </DashboardShell>
     );
@@ -430,8 +455,8 @@ export default function AutoscalerPage() {
                  ))}
                </div>
              </div>
-             <div className="h-[250px] w-full">
-               <ResponsiveContainer width="100%" height="100%">
+             <div className="h-[250px] w-full" style={{ minHeight: 250 }}>
+               <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                  <AreaChart data={chartData}>
                    <defs>
                      <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
@@ -468,8 +493,8 @@ export default function AutoscalerPage() {
                  <Activity size={16} className="text-emerald-500" /> Demand Scores
                </h3>
              </div>
-             <div className="h-[250px] w-full">
-               <ResponsiveContainer width="100%" height="100%">
+             <div className="h-[250px] w-full" style={{ minHeight: 250 }}>
+               <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                  <LineChart data={chartData}>
                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
                    <XAxis dataKey="timestamp" stroke="#666" fontSize={10} tickLine={false} axisLine={false} />
