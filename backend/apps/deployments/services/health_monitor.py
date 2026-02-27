@@ -43,7 +43,22 @@ RESTART_COOLDOWN_BASE = _env_int(
 )
 MAX_AUTO_RESTARTS = _env_int("HEALTH_MAX_AUTO_RESTARTS", 3, minimum=1)
 BACKOFF_MULTIPLIER = _env_float("HEALTH_RESTART_BACKOFF_MULTIPLIER", 2.0, minimum=1.0)
-STARTUP_GRACE_SECONDS = _env_int("HEALTH_STARTUP_GRACE_SECONDS", 60, minimum=0)
+STARTUP_GRACE_SECONDS = _env_int("HEALTH_STARTUP_GRACE_SECONDS", 120, minimum=0)
+LOW_RESOURCE_EXTRA_GRACE_SECONDS = _env_int(
+    "HEALTH_LOW_RESOURCE_EXTRA_GRACE_SECONDS",
+    120,
+    minimum=0,
+)
+LOW_RESOURCE_CPU_THRESHOLD = _env_float(
+    "HEALTH_LOW_RESOURCE_CPU_THRESHOLD",
+    0.75,
+    minimum=0.1,
+)
+LOW_RESOURCE_MEMORY_THRESHOLD_MB = _env_int(
+    "HEALTH_LOW_RESOURCE_MEMORY_THRESHOLD_MB",
+    768,
+    minimum=64,
+)
 
 # Keep state long enough to survive process restarts and long cooldown windows.
 _MAX_COOLDOWN_SECONDS = int(
@@ -101,7 +116,7 @@ def _platform_ssl_enabled() -> bool:
 
 
 def _check_due(service) -> bool:
-    interval = max(5, int(service.health_check_interval or 30))
+    interval = max(10, int(service.health_check_interval or 60))
     now = time.time()
     key = _last_check_key(str(service.id))
     last_check = cache.get(key)
@@ -180,6 +195,28 @@ def _build_targets(service, active_deployment):
     return targets
 
 
+def _service_startup_grace_seconds(service) -> int:
+    grace = STARTUP_GRACE_SECONDS
+
+    try:
+        cpu_cores = float(service.cpu_cores or 0)
+    except (TypeError, ValueError):
+        cpu_cores = 0.0
+
+    try:
+        memory_mb = int(service.memory_mb or 0)
+    except (TypeError, ValueError):
+        memory_mb = 0
+
+    is_low_resource = (
+        (cpu_cores > 0 and cpu_cores <= LOW_RESOURCE_CPU_THRESHOLD)
+        or (memory_mb > 0 and memory_mb <= LOW_RESOURCE_MEMORY_THRESHOLD_MB)
+    )
+    if is_low_resource:
+        grace += LOW_RESOURCE_EXTRA_GRACE_SECONDS
+    return max(0, grace)
+
+
 @shared_task
 def monitor_health_task():
     """
@@ -222,17 +259,18 @@ def _check_service_health(service, Deployment):
         _clear_state(service_key, clear_restart=True)
         return
 
-    # Give fresh deployments a brief warm-up period before failing them.
-    if STARTUP_GRACE_SECONDS > 0 and active.created_at:
+    # Give fresh deployments a warm-up period before failing them.
+    startup_grace_seconds = _service_startup_grace_seconds(service)
+    if startup_grace_seconds > 0 and active.created_at:
         age = (timezone.now() - active.created_at).total_seconds()
-        if age < STARTUP_GRACE_SECONDS:
+        if age < startup_grace_seconds:
             return
 
     targets = _build_targets(service, active)
     if not targets:
         return
 
-    timeout = max(1, int(service.health_check_timeout or 5))
+    timeout = max(2, int(service.health_check_timeout or 15))
     failure_reason = "Health target not reachable"
 
     for target in targets:
@@ -276,7 +314,7 @@ def _handle_failure(service, service_key: str, reason: str):
     current_failures = int(cache.get(failure_key, 0) or 0) + 1
     cache.set(failure_key, current_failures, timeout=STATE_TTL_SECONDS)
 
-    retries = max(1, int(service.health_check_retries or 3))
+    retries = max(2, int(service.health_check_retries or 8))
     logger.warning(
         "%s health check failed (%d/%d): %s",
         service.name,

@@ -50,8 +50,9 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         adapter.batch_v1 = None
         return adapter, docker_client
 
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.PlatformConfig.load")
-    def test_sets_forwarded_https_headers_when_caddy_terminates_tls(self, mock_load):
+    def test_sets_forwarded_https_headers_when_caddy_terminates_tls(self, mock_load, _wait_mock):
         adapter, docker_client = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
@@ -65,7 +66,10 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
                 },
             )
 
-        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        initial_labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(initial_labels["traefik.enable"], "false")
+
+        labels = docker_client.api.update_container.call_args.kwargs["labels"]
         self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
         self.assertEqual(
             labels["traefik.http.routers.buyforfront.middlewares"],
@@ -84,8 +88,9 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
             "443",
         )
 
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.PlatformConfig.load")
-    def test_uses_websecure_router_when_direct_traefik_tls_enabled(self, mock_load):
+    def test_uses_websecure_router_when_direct_traefik_tls_enabled(self, mock_load, _wait_mock):
         adapter, docker_client = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
@@ -99,7 +104,10 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
                 },
             )
 
-        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        initial_labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(initial_labels["traefik.enable"], "false")
+
+        labels = docker_client.api.update_container.call_args.kwargs["labels"]
         self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "websecure")
         self.assertEqual(labels["traefik.http.routers.buyforfront.tls"], "true")
         self.assertNotIn("traefik.http.routers.buyforfront.middlewares", labels)

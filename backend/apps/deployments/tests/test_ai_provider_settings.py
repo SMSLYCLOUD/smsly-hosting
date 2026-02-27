@@ -9,10 +9,18 @@ from rest_framework.test import APITestCase
 
 from apps.intelligence.models import AIProviderSettings
 from apps.intelligence.providers import _sync_db_to_env
+from apps.licensing.models import PlatformLicense, PlatformTier
 
 
 class AIProviderSettingsTests(APITestCase):
     def setUp(self):
+        license_obj = PlatformLicense.load()
+        license_obj.tier = PlatformTier.PRO
+        license_obj.is_valid = True
+        license_obj.max_services = 100
+        license_obj.max_team_members = 100
+        license_obj.save(update_fields=["tier", "is_valid", "max_services", "max_team_members"])
+
         self.admin = User.objects.create_superuser(
             username="ai-admin",
             email="ai-admin@example.com",

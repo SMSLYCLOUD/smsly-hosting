@@ -56,8 +56,8 @@ def generate_traefik_labels(
 
         # Health check
         f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.path": "/health",
-        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.interval": "10s",
-        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.timeout": "3s",
+        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.interval": "20s",
+        f"traefik.http.services.{router_name}-service.loadbalancer.healthcheck.timeout": "8s",
     }
 
     # NOTE: TLS labels removed — Caddy handles SSL termination in production.
