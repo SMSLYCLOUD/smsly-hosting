@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, Mail, Play, GitCompare, Users } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -85,8 +85,12 @@ export function Navbar() {
     { href: '/store', label: 'Templates' },
     { href: '/marketplace', label: 'Addons' },
     { href: '/pricing', label: 'Pricing' },
+    { href: '/compare', label: 'Compare' },
     { href: '/docs', label: 'Docs' },
     { href: '/status', label: 'Status' },
+    { href: '/contact', label: 'Contact' },
+    { href: '/get-started', label: 'Get Started' },
+    { href: '/reseller', label: 'Reseller' },
   ];
 
   const authLinks: Array<{
@@ -102,8 +106,13 @@ export function Navbar() {
     { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
     { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
     { href: '/activity', label: 'Activity', icon: Activity, tier: 'secondary' },
+    { href: '/functions', label: 'Functions', icon: Zap, tier: 'secondary' },
+    { href: '/autoscaler', label: 'Autoscaler', icon: Gauge, tier: 'secondary' },
+    { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
     { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
+    { href: '/templates', label: 'Templates', icon: FileCode, tier: 'secondary' },
+    { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'secondary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'secondary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'secondary' },
   ];
@@ -128,8 +137,8 @@ export function Navbar() {
 
         {/* Logo - Left */}
         <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
-            <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
-            {!user && <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
+            <Image src="/images/logo.svg" alt="SMSLY Hosting Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
+            {!user && <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">SMSLY Hosting</span>}
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}

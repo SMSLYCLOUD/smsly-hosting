@@ -28,6 +28,6 @@ jobs:
 
             echo "=== Running health check ==="
             sleep 10
-            curl -sf http://localhost/health || echo "WARNING: Health check failed"
+            curl -sf http://localhost/health || { echo "FATAL: Health check failed after deploy"; exit 1; }
 
             echo "=== Deploy complete ==="

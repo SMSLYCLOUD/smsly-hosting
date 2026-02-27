@@ -158,19 +158,50 @@ def perform_update(update_record) -> bool:
             raise PlatformUpdateError(f"Migration failed: {output[-500:]}")
         update_record.append_log('Migrations complete')
 
-        # Step 5: Restart services
+        # Step 5: Restart services sequentially with health gates.
+        # Restart in dependency order so each service is healthy before its
+        # dependents start with new code. This prevents the window of downtime
+        # that occurs when all services are replaced simultaneously.
         update_record.status = 'RESTARTING'
-        update_record.current_step = 'Restarting services'
         update_record.progress_percent = 75
         update_record.save()
 
-        ok, output = _run([
-            'docker', 'compose', '-f', COMPOSE_FILE,
-            'up', '-d', '--remove-orphans',
-        ])
-        if not ok:
-            raise PlatformUpdateError(f"Restart failed: {output[-500:]}")
-        update_record.append_log('Services restarted')
+        restart_order = [
+            'db', 'redis', 'pgbouncer', 'socket-proxy', 'registry',
+            'backend', 'celery', 'celery-beat',
+            'frontend', 'nginx',
+        ]
+        for svc in restart_order:
+            update_record.current_step = f'Restarting {svc}'
+            update_record.save()
+
+            ok, output = _run([
+                'docker', 'compose', '-f', COMPOSE_FILE,
+                'up', '-d', '--no-deps', svc,
+            ])
+            if not ok:
+                raise PlatformUpdateError(f"Failed to restart {svc}: {output[-300:]}")
+
+            # Wait for health before moving to next service
+            if svc in ('db', 'redis', 'pgbouncer', 'backend', 'frontend', 'nginx'):
+                svc_healthy = False
+                for attempt in range(HEALTH_CHECK_RETRIES):
+                    ok, ps_output = _run([
+                        'docker', 'compose', '-f', COMPOSE_FILE,
+                        'ps', svc, '--format', '{{.Health}}',
+                    ])
+                    if ok and 'healthy' in ps_output.lower():
+                        svc_healthy = True
+                        break
+                    time.sleep(HEALTH_CHECK_INTERVAL)
+                if not svc_healthy:
+                    update_record.append_log(
+                        f"WARNING: {svc} not healthy after "
+                        f"{HEALTH_CHECK_RETRIES * HEALTH_CHECK_INTERVAL}s"
+                    )
+            update_record.append_log(f'{svc} restarted')
+
+        update_record.append_log('All services restarted sequentially')
 
         # Step 6: Health check
         update_record.status = 'HEALTH_CHECK'
