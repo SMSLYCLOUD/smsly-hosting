@@ -904,18 +904,18 @@ export const coreApi = {
 
   // Notifications
   getNotifications: async (): Promise<any[]> => {
-    const res = await api.get('/notifications/notifications/');
+    const res = await api.get('/notifications/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
   markAllNotificationsRead: async (): Promise<void> => {
-    await api.post('/notifications/notifications/mark_all_read/');
+    await api.post('/notifications/mark_all_read/');
   },
   getNotificationPreferences: async (): Promise<any[]> => {
-    const res = await api.get('/notifications/preferences/');
+    const res = await api.get('/preferences/');
     return Array.isArray(res.data) ? res.data : res.data.results || [];
   },
   updateNotificationPreference: async (id: number, data: any): Promise<any> => {
-    const res = await api.patch(`/notifications/preferences/${id}/`, data);
+    const res = await api.patch(`/preferences/${id}/`, data);
     return res.data;
   }
 };

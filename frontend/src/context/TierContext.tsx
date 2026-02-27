@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import api from '@/lib/api';
 
 export type PlatformTier = 'community' | 'pro' | 'enterprise';
 

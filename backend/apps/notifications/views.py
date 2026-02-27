@@ -22,12 +22,19 @@ class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
         alert.save()
         return Response({'status': 'dismissed'})
 
-class NotificationViewSet(viewsets.ModelViewSet):
+class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = NotificationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         return Notification.objects.filter(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.read = True
+        notification.save(update_fields=['read'])
+        return Response({'status': 'ok'})
 
     @action(detail=False, methods=['POST'])
     def mark_all_read(self, request):
@@ -40,3 +47,6 @@ class NotificationPreferenceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return NotificationPreference.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

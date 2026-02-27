@@ -153,10 +153,12 @@ def _runtime_watch_defaults(user) -> Dict[str, str]:
 
 
 @shared_task(bind=True, soft_time_limit=120, time_limit=180)
-def ecosystem_scan_task(self, user_id: str) -> dict:
+def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
     This is async because fetching and AI analysis can take 30-60s.
+
+    scan_window_days is currently reserved for future repo recency filtering.
     """
     from django.contrib.auth import get_user_model
     from apps.deployments.views_github import _get_github_token
