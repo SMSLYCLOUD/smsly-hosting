@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import { Plus, LayoutGrid, Network, Store, Puzzle, GitFork } from 'lucide-react';
+import { Plus, LayoutGrid, Network, Store, Puzzle, GitFork, Building } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -18,6 +18,11 @@ const ServiceCanvas = dynamic(() => import('@/components/canvas/ServiceCanvas').
 
 const TopologyView = dynamic(() => import('@/components/topology/TopologyView').then(mod => mod.TopologyView), {
   loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Topology...</div>,
+  ssr: false
+});
+
+const Topology3D = dynamic(() => import('@/components/topology/Topology3D').then(mod => mod.Topology3D), {
+  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading 3D Engine...</div>,
   ssr: false
 });
 
@@ -38,13 +43,14 @@ function buildServiceFingerprint(services: Service[]): string {
 
 export default function ServicesPage() {
   const router = useRouter();
-  const [viewMode, setViewMode] = useState<'GRID' | 'CANVAS' | 'TOPOLOGY' | 'ADDONS'>('GRID');
+  const [viewMode, setViewMode] = useState<'GRID' | 'CANVAS' | 'TOPOLOGY' | 'CITY3D' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
   const fingerprintRef = useRef('');
-  const viewTabs: Array<{ id: 'GRID' | 'CANVAS' | 'TOPOLOGY' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
+  const viewTabs: Array<{ id: 'GRID' | 'CANVAS' | 'TOPOLOGY' | 'CITY3D' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
     { id: 'CANVAS', label: 'Canvas', icon: Network },
     { id: 'TOPOLOGY', label: 'Topology', icon: GitFork },
+    { id: 'CITY3D', label: 'City 3D', icon: Building },
     { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
 
@@ -142,6 +148,11 @@ export default function ServicesPage() {
         {viewMode === 'TOPOLOGY' && (
             <div className="h-full min-h-0">
                 <TopologyView />
+            </div>
+        )}
+        {viewMode === 'CITY3D' && (
+            <div className="h-full min-h-0">
+                <Topology3D />
             </div>
         )}
         {viewMode === 'ADDONS' && (
