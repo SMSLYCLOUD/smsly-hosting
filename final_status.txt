@@ -1,0 +1,64 @@
+
+=== 163.245.216.249 ===
+  [containers]: smsly-hosting-backend-1 Up 13 minutes (healthy)
+smsly-hosting-celery-1 Up 12 minutes (healthy)
+smsly-hosting-celery-beat-1 Up 12 minutes (healthy)
+smsly-hosting-db-1 Up 4 hours (healthy)
+smsly-hosting-frontend-1 Up 13 minutes (healthy)
+smsly-hosting-nginx-1 Up 4 hours (healthy)
+smsly-hosting-pgbouncer-1 Up 4 hours (healthy)
+smsly-hosting-redis-1 Up 4 hours (healthy)
+smsly-hosting-registry-1 Up 4 hours
+smsly-hosting-route-fallback-1 Up 4 hours
+smsly-hosting-socket-proxy-1 Up 4 hours
+smsly-hosting
+  [customers]: smsly-hosting-route-fallback-1 Up 4 hours
+distinction-lab Up 4 hours (healthy)
+  [exited]: SMSLY-MARKETER exited(exited)
+  [frontend]: 502
+  [api_tier]: <html>
+  [backend_errors]: (empty)
+
+=== 163.245.214.62 ===
+  [containers]: smsly-hosting-backend-1 Up 11 minutes (healthy)
+smsly-hosting-celery-1 Up 11 minutes (healthy)
+smsly-hosting-celery-beat-1 Up 11 minutes (healthy)
+smsly-hosting-db-1 Up 4 hours (healthy)
+smsly-hosting-frontend-1 Up 11 minutes (healthy)
+smsly-hosting-nginx-1 Up 4 hours (healthy)
+smsly-hosting-pgbouncer-1 Up 4 hours (healthy)
+smsly-hosting-redis-1 Up 4 hours (healthy)
+smsly-hosting-registry-1 Up 4 hours
+smsly-hosting-route-fallback-1 Up 4 hours
+smsly-hosting-socket-proxy-1 Up 4 hours
+smsly-hosting
+  [customers]: smsly-helper-frontend-green-9699d52a Up 12 minutes (unhealthy)
+fegloire Up 13 minutes (healthy)
+fegloire-frontend Up 14 minutes (healthy)
+smsly-hosting-route-fallback-1 Up 4 hours
+SMSLY-MARKETER Up 17 hours (healthy)
+Ucoin-frontend Up 21 hours (healthy)
+Ucoin Up 21 hours (healthy)
+lina-deluxe Up 25 hours (healthy)
+lina-deluxe-frontend Up 25 hours (healthy)
+  [exited]: (empty)
+  [frontend]: 200
+  [api_tier]: (empty)
+  [backend_errors]: (empty)
+
+=== 163.245.216.248 ===
+  [containers]: smsly-hosting-backend-1 Up 30 seconds (health: starting)
+smsly-hosting-db-1 Up 4 hours (healthy)
+smsly-hosting-frontend-1 Up 11 minutes (healthy)
+smsly-hosting-nginx-1 Up 4 hours (healthy)
+smsly-hosting-pgbouncer-1 Up 4 hours (healthy)
+smsly-hosting-redis-1 Up 4 hours (healthy)
+smsly-hosting-registry-1 Up 4 hours
+smsly-hosting-route-fallback-1 Up 4 hours
+smsly-hosting-socket-proxy-1 Up 4 hours
+smsly-hosting-traefik-1 Up 4 hours
+  [customers]: smsly-hosting-route-fallback-1 Up 4 hours
+  [exited]: (empty)
+  [frontend]: 200
+  [api_tier]: <html>
+  [backend_errors]: backend-1  | django.db.migrations.exceptions.InconsistentMigrationHistory: Migration deployments.0030_merge_0028_0029 is applied before its dependency deployments.0028_alter_service_is_public on database 'default'.

@@ -1,0 +1,21 @@
+[containers]: smsly-hosting-backend-1 Up 26 minutes (healthy)
+smsly-hosting-celery-1 Up 26 minutes (healthy)
+smsly-hosting-celery-beat-1 Up 26 minutes (healthy)
+smsly-hosting-db-1 Up 4 hours (healthy)
+smsly-hosting-frontend-1 Up 26 minutes (healthy)
+smsly-hosting-nginx-1 Up 4 hours (healthy)
+smsly-hosting-pgbouncer-1 Up 4 hours (healthy)
+smsly-hosting-redis-1 Up 4 hours (healthy)
+smsly-hosting-registry-1 Up 4 hours
+smsly-hosting-route-fallback-1 Up 4 hours
+smsly-hosting-socket-proxy-1 Up 4 hours
+smsly-hosting
+[restart_nginx]: Container smsly-hosting-nginx-1 Restarting 
+ Container smsly-hosting-nginx-1 Started
+[wait]: 
+[test_nginx]: 200
+[test_backend]: 000
+[backend_logs]: backend-1  |   required=allauth_account_settings.USERNAME_REQUIRED,
+backend-1  | /usr/local/lib/python3.11/site-packages/dj_rest_auth/registration/serializers.py:227: UserWarning: app_settings.EMAIL_REQUIRED is deprecated, use: app_settings.SIGNUP_FIELDS['email']['required']
+backend-1  |   email = serializers.EmailField(required=allauth_account_settings.EMAIL_REQUIRED)
+backend-1  | /usr/local/lib/python3.11/site-packages/dj_rest_auth/registration/serializers.py:285: UserWarning: app_settings.EMA
