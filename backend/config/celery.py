@@ -21,6 +21,7 @@ app.autodiscover_tasks()
 # otherwise models.py triggers AppRegistryNotReady.
 @app.on_after_finalize.connect
 def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
+    import apps.cloud.services.ssl_monitor  # noqa: F401
     import apps.deployments.services.autoscaler  # noqa: F401
     import apps.deployments.services.health_monitor  # noqa: F401
     import apps.deployments.services.provisioner  # noqa: F401
@@ -56,6 +57,11 @@ app.conf.beat_schedule = {
     'detect-runtime-anomalies-every-180s': {
         'task': 'apps.intelligence.tasks.detect_anomalies_task',
         'schedule': 180.0,
+    },
+    # SSL certificate expiry scan every 6 hours
+    'check-ssl-certificates-every-6h': {
+        'task': 'apps.cloud.services.ssl_monitor.check_ssl_certificates_task',
+        'schedule': 21600.0,
     },
     # Cleanup Docker build cache daily
     'cleanup-build-cache-daily': {

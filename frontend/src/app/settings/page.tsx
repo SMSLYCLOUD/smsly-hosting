@@ -101,6 +101,7 @@ export default function SettingsPage() {
   });
   const [savingDomain, setSavingDomain] = useState(false);
   const [showCfToken, setShowCfToken] = useState(false);
+  const [cfTokenTouched, setCfTokenTouched] = useState(false);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -156,6 +157,7 @@ export default function SettingsPage() {
         cloudflare_api_token: '',
         server_ip: data.server_ip || '',
       });
+      setCfTokenTouched(false);
     } catch (err) {
       console.error('Failed to fetch domain config', err);
     }
@@ -237,9 +239,14 @@ export default function SettingsPage() {
     setSavingDomain(true);
     try {
       const payload: any = { ...domainForm };
-      if (!payload.cloudflare_api_token) delete payload.cloudflare_api_token;
+      if (!cfTokenTouched) {
+        delete payload.cloudflare_api_token;
+      } else {
+        payload.cloudflare_api_token = String(payload.cloudflare_api_token || '').trim();
+      }
       const result = await systemApi.updateDomainConfig(payload);
       toast({ title: 'Domain Config Saved', description: result.message || 'Configuration applied.' });
+      setCfTokenTouched(false);
       fetchDomainConfig();
     } catch (err: any) {
       const msg = err?.response?.data?.error || 'Failed to save domain config.';
@@ -929,9 +936,22 @@ export default function SettingsPage() {
                           type={showCfToken ? "text" : "password"}
                           placeholder={domainConfig?.cloudflare_api_token_set ? "Configured token (hidden)" : "Enter Cloudflare API Token"}
                           value={domainForm.cloudflare_api_token}
-                          onChange={(e) => setDomainForm(prev => ({ ...prev, cloudflare_api_token: e.target.value }))}
+                          onChange={(e) => {
+                            setCfTokenTouched(true);
+                            setDomainForm(prev => ({ ...prev, cloudflare_api_token: e.target.value }));
+                          }}
                           className="flex-1"
                         />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setCfTokenTouched(true);
+                            setDomainForm(prev => ({ ...prev, cloudflare_api_token: '' }));
+                          }}
+                        >
+                          Clear
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => setShowCfToken(!showCfToken)}>
                           {showCfToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </Button>

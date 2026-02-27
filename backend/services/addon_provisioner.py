@@ -102,6 +102,10 @@ class AddonProvisioner:
         container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
         password = secrets.token_urlsafe(24)
 
+        # Friendly network alias so apps can reach the addon by name
+        # e.g. "postgres-buyforfront" instead of "smsly-addon-postgres-{uuid}"
+        alias_name = addon.name or f"{addon_type.lower()}-{service_name}"
+
         image = self.ADDON_IMAGES.get(addon_type)
         port = self.ADDON_PORTS.get(addon_type)
 
@@ -114,39 +118,43 @@ class AddonProvisioner:
         # Build Docker run command based on addon type
         if addon_type == 'POSTGRES':
             container_id, connection_url = self._provision_postgres(
-                container_name, password, port
+                container_name, password, port, alias_name
             )
         elif addon_type == 'REDIS':
             container_id, connection_url = self._provision_redis(
-                container_name, password, port
+                container_name, password, port, alias_name
             )
         elif addon_type == 'MYSQL':
             container_id, connection_url = self._provision_mysql(
-                container_name, password, port
+                container_name, password, port, alias_name
             )
         elif addon_type == 'MONGODB':
             container_id, connection_url = self._provision_mongodb(
-                container_name, password, port
+                container_name, password, port, alias_name
             )
         elif addon_type == 'QDRANT':
             container_id, connection_url = self._provision_qdrant(
-                container_name, port
+                container_name, port, alias_name
             )
         elif addon_type == 'ELASTICSEARCH':
             container_id, connection_url = self._provision_elasticsearch(
-                container_name, port
+                container_name, port, alias_name
             )
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
-        logger.info(f"Addon {addon_type} provisioned: {container_name}")
+        logger.info(f"Addon {addon_type} provisioned: {container_name} (alias: {alias_name})")
         return container_id, connection_url
 
     def _provision_postgres(self, container_name: str,
-                            password: str, port: int) -> Tuple[str, str]:
+                            password: str, port: int,
+                            alias_name: str = '') -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
-        db_name = "app_db"
-        db_user = "app_user"
+        # Derive service-specific user/db from alias (e.g. "postgres-myapp")
+        # so each addon gets isolated credentials.
+        safe_suffix = (alias_name or container_name).replace('-', '_')
+        db_user = safe_suffix  # e.g. "postgres_myapp"
+        db_name = safe_suffix  # same — one DB per addon
 
         cmd = [
             'docker', 'run', '-d',
@@ -157,8 +165,10 @@ class AddonProvisioner:
             '-e', f'POSTGRES_USER={db_user}',
             '-e', f'POSTGRES_DB={db_name}',
             '-v', f'{container_name}-data:/var/lib/postgresql/data',
-            self.ADDON_IMAGES['POSTGRES']
         ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['POSTGRES'])
 
         result = subprocess.run(
             cmd,
@@ -167,14 +177,17 @@ class AddonProvisioner:
             check=True)
         container_id = result.stdout.strip()[:12]
 
-        # Internal Docker network URL (service-to-service)
-        connection_url = f"postgresql://{db_user}:{password}@{container_name}:{port}/{db_name}"
+        # Use alias_name as hostname so apps reach the DB by friendly name
+        # (e.g. "postgres-myapp" instead of "smsly-addon-postgres-uuid")
+        hostname = alias_name or container_name
+        connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
 
     def _provision_redis(self, container_name: str,
-                         password: str, port: int) -> Tuple[str, str]:
+                         password: str, port: int,
+                         alias_name: str = '') -> Tuple[str, str]:
         """Provision a Redis container with authentication."""
         cmd = [
             'docker', 'run', '-d',
@@ -182,9 +195,13 @@ class AddonProvisioner:
             '--network', self.network_name,
             '--restart', 'unless-stopped',
             '-v', f'{container_name}-data:/data',
+        ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.extend([
             self.ADDON_IMAGES['REDIS'],
             'redis-server', '--requirepass', password, '--appendonly', 'yes'
-        ]
+        ])
 
         result = subprocess.run(
             cmd,
@@ -199,7 +216,8 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _provision_mysql(self, container_name: str,
-                         password: str, port: int) -> Tuple[str, str]:
+                         password: str, port: int,
+                         alias_name: str = '') -> Tuple[str, str]:
         """Provision a MySQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -214,8 +232,10 @@ class AddonProvisioner:
             '-e', f'MYSQL_USER={db_user}',
             '-e', f'MYSQL_PASSWORD={password}',
             '-v', f'{container_name}-data:/var/lib/mysql',
-            self.ADDON_IMAGES['MYSQL']
         ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['MYSQL'])
 
         result = subprocess.run(
             cmd,
@@ -233,7 +253,8 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _provision_mongodb(self, container_name: str,
-                           password: str, port: int) -> Tuple[str, str]:
+                           password: str, port: int,
+                           alias_name: str = '') -> Tuple[str, str]:
         """Provision a MongoDB container."""
         db_user = "app_user"
         db_name = "app_db"
@@ -246,8 +267,10 @@ class AddonProvisioner:
             '-e', f'MONGO_INITDB_ROOT_USERNAME={db_user}',
             '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
             '-v', f'{container_name}-data:/data/db',
-            self.ADDON_IMAGES['MONGODB']
         ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['MONGODB'])
 
         result = subprocess.run(
             cmd,
@@ -262,7 +285,8 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _provision_qdrant(self, container_name: str,
-                          port: int) -> Tuple[str, str]:
+                          port: int,
+                          alias_name: str = '') -> Tuple[str, str]:
         """Provision a Qdrant vector database container."""
         cmd = [
             'docker', 'run', '-d',
@@ -271,8 +295,10 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             '-e', 'QDRANT__SERVICE__GRPC_PORT=6334',
             '-v', f'{container_name}-data:/qdrant/storage',
-            self.ADDON_IMAGES['QDRANT']
         ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['QDRANT'])
 
         result = subprocess.run(
             cmd,
@@ -288,7 +314,8 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _provision_elasticsearch(self, container_name: str,
-                                 port: int) -> Tuple[str, str]:
+                                 port: int,
+                                 alias_name: str = '') -> Tuple[str, str]:
         """Provision a single-node Elasticsearch container."""
         cmd = [
             'docker', 'run', '-d',
@@ -299,8 +326,10 @@ class AddonProvisioner:
             '-e', 'xpack.security.enabled=false',
             '-e', 'ES_JAVA_OPTS=-Xms256m -Xmx256m',
             '-v', f'{container_name}-data:/usr/share/elasticsearch/data',
-            self.ADDON_IMAGES['ELASTICSEARCH']
         ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['ELASTICSEARCH'])
 
         result = subprocess.run(
             cmd,
@@ -446,10 +475,24 @@ class AddonProvisioner:
         
         try:
             if addon.addon_type == 'POSTGRES':
+                postgres_user = self._get_container_env(
+                    container_name, 'POSTGRES_USER'
+                )
+                postgres_db = self._get_container_env(
+                    container_name, 'POSTGRES_DB'
+                )
                 # Stream pg_dump output directly to file without shell redirection.
                 with open(backup_path, 'wb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', container_name, 'pg_dump', '-U', 'app_user', 'app_db'],
+                        [
+                            'docker',
+                            'exec',
+                            container_name,
+                            'pg_dump',
+                            '-U',
+                            postgres_user,
+                            postgres_db,
+                        ],
                         check=True,
                         stdout=backup_file,
                     )
@@ -501,10 +544,25 @@ class AddonProvisioner:
         
         try:
             if addon.addon_type == 'POSTGRES':
+                postgres_user = self._get_container_env(
+                    container_name, 'POSTGRES_USER'
+                )
+                postgres_db = self._get_container_env(
+                    container_name, 'POSTGRES_DB'
+                )
                 # Stream backup content as stdin to psql without shell piping.
                 with open(validated_backup_path, 'rb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', '-i', container_name, 'psql', '-U', 'app_user', 'app_db'],
+                        [
+                            'docker',
+                            'exec',
+                            '-i',
+                            container_name,
+                            'psql',
+                            '-U',
+                            postgres_user,
+                            postgres_db,
+                        ],
                         stdin=backup_file,
                         check=True,
                     )

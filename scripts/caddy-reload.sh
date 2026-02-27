@@ -11,6 +11,7 @@ WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
 CADDY_CONF="/etc/caddy/Caddyfile"
 RELOAD_FLAG="$WATCH_DIR/.reload"
 TOKEN_FILE="$WATCH_DIR/.cloudflare_token"
+TOKEN_CLEAR_FILE="$WATCH_DIR/.cloudflare_token_clear"
 OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
 OVERRIDE_CONF="$OVERRIDE_DIR/override.conf"
 LOG_PREFIX="[caddy-watcher]"
@@ -19,9 +20,37 @@ echo "$LOG_PREFIX Starting — watching $WATCH_DIR for changes"
 
 # Load Cloudflare token if available (needed for validation of wildcard configs)
 load_cloudflare_env() {
-    if [ -f "$OVERRIDE_CONF" ]; then
-        eval "$(grep '^Environment=' "$OVERRIDE_CONF" | sed 's/^Environment="//;s/"$//;s/^/export /')"
+    if [ ! -f "$OVERRIDE_CONF" ]; then
+        return
+    fi
+
+    local token_line token
+    token_line="$(grep '^Environment="CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF" 2>/dev/null || true)"
+    token="${token_line#Environment=\"CLOUDFLARE_API_TOKEN=}"
+    token="${token%\"}"
+
+    if [ -n "$token" ]; then
+        export CLOUDFLARE_API_TOKEN="$token"
         echo "$LOG_PREFIX Loaded Cloudflare env from Caddy service override"
+    else
+        unset CLOUDFLARE_API_TOKEN || true
+    fi
+}
+
+clear_cloudflare_override() {
+    local had_token=0
+    if [ -f "$OVERRIDE_CONF" ] && grep -q 'CLOUDFLARE_API_TOKEN=' "$OVERRIDE_CONF"; then
+        had_token=1
+    fi
+
+    if [ -f "$OVERRIDE_CONF" ]; then
+        rm -f "$OVERRIDE_CONF"
+    fi
+    unset CLOUDFLARE_API_TOKEN || true
+
+    if [ "$had_token" -eq 1 ]; then
+        systemctl daemon-reload 2>&1 || true
+        echo "$LOG_PREFIX Cleared Cloudflare token override"
     fi
 }
 
@@ -29,6 +58,11 @@ load_cloudflare_env() {
 # This bridges the gap between the web UI (writes token to DB → shared volume)
 # and Caddy (reads token from systemd environment).
 sync_cloudflare_token() {
+    if [ -f "$TOKEN_CLEAR_FILE" ]; then
+        clear_cloudflare_override
+        rm -f "$TOKEN_CLEAR_FILE" "$TOKEN_FILE"
+    fi
+
     if [ -f "$TOKEN_FILE" ]; then
         NEW_TOKEN=$(cat "$TOKEN_FILE")
         if [ -n "$NEW_TOKEN" ]; then
@@ -53,6 +87,8 @@ ENVEOF
             else
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
             fi
+        else
+            clear_cloudflare_override
         fi
         # Remove token file after processing (security: don't leave on disk)
         rm -f "$TOKEN_FILE"
