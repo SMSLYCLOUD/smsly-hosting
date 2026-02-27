@@ -158,3 +158,21 @@ class APIKeyViewSet(
             key.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+class SubdomainStubViewSet(viewsets.ViewSet):
+    """Stub endpoint for /api/v1/subdomains/ until full implementation."""
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        return Response({'subdomains': [], 'limit': 0})
+
+    def create(self, request):
+        return Response(
+            {'detail': 'Subdomain reservations coming soon.'},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
+
+    def destroy(self, request, pk=None):
+        return Response(status=status.HTTP_404_NOT_FOUND)
+

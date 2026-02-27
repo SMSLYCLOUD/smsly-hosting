@@ -85,12 +85,8 @@ export function Navbar() {
     { href: '/store', label: 'Templates' },
     { href: '/marketplace', label: 'Addons' },
     { href: '/pricing', label: 'Pricing' },
-    { href: '/compare', label: 'Compare' },
     { href: '/docs', label: 'Docs' },
     { href: '/status', label: 'Status' },
-    { href: '/contact', label: 'Contact' },
-    { href: '/get-started', label: 'Get Started' },
-    { href: '/reseller', label: 'Reseller' },
   ];
 
   const authLinks: Array<{
