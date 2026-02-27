@@ -1,4 +1,5 @@
 import logging
+from django.conf import settings
 from django.utils import timezone
 from django.http import JsonResponse
 from .models import PlatformLicense
@@ -13,6 +14,9 @@ class TierLimitsMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+            return self.get_response(request)
+
         if request.method == 'POST':
             path = request.path
 

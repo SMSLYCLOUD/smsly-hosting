@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.conf import settings
 from .models import PlatformLicense
 from .serializers import LicenseStatusSerializer, LicenseActivationSerializer
 from .validator import validate_license
@@ -18,7 +19,40 @@ class LicenseViewSet(viewsets.ViewSet):
         # Ensure validation is fresh-ish? Maybe rely on cron task or validate on read if old?
         # For now just return stored state.
         serializer = LicenseStatusSerializer(license_obj)
-        return Response(serializer.data)
+        data = dict(serializer.data)
+
+        # Owner edition: explicit runtime bypass for all tier gates/UI locks.
+        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+            data.update(
+                {
+                    "tier": "enterprise",
+                    "is_valid": True,
+                    "is_community": False,
+                    "is_pro": True,
+                    "is_enterprise": True,
+                    "max_services": -1,
+                    "max_team_members": -1,
+                }
+            )
+            data["features"] = {
+                "ai_features": True,
+                "autoscaler": True,
+                "custom_domains": True,
+                "ssl_certificates": True,
+                "marketplace": True,
+                "functions": True,
+                "tunnels": True,
+                "topology": True,
+                "transfers": True,
+                "backups_automated": True,
+                "sso": True,
+                "audit_logs": True,
+                "white_label": True,
+                "rbac": True,
+                "multi_node": True,
+            }
+
+        return Response(data)
 
     @action(detail=False, methods=['post'])
     def activate(self, request):

@@ -46,7 +46,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     # Skip collection if values are already pre-seeded via env vars, or if
     # this is an --update / --wipe run (those don't need interactive input).
     _ARG1="${1:-}"
-    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [ -z "${USE_SSL:-}" ]; then
+    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--debug" ]] && [ -z "${USE_SSL:-}" ]; then
         # Detect public IP for the mode selection prompt
         _detect_ip() {
             local c="" ep=""
@@ -244,6 +244,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
+    env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     postgres_password="$(env_get_value "$env_file" "POSTGRES_PASSWORD")"
@@ -393,18 +394,24 @@ ROLLBACK_NEEDED=false
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
 WIPE_MODE="false"
+RECOVER_MODE="false"
+DEBUG_MODE="false"
 case "${1:-}" in
     --update)          UPDATE_MODE="full" ;;
     --update-frontend) UPDATE_MODE="frontend" ;;
     --update-backend)  UPDATE_MODE="backend" ;;
     --wipe)            WIPE_MODE="true" ;;
+    --recover)         RECOVER_MODE="true" ;;
+    --debug)           DEBUG_MODE="true" ;;
     --help|-h)
-        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--wipe]"
+        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--recover|--debug|--wipe]"
         echo ""
         echo "  (no args)          Fresh install"
         echo "  --update           Pull latest code and rebuild all services"
         echo "  --update-frontend  Pull latest code and rebuild frontend only"
         echo "  --update-backend   Pull latest code and rebuild backend only"
+        echo "  --recover          Restart Docker/network/runtime stack without deleting data"
+        echo "  --debug            Print deep runtime diagnostics (containers, networks, health, logs)"
         echo "  --wipe             Delete existing install artifacts (for fresh VPS reset)"
         exit 0
         ;;
@@ -413,6 +420,10 @@ esac
 MODE_LABEL="fresh-install"
 if [ -n "$UPDATE_MODE" ]; then
     MODE_LABEL="update-$UPDATE_MODE"
+elif [ "$RECOVER_MODE" = "true" ]; then
+    MODE_LABEL="recover"
+elif [ "$DEBUG_MODE" = "true" ]; then
+    MODE_LABEL="debug"
 elif [ "$WIPE_MODE" = "true" ]; then
     MODE_LABEL="wipe"
 fi
@@ -603,6 +614,132 @@ restart_edge_stack() {
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
 
+wait_for_container_ready() {
+    local container_name="$1"
+    local timeout_seconds="${2:-180}"
+    local elapsed=0
+    local state=""
+
+    [ -z "$container_name" ] && return 1
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_name" 2>/dev/null || echo "missing")"
+        if [ "$state" = "healthy" ] || [ "$state" = "running" ]; then
+            echo -e "${GREEN}  OK $container_name is $state${NC}"
+            return 0
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    echo -e "${YELLOW}  WARN $container_name not ready after ${timeout_seconds}s (state=$state)${NC}"
+    return 1
+}
+
+recover_runtime_stack() {
+    echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
+
+    ensure_update_networks
+
+    if systemctl list-unit-files docker.service >/dev/null 2>&1; then
+        echo -e "${BLUE}    -> Restarting Docker daemon...${NC}"
+        systemctl restart docker >/dev/null 2>&1 || true
+        sleep 8
+        ensure_update_networks
+    fi
+
+    echo -e "${BLUE}    -> Starting dependency services...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy registry || true
+    wait_for_container_ready "smsly-hosting-db-1" 120 || true
+    wait_for_container_ready "smsly-hosting-pgbouncer-1" 120 || true
+    wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+
+    echo -e "${BLUE}    -> Starting app services...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d backend frontend || true
+    wait_for_container_ready "smsly-hosting-backend-1" 180 || true
+    wait_for_container_ready "smsly-hosting-frontend-1" 120 || true
+
+    echo -e "${BLUE}    -> Starting workers and edge services...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d celery celery-beat traefik route-fallback nginx || true
+
+    # Re-attach expected networks (idempotent)
+    ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+    if command -v caddy >/dev/null 2>&1; then
+        systemctl restart caddy >/dev/null 2>&1 || true
+    fi
+    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+
+    echo -e "${GREEN}  OK Runtime recovery completed${NC}"
+}
+
+debug_platform_status() {
+    set +e
+    echo -e "\n${YELLOW}=== SMSLY DEBUG SNAPSHOT ===${NC}"
+    echo "Timestamp: $(date -Iseconds)"
+    echo "Install dir: $INSTALL_DIR"
+    echo ""
+
+    echo "---- Systemd ----"
+    systemctl is-active docker 2>/dev/null || true
+    systemctl is-active caddy 2>/dev/null || true
+    systemctl is-active caddy-watcher 2>/dev/null || true
+    systemctl is-active smsly-autoscaler 2>/dev/null || true
+    echo ""
+
+    echo "---- Docker Networks ----"
+    docker network ls | grep -E 'smsly|socket-proxy' || true
+    echo ""
+
+    echo "---- Compose PS ----"
+    docker compose -f "$COMPOSE_FILE" ps || true
+    echo ""
+
+    echo "---- Local Health ----"
+    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
+    curl -iSsf http://127.0.0.1/health 2>/dev/null | head -20 || echo "http://127.0.0.1/health failed"
+    echo ""
+
+    echo "---- Backend DNS Checks ----"
+    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgbouncer redis 2>/dev/null || echo "backend DNS check failed"
+    echo ""
+
+    echo "---- Key Logs (tail 120) ----"
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx traefik pgbouncer redis 2>/dev/null || true
+    echo -e "${YELLOW}=== END DEBUG SNAPSHOT ===${NC}\n"
+    set -e
+}
+
+# =============================================================================
+# DEBUG/RECOVER MODES
+# =============================================================================
+if [ "$DEBUG_MODE" = "true" ]; then
+    cd "$INSTALL_DIR" 2>/dev/null || cd /root 2>/dev/null || cd /
+    debug_platform_status
+    exit 0
+fi
+
+if [ "$RECOVER_MODE" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --recover)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
+    recover_runtime_stack
+    debug_platform_status
+    exit 0
+fi
+
 # =============================================================================
 # UPDATE MODE — Fast path for pulling latest code and rebuilding
 # =============================================================================
@@ -717,6 +854,8 @@ if [ -n "$UPDATE_MODE" ]; then
         backend)
             echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
             docker compose -f "$COMPOSE_FILE" build --no-cache backend celery
+            echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
@@ -782,6 +921,8 @@ if [ -n "$UPDATE_MODE" ]; then
 
             # 8. Run migrations (as root to avoid PermissionError writing migration files)
             echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
+            echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
+            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             sleep 10
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py makemigrations --noinput 2>&1 || \
                 echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
@@ -816,6 +957,8 @@ if not created and not cp.is_active:
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     restart_edge_stack
+    # Hard recovery pass: ensure Docker networking and dependency ordering are correct.
+    recover_runtime_stack
 
     # Verify nginx loaded the correct custom config (not the default)
     sleep 2
@@ -909,6 +1052,8 @@ print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
+    echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
     exit 0
 fi
 
@@ -1899,6 +2044,8 @@ echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
 echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
+echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
+echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
 echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────

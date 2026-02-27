@@ -36,7 +36,8 @@ class GitHubWebhookView(GenericAPIView):
 
         # 1.5 Check License Tier for auto-deploy
         from apps.licensing.models import PlatformLicense
-        if PlatformLicense.load().is_community:
+        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
+        if PlatformLicense.load().is_community and not tier_gates_disabled:
             logger.info("Auto-deploy disabled in Community tier. Ignoring webhook.")
             return Response({'message': 'Auto-deploy disabled in Community tier', 'triggered': False})
 

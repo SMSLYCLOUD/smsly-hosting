@@ -18,6 +18,7 @@ from datetime import timedelta
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from django.conf import settings
 from django.utils import timezone
 
 # Redis-backed storage (with in-memory fallback)
@@ -58,6 +59,8 @@ class TunnelTier:
 
 def get_user_tier(user):
     """Get user's subscription tier."""
+    if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+        return TunnelTier.TEAM
     # Placeholder for billing integration
     if user.is_staff:
         return TunnelTier.TEAM

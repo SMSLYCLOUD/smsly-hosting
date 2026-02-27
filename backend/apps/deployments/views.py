@@ -193,7 +193,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
-        if deploy_type == 'FUNCTION':
+        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
+        if deploy_type == 'FUNCTION' and not tier_gates_disabled:
             license = PlatformLicense.load()
             if license.is_community:
                 from rest_framework.exceptions import PermissionDenied

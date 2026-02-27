@@ -1,0 +1,28 @@
+[caddy_config]: # CloudNeuron Reverse Proxy — Auto-generated
+:80 {
+    reverse_proxy localhost:8090
+}
+[caddy_status]: ● caddy.service - Caddy
+     Loaded: loaded (/lib/systemd/system/caddy.service; enabled; vendor preset: enabled)
+     Active: active (running) since Fri 2026-02-27 12:20:19 UTC; 3h 17min ago
+       Docs: https://caddyserver.com/docs/
+   Main PID: 755 (caddy)
+      Tasks: 8 (limit: 6970)
+     Memory: 51.5M
+        CPU: 4.515s
+     CGroup: /system.slice/caddy.service
+             └─755 /usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"warn","ts":1772194819.3676429,"logger":"http.auto_https","msg":"server is listening only on the HTTP port, so no automatic HTTPS will be applied to this server","server_name":"srv0","http_port":80}
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"warn","ts":1772194819.3702383,"logger":"http","msg":"HTTP
+[caddy_version]: v2.11.1 h1:C7sQpsFOC5CH+31KqJc7EoOf8mXrOEkFyYd6GpIqm/s=
+[caddy_logs]: Feb 27 12:20:19 vps3290067 caddy[755]: USER=caddy
+Feb 27 12:20:19 vps3290067 caddy[755]: INVOCATION_ID=4edce38549694316beb1792f50fa8a84
+Feb 27 12:20:19 vps3290067 caddy[755]: JOURNAL_STREAM=8:21796
+Feb 27 12:20:19 vps3290067 caddy[755]: SYSTEMD_EXEC_PID=755
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"info","ts":1772194819.3563693,"msg":"maxprocs: Leaving GOMAXPROCS=2: CPU quota undefined"}
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"info","ts":1772194819.3564034,"msg":"GOMEMLIMIT is updated","GOMEMLIMIT":5588519731,"previous":9223372036854775807}
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"info","ts":1772194819.3564093,"msg":"using config from file","file":"/etc/caddy/Caddyfile"}
+Feb 27 12:20:19 vps3290067 caddy[755]: {"level":"info","ts":1772194819.356413,"msg":"adapted con
+[curl_https]: 000
+[curl_http]: 200

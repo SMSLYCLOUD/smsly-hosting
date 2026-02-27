@@ -4,6 +4,11 @@ from rest_framework import status
 from django.conf import settings
 from .models import PlatformLicense, PlatformTier
 
+
+def _tier_gates_disabled() -> bool:
+    return bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
+
+
 def require_tier(*allowed_tiers):
     """
     Decorator for DRF views that gates access by platform tier.
@@ -18,6 +23,9 @@ def require_tier(*allowed_tiers):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(*args, **kwargs):
+            if _tier_gates_disabled():
+                return view_func(*args, **kwargs)
+
             # Locate request object
             request = None
             for arg in args:

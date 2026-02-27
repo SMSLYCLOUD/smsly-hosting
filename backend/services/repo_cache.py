@@ -25,6 +25,57 @@ CACHE_DIR = os.environ.get('REPO_CACHE_DIR', '/opt/smsly-cache/repos')
 CACHE_MAX_AGE_DAYS = int(os.environ.get('REPO_CACHE_MAX_AGE_DAYS', '7'))
 
 
+def _safe_stderr(exc: subprocess.CalledProcessError) -> str:
+    """Extract stderr for diagnostics without raising."""
+    return ((exc.stderr or '') or (exc.stdout or '')).strip()
+
+
+def _is_auth_error(stderr: str) -> bool:
+    text = (stderr or '').lower()
+    return any(
+        marker in text for marker in (
+            "authentication failed",
+            "invalid username or token",
+            "could not read username",
+            "repository not found",
+            "permission denied",
+            "http basic: access denied",
+            "fatal: could not read from remote repository",
+        )
+    )
+
+
+def _bare_clone(bare_dir: Path, remote_url: str, env: dict):
+    """Clone bare repo into cache dir."""
+    subprocess.run(
+        ['git', 'clone', '--bare', remote_url, str(bare_dir)],
+        check=True,
+        capture_output=True,
+        timeout=300,
+        env=env,
+    )
+
+
+def _fetch_bare(bare_dir: Path, remote_url: str, env: dict):
+    """Update bare repo from origin."""
+    subprocess.run(
+        ['git', 'remote', 'set-url', 'origin', remote_url],
+        cwd=str(bare_dir),
+        check=True,
+        capture_output=True,
+        timeout=60,
+        env=env,
+    )
+    subprocess.run(
+        ['git', 'fetch', '--all', '--prune'],
+        cwd=str(bare_dir),
+        check=True,
+        capture_output=True,
+        timeout=120,
+        env=env,
+    )
+
+
 def _is_github_https(repo_url: str) -> bool:
     """Return True for HTTPS GitHub URLs."""
     try:
@@ -118,22 +169,37 @@ def get_or_clone(repo_url: str, branch: str = 'main', token: str = None) -> str:
             logger.info(f"Cache HIT: fetching {repo_url}")
             env, askpass_path = _git_env(cache, token)
             try:
-                subprocess.run(
-                    ['git', 'remote', 'set-url', 'origin', remote_url],
-                    cwd=str(bare_dir),
-                    check=True,
-                    capture_output=True,
-                    timeout=60,
-                    env=env,
-                )
-                subprocess.run(
-                    ['git', 'fetch', '--all', '--prune'],
-                    cwd=str(bare_dir),
-                    check=True,
-                    capture_output=True,
-                    timeout=120,
-                    env=env,
-                )
+                try:
+                    _fetch_bare(bare_dir, remote_url, env)
+                except subprocess.CalledProcessError as fetch_error:
+                    stderr = _safe_stderr(fetch_error)
+                    logger.warning(
+                        "Cache fetch failed for %s (rebuilding cache): %s",
+                        repo_url,
+                        stderr[:500],
+                    )
+                    shutil.rmtree(bare_dir, ignore_errors=True)
+                    try:
+                        _bare_clone(bare_dir, remote_url, env)
+                    except subprocess.CalledProcessError as clone_error:
+                        clone_stderr = _safe_stderr(clone_error)
+                        if token and _is_auth_error(clone_stderr):
+                            fallback_env, fallback_askpass = _git_env(cache, None)
+                            try:
+                                _bare_clone(bare_dir, repo_url, fallback_env)
+                                logger.info("Anonymous cache clone fallback succeeded for %s", repo_url)
+                            except subprocess.CalledProcessError as fallback_error:
+                                fallback_stderr = _safe_stderr(fallback_error)
+                                raise RuntimeError(
+                                    f"git cache rebuild failed: {clone_stderr or stderr}; fallback failed: {fallback_stderr}"
+                                ) from fallback_error
+                            finally:
+                                if fallback_askpass:
+                                    fallback_askpass.unlink(missing_ok=True)
+                        else:
+                            raise RuntimeError(
+                                f"git cache rebuild failed: {clone_stderr or stderr}"
+                            ) from clone_error
             finally:
                 if askpass_path:
                     askpass_path.unlink(missing_ok=True)
@@ -142,13 +208,25 @@ def get_or_clone(repo_url: str, branch: str = 'main', token: str = None) -> str:
             logger.info(f"Cache MISS: cloning {repo_url}")
             env, askpass_path = _git_env(cache, token)
             try:
-                subprocess.run(
-                    ['git', 'clone', '--bare', remote_url, str(bare_dir)],
-                    check=True,
-                    capture_output=True,
-                    timeout=300,
-                    env=env,
-                )
+                try:
+                    _bare_clone(bare_dir, remote_url, env)
+                except subprocess.CalledProcessError as clone_error:
+                    stderr = _safe_stderr(clone_error)
+                    if token and _is_auth_error(stderr):
+                        fallback_env, fallback_askpass = _git_env(cache, None)
+                        try:
+                            _bare_clone(bare_dir, repo_url, fallback_env)
+                            logger.info("Anonymous cache clone fallback succeeded for %s", repo_url)
+                        except subprocess.CalledProcessError as fallback_error:
+                            fallback_stderr = _safe_stderr(fallback_error)
+                            raise RuntimeError(
+                                f"git cache clone failed: {stderr}; fallback failed: {fallback_stderr}"
+                            ) from fallback_error
+                        finally:
+                            if fallback_askpass:
+                                fallback_askpass.unlink(missing_ok=True)
+                    else:
+                        raise RuntimeError(f"git cache clone failed: {stderr}") from clone_error
             finally:
                 if askpass_path:
                     askpass_path.unlink(missing_ok=True)
