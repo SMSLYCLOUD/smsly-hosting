@@ -19,6 +19,7 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 // ─── Components ─────────────────────────────────────────────────────────────
 
@@ -202,6 +203,7 @@ export default function AutoscalerPage() {
 
   return (
     <DashboardShell>
+      <RequiresTier tier="pro">
       <div className="flex-1 p-8 relative z-10 space-y-8 max-w-7xl mx-auto">
 
         {/* ── Header ───────────────────────────────────────────────────────── */}
@@ -583,6 +585,7 @@ export default function AutoscalerPage() {
         </div>
 
       </div>
+      </RequiresTier>
     </DashboardShell>
   );
 }

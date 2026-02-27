@@ -3,6 +3,7 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.licensing.decorators import require_tier
 from .models_addons import Addon
 from .models import Service, EnvironmentVariable
 import logging
@@ -44,6 +45,13 @@ class AddonViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(service__owner=self.request.user)
 
     def perform_create(self, serializer):
+        # Check License
+        from apps.licensing.models import PlatformLicense
+        platform_license = PlatformLicense.load()
+        if not platform_license.is_pro:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Addons require Pro tier.")
+
         # SECURITY: Verify user owns the service before creating addon
         service = serializer.validated_data.get('service')
         if service and service.owner != self.request.user:

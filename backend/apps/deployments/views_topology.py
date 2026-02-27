@@ -2,6 +2,7 @@
 from rest_framework import serializers, viewsets
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.licensing.decorators import require_tier
 from .models import Service, Deployment
 
 
@@ -14,6 +15,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
     serializer_class = TopologySerializer
     permission_classes = [IsAuthenticated]
 
+    @require_tier('pro', 'enterprise')
     def list(self, request):
         """
         Build topology graph with rich node/edge data for canvas rendering.

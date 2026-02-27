@@ -1081,3 +1081,29 @@ export const autoscalerApi = {
     return data;
   },
 };
+
+// ─── Licensing API ──────────────────────────────────────────────────────────
+
+export interface LicenseStatus {
+  tier: 'community' | 'pro' | 'enterprise';
+  is_valid: boolean;
+  expires_at: string | null;
+  features: Record<string, boolean>;
+  max_services: number;
+  max_team_members: number;
+}
+
+export const licensingApi = {
+  getStatus: async (): Promise<LicenseStatus> => {
+    const { data } = await api.get('/licensing/status/');
+    return data;
+  },
+  activate: async (license_key: string): Promise<any> => {
+    const { data } = await api.post('/licensing/activate/', { license_key });
+    return data;
+  },
+  deactivate: async (): Promise<any> => {
+    const { data } = await api.post('/licensing/deactivate/');
+    return data;
+  },
+};

@@ -4,6 +4,7 @@ from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
+from apps.licensing.decorators import require_tier
 
 AUTOSCALER_URL = getattr(settings, 'AUTOSCALER_API_URL', 'http://localhost:9876')
 AUTOSCALER_TOKEN = os.environ.get('AUTOSCALER_API_TOKEN', '')
@@ -19,6 +20,7 @@ def _autoscaler_headers():
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
+@require_tier('pro', 'enterprise')
 def autoscaler_status(request):
     """Proxy to autoscaler /api/status"""
     try:
@@ -29,6 +31,7 @@ def autoscaler_status(request):
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
+@require_tier('pro', 'enterprise')
 def autoscaler_history(request):
     """Proxy to autoscaler /api/history"""
     minutes = request.query_params.get('minutes', '60')
@@ -40,6 +43,7 @@ def autoscaler_history(request):
 
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
+@require_tier('pro', 'enterprise')
 def autoscaler_config(request):
     """Proxy config update to autoscaler"""
     try:
@@ -55,6 +59,7 @@ def autoscaler_config(request):
 
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
+@require_tier('pro', 'enterprise')
 def autoscaler_trigger(request):
     """Trigger an immediate autoscaler check"""
     try:

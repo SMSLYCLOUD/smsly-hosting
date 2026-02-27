@@ -5,9 +5,11 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Check, CreditCard, Download, ExternalLink, Loader2, Receipt } from 'lucide-react';
-import api from '@/lib/api';
+import { Check, CreditCard, Download, ExternalLink, Loader2, Receipt, Key, ShieldCheck } from 'lucide-react';
+import api, { licensingApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
+import { useTier } from '@/context/TierContext';
+import { Input } from '@/components/ui/input';
 
 type PlanCode = 'HOBBY' | 'PRO' | 'ENTERPRISE';
 
@@ -73,6 +75,7 @@ const PLANS: Array<{
 
 export default function BillingPage() {
   const { toast } = useToast();
+  const { license, refreshLicense } = useTier();
 
   const [summary, setSummary] = React.useState<BillingSummary | null>(null);
   const [invoices, setInvoices] = React.useState<StripeInvoice[]>([]);
@@ -81,6 +84,8 @@ export default function BillingPage() {
   const [openingPortal, setOpeningPortal] = React.useState(false);
   const [provider, setProvider] = React.useState<'stripe' | 'flutterwave' | 'cryptomus'>('stripe');
   const [checkoutStatus, setCheckoutStatus] = React.useState<string | null>(null);
+  const [licenseKey, setLicenseKey] = React.useState('');
+  const [activating, setActivating] = React.useState(false);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -92,9 +97,220 @@ export default function BillingPage() {
     const load = async () => {
       setLoading(true);
       try {
-        const res = await api.get('/billing/summary/');
-        const s = res.data as BillingSummary;
-        setSummary(s);
+        // Try to load billing summary, but don't fail hard if not configured
+        const res = await api.get('/billing/summary/').catch(() => null);
+        if (res) {
+            const s = res.data as BillingSummary;
+            setSummary(s);
+            setProvider(
+            s?.stripe_configured
+                ? 'stripe'
+                : s?.flutterwave_configured
+                ? 'flutterwave'
+                : s?.cryptomus_configured
+                    ? 'cryptomus'
+                    : 'stripe'
+            );
+        }
+
+        // Invoices are optional; if Stripe isn't configured, backend returns [].
+        const inv = await api.get('/billing/invoices/').catch(() => null);
+        if (inv) {
+            setInvoices(Array.isArray(inv?.data?.invoices) ? inv.data.invoices : []);
+        }
+      } catch (err: any) {
+        console.error("Billing load error", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleActivateLicense = async () => {
+    if (!licenseKey) return;
+    setActivating(true);
+    try {
+        await licensingApi.activate(licenseKey);
+        await refreshLicense();
+        toast({ title: "License Activated", description: "Features unlocked successfully." });
+        setLicenseKey('');
+    } catch (e: any) {
+        toast({
+            title: "Activation Failed",
+            description: e.response?.data?.detail || e.message || "Invalid license key",
+            variant: "destructive"
+        });
+    } finally {
+        setActivating(false);
+    }
+  };
+
+  const handleDeactivateLicense = async () => {
+      if (!confirm("Deactivate license? This will downgrade features to Community.")) return;
+      try {
+          await licensingApi.deactivate();
+          await refreshLicense();
+          toast({ title: "License Deactivated" });
+      } catch (e) {
+          toast({ title: "Error", variant: "destructive" });
+      }
+  };
+
+  React.useEffect(() => {
+    if (checkoutStatus === 'success') {
+      toast({ title: 'Payment successful', description: 'Your plan will update shortly.' });
+    } else if (checkoutStatus === 'cancelled') {
+      toast({ title: 'Checkout cancelled', description: 'No changes were made.' });
+    }
+  }, [checkoutStatus, toast]);
+
+  const handleUpgrade = async (plan: PlanCode) => {
+    if (!summary) return;
+
+    const providerConfigured =
+      provider === 'stripe'
+        ? summary.stripe_configured
+        : provider === 'flutterwave'
+          ? summary.flutterwave_configured
+          : summary.cryptomus_configured;
+    if (!providerConfigured) {
+      toast({
+        title: 'Billing not configured',
+        description: `${provider} is not configured on the server.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (plan === 'ENTERPRISE') {
+      toast({
+        title: 'Enterprise plan',
+        description: 'Contact sales to activate Enterprise.',
+      });
+      return;
+    }
+
+    if (plan === summary.plan) return;
+
+    setUpgradingTo(plan);
+    try {
+      const res = await api.post('/billing/checkout/', { plan, provider });
+      const url = res?.data?.url;
+      if (!url) throw new Error('Missing checkout URL');
+      window.location.assign(url);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Checkout failed.';
+      toast({ title: 'Upgrade failed', description: msg, variant: 'destructive' });
+      setUpgradingTo(null);
+    }
+  };
+
+  const handleOpenPortal = async () => {
+    if (!summary?.stripe_configured) {
+      toast({
+        title: 'Stripe not configured',
+        description: 'The customer portal requires Stripe to be configured.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setOpeningPortal(true);
+    try {
+      const res = await api.post('/billing/portal/', {
+        return_url: typeof window !== 'undefined' ? `${window.location.origin}/billing` : '',
+      });
+      const url = res?.data?.url;
+      if (!url) throw new Error('Missing portal URL');
+      window.location.assign(url);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Failed to open billing portal.';
+      toast({ title: 'Portal error', description: msg, variant: 'destructive' });
+    } finally {
+      setOpeningPortal(false);
+    }
+  };
+
+  return (
+    <DashboardShell>
+      <div className="container max-w-6xl mx-auto p-6 space-y-10">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold mb-1">Billing & License</h1>
+            <p className="text-muted-foreground">Manage your platform license and billing.</p>
+          </div>
+        </div>
+
+        {/* License Section */}
+        <Card className="border-primary/20 bg-primary/5">
+            <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                    <ShieldCheck className="h-5 w-5 text-primary" />
+                    Platform License
+                </CardTitle>
+                <CardDescription>
+                    Current Tier: <Badge className="ml-1 uppercase">{license?.tier || 'COMMUNITY'}</Badge>
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <div className="flex flex-col md:flex-row gap-4 items-end">
+                    <div className="flex-1 space-y-2 w-full">
+                        <label className="text-sm font-medium">License Key</label>
+                        <div className="flex gap-2">
+                            <Input
+                                placeholder="smsly_..."
+                                value={licenseKey}
+                                onChange={e => setLicenseKey(e.target.value)}
+                                type="password"
+                            />
+                            <Button onClick={handleActivateLicense} disabled={activating}>
+                                {activating ? <Loader2 className="animate-spin" /> : "Activate"}
+                            </Button>
+                        </div>
+                    </div>
+                    {license?.tier !== 'community' && (
+                        <Button variant="destructive" onClick={handleDeactivateLicense} variant="outline" className="border-red-500/50 text-red-500 hover:bg-red-500/10">
+                            Deactivate License
+                        </Button>
+                    )}
+                </div>
+                {license?.tier !== 'community' && (
+                    <div className="text-sm text-muted-foreground grid grid-cols-2 gap-4 pt-2">
+                        <div>Licensed To: <span className="font-medium text-foreground">{license?.licensed_to || 'N/A'}</span></div>
+                        <div>Expires: <span className="font-medium text-foreground">{license?.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Never'}</span></div>
+                        <div>Max Services: <span className="font-medium text-foreground">{license?.max_services === -1 ? 'Unlimited' : license?.max_services}</span></div>
+                        <div>Max Team Members: <span className="font-medium text-foreground">{license?.max_team_members === -1 ? 'Unlimited' : license?.max_team_members}</span></div>
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+
+        {loading ? (
+          <div className="py-24 text-center text-muted-foreground">Loading billing...</div>
+        ) : (
+          <>
+            {summary && (
+                <>
+                {/* Billing Summary & Invoices ... (Existing code kept mostly as is but wrapped) */}
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm text-muted-foreground">Current Plan</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="text-2xl font-bold">{summary?.plan || license?.tier.toUpperCase()}</div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{summary?.subscription_status || 'Active'}</Badge>
         setProvider(
           s?.stripe_configured
             ? 'stripe'
