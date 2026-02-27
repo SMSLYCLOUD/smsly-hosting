@@ -284,6 +284,10 @@ class LocalAdapter(BaseCloudAdapter):
             f'traefik.http.services.{name}.loadbalancer.healthcheck.path': hc_path if healthcheck and healthcheck.get('path') else '/',
             f'traefik.http.services.{name}.loadbalancer.healthcheck.interval': f'{hc_interval}s',
             f'traefik.http.services.{name}.loadbalancer.healthcheck.timeout': f'{hc_timeout}s',
+            # Send Host: localhost in health-check probes so Django/FastAPI
+            # ALLOWED_HOSTS doesn't reject them with 400 when probing by IP.
+            f'traefik.http.services.{name}.loadbalancer.healthcheck.hostname': 'localhost',
+            f'traefik.http.services.{name}.loadbalancer.healthcheck.scheme': 'http',
         }
         if is_public and use_ssl and enable_traefik_tls:
             labels.update({
