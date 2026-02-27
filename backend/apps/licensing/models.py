@@ -10,6 +10,11 @@ class PlatformLicense(models.Model):
     """
     Singleton model storing the current license state.
     Only one record should exist (use .load() class method).
+
+    Stores:
+    - Current license key and tier (Community/Pro/Enterprise)
+    - RSA-signed payload for offline validation
+    - Feature limits (services, team members)
     """
     license_key = models.TextField(blank=True, default='')
     tier = models.CharField(
