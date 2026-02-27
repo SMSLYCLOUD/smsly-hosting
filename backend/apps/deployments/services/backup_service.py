@@ -20,11 +20,12 @@ class BackupService:
     def __init__(self):
         self.docker_client = docker.from_env()
 
-    def backup_service(self, service_id) -> ServiceBackup:
+    def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
         service = Service.objects.get(id=service_id)
         backup = ServiceBackup.objects.create(
             service=service,
-            status='IN_PROGRESS'
+            status='IN_PROGRESS',
+            backup_type=backup_type
         )
         temp_dir = None
         try:

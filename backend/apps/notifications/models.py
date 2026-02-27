@@ -1,5 +1,7 @@
 from django.db import models
 from django.conf import settings
+import uuid
+from apps.deployments.models import Service
 
 class NotificationPreference(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -26,3 +28,22 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+class ResourceAlert(models.Model):
+    """Tracks resource usage alerts for services."""
+    class Severity(models.TextChoices):
+        INFO = 'INFO', 'Info'
+        WARNING = 'WARNING', 'Warning'
+        CRITICAL = 'CRITICAL', 'Critical'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service = models.ForeignKey(
+        Service, on_delete=models.CASCADE, related_name='resource_alerts')
+    severity = models.CharField(
+        max_length=20, choices=Severity.choices, default=Severity.WARNING)
+    metric = models.CharField(max_length=50)  # 'cpu', 'memory', 'disk'
+    threshold = models.FloatField()  # percentage
+    current_value = models.FloatField()
+    message = models.TextField()
+    acknowledged = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)

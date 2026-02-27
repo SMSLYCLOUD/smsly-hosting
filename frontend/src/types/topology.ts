@@ -19,7 +19,7 @@ export interface TopologyNodeData {
 
 export interface TopologyNode {
   id: string;
-  type: 'SERVICE' | 'ADDON' | 'EXTERNAL' | 'service' | 'addon' | 'volume';
+  type: 'SERVICE' | 'ADDON' | 'EXTERNAL';
   data: TopologyNodeData;
   // Position fields populated by layout engine
   x?: number;
@@ -39,7 +39,7 @@ export interface TopologyEdge {
   id: string;
   source: string;
   target: string;
-  type: 'OWNS' | 'CONNECTS_TO' | 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'ADDON' | 'STORAGE' | 'API' | 'HTTP_DEPENDENCY' | 'DATABASE_CONNECTION' | 'CONFIG_DEPENDENCY';
+  type: 'OWNS' | 'CONNECTS_TO';
   label?: string;
   data?: TopologyEdgeData;
 }

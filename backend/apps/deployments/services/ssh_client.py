@@ -7,6 +7,11 @@ import os
 
 logger = logging.getLogger(__name__)
 
+
+class SSHConnectionError(Exception):
+    """Raised when SSH command execution fails."""
+
+
 class SSHClient:
     def __init__(self, ip, key_content, user='root'):
         self.ip = ip
@@ -103,7 +108,7 @@ class SSHClient:
         err = stderr.read().decode('utf-8', errors='replace')
 
         if exit_status != 0:
-            raise Exception(f"Command failed (exit {exit_status}): {err or out}")
+            raise SSHConnectionError(f"Command failed (exit {exit_status}): {err or out}")
 
         return out
 

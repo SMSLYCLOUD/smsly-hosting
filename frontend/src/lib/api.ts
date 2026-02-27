@@ -169,6 +169,7 @@ export interface EnvVar {
   key: string;
   value: string;
   is_secret: boolean;
+  source?: 'USER' | 'ADDON' | 'SHORTCODE';
 }
 
 export interface CronJob {
@@ -307,14 +308,6 @@ export const servicesApi = {
   verifyDomain: async (serviceId: string, domain: string): Promise<{ domain: string; verified: boolean; cname_target: string; message: string }> => {
       const response = await api.post(`/services/${serviceId}/verify-domain/`, { domain });
       return response.data;
-  },
-  revealEnvVar: async (serviceId: string, key: string): Promise<{ key: string; value: string }> => {
-      // Fetch all env vars to find the one we need, since there's no single-var endpoint
-      const response = await api.get(`/services/${serviceId}/env_vars/`);
-      const vars = Array.isArray(response.data) ? response.data : (response.data?.results || []);
-      const found = vars.find((v: any) => v.key === key);
-      if (!found) throw new Error('Env var not found');
-      return { key: found.key, value: found.value };
   }
 };
 
@@ -962,7 +955,11 @@ export const addonsApi = {
     runQuery: async (id: string, query: string): Promise<{ results: any[], columns: string[], error?: string }> => {
         const res = await api.post(`/addons/${id}/query/`, { query });
         return res.data;
-    }
+    },
+    addonCredentials: async (addonId: string): Promise<Record<string, string>> => {
+      const res = await api.get(`/addons/${addonId}/credentials/`);
+      return res.data;
+    },
 };
 
 export default api;
