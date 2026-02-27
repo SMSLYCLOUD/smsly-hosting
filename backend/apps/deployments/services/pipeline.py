@@ -1052,6 +1052,108 @@ class PipelineManager:
             update_stage(self.deployment, 'Build', 'failed')
             raise BuildError(f"Build failed: {str(e)}") from e
 
+    def _collect_compose_domains(self) -> list:
+        """Collect primary + custom domains for compose routing."""
+        domains = []
+
+        primary = (self.service.public_domain or "").strip().lower()
+        if primary:
+            domains.append(primary)
+        else:
+            domains.append(f"{self.service.name.lower()}.apps.smsly.cloud")
+
+        for item in self.service.custom_domains or []:
+            value = str(item or "").strip().lower()
+            if value and value not in domains:
+                domains.append(value)
+
+        return domains
+
+    def _compose_traefik_labels(self, project_name: str) -> dict:
+        """Build Traefik labels for compose main service at create-time."""
+        is_public = bool(self.service.is_public)
+        router = re.sub(r"[^a-zA-Z0-9_-]+", "-", project_name)
+        domains = self._collect_compose_domains()
+        host_rule = " || ".join(f"Host(`{domain}`)" for domain in domains)
+
+        labels = {
+            "managed_by": "smsly-hosting",
+            "traefik.enable": "true" if is_public else "false",
+        }
+        if not is_public:
+            return labels
+
+        labels[
+            f"traefik.http.services.{router}.loadbalancer.server.port"
+        ] = str(self.service.internal_port)
+
+        try:
+            config_obj = PlatformConfig.load()
+            use_ssl = bool(config_obj.use_ssl)
+        except Exception:  # pylint: disable=broad-exception-caught
+            use_ssl = False
+
+        enable_traefik_tls = (
+            str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
+        if use_ssl and enable_traefik_tls:
+            labels.update(
+                {
+                    f"traefik.http.routers.{router}-http.rule": host_rule,
+                    f"traefik.http.routers.{router}-http.entrypoints": "web",
+                    f"traefik.http.routers.{router}-http.middlewares": f"{router}-redirect",
+                    f"traefik.http.middlewares.{router}-redirect.redirectscheme.scheme": "https",
+                    f"traefik.http.middlewares.{router}-redirect.redirectscheme.permanent": "true",
+                    f"traefik.http.routers.{router}.rule": host_rule,
+                    f"traefik.http.routers.{router}.entrypoints": "websecure",
+                    f"traefik.http.routers.{router}.tls": "true",
+                    f"traefik.http.routers.{router}.tls.certresolver": "letsencrypt",
+                }
+            )
+            return labels
+
+        labels.update(
+            {
+                f"traefik.http.routers.{router}.rule": host_rule,
+                f"traefik.http.routers.{router}.entrypoints": "web",
+            }
+        )
+        if use_ssl:
+            middleware_name = f"{router}-forwarded-https"
+            labels.update(
+                {
+                    f"traefik.http.routers.{router}.middlewares": middleware_name,
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto": "https",
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port": "443",
+                    f"traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl": "on",
+                }
+            )
+        return labels
+
+    def _write_compose_routing_override(self, main_service: str, project_name: str) -> str:
+        """
+        Write a compose override file with Traefik labels.
+
+        Docker labels are immutable after container creation, so labels must be
+        injected into compose config before `docker compose up`.
+        """
+        override_path = os.path.join(
+            self.build_dir or self.source_dir,
+            f".smsly-routing-{self.deployment.id}.yml",
+        )
+        override_payload = {
+            "services": {
+                main_service: {
+                    "labels": self._compose_traefik_labels(project_name),
+                }
+            }
+        }
+        with open(override_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(override_payload, handle, sort_keys=False)
+        return override_path
+
     def _build_with_compose(self):
         """Build and start all services via docker-compose."""
         compose_path = os.path.join(self.source_dir, self.service.compose_file)
@@ -1067,6 +1169,41 @@ class PipelineManager:
 
         # Project name = service name (so containers are namespaced)
         project_name = self.service.name.lower().replace(' ', '-')
+
+        # Validate compose file and resolve main service
+        try:
+            with open(compose_path, "r", encoding="utf-8") as handle:
+                compose_data = yaml.safe_load(handle) or {}
+            compose_services = set((compose_data.get("services") or {}).keys())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            raise BuildError(f"Invalid compose file: {exc}") from exc
+
+        main_svc = (self.service.compose_main_service or "").strip()
+        if main_svc and main_svc not in compose_services:
+            append_log(
+                self.deployment,
+                f"  ⚠️ compose_main_service '{main_svc}' not found; auto-detecting main service.\n"
+            )
+            main_svc = ""
+        if not main_svc:
+            main_svc = self._detect_compose_main_service(compose_path)
+
+        if not main_svc or main_svc not in compose_services:
+            available = ", ".join(sorted(compose_services)) or "(none)"
+            raise BuildError(
+                "Could not determine compose main service. "
+                f"Set compose_main_service explicitly. Available services: {available}"
+            )
+
+        if self.service.compose_main_service != main_svc:
+            self.service.compose_main_service = main_svc
+            self.service.save(update_fields=["compose_main_service"])
+            append_log(
+                self.deployment,
+                f"  ℹ️ Main compose service set to: {main_svc}\n"
+            )
+
+        override_path = self._write_compose_routing_override(main_svc, project_name)
 
         # Build env vars to inject (addons, runtime config)
         env = os.environ.copy()
@@ -1091,6 +1228,7 @@ class PipelineManager:
         cmd = [
             'docker', 'compose',
             '-f', compose_path,
+            '-f', override_path,
             '-p', project_name,
             'up', '-d', '--build',
             '--remove-orphans',
@@ -1114,76 +1252,37 @@ class PipelineManager:
             )
             append_log(self.deployment, full_err)
             raise BuildError(f"Compose build failed: {full_err[:500]}") from e
+        finally:
+            try:
+                if os.path.exists(override_path):
+                    os.remove(override_path)
+            except OSError:
+                pass
 
         # Attach main service container to smsly-net for Traefik routing
-        main_svc = self.service.compose_main_service or ''
-        if main_svc:
-            container_name = f"{project_name}-{main_svc}-1"
-            try:
-                subprocess.run(
-                    ['docker', 'network', 'connect', network_name, container_name],
-                    check=False, capture_output=True, text=True, timeout=30,
-                )
-                append_log(
-                    self.deployment,
-                    f"  ✅ Connected {container_name} to {network_name}\n"
-                )
-            except Exception as net_err:  # pylint: disable=broad-exception-caught
-                append_log(
-                    self.deployment,
-                    f"  ⚠️ Could not connect to {network_name}: {net_err}\n"
-                )
-
-            # Apply Traefik labels to the main container
-            self._apply_traefik_labels_to_compose(
-                container_name, project_name
-            )
-
-            # Store container name for health checking in _deploy_container
-            self.image_name = f"compose:{container_name}"
-
-    def _apply_traefik_labels_to_compose(self, container_name: str,
-                                         project_name: str):
-        """Apply Traefik routing labels to a running compose container."""
-
+        container_name = f"{project_name}-{main_svc}-1"
         try:
-            domain = (
-                self.service.public_domain
-                or f"{self.service.name.lower()}.apps.smsly.cloud"
+            subprocess.run(
+                ['docker', 'network', 'connect', network_name, container_name],
+                check=False, capture_output=True, text=True, timeout=30,
             )
-            port = str(self.service.internal_port)
-            router = project_name.replace('-', '_')
+            append_log(
+                self.deployment,
+                f"  ✅ Connected {container_name} to {network_name}\n"
+            )
+        except Exception as net_err:  # pylint: disable=broad-exception-caught
+            append_log(
+                self.deployment,
+                f"  ⚠️ Could not connect to {network_name}: {net_err}\n"
+            )
 
-            labels = {
-                'traefik.enable': 'true' if self.service.is_public else 'false',
-                f'traefik.http.services.{router}.loadbalancer.server.port': port,
-                f'traefik.http.routers.{router}.rule': f'Host(`{domain}`)',
-                f'traefik.http.routers.{router}.entrypoints': 'web',
-                'managed_by': 'smsly-hosting',
-            }
+        append_log(
+            self.deployment,
+            f"  📛 Traefik labels prepared at container creation for {main_svc}\n"
+        )
 
-            # Use docker inspect + update labels via low-level API
-            import docker
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client(timeout=30)
-            try:
-                container = client.containers.get(container_name)
-                # Labels can only be set at creation time in Docker.
-                # For compose containers, we add labels via docker compose
-                # labels section. Log the expected labels for debugging.
-                existing = container.labels or {}
-                existing.update(labels)
-                append_log(
-                    self.deployment,
-                    f"  📛 Traefik labels applied for {domain}\n"
-                )
-            except docker.errors.NotFound:
-                append_log(
-                    self.deployment,
-                    f"  ⚠️ Container {container_name} not found for labeling\n"
-                )
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning("Traefik label application failed: %s", e)
+        # Store container name for health checking in _deploy_container
+        self.image_name = f"compose:{container_name}"
 
     def _get_build_context(self) -> str:
         """Resolve root directory."""

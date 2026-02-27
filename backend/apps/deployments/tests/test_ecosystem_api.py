@@ -25,7 +25,7 @@ class EcosystemApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data.get("task_id"), "scan-task-id")
-        delay_mock.assert_called_once_with(str(self.user.id))
+        delay_mock.assert_called_once_with(str(self.user.id), 30)
 
     def test_deploy_route_requires_plan_object(self):
         response = self.client.post("/api/v1/cloud/ecosystem/deploy/", {}, format="json")

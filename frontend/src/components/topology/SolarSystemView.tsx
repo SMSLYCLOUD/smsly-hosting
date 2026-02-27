@@ -47,7 +47,8 @@ function SolarSystemContent() {
 
   // Initialize Three.js
   useEffect(() => {
-    if (!containerRef.current) return;
+    const containerEl = containerRef.current;
+    if (!containerEl) return;
 
     // Scene
     const scene = new THREE.Scene();
@@ -56,15 +57,15 @@ function SolarSystemContent() {
     sceneRef.current = scene;
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(60, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(60, containerEl.clientWidth / containerEl.clientHeight, 0.1, 1000);
     camera.position.set(0, 20, 40);
     cameraRef.current = camera;
 
     // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+    renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
-    containerRef.current.appendChild(renderer.domElement);
+    containerEl.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     // Controls
@@ -96,8 +97,8 @@ function SolarSystemContent() {
     // Cleanup
     return () => {
       cancelAnimationFrame(frameIdRef.current);
-      if (rendererRef.current && containerRef.current) {
-        containerRef.current.removeChild(rendererRef.current.domElement);
+      if (rendererRef.current && containerEl.contains(rendererRef.current.domElement)) {
+        containerEl.removeChild(rendererRef.current.domElement);
       }
       renderer.dispose();
     };

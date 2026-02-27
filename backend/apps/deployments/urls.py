@@ -4,7 +4,7 @@ from django.urls import path, include
 from rest_framework_nested import routers
 from .views import (
     DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView,
-    ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
+    RouteRecheckView, ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
 )
 from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
@@ -77,6 +77,7 @@ urlpatterns = router.urls + [
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
+    path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/github/', github_connection, name='github-connection'),

@@ -540,11 +540,75 @@ wipe_existing_install() {
 if [ "$WIPE_MODE" = "true" ]; then
     wipe_existing_install
 fi
+
+ensure_update_networks() {
+    # Never delete data networks/volumes in update mode. Only (re)create if missing.
+    docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null 2>&1 || true
+    docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null 2>&1 || true
+    docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
+}
+
+ensure_container_on_network() {
+    local network_name="$1"
+    local container_name="$2"
+
+    [ -z "$network_name" ] && return 0
+    [ -z "$container_name" ] && return 0
+
+    docker container inspect "$container_name" >/dev/null 2>&1 || return 0
+    docker network inspect "$network_name" >/dev/null 2>&1 || return 0
+    docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
+}
+
+bust_core_build_cache() {
+    echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
+
+    # Remove old app image layers for deterministic rebuilds (no DB/data touched).
+    for svc in frontend backend celery celery-beat; do
+        local image_ids=""
+        image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
+        if [ -n "$image_ids" ]; then
+            while read -r image_id; do
+                [ -n "$image_id" ] && docker rmi -f "$image_id" >/dev/null 2>&1 || true
+            done <<< "$image_ids"
+        fi
+    done
+
+    # Build cache only (no global container/image prune).
+    docker builder prune -af >/dev/null 2>&1 || true
+    echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache)${NC}"
+}
+
+restart_edge_stack() {
+    local edge_services="socket-proxy traefik route-fallback nginx"
+
+    echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
+
+    # Restart core app entrypoints so new upstream bindings are live.
+    docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" restart $edge_services >/dev/null 2>&1 || true
+
+    # Re-attach expected external networks (idempotent).
+    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+    # Refresh Caddy + watcher for external TLS/domain routing state.
+    systemctl restart caddy >/dev/null 2>&1 || true
+    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    echo -e "${GREEN}  OK Edge stack refreshed${NC}"
+}
+
 # =============================================================================
 # UPDATE MODE — Fast path for pulling latest code and rebuilding
 # =============================================================================
 if [ -n "$UPDATE_MODE" ]; then
     echo -e "${YELLOW}[UPDATE] Running in update mode: $UPDATE_MODE${NC}"
+    echo -e "${BLUE}  -> Safe update: preserves database/redis volumes and addon data.${NC}"
 
     # ─── Pre-flight ──────────────────────────────────────────────────────────
     if [ "$EUID" -ne 0 ]; then
@@ -615,9 +679,8 @@ if [ -n "$UPDATE_MODE" ]; then
     DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
     if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
         echo -e "${YELLOW}  ⚠ WARNING: Only ${DISK_AVAIL_MB}MB disk space available.${NC}"
-        echo -e "${YELLOW}    Docker builds typically need 2GB+. Cleaning Docker cache...${NC}"
-        docker system prune -f --volumes 2>/dev/null || true
-        docker builder prune -f 2>/dev/null || true
+        echo -e "${YELLOW}    Docker builds typically need 2GB+. Cleaning safe caches (no volume deletion)...${NC}"
+        bust_core_build_cache
         DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
         echo -e "${BLUE}  → Disk space after cleanup: ${DISK_AVAIL_MB}MB${NC}"
         if [ "$DISK_AVAIL_MB" -lt 1000 ]; then
@@ -635,8 +698,10 @@ if [ -n "$UPDATE_MODE" ]; then
     echo -e "${GREEN}  ✓ Script permissions fixed${NC}"
 
     # Ensure shared networks exist (prod stack uses external networks)
-    docker network create smsly-net 2>/dev/null || true
-    docker network create smsly-proxy 2>/dev/null || true
+    ensure_update_networks
+
+    # Force deterministic app rebuilds (frontend/backend cache bust).
+    bust_core_build_cache
 
     case "$UPDATE_MODE" in
         frontend)
@@ -672,7 +737,7 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery-beat nginx traefik"
+            CORE_SERVICES="frontend backend celery celery-beat nginx traefik socket-proxy route-fallback"
             echo -e "${BLUE}    ↳ Stopping core services...${NC}"
             docker compose -f "$COMPOSE_FILE" stop $CORE_SERVICES 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" rm -f $CORE_SERVICES 2>/dev/null || true
@@ -688,13 +753,11 @@ if [ -n "$UPDATE_MODE" ]; then
 
             # 3. Prune dangling images and build cache
             echo -e "${BLUE}    ↳ Pruning dangling images and build cache...${NC}"
-            docker image prune -f 2>/dev/null || true
-            docker builder prune -f 2>/dev/null || true
+            docker builder prune -af 2>/dev/null || true
 
             # 4. Ensure shared networks exist (create if missing, don't destroy)
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
-            docker network create smsly-net 2>/dev/null || true
-            docker network create smsly-proxy 2>/dev/null || true
+            ensure_update_networks
 
             # 5. Rebuild core images from scratch
             echo -e "${BLUE}    ↳ Rebuilding core images (no cache)...${NC}"
@@ -708,7 +771,7 @@ if [ -n "$UPDATE_MODE" ]; then
             #    (recreation drops Docker DNS links — causes 502 gateway errors)
             echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
             for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
-                docker network connect smsly-proxy "$ctr" 2>/dev/null || true
+                ensure_container_on_network "smsly-proxy" "$ctr"
             done
             docker restart smsly-hosting-traefik-1 2>/dev/null || true
 
@@ -746,15 +809,8 @@ if not created and not cp.is_active:
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     echo -e "${GREEN}  ✓ Cloud provider ready${NC}"
 
-    # ─── CRITICAL FIX: Force-recreate nginx to pick up config mount ──────────
-    # Docker 'up -d' does NOT recreate unchanged containers. nginx image doesn't
-    # change between updates, but the mounted nginx.conf may have changed.
-    # Without this, nginx runs default config → 502 on all frontend routes.
-    echo -e "${BLUE}  → Force-recreating nginx (ensures config mount is fresh)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
-    # Workaround: on some hosts, the 127.0.0.1 port publish doesn't bind
-    # immediately after recreate. A restart reliably brings up docker-proxy.
-    docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
+    # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
+    restart_edge_stack
 
     # Verify nginx loaded the correct custom config (not the default)
     sleep 2
@@ -928,10 +984,15 @@ fi
 # Remove stale Docker volumes (postgres data with old passwords, etc.)
 SMSLY_VOLUMES=$(docker volume ls --filter "name=smsly" -q 2>/dev/null || true)
 if [ -n "$SMSLY_VOLUMES" ]; then
-    echo -e "${YELLOW}  → Removing stale SMSLY volumes (fresh DB will be created)...${NC}"
-    for vol in $SMSLY_VOLUMES; do
-        docker volume rm "$vol" 2>/dev/null || true
-    done
+    if [ "${SMSLY_ALLOW_DESTRUCTIVE_FRESH:-0}" = "1" ]; then
+        echo -e "${YELLOW}  → Removing stale SMSLY volumes (SMSLY_ALLOW_DESTRUCTIVE_FRESH=1)...${NC}"
+        for vol in $SMSLY_VOLUMES; do
+            docker volume rm "$vol" 2>/dev/null || true
+        done
+    else
+        echo -e "${YELLOW}  ⚠ Existing SMSLY volumes detected; preserving data by default.${NC}"
+        echo -e "${YELLOW}    Use --wipe for full reset, or set SMSLY_ALLOW_DESTRUCTIVE_FRESH=1 to delete volumes in fresh install.${NC}"
+    fi
 fi
 
 # Remove stale Docker networks
@@ -1467,6 +1528,15 @@ fi
 # ─── Configure Caddyfile ──────────────────────────────────────────────────────
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
 mkdir -p /var/log/caddy
+touch /var/log/caddy/access.log
+if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy /var/log/caddy
+fi
+chmod 755 /var/log/caddy
+chmod 640 /var/log/caddy/access.log
+
+CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
+CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
 
 if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
     if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
@@ -1497,12 +1567,14 @@ $DOMAIN {
 CADDYEOF
 
         # Set Cloudflare token in systemd environment
-        mkdir -p /etc/systemd/system/caddy.service.d
-        cat > /etc/systemd/system/caddy.service.d/override.conf <<ENVEOF
+        mkdir -p "$CADDY_OVERRIDE_DIR"
+        cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
 [Service]
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
 Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
 ENVEOF
-        chmod 600 /etc/systemd/system/caddy.service.d/override.conf
+        chmod 600 "$CADDY_OVERRIDE_FILE"
         systemctl daemon-reload
 
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
@@ -1524,6 +1596,11 @@ $DOMAIN {
     reverse_proxy localhost:8090
 }
 CADDYEOF
+        if [ -f "$CADDY_OVERRIDE_FILE" ]; then
+            rm -f "$CADDY_OVERRIDE_FILE"
+            rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
+            systemctl daemon-reload
+        fi
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
     fi
 else
@@ -1533,6 +1610,11 @@ else
     reverse_proxy localhost:8090
 }
 CADDYEOF
+    if [ -f "$CADDY_OVERRIDE_FILE" ]; then
+        rm -f "$CADDY_OVERRIDE_FILE"
+        rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
+        systemctl daemon-reload
+    fi
     echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
 fi
 

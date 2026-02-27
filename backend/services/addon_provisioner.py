@@ -475,10 +475,24 @@ class AddonProvisioner:
         
         try:
             if addon.addon_type == 'POSTGRES':
+                postgres_user = self._get_container_env(
+                    container_name, 'POSTGRES_USER'
+                )
+                postgres_db = self._get_container_env(
+                    container_name, 'POSTGRES_DB'
+                )
                 # Stream pg_dump output directly to file without shell redirection.
                 with open(backup_path, 'wb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', container_name, 'pg_dump', '-U', 'app_user', 'app_db'],
+                        [
+                            'docker',
+                            'exec',
+                            container_name,
+                            'pg_dump',
+                            '-U',
+                            postgres_user,
+                            postgres_db,
+                        ],
                         check=True,
                         stdout=backup_file,
                     )
@@ -530,10 +544,25 @@ class AddonProvisioner:
         
         try:
             if addon.addon_type == 'POSTGRES':
+                postgres_user = self._get_container_env(
+                    container_name, 'POSTGRES_USER'
+                )
+                postgres_db = self._get_container_env(
+                    container_name, 'POSTGRES_DB'
+                )
                 # Stream backup content as stdin to psql without shell piping.
                 with open(validated_backup_path, 'rb') as backup_file:
                     subprocess.run(
-                        ['docker', 'exec', '-i', container_name, 'psql', '-U', 'app_user', 'app_db'],
+                        [
+                            'docker',
+                            'exec',
+                            '-i',
+                            container_name,
+                            'psql',
+                            '-U',
+                            postgres_user,
+                            postgres_db,
+                        ],
                         stdin=backup_file,
                         check=True,
                     )

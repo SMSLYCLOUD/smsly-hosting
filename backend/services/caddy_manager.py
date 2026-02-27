@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 CADDY_FILE_PATH = os.path.join(CADDY_CONFIG_DIR, "Caddyfile")
 CADDY_RELOAD_FLAG = os.path.join(CADDY_CONFIG_DIR, ".reload")
+CADDY_TOKEN_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
+CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear")
 
 
 def _build_service_domain_block(domain: str, upstream_host: str) -> str:
@@ -213,16 +215,21 @@ def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
 
-        # Write Cloudflare token to shared volume for the host watcher
-        # to sync into Caddy's systemd environment override.
-        token_path = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
         if cloudflare_token:
-            with open(token_path, "w", encoding="utf-8") as handle:
+            # Write Cloudflare token to shared volume for the host watcher
+            # to sync into Caddy's systemd environment override.
+            with open(CADDY_TOKEN_FILE, "w", encoding="utf-8") as handle:
                 handle.write(cloudflare_token)
-            os.chmod(token_path, 0o600)
-        elif os.path.exists(token_path):
-            # Clean up stale token file if no token provided
-            os.remove(token_path)
+            os.chmod(CADDY_TOKEN_FILE, 0o600)
+            if os.path.exists(CADDY_TOKEN_CLEAR_FILE):
+                os.remove(CADDY_TOKEN_CLEAR_FILE)
+        else:
+            if os.path.exists(CADDY_TOKEN_FILE):
+                os.remove(CADDY_TOKEN_FILE)
+            # Signal watcher to explicitly remove any stale systemd override.
+            with open(CADDY_TOKEN_CLEAR_FILE, "w", encoding="utf-8") as handle:
+                handle.write("clear")
+            os.chmod(CADDY_TOKEN_CLEAR_FILE, 0o600)
 
         # Create reload flag - the host watcher will pick this up
         with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as handle:
