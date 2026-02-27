@@ -48,6 +48,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.services.autoscaler.check_autoscale_task',
         'schedule': 30.0,
     },
+    # Collect stats for inline autoscaler dashboard every 60 seconds
+    'autoscaler-collect-stats-every-60s': {
+        'task': 'apps.autoscaler.tasks.autoscaler_collect_stats',
+        'schedule': 60.0,
+    },
     # Mark interrupted/stale server provisioning runs as failed
     'cleanup-stale-server-provisioning-every-5m': {
         'task': 'apps.deployments.services.provisioner.cleanup_stale_server_provisioning',
