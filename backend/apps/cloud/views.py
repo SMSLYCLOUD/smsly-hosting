@@ -170,22 +170,11 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     def ecosystem_scan(self, request):
         """
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
-
-        Accepts optional `scan_depth` (10=quick, 20=deep, 30=full AI).
         """
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
+        task = ecosystem_scan_task.delay(str(request.user.id))
 
-        scan_depth = 30  # default: full scan
-        try:
-            scan_depth = int(request.data.get('scan_depth', 30))
-            if scan_depth not in (10, 20, 30):
-                scan_depth = 30
-        except (TypeError, ValueError):
-            pass
-
-        task = ecosystem_scan_task.delay(str(request.user.id), scan_depth)
-
-        return Response({'task_id': task.id, 'status': 'scanning', 'scan_depth': scan_depth})
+        return Response({'task_id': task.id, 'status': 'scanning'})
 
     @action(detail=False, methods=['post'])
     def ecosystem_deploy(self, request):
@@ -303,17 +292,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                         rel_path = os.path.relpath(os.path.join(root, f), project_path)
                         project_files.append(rel_path)
 
-                scan_depth = 30
-                try:
-                    scan_depth = int(request.data.get('scan_depth', 30))
-                    if scan_depth not in (10, 20, 30):
-                        scan_depth = 30
-                except (TypeError, ValueError):
-                    pass
-
-                analysis_results = heuristic_analysis(
-                    project_files, clone_dir=project_path, scan_depth=scan_depth
-                )
+                analysis_results = heuristic_analysis(project_files, clone_dir=project_path)
 
                 return Response(analysis_results)
 

@@ -1,8 +1,26 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Notification, NotificationPreference
-from .serializers import NotificationSerializer, NotificationPreferenceSerializer
+from .models import Notification, NotificationPreference, ResourceAlert
+from .serializers import NotificationSerializer, NotificationPreferenceSerializer, ResourceAlertSerializer
+
+class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ResourceAlertSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = ResourceAlert.objects.filter(service__owner=self.request.user, acknowledged=False)
+        service_id = self.request.query_params.get('service')
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        return qs
+
+    @action(detail=True, methods=['post'])
+    def dismiss(self, request, pk=None):
+        alert = self.get_object()
+        alert.acknowledged = True
+        alert.save()
+        return Response({'status': 'dismissed'})
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer

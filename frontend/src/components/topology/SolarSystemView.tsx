@@ -1,4 +1,4 @@
- 'use client';
+'use client';
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
@@ -24,14 +24,14 @@ function SolarSystemContent() {
   const systems = useMemo(() => {
     if (!data) return [];
 
-    const serviceNodes = data.nodes.filter(n => n.type?.toUpperCase() === 'SERVICE');
-    const addonNodes = data.nodes.filter(n => n.type?.toUpperCase() === 'ADDON');
+    const serviceNodes = data.nodes.filter(n => n.type === 'SERVICE');
+    const addonNodes = data.nodes.filter(n => n.type === 'ADDON');
     const edges = data.edges;
 
     return serviceNodes.map(service => {
       // Find owned addons
       const ownedAddons = edges
-        .filter(e => e.source === service.id && e.target.startsWith('addon-'))
+        .filter(e => e.source === service.id && e.target.startsWith('addon-') && e.type === 'OWNS')
         .map(e => addonNodes.find(n => n.id === e.target))
         .filter(Boolean) as TopologyNode[];
 

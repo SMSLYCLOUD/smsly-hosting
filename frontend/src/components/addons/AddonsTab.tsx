@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers } from 'lucide-react';
+import Image from 'next/image';
+import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { addonsApi } from '@/lib/api';
 
 interface Addon {
     id: string;
@@ -24,17 +26,17 @@ interface Backup {
 }
 
 const ADDON_TYPES = [
-    { value: 'POSTGRES', label: 'PostgreSQL', icon: '🐘', color: 'text-blue-400', description: 'Relational database' },
-    { value: 'REDIS', label: 'Redis', icon: '🔴', color: 'text-red-400', description: 'In-memory cache & store' },
-    { value: 'MYSQL', label: 'MySQL', icon: '🐬', color: 'text-cyan-400', description: 'Relational database' },
-    { value: 'MONGODB', label: 'MongoDB', icon: '🍃', color: 'text-green-400', description: 'Document database' },
-    { value: 'ELASTICSEARCH', label: 'Elasticsearch', icon: '🔍', color: 'text-yellow-400', description: 'Search & analytics' },
+    { value: 'POSTGRES', label: 'PostgreSQL', logo: '/logos/addons/postgres.svg', color: 'text-blue-400', description: 'Relational database' },
+    { value: 'REDIS', label: 'Redis', logo: '/logos/addons/redis.svg', color: 'text-red-400', description: 'In-memory cache & store' },
+    { value: 'MYSQL', label: 'MySQL', logo: '/logos/addons/mysql.svg', color: 'text-cyan-400', description: 'Relational database' },
+    { value: 'MONGODB', label: 'MongoDB', logo: '/logos/addons/mongodb.svg', color: 'text-green-400', description: 'Document database' },
+    { value: 'ELASTICSEARCH', label: 'Elasticsearch', logo: '/logos/addons/elasticsearch.svg', color: 'text-yellow-400', description: 'Search & analytics' },
     { value: 'RABBITMQ', label: 'RabbitMQ', icon: '🐇', color: 'text-orange-400', description: 'Message broker' },
     { value: 'MEMCACHED', label: 'Memcached', icon: '⚡', color: 'text-purple-400', description: 'Distributed cache' },
     { value: 'CLICKHOUSE', label: 'ClickHouse', icon: '📊', color: 'text-amber-400', description: 'Analytics database' },
     { value: 'MARIADB', label: 'MariaDB', icon: '🦭', color: 'text-teal-400', description: 'MySQL-compatible DB' },
-    { value: 'MINIO', label: 'MinIO', icon: '📦', color: 'text-pink-400', description: 'S3-compatible storage' },
-    { value: 'QDRANT', label: 'Qdrant', icon: '🧠', color: 'text-violet-400', description: 'Vector database (AI)' },
+    { value: 'MINIO', label: 'MinIO', logo: '/logos/addons/minio.svg', color: 'text-pink-400', description: 'S3-compatible storage' },
+    { value: 'QDRANT', label: 'Qdrant', logo: '/logos/addons/qdrant.svg', color: 'text-violet-400', description: 'Vector database (AI)' },
 ];
 
 function getHeaders(): Record<string, string> {
@@ -58,6 +60,9 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const [newServiceId, setNewServiceId] = useState(serviceId || '');
     const [backups, setBackups] = useState<Record<string, Backup[]>>({});
     const [expandedAddon, setExpandedAddon] = useState<string | null>(null);
+    const [credentials, setCredentials] = useState<Record<string, Record<string, string>>>({});
+    const [revealedCreds, setRevealedCreds] = useState<Record<string, boolean>>({});
+    const [copied, setCopied] = useState<string | null>(null);
 
     const fetchAddons = useCallback(async () => {
         try {
@@ -141,12 +146,21 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     };
 
-    const toggleExpand = (addonId: string) => {
+    const toggleExpand = async (addonId: string) => {
         if (expandedAddon === addonId) {
             setExpandedAddon(null);
         } else {
             setExpandedAddon(addonId);
             fetchBackups(addonId);
+            const addon = addons.find(a => a.id === addonId);
+            if (addon?.status === 'ACTIVE' && !credentials[addonId]) {
+                try {
+                    const creds = await addonsApi.addonCredentials(addonId);
+                    setCredentials(prev => ({ ...prev, [addonId]: creds }));
+                } catch (e) {
+                    console.error('Failed to fetch credentials:', e);
+                }
+            }
         }
     };
 
@@ -202,7 +216,13 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                         : 'border-border hover:border-muted-foreground/30'
                                 }`}
                             >
-                                <span className="text-2xl">{type.icon}</span>
+                                <span className="text-2xl block h-6 w-6 relative">
+                                    {(type as any).logo ? (
+                                        <Image src={(type as any).logo} alt={type.label} width={24} height={24} />
+                                    ) : (
+                                        (type as any).icon
+                                    )}
+                                </span>
                                 <p className={`font-semibold mt-2 ${type.color}`}>{type.label}</p>
                                 <p className="text-[10px] text-muted-foreground mt-0.5">{type.description}</p>
                             </button>
@@ -257,7 +277,13 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                     onClick={() => toggleExpand(addon.id)}
                                 >
                                     <div className="flex items-center gap-4">
-                                        <span className="text-3xl">{meta.icon}</span>
+                                        <span className="text-3xl block h-8 w-8 relative">
+                                            {(meta as any).logo ? (
+                                                <Image src={(meta as any).logo} alt={meta.label} width={32} height={32} />
+                                            ) : (
+                                                (meta as any).icon
+                                            )}
+                                        </span>
                                         <div>
                                             <h4 className="font-semibold text-foreground">{addon.name}</h4>
                                             <p className={`text-xs font-medium ${meta.color}`}>{meta.label}</p>
@@ -297,42 +323,52 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                             </button>
                                         </div>
 
-                                        {/* Connection Variables */}
-                                        <div>
-                                            <h5 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Connection Variables</h5>
-                                            <div className="space-y-1.5">
-                                                {(() => {
-                                                    const addonType = addon.addon_type.toLowerCase();
-                                                    const defaultPort = addonType === 'postgres' ? '5432' : addonType === 'mysql' || addonType === 'mariadb' ? '3306' : addonType === 'redis' || addonType === 'memcached' ? '6379' : addonType === 'mongodb' ? '27017' : addonType === 'elasticsearch' ? '9200' : addonType === 'rabbitmq' ? '5672' : addonType === 'clickhouse' ? '8123' : addonType === 'minio' ? '9000' : addonType === 'qdrant' ? '6333' : '5432';
-                                                    const isKV = ['redis', 'memcached'].includes(addonType);
-                                                    const vars = [
-                                                        { key: `${addon.addon_type}_HOST`, value: addon.name },
-                                                        { key: `${addon.addon_type}_PORT`, value: defaultPort },
-                                                        ...(!isKV ? [
-                                                            { key: `${addon.addon_type}_USER`, value: addon.name.replace(/-/g, '_') },
-                                                            { key: `${addon.addon_type}_PASSWORD`, value: '••••••••' },
-                                                            { key: `${addon.addon_type}_DB`, value: addon.name.replace(/-/g, '_') },
-                                                        ] : []),
-                                                        { key: `${addon.addon_type}_URL`, value: `${addonType}://${addon.name.replace(/-/g, '_')}:****@${addon.name}:${defaultPort}/${addon.name.replace(/-/g, '_')}` },
-                                                    ];
-                                                    return vars.map(v => (
-                                                        <div key={v.key} className="flex items-center justify-between p-2 bg-background rounded-lg border border-border group">
-                                                            <div className="flex-1 min-w-0">
-                                                                <span className="text-[10px] text-muted-foreground font-mono">{v.key}</span>
-                                                                <p className="text-xs text-foreground font-mono truncate">{v.value}</p>
+                                        {/* Credentials */}
+                                        {addon.status === 'ACTIVE' && credentials[addon.id] && (
+                                            <div>
+                                                <h5 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Connection Details</h5>
+                                                <div className="space-y-2">
+                                                    {Object.entries(credentials[addon.id]).map(([key, value]) => {
+                                                        const isRevealed = revealedCreds[`${addon.id}-${key}`];
+                                                        const shortSuffix = key.split('_').slice(1).join('_');
+                                                        const shortcode = `{{${addon.name}.${shortSuffix}}}`;
+
+                                                        return (
+                                                            <div key={key} className="bg-zinc-900/30 rounded-lg border border-zinc-800/50 p-3">
+                                                                <div className="flex items-center justify-between mb-1">
+                                                                    <span className="font-mono text-xs text-blue-300">{key}</span>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <button
+                                                                            onClick={(e) => { e.stopPropagation(); setRevealedCreds(prev => ({...prev, [`${addon.id}-${key}`]: !isRevealed})); }}
+                                                                            className="text-muted-foreground hover:text-foreground transition-colors"
+                                                                        >
+                                                                            <Eye size={12} />
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                navigator.clipboard.writeText(value);
+                                                                                setCopied(`${addon.id}-${key}`);
+                                                                                setTimeout(() => setCopied(null), 2000);
+                                                                            }}
+                                                                            className="text-muted-foreground hover:text-foreground transition-colors"
+                                                                        >
+                                                                            {copied === `${addon.id}-${key}` ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="font-mono text-xs text-zinc-400 break-all mb-1">
+                                                                    {isRevealed ? value : '•'.repeat(24)}
+                                                                </div>
+                                                                <div className="inline-flex items-center px-1.5 py-0.5 rounded bg-zinc-800/50 border border-zinc-700/50 text-[10px] text-zinc-500 font-mono">
+                                                                    {shortcode}
+                                                                </div>
                                                             </div>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(v.value); }}
-                                                                className="ml-2 p-1.5 text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-all"
-                                                                title="Copy"
-                                                            >
-                                                                <Layers size={12} />
-                                                            </button>
-                                                        </div>
-                                                    ));
-                                                })()}
+                                                        );
+                                                    })}
+                                                </div>
                                             </div>
-                                        </div>
+                                        )}
 
                                         {/* Backups */}
                                         <div>

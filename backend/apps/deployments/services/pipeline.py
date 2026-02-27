@@ -333,10 +333,10 @@ class PipelineManager:
             except Exception: # pylint: disable=broad-exception-caught
                 pass
 
-            self.source_dir = GitManager.clone_repo(
+            from services.repo_cache import get_or_clone
+            self.source_dir = get_or_clone(
                 repo_url=self.service.repository_url,
                 branch=self.service.branch or 'main',
-                destination=self.build_dir,
                 token=repo_token,
             )
 
@@ -1432,3 +1432,11 @@ class PipelineManager:
                 shutil.rmtree(self.build_dir)
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Failed to cleanup build dir %s: %s", self.build_dir, e)
+
+        # Cleanup cached worktrees
+        try:
+            if self.service and self.service.repository_url:
+                from services.repo_cache import cleanup_worktrees
+                cleanup_worktrees(self.service.repository_url)
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.warning("Failed to cleanup repo cache: %s", e)

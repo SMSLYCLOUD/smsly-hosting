@@ -153,11 +153,9 @@ def _runtime_watch_defaults(user) -> Dict[str, str]:
 
 
 @shared_task(bind=True, soft_time_limit=120, time_limit=180)
-def ecosystem_scan_task(self, user_id: str, scan_depth: int = 30) -> dict:
+def ecosystem_scan_task(self, user_id: str) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
-
-    scan_depth: 10=quick, 20=deep, 30=full AI.
     This is async because fetching and AI analysis can take 30-60s.
     """
     from django.contrib.auth import get_user_model
@@ -175,7 +173,7 @@ def ecosystem_scan_task(self, user_id: str, scan_depth: int = 30) -> dict:
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
     try:
-        return scan_and_analyze(token, scan_depth=scan_depth)
+        return scan_and_analyze(token)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Ecosystem scan failed for user %s: %s", user_id, exc)
         return {"error": f"Scan failed: {str(exc)}"}

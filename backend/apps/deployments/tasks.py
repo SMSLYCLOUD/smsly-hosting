@@ -4,7 +4,6 @@ import logging
 import re
 import shutil
 import tempfile
-import time
 import subprocess
 import os
 import json
@@ -85,6 +84,14 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
 def _build_runtime_env(service: Service) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
+
+    # Resolve shortcodes in all env vars (e.g. {{addon.URL}})
+    try:
+        from services.env_resolver import resolve_shortcodes
+        for key, value in env_vars.items():
+            env_vars[key] = resolve_shortcodes(str(service.id), value)
+    except Exception as e:
+        logger.warning(f"Failed to resolve shortcodes for service {service.name}: {e}")
 
     # internal_port is the canonical port — override any stale PORT env var.
     if service.internal_port:
@@ -1367,17 +1374,17 @@ def provision_addon_task(self, addon_id: str):
         addon.coolify_uuid = cid
         addon.save()
 
-        if addon.service:
-            key = f"{addon.addon_type}_URL"
-            if addon.addon_type == 'POSTGRES':
-                key = 'DATABASE_URL'
-            elif addon.addon_type == 'REDIS':
-                key = 'REDIS_URL'
-
+        # Auto-inject addon credentials as env vars
+        creds = addon.parsed_credentials
+        for key, value in creds.items():
             EnvironmentVariable.objects.update_or_create(
                 service=addon.service,
                 key=key,
-                defaults={'value': url, 'is_secret': True}
+                defaults={
+                    'value': value,
+                    'is_secret': key.endswith('_PASSWORD') or key.endswith('_URL'),
+                    'source': 'ADDON',
+                }
             )
     except Exception as e:
         raise self.retry(exc=e, countdown=30)
@@ -1464,10 +1471,33 @@ def cleanup_old_backups_task():
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def execute_server_transfer_task(self, transfer_id):
-    transfer = ServerTransfer.objects.get(id=transfer_id)
-    ServerTransferService(transfer).execute()
+    from .models_transfer import ServerTransfer as TransferModel
+    from services.transfer_engine import TransferEngine
+
+    transfer = TransferModel.objects.get(id=transfer_id)
+    engine = TransferEngine(transfer)
+    engine.execute()
+
 
 @shared_task(bind=True)
 def rollback_transfer_task(self, transfer_id):
-    transfer = ServerTransfer.objects.get(id=transfer_id)
-    ServerTransferService(transfer).rollback()
+    from .models_transfer import ServerTransfer as TransferModel
+    from services.transfer_engine import TransferEngine
+
+    transfer = TransferModel.objects.get(id=transfer_id)
+    engine = TransferEngine(transfer)
+    engine.rollback()
+
+
+@shared_task(bind=True, max_retries=0)
+def platform_update_task(self, update_id: str):
+    """Execute platform update in background."""
+    from .models_updates import PlatformUpdate
+    from services.platform_updater import perform_update
+
+    try:
+        update = PlatformUpdate.objects.get(id=update_id)
+    except PlatformUpdate.DoesNotExist:
+        return
+
+    perform_update(update)

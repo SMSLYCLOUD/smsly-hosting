@@ -21,6 +21,7 @@ import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
 import { BuildTab } from '@/components/settings/BuildTab';
 import { toast } from '@/components/ui/use-toast';
+import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
@@ -254,6 +255,10 @@ export default function ServiceDetailPage() {
         <ServiceLayout service={service} activeTab={activeTab} setActiveTab={setActiveTab}>
             {activeTab === 'overview' && (
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="col-span-1 md:col-span-4">
+                        <ResourceAlerts serviceId={service.id} />
+                    </div>
+
                     {/* Stats Cards */}
                     <div className="bg-card border border-border p-6 rounded-xl shadow-sm hover:shadow-md transition-shadow">
                         <h4 className="text-muted-foreground text-xs font-bold uppercase tracking-wider mb-3">Status</h4>
