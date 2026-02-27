@@ -1,0 +1,93 @@
+=== .248 MIGRATION FIX ===
+>>> DB User
+smsly_admin
+>>> Fake-apply migration 0028
+ Container smsly-hosting-socket-proxy-1 Running 
+ Container smsly-hosting-db-1 Running 
+ Container smsly-hosting-redis-1 Running 
+ Container smsly-hosting-pgbouncer-1 Running 
+ Container smsly-hosting-db-1 Waiting 
+ Container smsly-hosting-db-1 Healthy 
+ Container smsly-hosting-redis-1 Waiting 
+ Container smsly-hosting-pgbouncer-1 Waiting 
+ Container smsly-hosting-redis-1 Healthy 
+ Container smsly-hosting-pgbouncer-1 Healthy 
+ Container smsly-hosting-backend-run-cab9a6521860 Creating 
+ Container smsly-hosting-backend-run-cab9a6521860 Created 
+Starting: python manage.py migrate deployments 0028_alter_service_is_public --fake
+/usr/local/lib/python3.11/site-packages/django/db/backends/utils.py:98: RuntimeWarning: Accessing the database during app initialization is discouraged. To fix this warning, avoid executing queries in AppConfig.ready() or when your app modules are imported.
+  warnings.warn(self.APPS_NOT_READY_WARNING_MSG, category=RuntimeWarning)
+/usr/local/lib/python3.11/site-packages/dj_rest_auth/registration/serializers.py:225: UserWarning: app_settings.USERNAME_REQUIRED is deprecated, use: app_settings.SIGNUP_FIELDS['username']['required']
+  required=allauth_account_settings.USERNAME_REQUIRED,
+/usr/local/lib/python3.11/site-packages/dj_rest_auth/registration/serializers.py:227: UserWarning: app_settings.EMAIL_REQUIRED is deprecated, use: app_settings.SIGNUP_FIELDS['email']['required']
+  email = serializers.EmailField(required=allauth_account_settings.EMAIL_REQUIRED)
+/usr/local/lib/python3.11/site-packages/dj_rest_auth/registration/serializers.py:285: UserWarning: app_settings.EMAIL_REQUIRED is deprecated, use: app_settings.SIGNUP_FIELDS['email']['required']
+  email = serializers.EmailField(required=allauth_account_settings.EMAIL_REQUIRED)
+Traceback (most recent call last):
+  File "/app/manage.py", line 23, in <module>
+    main()
+  File "/app/manage.py", line 19, in main
+    execute_from_command_line(sys.ar
+
+=== .62 SMSLY-HELPER FIX ===
+>>> Nginx config
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /health {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location = /healthz {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        set $api_upstream "http://backend:8000";
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /ws/ {
+        set $ws_upstream "http://backend:8000";
+        proxy_pass $ws_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+>>> Test health from inside container
+wget: can't connect to remote host: Connection refused
+GET /health failed
+wget: can't connect to remote host: Connection refused
+GET :8000/health failed
+wget: can't connect to remote host: Connection refused
+wget: can't connect to remote host: Connection refused
+
+>>> Test ports from inside
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 127.0.0.11:35707        0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      1/nginx: master pro
+
+>>> Docker health check config
+{"Test":["CMD-SHELL","if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null \"http://127.0.0.1:8000/health\" >/dev/null 2>&1 && exit 0 || exit 1
