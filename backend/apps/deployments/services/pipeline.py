@@ -132,6 +132,12 @@ class PipelineManager:
             # Build the review summary from what was detected
             summary = self._build_review_summary()
 
+            # Persist source/build paths so run_build_only() can resume
+            summary['_build_meta'] = {
+                'source_dir': self.source_dir,
+                'build_dir': self.build_dir,
+            }
+
             # Save summary and pause
             self.deployment.review_summary = summary
             self.deployment.status = Deployment.Status.REVIEW
@@ -182,33 +188,43 @@ class PipelineManager:
 
     def _setup_for_resume(self):
         """Re-initialise state for phase 2 (build) from saved deployment data."""
-        # Deterministic path — no glob needed, no /tmp cleanup race.
-        self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
-        if not os.path.isdir(self.build_dir):
+        # Try to restore paths from review_summary (saved by run_analysis_only)
+        meta = (self.deployment.review_summary or {}).get('_build_meta', {})
+        saved_source = meta.get('source_dir', '')
+        saved_build = meta.get('build_dir', '')
+
+        # Restore build_dir
+        self.build_dir = saved_build or os.path.join(
+            _BUILDS_ROOT, f"build_{self.deployment.id}"
+        )
+
+        # Restore source_dir — prefer saved path from repo cache
+        if saved_source and os.path.isdir(saved_source):
+            self.source_dir = saved_source
+        elif os.path.isdir(self.build_dir):
+            # Fallback: search for .git inside build_dir (legacy behavior)
+            subdirs = [
+                d for d in os.listdir(self.build_dir)
+                if os.path.isdir(os.path.join(self.build_dir, d))
+            ]
+            git_dirs = [
+                d for d in subdirs
+                if os.path.isdir(
+                    os.path.join(self.build_dir, d, '.git')
+                )
+            ]
+            if git_dirs:
+                self.source_dir = os.path.join(self.build_dir, git_dirs[0])
+            elif subdirs:
+                self.source_dir = os.path.join(self.build_dir, subdirs[0])
+            else:
+                self.source_dir = self.build_dir
+        else:
             raise InfraError(
                 "Build directory from analysis phase not found. "
                 "The deployment may need to be restarted. "
-                f"Expected: {self.build_dir}"
+                f"Expected source: {saved_source or self.build_dir}"
             )
-
-
-        # Find the cloned repo dir: look for a dir containing .git
-        subdirs = [
-            d for d in os.listdir(self.build_dir)
-            if os.path.isdir(os.path.join(self.build_dir, d))
-        ]
-        git_dirs = [
-            d for d in subdirs
-            if os.path.isdir(
-                os.path.join(self.build_dir, d, '.git')
-            )
-        ]
-        if git_dirs:
-            self.source_dir = os.path.join(self.build_dir, git_dirs[0])
-        elif subdirs:
-            self.source_dir = os.path.join(self.build_dir, subdirs[0])
-        else:
-            self.source_dir = self.build_dir
 
         # Reload secrets for log redaction
         env_vars = self.service.env_vars.all()
