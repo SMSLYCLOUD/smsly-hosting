@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { cn } from "@/lib/utils"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { useConfirm } from '@/components/ui/confirm-dialog'
+import { RequiresTier } from "@/components/licensing/RequiresTier"
 
 // Types
 interface Service {
@@ -268,6 +269,7 @@ export default function MarketplacePage() {
 
     return (
         <DashboardShell>
+        <RequiresTier tier="pro">
         <div className="container py-8 space-y-8">
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Marketplace</h1>
@@ -411,6 +413,7 @@ export default function MarketplacePage() {
             </Dialog>
 
         </div>
+        </RequiresTier>
         </DashboardShell>
     )
 }

@@ -10,6 +10,7 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { tunnelsApi, type Tunnel, type TunnelRequest, type ReservedSubdomain } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 export default function TunnelsPage() {
   const confirm = useConfirm();
@@ -166,6 +167,7 @@ export default function TunnelsPage() {
 
   return (
     <DashboardShell>
+      <RequiresTier tier="pro">
       <div className="flex-1 p-8 relative z-10">
         <motion.div
           className="max-w-6xl mx-auto space-y-8"
@@ -491,6 +493,7 @@ export default function TunnelsPage() {
           </div>
         </motion.div>
       </div>
+      </RequiresTier>
     </DashboardShell>
   );
 }
