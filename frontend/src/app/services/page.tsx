@@ -21,8 +21,8 @@ const TopologyView = dynamic(() => import('@/components/topology/TopologyView').
   ssr: false
 });
 
-const Topology3D = dynamic(() => import('@/components/topology/Topology3D').then(mod => mod.Topology3D), {
-  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading 3D Engine...</div>,
+const CityTopologyView = dynamic(() => import('@/components/topology/CityTopologyView'), {
+  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading 3D City...</div>,
   ssr: false
 });
 
@@ -152,7 +152,7 @@ export default function ServicesPage() {
         )}
         {viewMode === 'CITY3D' && (
             <div className="h-full min-h-0">
-                <Topology3D />
+                <CityTopologyView />
             </div>
         )}
         {viewMode === 'ADDONS' && (
