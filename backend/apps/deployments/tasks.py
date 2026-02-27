@@ -1147,10 +1147,38 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     auto_fixed = [r for r in results if r.get('auto_fixed')]
 
     if auto_fixed:
+        # ── Auto-fix generation cap ──
+        # Count how many auto-fix generations preceded this deployment.
+        # Stop after MAX_AUTO_FIX_GENERATIONS to prevent infinite fix→crash→fix loops.
+        MAX_AUTO_FIX_GENERATIONS = 2
+        generation = (deployment.commit_message or '').count('[auto-fix]')
+        # Also count parent chain via commit_hash lineage
+        from datetime import timedelta as _timedelta
+        parent_autofix_count = Deployment.objects.filter(
+            service=service,
+            commit_message__contains='[auto-fix]',
+            created_at__gte=timezone.now() - _timedelta(hours=1),
+        ).count()
+        effective_generation = max(generation, parent_autofix_count)
+
+        if effective_generation >= MAX_AUTO_FIX_GENERATIONS:
+            append_log(
+                deployment,
+                f"\n⛔ Auto-fix cap reached ({effective_generation}/{MAX_AUTO_FIX_GENERATIONS}). "
+                f"Manual intervention required.\n"
+            )
+            deployment.status = 'FAILED'
+            deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
+            deployment.finished_at = timezone.now()
+            deployment.save()
+            broadcast_status(deployment)
+            return
+
         # Auto-fix applied → trigger automatic redeploy
         append_log(
             deployment,
-            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed. "
+            f"\n🔧 {len(auto_fixed)} issue(s) auto-fixed "
+            f"(generation {effective_generation + 1}/{MAX_AUTO_FIX_GENERATIONS}). "
             f"Triggering automatic redeploy...\n"
         )
         deployment.status = 'FAILED'
@@ -1289,6 +1317,11 @@ def _handle_failure(task, deployment, error_msg, reason):
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Failed to trigger AI failure task: %s", e)
 
+    # Only retry on transient errors, not build/pipeline failures.
+    # Build failures are deterministic — retrying won't help.
+    if reason in ('Pipeline Failure', 'Build Failure'):
+        logger.error("Non-retryable failure (%s), not retrying: %s", reason, error_msg)
+        return
     raise task.retry(exc=Exception(error_msg), countdown=30)
 
 

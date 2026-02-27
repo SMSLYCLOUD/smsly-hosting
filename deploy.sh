@@ -44,14 +44,52 @@ echo "[3/9] Starting core infrastructure (db, redis, socket-proxy, registry)..."
 # Do not use --remove-orphans here; it can unintentionally remove routing services.
 "${COMPOSE_CMD[@]}" up -d db redis socket-proxy registry
 
+# ── Health-check polling (replaces fragile sleep) ──
+wait_for_healthy() {
+  local service="$1" timeout="${2:-60}" elapsed=0
+  echo "  Waiting for $service to become healthy (timeout ${timeout}s)..."
+  while [ $elapsed -lt $timeout ]; do
+    health=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Health}}' 2>/dev/null || echo "")
+    if [ "$health" = "healthy" ]; then
+      echo "  ✓ $service is healthy"
+      return 0
+    fi
+    status=$("${COMPOSE_CMD[@]}" ps "$service" --format '{{.Status}}' 2>/dev/null || echo "")
+    if echo "$status" | grep -qi "exit"; then
+      echo "  ✗ $service exited unexpectedly"
+      return 1
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  echo "  ⚠ $service not healthy after ${timeout}s (continuing)"
+  return 1
+}
+
+wait_for_endpoint() {
+  local url="$1" timeout="${2:-60}" elapsed=0
+  echo "  Waiting for $url (timeout ${timeout}s)..."
+  while [ $elapsed -lt $timeout ]; do
+    if curl -sf "$url" > /dev/null 2>&1; then
+      echo "  ✓ $url responding"
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  echo "  ⚠ $url not responding after ${timeout}s (continuing)"
+  return 1
+}
+
 echo "[4/9] Waiting for db/redis health..."
-sleep 5
+wait_for_healthy db 60
+wait_for_healthy redis 30
 
 echo ""
 echo "[5/9] Starting backend..."
 "${COMPOSE_CMD[@]}" up -d backend
 echo "Waiting for backend health..."
-sleep 10
+wait_for_healthy backend 120 || wait_for_endpoint "http://localhost:8090/health" 30
 
 echo ""
 echo "[6/9] Starting and recycling celery worker + beat..."
@@ -62,7 +100,7 @@ sleep 3
 echo ""
 echo "[7/9] Starting frontend..."
 "${COMPOSE_CMD[@]}" up -d frontend
-sleep 5
+wait_for_healthy frontend 60
 
 echo ""
 echo "[8/9] Starting platform reverse-proxy (nginx)..."

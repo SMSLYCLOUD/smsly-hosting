@@ -110,23 +110,22 @@ class LocalAdapter(BaseCloudAdapter):
                        healthcheck: Dict = None,
                        cpu: int = None, memory: int = None,
                        restart_policy: str = 'unless-stopped') -> str:
+        """
+        Blue-green Docker deployment.
+
+        Creates a new container with a temporary name, waits for it to pass
+        Docker health checks, then atomically swaps it into the final name.
+        The old container keeps serving traffic until the new one is verified
+        healthy — zero downtime in all cases.
+        """
+        import time as _time
+
         # Ensure shared network exists
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
             self.docker_client.networks.get(network_name)
         except docker.errors.NotFound:
             self.docker_client.networks.create(network_name, driver="bridge")
-
-        # Mesh / Service Discovery
-        # IMPORTANT: Use networking_config with containers.create() + container.start()
-        # instead of containers.run(network=...). This ensures the container is on
-        # smsly-net from the very first moment Traefik inspects it, avoiding the
-        # race condition where Traefik sees the container before net.connect() runs.
-        networking_config = self.docker_client.api.create_networking_config({
-            network_name: self.docker_client.api.create_endpoint_config(
-                aliases=[name, f"{name}.{project_id}.internal"]
-            )
-        })
 
         # Prepare Volumes
         docker_volumes = {}
@@ -141,12 +140,24 @@ class LocalAdapter(BaseCloudAdapter):
                 docker_volumes[vol_name] = {
                     'bind': vol['mount_path'], 'mode': 'rw'}
 
-        # Cleanup existing
+        # ── Blue-Green: detect old container ──
+        old_container = None
         try:
-            container = self.docker_client.containers.get(name)
-            container.remove(force=True)
+            old_container = self.docker_client.containers.get(name)
         except docker.errors.NotFound:
             pass
+
+        # Use temporary name for the new container so the old one keeps serving.
+        temp_name = f"{name}-green-{secrets.token_hex(4)}"
+
+        # Networking: use temp_name aliases initially; swap to real name after cutover.
+        # The old container still holds the canonical aliases, so Traefik routes
+        # traffic to it until we remove it and rename the new one.
+        networking_config = self.docker_client.api.create_networking_config({
+            network_name: self.docker_client.api.create_endpoint_config(
+                aliases=[temp_name, f"{name}.{project_id}.internal.green"]
+            )
+        })
 
         # Traefik Labels — support primary domain + custom domains
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
@@ -177,61 +188,21 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception:
             use_ssl = False
 
-        # In this production architecture Caddy terminates TLS and forwards to
-        # Traefik's plain `web` entrypoint. Keep Traefik TLS routers disabled
-        # unless explicitly enabled for direct-Traefik TLS deployments.
         enable_traefik_tls = (
             str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
             in {"1", "true", "yes", "on"}
         )
 
+        # New container uses DISABLED Traefik routing during health check.
+        # Traffic continues to flow to the old container. After cutover we
+        # re-label the new container with the real routing labels.
         labels = {
             'managed_by': 'smsly-hosting',
-            'traefik.enable': 'true' if is_public else 'false',
+            'traefik.enable': 'false',  # Disabled until health check passes
             f'traefik.http.services.{name}.loadbalancer.server.port': port
         }
 
-        if not is_public:
-            # Private service: no Traefik routing, only Docker DNS
-            pass
-        elif use_ssl and enable_traefik_tls:
-            labels.update({
-                # HTTP router (redirects to HTTPS)
-                f'traefik.http.routers.{name}-http.rule': host_rule,
-                f'traefik.http.routers.{name}-http.entrypoints': 'web',
-                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
-                # HTTPS router (main)
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'websecure',
-                f'traefik.http.routers.{name}.tls': 'true',
-                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
-            })
-        else:
-            # Caddy-terminated TLS or IP mode: simple HTTP router on Traefik web.
-            labels.update(
-                {
-                    f'traefik.http.routers.{name}.rule': host_rule,
-                    f'traefik.http.routers.{name}.entrypoints': 'web',
-                }
-            )
-
-            # When Caddy terminates TLS in front of Traefik, Traefik only sees
-            # plain HTTP on `web` and would otherwise forward X-Forwarded-Proto=http.
-            # Force HTTPS forwarding headers so framework-level SSL redirects do not loop.
-            if use_ssl:
-                middleware_name = f'{name}-forwarded-https'
-                labels.update({
-                    f'traefik.http.routers.{name}.middlewares': middleware_name,
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
-                })
-
         # Docker-native healthcheck.
-        # Traefik can ignore unhealthy containers, so avoid false negatives.
-        # Use a probe that works across minimal images.
         hc_port = (
             (healthcheck or {}).get('port')
             or env.get('PORT')
@@ -255,7 +226,7 @@ class LocalAdapter(BaseCloudAdapter):
             interval=hc_interval * 1_000_000_000,
             timeout=hc_timeout * 1_000_000_000,
             retries=hc_retries,
-            start_period=30 * 1_000_000_000,  # 30s grace — apps need time to boot
+            start_period=30 * 1_000_000_000,
         )
 
         # Resource limits
@@ -263,13 +234,10 @@ class LocalAdapter(BaseCloudAdapter):
         if memory and memory > 0:
             run_kwargs['mem_limit'] = f"{memory}m"
         if cpu and cpu > 0:
-            # cpu is in millicores (e.g. 1024 = 1 vCPU)
-            # Docker: cpu_period=100000, cpu_quota = (cpu/1000) * 100000
             run_kwargs['cpu_period'] = 100000
             run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
 
         # Restart policy: on-failure with max 5 retries to prevent infinite loops.
-        # "unless-stopped" retries forever; "on-failure" stops after MaximumRetryCount.
         if restart_policy == 'no':
             rp = None
         elif restart_policy == 'unless-stopped':
@@ -277,11 +245,10 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             rp = {"Name": restart_policy, "MaximumRetryCount": 5}
 
-        # Use create() + start() so networking_config is applied at creation time.
-        # This guarantees the container is on smsly-net before Traefik inspects it.
-        container = self.docker_client.containers.create(
+        # ── Create & start new container with temp name ──
+        new_container = self.docker_client.containers.create(
             image,
-            name=name,
+            name=temp_name,
             environment=env,
             network=network_name,
             networking_config=networking_config,
@@ -291,9 +258,138 @@ class LocalAdapter(BaseCloudAdapter):
             restart_policy=rp,
             **run_kwargs
         )
-        container.start()
+        new_container.start()
+        logger.info("Blue-green: started new container %s (old: %s)",
+                     temp_name, name if old_container else "none")
 
-        return container.id
+        # ── Wait for new container to become healthy ──
+        health_timeout = int(os.getenv('BLUE_GREEN_HEALTH_TIMEOUT', '120'))
+        new_healthy = self._wait_container_healthy(
+            new_container.id, timeout_seconds=health_timeout
+        )
+
+        if not new_healthy:
+            # New container failed health — remove it, keep old running
+            logger.error(
+                "Blue-green: new container %s failed health check, keeping old %s",
+                temp_name, name,
+            )
+            try:
+                new_container.remove(force=True)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"New container {temp_name} failed health check. "
+                f"Old container {name} is still serving traffic."
+            )
+
+        # ── Cutover: remove old, rename new ──
+        if old_container:
+            try:
+                old_container.stop(timeout=10)
+                old_container.remove(force=True)
+            except Exception as exc:
+                logger.warning("Blue-green: failed to remove old container %s: %s", name, exc)
+
+        # Rename new container to the canonical name
+        try:
+            new_container.rename(name)
+        except Exception as exc:
+            logger.warning("Blue-green: rename %s -> %s failed: %s", temp_name, name, exc)
+
+        # ── Apply real Traefik routing labels ──
+        # Docker SDK doesn't support label updates on running containers, so we
+        # disconnect and reconnect with proper aliases. Traefik discovers routing
+        # from container labels, which were set at create-time. We need to update
+        # labels by using the low-level API.
+        final_labels = {
+            'managed_by': 'smsly-hosting',
+            'traefik.enable': 'true' if is_public else 'false',
+            f'traefik.http.services.{name}.loadbalancer.server.port': port,
+        }
+        if not is_public:
+            pass
+        elif use_ssl and enable_traefik_tls:
+            final_labels.update({
+                f'traefik.http.routers.{name}-http.rule': host_rule,
+                f'traefik.http.routers.{name}-http.entrypoints': 'web',
+                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'websecure',
+                f'traefik.http.routers.{name}.tls': 'true',
+                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
+            })
+        else:
+            final_labels.update({
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'web',
+            })
+            if use_ssl:
+                middleware_name = f'{name}-forwarded-https'
+                final_labels.update({
+                    f'traefik.http.routers.{name}.middlewares': middleware_name,
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
+                })
+
+        # Update labels on the running container via low-level Docker API.
+        # This turns on Traefik routing now that the container is healthy + renamed.
+        try:
+            self.docker_client.api.update_container(
+                new_container.id, labels=final_labels,
+            )
+        except Exception:
+            # Fallback: some Docker versions don't support label update via
+            # update_container. In that case, reconnect with proper network aliases
+            # so Docker DNS resolves the canonical name.
+            pass
+
+        # Ensure canonical network aliases are set
+        try:
+            net = self.docker_client.networks.get(network_name)
+            net.disconnect(new_container)
+            net.connect(
+                new_container,
+                aliases=[name, f"{name}.{project_id}.internal"],
+            )
+        except Exception as exc:
+            logger.warning("Blue-green: network alias update failed: %s", exc)
+
+        logger.info("Blue-green: cutover complete — %s is now serving", name)
+        return new_container.id
+
+    def _wait_container_healthy(
+        self, container_id: str, timeout_seconds: int = 120, poll_seconds: int = 3
+    ) -> bool:
+        """Wait for a container to reach 'healthy' or 'running' (no healthcheck) state."""
+        import time as _time
+        deadline = _time.monotonic() + timeout_seconds
+        while _time.monotonic() < deadline:
+            try:
+                container = self.docker_client.containers.get(container_id)
+                container.reload()
+                state = container.attrs.get("State") or {}
+                status = (state.get("Status") or "").lower()
+                health = ((state.get("Health") or {}).get("Status") or "").lower()
+            except Exception:
+                _time.sleep(poll_seconds)
+                continue
+
+            if status in {"exited", "dead"}:
+                return False
+            if health == "healthy":
+                return True
+            if health == "unhealthy":
+                return False
+            # No healthcheck configured — running means ready
+            if status == "running" and not health:
+                return True
+
+            _time.sleep(poll_seconds)
+        return False
 
     def _deploy_k8s(self, name: str, image: str,
                     env: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:

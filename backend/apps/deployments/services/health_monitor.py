@@ -379,6 +379,23 @@ def _trigger_restart(service, service_key: str) -> bool:
             logger.info("Skipping auto-restart for %s: deployment already in progress.", service.name)
             return False
 
+        # Guard: don't auto-restart if recent deployments keep failing.
+        # This prevents restart storms when the issue is persistent
+        # (bad code, missing env var, broken Dockerfile, etc.).
+        from datetime import timedelta
+        recent_failures = Deployment.objects.filter(
+            service=service,
+            status=Deployment.Status.FAILED,
+            created_at__gte=timezone.now() - timedelta(hours=1),
+        ).count()
+        if recent_failures >= 3:
+            logger.warning(
+                "Skipping auto-restart for %s: %d deployments failed in the last hour. "
+                "Manual intervention required.",
+                service.name, recent_failures,
+            )
+            return False
+
         latest = Deployment.objects.filter(service=service).order_by("-created_at").first()
         if not latest:
             logger.warning("Skipping auto-restart for %s: no prior deployment found.", service.name)
