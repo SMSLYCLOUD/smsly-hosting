@@ -47,10 +47,10 @@ class AddonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # Check License
         from apps.licensing.models import PlatformLicense
-        license = PlatformLicense.load()
-        if not license.is_pro:
-             from rest_framework.exceptions import PermissionDenied
-             raise PermissionDenied("Addons require Pro tier.")
+        platform_license = PlatformLicense.load()
+        if not platform_license.is_pro:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Addons require Pro tier.")
 
         # SECURITY: Verify user owns the service before creating addon
         service = serializer.validated_data.get('service')
