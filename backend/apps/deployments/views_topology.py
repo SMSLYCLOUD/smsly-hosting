@@ -47,48 +47,70 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     if latest_deploy.created_at else None
                 )
 
+            # Map deploy status to a canonical status for the frontend
+            status = {
+                'SUCCESS': 'ACTIVE', 'RUNNING': 'ACTIVE',
+                'FAILED': 'FAILED', 'ERROR': 'FAILED',
+            }.get(deploy_status, deploy_status)
+
             nodes.append({
                 'id': str(service.id),
                 'type': 'service',
                 'data': {
                     'name': service.name,
+                    'status': status,  # Used by Solar System view
+                    'kind': 'COMPUTE',
+                    'subtype': getattr(
+                        service, 'build_strategy', 'DOCKERFILE'),
+                    'region': '',
                     'port': service.internal_port,
                     'replicas': getattr(service, 'min_replicas', 1),
                     'health': getattr(service, 'health_status', 'unknown'),
                     'domain': getattr(service, 'public_domain', None),
+                    'url': getattr(service, 'public_domain', None),
                     'deploy_status': deploy_status,
                     'deploy_commit': deploy_commit,
                     'deploy_time': deploy_time,
                     'build_strategy': getattr(
                         service, 'build_strategy', 'DOCKERFILE'),
+                    'metadata': {
+                        'replicas': getattr(service, 'min_replicas', 1),
+                        'port': service.internal_port,
+                    },
                 }
             })
 
             # Addon nodes + edges
             for addon in service.addons.all():
                 addon_id = f"addon-{addon.id}"
+                # Map addon_type to kind for frontend Solar System view
+                addon_upper = (addon.addon_type or '').upper()
+                if addon_upper in ('POSTGRES', 'MYSQL', 'MONGODB'):
+                    addon_kind = 'DATABASE'
+                elif addon_upper == 'REDIS':
+                    addon_kind = 'CACHE'
+                elif addon_upper in ('RABBITMQ', 'KAFKA'):
+                    addon_kind = 'QUEUE'
+                elif addon_upper == 'ELASTICSEARCH':
+                    addon_kind = 'SEARCH'
+                else:
+                    addon_kind = 'STORAGE'
+
                 nodes.append({
                     'id': addon_id,
                     'type': 'addon',
                     'data': {
                         'name': addon.name,
-                        'addon_type': addon.addon_type,
                         'status': addon.status,
+                        'kind': addon_kind,  # Used by Solar System view
+                        'subtype': addon.addon_type,
+                        'region': '',
+                        'addon_type': addon.addon_type,
                     }
                 })
 
-                # Determine link type from addon type
-                addon_upper = (addon.addon_type or '').upper()
-                if addon_upper in ('POSTGRES', 'MYSQL', 'MONGODB'):
-                    link_type = 'DATABASE'
-                elif addon_upper == 'REDIS':
-                    link_type = 'CACHE'
-                elif addon_upper in ('RABBITMQ', 'KAFKA'):
-                    link_type = 'QUEUE'
-                elif addon_upper == 'ELASTICSEARCH':
-                    link_type = 'SEARCH'
-                else:
-                    link_type = 'ADDON'
+                # Reuse addon_kind for link type (they map identically)
+                link_type = addon_kind if addon_kind != 'STORAGE' else 'ADDON'
 
                 edges.append({
                     'source': str(service.id),

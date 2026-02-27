@@ -124,7 +124,7 @@ export function Navbar() {
             : 'bg-transparent border-b border-transparent'
         }`}
     >
-      <div className="container relative flex h-16 items-center max-w-7xl mx-auto px-4 sm:px-6">
+      <div className="container mx-auto grid h-16 max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6">
 
         {/* Logo - Left */}
         <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
@@ -133,7 +133,7 @@ export function Navbar() {
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
-        <nav className="hidden md:flex absolute left-1/2 -translate-x-1/2 w-full max-w-[760px] px-2 justify-center">
+        <nav className="hidden min-w-0 items-center justify-center md:flex">
             <div className="flex max-w-full items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
@@ -185,7 +185,7 @@ export function Navbar() {
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
-        <div className="hidden md:flex ml-auto items-center space-x-3">
+        <div className="hidden items-center justify-end space-x-3 md:flex">
           {user && (
            <Link href="/new" prefetch={false}>
                <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">

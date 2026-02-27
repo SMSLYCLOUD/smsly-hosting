@@ -1,7 +1,8 @@
 """SSL Monitor service."""
 import logging
-from datetime import datetime, timedelta
-from django.conf import settings
+from datetime import datetime, timezone as dt_timezone
+
+from celery import shared_task
 from django.utils import timezone
 from apps.deployments.models import Service, PlatformConfig
 from apps.notifications.models import Notification
@@ -37,8 +38,7 @@ class SSLMonitorService:
                 cert = s.getpeercert()
 
             not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-            # Convert to aware UTC
-            expires_at = timezone.make_aware(not_after, timezone=timezone.utc)
+            expires_at = not_after.replace(tzinfo=dt_timezone.utc)
 
             days_left = (expires_at - timezone.now()).days
 
@@ -61,6 +61,24 @@ class SSLMonitorService:
             )
 
     def _attempt_renew(self, domain):
-        # Trigger Caddy reload via API or touch file
-        # Stub for now
-        logger.info(f"Triggering renewal for {domain}")
+        # Caddy auto-renews certs. Trigger a safe config apply/reload so
+        # failed/paused cert jobs are nudged without manual SSH intervention.
+        try:
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+
+            config = PlatformConfig.load()
+            caddyfile = generate_caddyfile(config)
+            cf_token = (config.cloudflare_api_token or "").strip()
+            result = apply_caddyfile(caddyfile, cloudflare_token=cf_token)
+            if result.get("ok"):
+                logger.info("Triggered Caddy reload for certificate refresh: %s", domain)
+            else:
+                logger.warning("Caddy reload trigger failed for %s: %s", domain, result.get("message"))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Certificate refresh trigger failed for %s: %s", domain, exc)
+
+
+@shared_task(name="apps.cloud.services.ssl_monitor.check_ssl_certificates_task")
+def check_ssl_certificates_task():
+    """Periodic SSL certificate expiry monitor."""
+    SSLMonitorService().check_all_certificates()

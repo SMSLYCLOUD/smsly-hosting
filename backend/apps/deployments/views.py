@@ -8,6 +8,9 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.utils import timezone
 from django.conf import settings
+from django.core.cache import cache
+from django.core.exceptions import ValidationError
+from django.db import DataError, IntegrityError
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .serializers import (
@@ -94,6 +97,70 @@ def _normalize_request_domain(raw_domain: str):
         return normalize_domain(raw_domain), None
     except ValueError as exc:
         return None, str(exc)
+
+
+def _resolve_domain_ips(hostname: str) -> set:
+    """Resolve host to a set of IPs (A/AAAA). Returns empty set on errors."""
+    import socket
+    ips = set()
+    try:
+        for row in socket.getaddrinfo(hostname, 443):
+            if row and len(row) >= 5 and row[4]:
+                ips.add(row[4][0])
+    except socket.gaierror:
+        return set()
+    return ips
+
+
+def _cname_chain_contains(domain: str, target: str, max_hops: int = 10) -> bool:
+    """
+    Best-effort CNAME chain check.
+    Returns False if dnspython is unavailable or lookup fails.
+    """
+    try:
+        import dns.resolver  # type: ignore
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+    current = domain.rstrip(".").lower()
+    wanted = target.rstrip(".").lower()
+    seen = set()
+    for _ in range(max_hops):
+        if current in seen:
+            return False
+        seen.add(current)
+        try:
+            answers = dns.resolver.resolve(current, "CNAME")
+        except Exception:  # pylint: disable=broad-exception-caught
+            return False
+
+        try:
+            next_target = str(answers[0].target).rstrip(".").lower()
+        except Exception:  # pylint: disable=broad-exception-caught
+            return False
+
+        if next_target == wanted:
+            return True
+        current = next_target
+
+    return False
+
+
+def _service_for_domain(domain: str):
+    """Find service routed by this public/custom domain."""
+    direct = Service.objects.filter(public_domain=domain).first()
+    if direct:
+        return direct
+
+    for service in Service.objects.only("id", "custom_domains"):
+        values = [
+            str(value or "").strip().lower()
+            for value in (service.custom_domains or [])
+            if str(value or "").strip()
+        ]
+        if domain in values:
+            return service
+    return None
 
 
 def _parse_bool(value):
@@ -727,11 +794,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         value = str(request.data.get('value', '') or '')
         is_secret = _parse_bool(request.data.get('is_secret', False))
 
-        env_var, created = EnvironmentVariable.objects.update_or_create(
-            service=service,
-            key=key,
-            defaults={'value': value, 'is_secret': is_secret},
-        )
+        try:
+            env_var, created = EnvironmentVariable.objects.update_or_create(
+                service=service,
+                key=key,
+                defaults={'value': value, 'is_secret': is_secret},
+            )
+        except (ValidationError, DataError, IntegrityError) as exc:
+            logger.warning("Invalid env var payload for service %s key=%s: %s", service.id, key, exc)
+            return Response(
+                {'error': f'Invalid environment variable payload for key "{key}"'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Failed to save env var for service %s key=%s: %s", service.id, key, exc)
+            return Response(
+                {'error': 'Failed to save environment variable'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         out = EnvVarSerializer(env_var).data
         return Response(
             out,
@@ -756,7 +836,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         POST /api/v1/services/{id}/verify-domain/
         Body: { "domain": "myapp.com" }
         """
-        import socket
         service = self.get_object()
         domain, domain_error = _normalize_request_domain(
             request.data.get('domain', '')
@@ -778,23 +857,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'message': 'Service has no public domain assigned yet.',
             })
 
+        domain_ips = _resolve_domain_ips(domain)
+        expected_ips = _resolve_domain_ips(cname_target)
+        is_valid = bool(domain_ips and expected_ips and (domain_ips & expected_ips))
+
+        # Apex domains can point directly to server IP instead of CNAME.
+        server_ip = ""
         try:
-            resolved = socket.getaddrinfo(domain, 443)
-            target_ips = socket.getaddrinfo(cname_target, 443)
+            server_ip = str(PlatformConfig.load().server_ip or "").strip()
+        except Exception:  # pylint: disable=broad-exception-caught
+            server_ip = ""
+        if not is_valid and server_ip and server_ip in domain_ips:
+            is_valid = True
 
-            domain_ips = {r[4][0] for r in resolved}
-            expected_ips = {r[4][0] for r in target_ips}
-
-            is_valid = bool(domain_ips & expected_ips)
-        except socket.gaierror:
-            is_valid = False
+        # Extra robustness: follow CNAME chain when dnspython is available.
+        if not is_valid and _cname_chain_contains(domain, cname_target):
+            is_valid = True
 
         return Response({
             'domain': domain,
             'verified': is_valid,
             'cname_target': cname_target,
-            'message': 'DNS verified! Domain points to CloudNeuron.' if is_valid
-                       else f'DNS not configured. Add a CNAME record pointing to {cname_target}',
+            'message': (
+                'DNS verified! Domain points to CloudNeuron.'
+                if is_valid
+                else (
+                    f'DNS not configured. Add a CNAME record pointing to {cname_target} '
+                    f'or an A record to {server_ip or "your server IP"}.'
+                )
+            ),
         })
 
     def _sync_caddy(self):
@@ -814,6 +905,63 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error("Caddy sync error: %s", e)
             return False
+
+    def _find_domain_conflict(self, service: Service, domain: str):
+        """Return conflicting service if domain is already assigned globally."""
+        public_conflict = (
+            Service.objects
+            .exclude(id=service.id)
+            .filter(public_domain=domain)
+            .only("id", "name", "public_domain")
+            .first()
+        )
+        if public_conflict:
+            return public_conflict
+
+        for other in Service.objects.exclude(id=service.id).only("id", "name", "custom_domains"):
+            other_domains = [
+                str(d or "").strip().lower()
+                for d in (other.custom_domains or [])
+                if str(d or "").strip()
+            ]
+            if domain in other_domains:
+                return other
+        return None
+
+    def _enforce_custom_domain_quota(self, service: Service, new_total: int):
+        """
+        Enforce billing plan limit for custom domains.
+        Defaults to 1 when no active subscription exists.
+        """
+        try:
+            from apps.billing.models import UserSubscription
+            sub = (
+                UserSubscription.objects
+                .select_related("plan")
+                .filter(
+                    user=service.owner,
+                    status__in=["ACTIVE", "TRIAL"],
+                )
+                .first()
+            )
+            limit = 1
+            if sub and sub.plan and sub.plan.max_custom_domains is not None:
+                limit = int(sub.plan.max_custom_domains)
+        except Exception:  # pylint: disable=broad-exception-caught
+            limit = 1
+
+        # Non-positive means unlimited.
+        if limit > 0 and new_total > limit:
+            return Response(
+                {
+                    "error": (
+                        f"Custom domain limit reached ({limit}). "
+                        "Upgrade your plan to add more domains."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
     def add_domain(self, request, pk=None):
@@ -840,13 +988,43 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Domain already added'},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        conflict = self._find_domain_conflict(service, domain)
+        if conflict:
+            return Response(
+                {
+                    'error': (
+                        f'Domain already assigned to service "{conflict.name}". '
+                        'A domain can only be attached to one service.'
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         domains = list(dict.fromkeys([*domains, domain]))
+        quota_response = self._enforce_custom_domain_quota(service, len(domains))
+        if quota_response is not None:
+            return quota_response
+
+        previous_domains = list(service.custom_domains or [])
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
         # Auto-sync Caddyfile so SSL + routing are provisioned immediately.
         # No service redeploy is required.
         caddy_ok = self._sync_caddy()
+        if not caddy_ok:
+            service.custom_domains = previous_domains
+            service.save(update_fields=['custom_domains'])
+            return Response(
+                {
+                    'error': (
+                        'Domain saved failed to apply routing configuration. '
+                        'Change has been rolled back. Please retry.'
+                    ),
+                    'caddy_synced': False,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({
             'domain': domain,
@@ -882,12 +1060,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Domain not found'},
                             status=status.HTTP_404_NOT_FOUND)
 
+        previous_domains = list(service.custom_domains or [])
         domains = [d for d in domains if d != domain]
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
         # Auto-sync Caddyfile so stale domain entry is removed immediately.
         caddy_ok = self._sync_caddy()
+        if not caddy_ok:
+            service.custom_domains = previous_domains
+            service.save(update_fields=['custom_domains'])
+            return Response(
+                {
+                    'error': (
+                        'Domain removal failed to apply routing configuration. '
+                        'Change has been rolled back. Please retry.'
+                    ),
+                    'caddy_synced': False,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({
             'domains': domains,
@@ -1464,10 +1656,13 @@ class DomainConfigView(GenericAPIView):
             config.use_ssl = _parse_bool(data.get('use_ssl'))
         if 'wildcard_subdomains' in data:
             config.wildcard_subdomains = _parse_bool(data.get('wildcard_subdomains'))
-        if 'cloudflare_api_token' in data and data['cloudflare_api_token']:
-            config.cloudflare_api_token = data['cloudflare_api_token'].strip()
+        if 'cloudflare_api_token' in data:
+            # Allow explicit clear by sending an empty string.
+            config.cloudflare_api_token = str(
+                data.get('cloudflare_api_token') or ''
+            ).strip()
         if 'server_ip' in data:
-            config.server_ip = data['server_ip'].strip() or None
+            config.server_ip = str(data.get('server_ip') or '').strip() or None
 
         # Validate: wildcard requires Cloudflare token
         if config.wildcard_subdomains and config.use_ssl and not config.cloudflare_api_token:
@@ -1497,8 +1692,119 @@ class DomainConfigView(GenericAPIView):
         return Response({
             'message': 'Domain configuration updated and Caddyfile applied.',
             'caddy_status': config.caddy_status,
+            'cloudflare_api_token_set': bool(config.cloudflare_api_token),
             'caddyfile_preview': caddyfile_content,
         })
+
+
+class RouteRecheckView(GenericAPIView):
+    """
+    Public route recheck hook for fallback pages.
+
+    Allows a domain-level health recheck without requiring a dashboard login.
+    This is intentionally rate-limited and only operates on known service domains.
+    """
+
+    serializer_class = EmptySerializer
+    permission_classes = [permissions.AllowAny]
+
+    @staticmethod
+    def _cors(response: Response):
+        response["Access-Control-Allow-Origin"] = "*"
+        response["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
+
+    def options(self, request, *args, **kwargs):  # pylint: disable=unused-argument
+        return self._cors(Response(status=status.HTTP_204_NO_CONTENT))
+
+    def _extract_domain(self, request):
+        raw_host = (
+            request.query_params.get("host")
+            or request.data.get("host")
+            or request.get_host()
+        )
+        host = str(raw_host or "").strip().lower()
+        if ":" in host:
+            host = host.split(":", 1)[0]
+        domain, domain_error = _normalize_request_domain(host)
+        if domain_error:
+            return None, domain_error
+        return domain, None
+
+    def _trigger_recheck(self, service):
+        try:
+            from apps.deployments.services.health_monitor import (
+                _check_service_health,
+                reset_restart_state,
+            )
+
+            reset_restart_state(str(service.id))
+            _check_service_health(service, Deployment)
+            service.refresh_from_db(fields=["health_status"])
+            return True, service.health_status
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Route recheck failed for service %s: %s", service.id, exc)
+            return False, "unknown"
+
+    def get(self, request):
+        return self._handle(request)
+
+    def post(self, request):
+        return self._handle(request)
+
+    def _handle(self, request):
+        domain, domain_error = self._extract_domain(request)
+        if domain_error:
+            return self._cors(
+                Response(
+                    {"error": f"Invalid domain: {domain_error}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            )
+
+        service = _service_for_domain(domain)
+        if not service:
+            return self._cors(
+                Response(
+                    {"error": "Domain is not mapped to a service"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            )
+
+        client_ip = (
+            str(request.META.get("HTTP_X_FORWARDED_FOR", "")).split(",")[0].strip()
+            or str(request.META.get("REMOTE_ADDR", "unknown")).strip()
+            or "unknown"
+        )
+        throttle_key = f"route-recheck:{service.id}:{client_ip}"
+        if cache.get(throttle_key):
+            return self._cors(
+                Response(
+                    {"error": "Recheck already requested. Try again in a few seconds."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            )
+        cache.set(throttle_key, True, timeout=20)
+
+        ok, health_status = self._trigger_recheck(service)
+        if not ok:
+            return self._cors(
+                Response(
+                    {"error": "Failed to run health recheck"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            )
+
+        return self._cors(
+            Response(
+                {
+                    "message": "Health recheck triggered",
+                    "service_id": str(service.id),
+                    "health_status": health_status,
+                }
+            )
+        )
 
 class ServiceBackupViewSet(viewsets.ModelViewSet):
     queryset = ServiceBackup.objects.all()

@@ -1,14 +1,17 @@
 # pylint: disable=invalid-name
 """Tests for instant custom-domain routing without redeploy."""
 
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from apps.billing.models import PricingPlan, UserSubscription
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
 from services.caddy_manager import generate_caddyfile
@@ -122,3 +125,76 @@ class InstantCustomDomainApiTests(APITestCase):
         self.service.refresh_from_db()
         self.assertNotIn('instant.example.com', self.service.custom_domains)
         self.assertEqual(self.service.deployments.count(), 1)
+
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=False)
+    def test_add_domain_rolls_back_when_caddy_sync_fails(self, _sync_mock):
+        response = self.client.post(
+            f'/api/v1/services/{self.service.id}/add-domain/',
+            {'domain': 'rollback.example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.custom_domains or [], [])
+
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=False)
+    def test_delete_domain_rolls_back_when_caddy_sync_fails(self, _sync_mock):
+        self.service.custom_domains = ['rollback.example.com']
+        self.service.save(update_fields=['custom_domains'])
+
+        response = self.client.post(
+            f'/api/v1/services/{self.service.id}/delete-domain/',
+            {'domain': 'rollback.example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.service.refresh_from_db()
+        self.assertIn('rollback.example.com', self.service.custom_domains)
+
+    def test_add_domain_rejects_global_conflict(self):
+        Service.objects.create(
+            name='domain-conflict-service',
+            owner=self.user,
+            provider=self.provider,
+            public_domain='domain-conflict-service-bbbbbb.cloud.smsly.cloud',
+            custom_domains=['taken.example.com'],
+        )
+
+        response = self.client.post(
+            f'/api/v1/services/{self.service.id}/add-domain/',
+            {'domain': 'taken.example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn('already assigned', response.data.get('error', ''))
+
+    def test_add_domain_enforces_plan_quota(self):
+        plan = PricingPlan.objects.create(
+            name='Starter',
+            slug='starter',
+            price_monthly_usd='9.00',
+            price_yearly_usd='90.00',
+            max_custom_domains=1,
+        )
+        now = timezone.now()
+        UserSubscription.objects.create(
+            user=self.user,
+            plan=plan,
+            status='ACTIVE',
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        )
+        self.service.custom_domains = ['one.example.com']
+        self.service.save(update_fields=['custom_domains'])
+
+        response = self.client.post(
+            f'/api/v1/services/{self.service.id}/add-domain/',
+            {'domain': 'two.example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn('limit reached', response.data.get('error', ''))

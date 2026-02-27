@@ -30,6 +30,7 @@ class EcosystemApiTests(APITestCase):
         self.assertTrue(delay_mock.called)
         args, _ = delay_mock.call_args
         self.assertEqual(args[0], str(self.user.id))
+        delay_mock.assert_called_once_with(str(self.user.id), 30)
 
     def test_deploy_route_requires_plan_object(self):
         response = self.client.post("/api/v1/cloud/ecosystem/deploy/", {}, format="json")
