@@ -1244,6 +1244,39 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         return Response(DeploymentSerializer(deployment).data)
 
+    @action(detail=False, methods=['post'], url_path='bulk-cancel')
+    def bulk_cancel(self, request):
+        """
+        Cancel multiple deployments at once.
+        POST /api/v1/deployments/bulk-cancel/
+        Body: { "deployment_ids": ["uuid1", "uuid2", ...] }
+        """
+        deployment_ids = request.data.get('deployment_ids', [])
+        if not deployment_ids or not isinstance(deployment_ids, list):
+            return Response(
+                {'error': 'deployment_ids must be a non-empty list'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        # Only allow cancelling deployments the user owns
+        qs = self.get_queryset().filter(
+            id__in=deployment_ids,
+            status__in=[
+                Deployment.Status.QUEUED,
+                Deployment.Status.REVIEW,
+                Deployment.Status.BUILDING,
+                Deployment.Status.FAILED,
+            ]
+        )
+        count = qs.update(
+            status=Deployment.Status.CANCELLED,
+            finished_at=timezone.now(),
+        )
+
+        return Response({
+            'cancelled': count,
+            'message': f'{count} deployment(s) cancelled.',
+        })
+
     @action(detail=True, methods=['get'])
     def review(self, request, pk=None):
         """

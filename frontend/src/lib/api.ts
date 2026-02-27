@@ -250,6 +250,10 @@ export const servicesApi = {
     const response = await api.post(`/deployments/${deploymentId}/approve/`, overrides || {});
     return response.data;
   },
+  bulkCancelDeployments: async (deploymentIds: string[]): Promise<{ cancelled: number; message: string }> => {
+    const response = await api.post('/deployments/bulk-cancel/', { deployment_ids: deploymentIds });
+    return response.data;
+  },
 
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {

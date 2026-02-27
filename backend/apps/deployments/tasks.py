@@ -7,6 +7,7 @@ import tempfile
 import subprocess
 import os
 import json
+import time
 import zipfile
 import secrets
 from urllib.parse import unquote, urlparse
@@ -1317,12 +1318,11 @@ def _handle_failure(task, deployment, error_msg, reason):
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Failed to trigger AI failure task: %s", e)
 
-    # Only retry on transient errors, not build/pipeline failures.
-    # Build failures are deterministic — retrying won't help.
-    if reason in ('Pipeline Failure', 'Build Failure'):
-        logger.error("Non-retryable failure (%s), not retrying: %s", reason, error_msg)
-        return
-    raise task.retry(exc=Exception(error_msg), countdown=30)
+    # Never auto-retry failed deployments.
+    # Build failures are deterministic and system failures should be
+    # investigated, not blindly retried. Users can manually redeploy.
+    logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
+    return
 
 
 @shared_task(bind=True, max_retries=0)

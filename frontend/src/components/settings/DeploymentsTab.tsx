@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Deployment } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck } from 'lucide-react';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2 } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -19,6 +19,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [redeploying, setRedeploying] = useState(false);
     const [cancellingId, setCancellingId] = useState<string | null>(null);
     const [approvingId, setApprovingId] = useState<string | null>(null);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [bulkCancelling, setBulkCancelling] = useState(false);
 
     const loadDeployments = useCallback(async () => {
         try {
@@ -105,6 +107,44 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const toggleSelect = (id: string) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
+    const cancellableStatuses = ['QUEUED', 'REVIEW', 'BUILDING', 'FAILED'];
+    const cancellableIds = deployments.filter(d => cancellableStatuses.includes(d.status)).map(d => d.id);
+    const allSelected = cancellableIds.length > 0 && cancellableIds.every(id => selectedIds.has(id));
+
+    const toggleSelectAll = () => {
+        if (allSelected) {
+            setSelectedIds(new Set());
+        } else {
+            setSelectedIds(new Set(cancellableIds));
+        }
+    };
+
+    const handleBulkCancel = async () => {
+        const ids = Array.from(selectedIds);
+        if (ids.length === 0) return;
+        if (!await confirm({ title: `Cancel ${ids.length} deployment(s)?`, message: `This will cancel ${ids.length} selected deployment(s).`, variant: 'destructive', confirmText: 'Cancel All Selected' })) return;
+        try {
+            setBulkCancelling(true);
+            const result = await servicesApi.bulkCancelDeployments(ids);
+            toast({ title: result.message || `${result.cancelled} deployment(s) cancelled.` });
+            setSelectedIds(new Set());
+            setTimeout(() => { void loadDeployments(); }, 1000);
+        } catch (err) {
+            console.error(err);
+            toast({ title: "Bulk cancel failed", variant: "destructive" });
+        } finally {
+            setBulkCancelling(false);
+        }
+    };
+
     const toggleExpand = async (d: Deployment) => {
         if (expandedId === d.id) {
             setExpandedId(null);
@@ -157,7 +197,30 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                             Click a deployment to see details. Rollback or redeploy as needed.
                         </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
+                        {cancellableIds.length > 0 && (
+                            <label className="flex items-center gap-1.5 text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                                <input
+                                    type="checkbox"
+                                    checked={allSelected}
+                                    onChange={toggleSelectAll}
+                                    className="rounded border-border"
+                                />
+                                Select All
+                            </label>
+                        )}
+                        {selectedIds.size > 0 && (
+                            <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={handleBulkCancel}
+                                disabled={bulkCancelling}
+                                className="gap-2"
+                            >
+                                {bulkCancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                Cancel Selected ({selectedIds.size})
+                            </Button>
+                        )}
                         <Button variant="outline" size="sm" onClick={loadDeployments}>
                             Refresh
                         </Button>
@@ -191,6 +254,16 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                         onClick={() => toggleExpand(d)}
                                     >
                                         <div className="flex items-center gap-4">
+                                            {/* Checkbox for bulk cancel */}
+                                            {cancellableStatuses.includes(d.status) && (
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedIds.has(d.id)}
+                                                    onChange={(e) => { e.stopPropagation(); toggleSelect(d.id); }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="rounded border-border"
+                                                />
+                                            )}
                                             <div className="bg-muted p-2 rounded-full">
                                                 {getStatusIcon(d.status)}
                                             </div>
