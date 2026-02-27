@@ -95,7 +95,9 @@ class HealthMonitorServiceTests(TestCase):
     ):
         requests_get_mock.side_effect = hm.requests.ConnectionError("down")
 
-        with patch.object(hm, "STARTUP_GRACE_SECONDS", 0):
+        with patch.object(hm, "STARTUP_GRACE_SECONDS", 0), patch.object(
+            hm, "LOW_RESOURCE_EXTRA_GRACE_SECONDS", 0
+        ):
             hm._check_service_health(self.service, Deployment)
             hm._check_service_health(self.service, Deployment)
 

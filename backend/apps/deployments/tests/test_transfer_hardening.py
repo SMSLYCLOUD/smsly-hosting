@@ -11,10 +11,18 @@ from apps.deployments.models import PlatformConfig, Service
 from apps.deployments.models_backup import ServiceBackup
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
+from apps.licensing.models import PlatformLicense, PlatformTier
 
 
 class ServerTransferHardeningTests(APITestCase):
     def setUp(self):
+        license_obj = PlatformLicense.load()
+        license_obj.tier = PlatformTier.PRO
+        license_obj.is_valid = True
+        license_obj.max_services = 100
+        license_obj.max_team_members = 100
+        license_obj.save(update_fields=['tier', 'is_valid', 'max_services', 'max_team_members'])
+
         self.user = User.objects.create_user('transfer-user', 'transfer@example.com', 'password123')
         self.client.force_authenticate(user=self.user)
         self.service = Service.objects.create(name='transfer-service', owner=self.user)

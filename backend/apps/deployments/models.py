@@ -199,11 +199,11 @@ class Service(TimeStampedModel):
         null=True, blank=True,
         help_text="Port for health checks. Leave blank to auto-detect from PORT env var.")
     health_check_interval = models.IntegerField(
-        default=30, help_text="Seconds between health checks")
+        default=60, help_text="Seconds between health checks")
     health_check_timeout = models.IntegerField(
-        default=5, help_text="Seconds to wait for health check response")
+        default=15, help_text="Seconds to wait for health check response")
     health_check_retries = models.IntegerField(
-        default=3, help_text="Consecutive failures before marking unhealthy")
+        default=8, help_text="Consecutive failures before marking unhealthy")
     auto_restart = models.BooleanField(
         default=True, help_text="Automatically restart unhealthy containers")
     health_status = models.CharField(

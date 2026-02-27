@@ -11,6 +11,29 @@ from .base import BaseCloudAdapter
 logger = logging.getLogger(__name__)
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _is_low_resource_profile(cpu_millicores: int | None, memory_mb: int | None) -> bool:
+    cpu_threshold = _env_int("LOW_RESOURCE_CPU_MILLICORES_THRESHOLD", 600, minimum=1)
+    memory_threshold = _env_int("LOW_RESOURCE_MEMORY_MB_THRESHOLD", 768, minimum=64)
+    cpu_low = cpu_millicores is not None and cpu_millicores > 0 and cpu_millicores <= cpu_threshold
+    memory_low = memory_mb is not None and memory_mb > 0 and memory_mb <= memory_threshold
+    return cpu_low or memory_low
+
+
+def _coerce_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalize_health_path(path: str) -> str:
     value = str(path or "/").strip()
     if not value.startswith("/"):
@@ -203,6 +226,28 @@ class LocalAdapter(BaseCloudAdapter):
         }
 
         # Docker-native healthcheck.
+        low_resource_profile = _is_low_resource_profile(cpu, memory)
+        min_interval = _env_int(
+            "DOCKER_HEALTHCHECK_MIN_INTERVAL_SECONDS",
+            20 if low_resource_profile else 12,
+            minimum=1,
+        )
+        min_timeout = _env_int(
+            "DOCKER_HEALTHCHECK_MIN_TIMEOUT_SECONDS",
+            8 if low_resource_profile else 5,
+            minimum=1,
+        )
+        min_retries = _env_int(
+            "DOCKER_HEALTHCHECK_MIN_RETRIES",
+            8 if low_resource_profile else 5,
+            minimum=1,
+        )
+        start_period_seconds = _env_int(
+            "DOCKER_HEALTHCHECK_START_PERIOD_SECONDS",
+            120 if low_resource_profile else 60,
+            minimum=1,
+        )
+
         hc_port = (
             (healthcheck or {}).get('port')
             or env.get('PORT')
@@ -210,15 +255,24 @@ class LocalAdapter(BaseCloudAdapter):
         )
         if healthcheck and healthcheck.get('path'):
             hc_path = _normalize_health_path(healthcheck['path'])
-            hc_interval = healthcheck.get('interval', 10)
-            hc_timeout = healthcheck.get('timeout', 5)
-            hc_retries = healthcheck.get('retries', 3)
+            hc_interval = max(
+                min_interval,
+                _coerce_int(healthcheck.get('interval', min_interval), min_interval),
+            )
+            hc_timeout = max(
+                min_timeout,
+                _coerce_int(healthcheck.get('timeout', min_timeout), min_timeout),
+            )
+            hc_retries = max(
+                min_retries,
+                _coerce_int(healthcheck.get('retries', min_retries), min_retries),
+            )
             hc_url = f"http://127.0.0.1:{hc_port}{hc_path}"
             hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         else:
-            hc_interval = 10
-            hc_timeout = 3
-            hc_retries = 3
+            hc_interval = min_interval
+            hc_timeout = min_timeout
+            hc_retries = min_retries
             hc_url = f"http://127.0.0.1:{hc_port}/"
             hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
         docker_healthcheck = docker.types.Healthcheck(
@@ -226,7 +280,7 @@ class LocalAdapter(BaseCloudAdapter):
             interval=hc_interval * 1_000_000_000,
             timeout=hc_timeout * 1_000_000_000,
             retries=hc_retries,
-            start_period=30 * 1_000_000_000,
+            start_period=start_period_seconds * 1_000_000_000,
         )
 
         # Resource limits
@@ -263,7 +317,12 @@ class LocalAdapter(BaseCloudAdapter):
                      temp_name, name if old_container else "none")
 
         # ── Wait for new container to become healthy ──
-        health_timeout = int(os.getenv('BLUE_GREEN_HEALTH_TIMEOUT', '120'))
+        health_timeout_default = 360 if low_resource_profile else 240
+        health_timeout = _env_int(
+            'BLUE_GREEN_HEALTH_TIMEOUT',
+            health_timeout_default,
+            minimum=30,
+        )
         new_healthy = self._wait_container_healthy(
             new_container.id, timeout_seconds=health_timeout
         )
@@ -362,7 +421,7 @@ class LocalAdapter(BaseCloudAdapter):
         return new_container.id
 
     def _wait_container_healthy(
-        self, container_id: str, timeout_seconds: int = 120, poll_seconds: int = 3
+        self, container_id: str, timeout_seconds: int = 240, poll_seconds: int = 5
     ) -> bool:
         """Wait for a container to reach 'healthy' or 'running' (no healthcheck) state."""
         import time as _time

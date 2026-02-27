@@ -701,11 +701,62 @@ def _is_traefik_not_ready(response: requests.Response) -> bool:
     return content_type.startswith("text/plain") and nosniff == "nosniff"
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+def _is_low_resource_service(service: Service) -> bool:
+    try:
+        cpu_threshold = float(os.environ.get("LOW_RESOURCE_CPU_CORES_THRESHOLD", "0.75"))
+    except (TypeError, ValueError):
+        cpu_threshold = 0.75
+    memory_threshold = _env_int("LOW_RESOURCE_MEMORY_MB_THRESHOLD", 768, minimum=64)
+
+    try:
+        cpu_cores = float(service.cpu_cores or 0)
+    except (TypeError, ValueError):
+        cpu_cores = 0.0
+
+    try:
+        memory_mb = int(service.memory_mb or 0)
+    except (TypeError, ValueError):
+        memory_mb = 0
+
+    return (
+        (cpu_cores > 0 and cpu_cores <= cpu_threshold)
+        or (memory_mb > 0 and memory_mb <= memory_threshold)
+    )
+
+
+def _local_route_timeout_seconds(service: Service) -> int:
+    if _is_low_resource_service(service):
+        return _env_int(
+            "LOCAL_ROUTE_READY_TIMEOUT_LOW_RESOURCE_SECONDS",
+            300,
+            minimum=30,
+        )
+    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 180, minimum=30)
+
+
+def _local_container_timeout_seconds(service: Service) -> int:
+    if _is_low_resource_service(service):
+        return _env_int(
+            "LOCAL_CONTAINER_HEALTH_TIMEOUT_LOW_RESOURCE_SECONDS",
+            420,
+            minimum=30,
+        )
+    return _env_int("LOCAL_CONTAINER_HEALTH_TIMEOUT_SECONDS", 240, minimum=30)
+
+
 def _wait_for_local_container_healthy(
     deployment,
     container_id: str,
-    timeout_seconds: int = 90,
-    poll_seconds: int = 3,
+    timeout_seconds: int = 180,
+    poll_seconds: int = 5,
 ) -> bool:
     """
     Wait for a freshly deployed local container to be healthy/running.
@@ -788,8 +839,8 @@ def _wait_for_local_container_healthy(
 def _wait_for_local_route_ready(
     deployment,
     service,
-    timeout_seconds: int = 90,
-    poll_seconds: int = 3,
+    timeout_seconds: int = 180,
+    poll_seconds: int = 5,
 ) -> bool:
     """
     Wait until Traefik has picked up host routing for this service.
@@ -864,7 +915,7 @@ def _wait_for_local_route_ready(
                     response = requests.get(
                         url,
                         headers=probe["headers"],
-                        timeout=4,
+                        timeout=8,
                         verify=probe["verify"],
                         allow_redirects=False,
                     )
@@ -915,10 +966,12 @@ def _deploy_container(deployment, provider, image_name):
             broadcast_status(deployment)
 
             if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+                route_timeout = _local_route_timeout_seconds(service)
+                container_timeout = _local_container_timeout_seconds(service)
                 # Only check route if public
                 if service.is_public:
                     route_ready = _wait_for_local_route_ready(
-                        deployment, service, timeout_seconds=120,
+                        deployment, service, timeout_seconds=route_timeout,
                     )
                     if not route_ready:
                         append_log(
@@ -927,7 +980,7 @@ def _deploy_container(deployment, provider, image_name):
                             "failed; continuing with container health.\n",
                         )
                 container_ready = _wait_for_local_container_healthy(
-                    deployment, container_name, timeout_seconds=120,
+                    deployment, container_name, timeout_seconds=container_timeout,
                 )
                 if not container_ready:
                     raise RuntimeError(
@@ -1003,10 +1056,12 @@ def _deploy_container(deployment, provider, image_name):
         broadcast_status(deployment)
 
         if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+            route_timeout = _local_route_timeout_seconds(service)
+            container_timeout = _local_container_timeout_seconds(service)
             route_ready = _wait_for_local_route_ready(
                 deployment,
                 service,
-                timeout_seconds=120,
+                timeout_seconds=route_timeout,
             )
             if not route_ready:
                 append_log(
@@ -1017,7 +1072,7 @@ def _deploy_container(deployment, provider, image_name):
             container_ready = _wait_for_local_container_healthy(
                 deployment,
                 resource.resource_id,
-                timeout_seconds=120,
+                timeout_seconds=container_timeout,
             )
             if not container_ready:
                 raise RuntimeError(
