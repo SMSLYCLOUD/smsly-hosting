@@ -150,16 +150,28 @@ def generate_caddyfile(config) -> str:
             logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
 
     if config.use_ssl and domain:
-        # Main domain - auto HTTPS via Let's Encrypt
-        sections.append(
-            f"""{domain} {{
-    reverse_proxy localhost:8090
-    encode gzip
-    log {{
-        output file /var/log/caddy/access.log
-    }}
-}}"""
+        # In wildcard mode, also use DNS challenge for the platform domain.
+        # This avoids HTTP-01 edge cases when the domain is proxied by Cloudflare.
+        platform_block = [f"{domain} {{"]
+        if config.wildcard_subdomains and cloudflare_token:
+            platform_block.extend(
+                [
+                    "    tls {",
+                    "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
+                    "    }",
+                ]
+            )
+        platform_block.extend(
+            [
+                "    reverse_proxy localhost:8090",
+                "    encode gzip",
+                "    log {",
+                "        output file /var/log/caddy/access.log",
+                "    }",
+                "}",
+            ]
         )
+        sections.append("\n".join(platform_block))
 
         # Wildcard subdomains for deployed services.
         # Use {env.CLOUDFLARE_API_TOKEN} (Caddy env syntax) instead of the

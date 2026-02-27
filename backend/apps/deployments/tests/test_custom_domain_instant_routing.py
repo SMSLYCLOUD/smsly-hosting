@@ -56,6 +56,23 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile,
         )
 
+    def test_platform_domain_uses_dns_challenge_when_wildcard_enabled(self):
+        config = SimpleNamespace(
+            domain='cloud.smsly.cloud',
+            use_ssl=True,
+            wildcard_subdomains=True,
+            cloudflare_api_token='token-123',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn('cloud.smsly.cloud {\n    tls {', caddyfile)
+        self.assertIn('*.cloud.smsly.cloud {', caddyfile)
+        self.assertGreaterEqual(
+            caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
+            2,
+        )
+
 
 class InstantCustomDomainApiTests(APITestCase):
     """Domain add/remove should sync routing instantly with no redeploy."""
