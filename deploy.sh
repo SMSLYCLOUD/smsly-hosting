@@ -27,6 +27,11 @@ echo "========================================"
 echo " SMSLY Hosting - Full Deploy"
 echo "========================================"
 
+# Ensure repo cache directory exists for user service builds
+mkdir -p /opt/smsly-cache/repos
+chmod 775 /opt/smsly-cache
+chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
+
 if [ "$NO_PULL" = false ]; then
   echo ""
   echo "[1/9] Pulling latest code..."
