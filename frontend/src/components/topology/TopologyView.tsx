@@ -376,13 +376,28 @@ export function TopologyView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [services, setServices] = useState<Service[]>([]);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
   // Pan / zoom state
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const isPanning = useRef(false);
+  const panMoved = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
   const offsetStart = useRef({ x: 0, y: 0 });
+
+  const updateViewport = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width));
+    const height = Math.max(1, Math.floor(rect.height));
+    setViewport((prev) => (
+      prev.width === width && prev.height === height
+        ? prev
+        : { width, height }
+    ));
+  }, []);
 
   // Fetch services
   useEffect(() => {
@@ -457,6 +472,7 @@ export function TopologyView() {
   // Mouse handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     isPanning.current = true;
+    panMoved.current = false;
     panStart.current = { x: e.clientX, y: e.clientY };
     offsetStart.current = { x: offset.x, y: offset.y };
   }, [offset]);
@@ -465,6 +481,9 @@ export function TopologyView() {
     if (isPanning.current) {
       const dx = e.clientX - panStart.current.x;
       const dy = e.clientY - panStart.current.y;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        panMoved.current = true;
+      }
       setOffset({ x: offsetStart.current.x + dx, y: offsetStart.current.y + dy });
     }
     const hit = hitTest(e.clientX, e.clientY);
@@ -476,6 +495,10 @@ export function TopologyView() {
   }, []);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
+    if (panMoved.current) {
+      panMoved.current = false;
+      return;
+    }
     const hit = hitTest(e.clientX, e.clientY);
     if (hit) router.push(`/services/${hit.id}`);
   }, [hitTest, router]);
@@ -502,22 +525,24 @@ export function TopologyView() {
     const el = containerRef.current;
     if (!canvas || !el) return;
 
-    const rect = el.getBoundingClientRect();
+    const width = viewport.width || el.clientWidth;
+    const height = viewport.height || el.clientHeight;
+    if (!width || !height) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.clearRect(0, 0, width, height);
 
     // Background
     ctx.fillStyle = '#04070f';
-    ctx.fillRect(0, 0, rect.width, rect.height);
+    ctx.fillRect(0, 0, width, height);
 
     // Grid dots (Railway-style)
     ctx.save();
@@ -527,8 +552,8 @@ export function TopologyView() {
     const gridSpacing = 40;
     const startX = Math.floor(((-offset.x / scale) - 100) / gridSpacing) * gridSpacing;
     const startY = Math.floor(((-offset.y / scale) - 100) / gridSpacing) * gridSpacing;
-    const endX = startX + (rect.width / scale) + 200;
-    const endY = startY + (rect.height / scale) + 200;
+    const endX = startX + (width / scale) + 200;
+    const endY = startY + (height / scale) + 200;
 
     ctx.fillStyle = '#1a1a2e';
     for (let gx = startX; gx < endX; gx += gridSpacing) {
@@ -558,22 +583,23 @@ export function TopologyView() {
     ctx.font = '11px Inter, system-ui, sans-serif';
     ctx.fillStyle = '#52525b';
     ctx.textAlign = 'left';
-    ctx.fillText(`${nodes.length} service${nodes.length !== 1 ? 's' : ''} · ${edges.length} connection${edges.length !== 1 ? 's' : ''}`, 16, rect.height - 12);
+    ctx.fillText(`${nodes.length} service${nodes.length !== 1 ? 's' : ''} · ${edges.length} connection${edges.length !== 1 ? 's' : ''}`, 16, height - 12);
 
-  }, [nodes, edges, offset, scale, hoveredId]);
+  }, [nodes, edges, offset, scale, hoveredId, viewport.height, viewport.width]);
 
   // Resize listener
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const obs = new ResizeObserver(() => {
-      // Trigger redraw by updating a dep
-      const canvas = canvasRef.current;
-      if (canvas) canvas.width = canvas.width; // Force canvas clear
-    });
+    updateViewport();
+    const obs = new ResizeObserver(updateViewport);
     obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      obs.disconnect();
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, [updateViewport]);
 
   return (
     <div

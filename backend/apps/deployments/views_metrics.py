@@ -1,4 +1,6 @@
 """Views Metrics module."""
+import logging
+
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import serializers, viewsets, permissions, status
@@ -6,6 +8,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Service
 from .metrics import metrics_adapter
+
+logger = logging.getLogger(__name__)
 
 
 class MetricsResponseSerializer(serializers.Serializer):
@@ -65,3 +69,28 @@ class MetricsViewSet(viewsets.GenericViewSet):
             })
         except Service.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "Metrics API failed for service=%s: %s",
+                service_pk,
+                exc,
+                exc_info=True,
+            )
+            return Response(
+                {
+                    'cpu': [],
+                    'memory': [],
+                    'network': [],
+                    'disk': [],
+                    'current': {
+                        'cpu_percent': 0,
+                        'memory_usage': 0,
+                        'memory_limit': 0,
+                        'memory_percent': 0,
+                        'network_rx_kb': 0,
+                        'network_tx_kb': 0,
+                    },
+                    'error': 'Metrics temporarily unavailable',
+                },
+                status=status.HTTP_200_OK,
+            )

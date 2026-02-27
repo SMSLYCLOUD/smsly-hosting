@@ -349,22 +349,6 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
       fg.d3Force('link')?.distance(200);
       fg.d3ReheatSimulation?.();
 
-      // Auto-orbit camera
-      let angle = 0;
-      const radius = dist;
-      const rotateInterval = setInterval(() => {
-        angle += 0.003;
-        fg.cameraPosition(
-          { x: radius * Math.sin(angle), y: 50, z: radius * Math.cos(angle) },
-          { x: 0, y: 0, z: 0 }
-        );
-      }, 30);
-
-      const container = containerRef.current;
-      const stopRotate = () => clearInterval(rotateInterval);
-      container?.addEventListener('mousedown', stopRotate, { once: true });
-      container?.addEventListener('touchstart', stopRotate, { once: true });
-
       const fitTimer = setTimeout(() => {
         if (!hasInitialFitRef.current) {
           fitGraphToViewport(700);
@@ -372,10 +356,7 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
         }
       }, 250);
       return () => {
-        clearInterval(rotateInterval);
         clearTimeout(fitTimer);
-        container?.removeEventListener('mousedown', stopRotate);
-        container?.removeEventListener('touchstart', stopRotate);
       };
     }
   }, [fitGraphToViewport, graphData.nodes.length]);
@@ -523,4 +504,3 @@ export function ServiceCanvas({ services }: ServiceCanvasProps) {
     </div>
   );
 }
-

@@ -104,6 +104,15 @@
       color: var(--danger);
       font-size: 12px;
     }
+    .status {
+      margin-top: 12px;
+      min-height: 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .status[data-tone="ok"] { color: var(--accent); }
+    .status[data-tone="warn"] { color: #ffd27a; }
+    .status[data-tone="err"] { color: var(--danger); }
   </style>
 </head>
 <body>
@@ -119,15 +128,58 @@
       <button class="primary" id="recheck-btn" type="button">Recheck Now</button>
       <a class="btn ghost" href="https://cloud.smsly.cloud/services">Open Services Dashboard</a>
     </div>
+    <div class="status" id="status"></div>
     <div class="foot">If this persists, trigger "Recheck Now" in the service Health tab.</div>
   </main>
 
   <script>
     const host = window.location.host || "unknown-host";
     document.getElementById("host").textContent = host;
-    document.getElementById("recheck-btn").addEventListener("click", () => {
-      window.location.reload();
-    });
+    const statusEl = document.getElementById("status");
+    const recheckBtn = document.getElementById("recheck-btn");
+    const controlPlane = "https://cloud.smsly.cloud";
+
+    function setStatus(message, tone = "") {
+      statusEl.textContent = message;
+      statusEl.dataset.tone = tone;
+    }
+
+    async function triggerRecheck() {
+      recheckBtn.disabled = true;
+      setStatus("Requesting route recheck...", "");
+      try {
+        const url = `${controlPlane}/api/v1/system/route-recheck/?host=${encodeURIComponent(host)}`;
+        const response = await fetch(url, { method: "GET", mode: "cors", cache: "no-store" });
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch (err) {
+          payload = {};
+        }
+
+        if (response.ok) {
+          setStatus("Recheck queued. Retrying this page in 5 seconds...", "ok");
+          window.setTimeout(() => window.location.reload(), 5000);
+          return;
+        }
+
+        if (response.status === 429) {
+          setStatus(payload.error || "Recheck already requested. Retrying in 10 seconds...", "warn");
+          window.setTimeout(() => window.location.reload(), 10000);
+          return;
+        }
+
+        setStatus(payload.error || "Recheck failed. Open Services Dashboard to inspect health.", "err");
+      } catch (err) {
+        setStatus("Unable to contact control plane. Check DNS/SSL and retry.", "err");
+      } finally {
+        window.setTimeout(() => {
+          recheckBtn.disabled = false;
+        }, 2000);
+      }
+    }
+
+    recheckBtn.addEventListener("click", triggerRecheck);
   </script>
 </body>
 </html>

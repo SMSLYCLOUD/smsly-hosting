@@ -159,11 +159,23 @@ def _build_targets(service, active_deployment):
     if container_id:
         port = service.internal_port or 8000
         direct_headers = {"Host": public_domain} if public_domain else {}
-        _add(
-            f"http://{container_id[:12]}:{port}{path}",
-            headers=direct_headers,
-            verify=False,
-        )
+        candidates = []
+        # Compose deployments store container names like "app-web-1".
+        # Keep full names intact; truncation breaks Docker DNS resolution.
+        if "-" in container_id:
+            candidates.append(container_id)
+        else:
+            short_id = container_id[:12]
+            candidates.append(short_id)
+            if short_id != container_id:
+                candidates.append(container_id)
+
+        for candidate in candidates:
+            _add(
+                f"http://{candidate}:{port}{path}",
+                headers=direct_headers,
+                verify=False,
+            )
 
     return targets
 

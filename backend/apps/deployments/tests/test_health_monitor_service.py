@@ -48,6 +48,20 @@ class HealthMonitorServiceTests(TestCase):
         self.assertTrue(hm._check_due(self.service))
         self.assertFalse(hm._check_due(self.service))
 
+    def test_build_targets_preserves_compose_container_name(self):
+        self.active.container_id = "buyforfront-web-1"
+        self.active.save(update_fields=["container_id"])
+        self.service.public_domain = "buyforfront-0398be.cloud.smsly.cloud"
+        self.service.save(update_fields=["public_domain"])
+
+        targets = hm._build_targets(self.service, self.active)
+        urls = [target["url"] for target in targets]
+
+        self.assertIn(
+            "http://buyforfront-web-1:8000/health",
+            urls,
+        )
+
     def test_should_restart_respects_cooldown_and_cap(self):
         service_key = str(self.service.id)
         restart_key = hm._restart_key(service_key)
