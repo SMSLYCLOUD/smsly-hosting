@@ -12,6 +12,7 @@ import { Zap, Play, Loader2, ExternalLink, Plus } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 export default function FunctionsPage() {
   const { toast } = useToast();
@@ -128,6 +129,7 @@ export default function FunctionsPage() {
 
   return (
     <DashboardShell>
+      <RequiresTier tier="pro">
       <div className="container h-[calc(100vh-100px)] max-w-full p-4 flex gap-4">
         {/* Sidebar List */}
         <div className="w-64 flex flex-col gap-4">
@@ -233,6 +235,7 @@ export default function FunctionsPage() {
           )}
         </div>
       </div>
+      </RequiresTier>
     </DashboardShell>
   );
 }

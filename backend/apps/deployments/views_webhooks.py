@@ -34,6 +34,12 @@ class GitHubWebhookView(GenericAPIView):
             return Response({'error': 'Invalid signature'},
                             status=status.HTTP_403_FORBIDDEN)
 
+        # 1.5 Check License Tier for auto-deploy
+        from apps.licensing.models import PlatformLicense
+        if PlatformLicense.load().is_community:
+            logger.info("Auto-deploy disabled in Community tier. Ignoring webhook.")
+            return Response({'message': 'Auto-deploy disabled in Community tier', 'triggered': False})
+
         # 2. Parse Event
         event_type = request.headers.get('X-GitHub-Event')
         if not event_type:

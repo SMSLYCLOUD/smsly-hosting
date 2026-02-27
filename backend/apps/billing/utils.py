@@ -40,3 +40,30 @@ def _activate_paid_plan(*, user, plan: str):
         account.subscription_status = BillingAccount.SubscriptionStatus.ACTIVE
 
     account.save(update_fields=["plan", "subscription_status", "current_period_end"])
+
+    # Update Platform License
+    try:
+        from apps.licensing.models import PlatformLicense
+        from apps.licensing.validator import validate_license
+
+        license = PlatformLicense.load()
+        # Map plan to license tier (BillingAccount.Plan -> PlatformTier)
+        tier_map = {
+            'PRO': 'pro',
+            'ENTERPRISE': 'enterprise',
+            'HOBBY': 'community'
+        }
+        license.tier = tier_map.get(plan, 'community')
+        license.expires_at = account.current_period_end
+        license.save()
+
+        # Trigger validation to sync features if connected
+        try:
+            validate_license(license)
+        except Exception:
+            pass
+
+    except Exception as e:
+        # Don't fail the transaction just because licensing failed (it can be retried)
+        import logging
+        logging.getLogger(__name__).error(f"Failed to update platform license after payment: {e}")

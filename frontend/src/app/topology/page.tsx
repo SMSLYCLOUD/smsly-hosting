@@ -6,12 +6,14 @@ import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
 import { SolarSystemView } from '@/components/topology/SolarSystemView';
 import { Network, Map as MapIcon, Orbit } from 'lucide-react';
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 export default function TopologyPage() {
   const [view, setView] = useState<'3d' | '2d' | 'solar'>('3d');
 
   return (
     <DashboardShell>
+      <RequiresTier tier="pro">
        <div className="flex flex-col h-[calc(100vh-6rem)] md:h-[calc(100vh-4rem)]">
           <div className="border-b border-zinc-800 bg-[#04070f] px-4 py-3 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
              <div>
@@ -47,6 +49,7 @@ export default function TopologyPage() {
              {view === 'solar' && <SolarSystemView />}
           </div>
        </div>
+      </RequiresTier>
     </DashboardShell>
   );
 }

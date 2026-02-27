@@ -210,6 +210,7 @@ INSTALLED_APPS = [
     'apps.notifications',
     'apps.addons',
     'apps.autoscaler',
+    'apps.licensing',
 ]
 
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
@@ -226,6 +227,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'apps.core.middleware.security.SecurityMiddleware',  # Zero Trust HMAC V2
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
+    'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
     'allauth.account.middleware.AccountMiddleware',
 ]
 

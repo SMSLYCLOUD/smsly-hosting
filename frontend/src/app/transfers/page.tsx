@@ -11,6 +11,7 @@ import { ArrowRight, Loader2, Server, CheckCircle2, RotateCcw } from 'lucide-rea
 import { useToast } from '@/components/ui/use-toast';
 import api, { servicesApi, Service } from '@/lib/api';
 import { Progress } from '@/components/ui/progress';
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 export default function TransfersPage() {
     const { toast } = useToast();
@@ -54,6 +55,7 @@ export default function TransfersPage() {
 
     return (
         <DashboardShell>
+            <RequiresTier tier="pro">
             <div className="container max-w-5xl mx-auto p-6 space-y-8">
                 <div className="flex items-center justify-between">
                     <div>
@@ -207,6 +209,7 @@ export default function TransfersPage() {
                     </div>
                 </div>
             </div>
+            </RequiresTier>
         </DashboardShell>
     );
 }

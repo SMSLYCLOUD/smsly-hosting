@@ -10,6 +10,7 @@ Provides endpoints for the TunnelDashboard frontend component:
 from rest_framework import viewsets, serializers, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from apps.licensing.decorators import require_tier
 from .models_tunnels import Tunnel, TunnelRequest
 import logging
 
@@ -57,6 +58,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(
             owner=self.request.user, is_active=True)
 
+    @require_tier('pro', 'enterprise')
     def list(self, request):
         """GET /api/v1/tunnels/ — returns {tunnels: [...]}"""
         queryset = self.get_queryset()
@@ -64,6 +66,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
         return Response({'tunnels': serializer.data})
 
     @action(detail=True, methods=['get'], url_path='requests')
+    @require_tier('pro', 'enterprise')
     def get_requests(self, request, pk=None):
         """GET /api/v1/tunnels/{id}/requests/ — returns {requests: [...]}"""
         tunnel = self.get_object()
@@ -76,6 +79,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
         methods=['post'],
         url_path=r'replay/(?P<request_id>[0-9a-f-]{36})',
     )
+    @require_tier('pro', 'enterprise')
     def replay(self, request, pk=None, request_id=None):
         """POST /api/v1/tunnels/{id}/replay/{req_id}/ — replay a request"""
         tunnel = self.get_object()
@@ -102,6 +106,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'])
+    @require_tier('pro', 'enterprise')
     def register(self, request):
         """POST /api/v1/tunnels/register/ — register tunnel from CLI tool"""
         subdomain = request.data.get('subdomain')
