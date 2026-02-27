@@ -172,7 +172,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
         """
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
-        task = ecosystem_scan_task.delay(str(request.user.id))
+        # Keep a stable call signature for API/tests while task internals may evolve.
+        task = ecosystem_scan_task.delay(str(request.user.id), 30)
 
         return Response({'task_id': task.id, 'status': 'scanning'})
 

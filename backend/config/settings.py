@@ -11,6 +11,13 @@ IS_TESTING = bool(os.environ.get('TESTING')) or any(
     for arg in sys.argv
 )
 
+
+def _env_bool(name: str, default: str = 'False') -> bool:
+    """Parse boolean-like env vars without raising on non-standard values."""
+    raw = str(config(name, default=default)).strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
 # SECURITY: No default - service MUST crash if SECRET_KEY is missing
 # Generate with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 SECRET_KEY = config('SECRET_KEY')
@@ -22,8 +29,8 @@ try:
     Fernet(FIELD_ENCRYPTION_KEY.encode() if isinstance(FIELD_ENCRYPTION_KEY, str) else FIELD_ENCRYPTION_KEY)
 except Exception as e:
     raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'") from e
-DEBUG = config('DEBUG', default=False, cast=bool)
-SMSLY_DISABLE_SIGNATURE_CHECK = config('SMSLY_DISABLE_SIGNATURE_CHECK', default=False, cast=bool)
+DEBUG = _env_bool('DEBUG', default='False')
+SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
 
 # Security hardening
 # Force insecure settings when running tests to prevent 301 redirects
@@ -31,9 +38,10 @@ if not DEBUG and not IS_TESTING:
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    SECURE_SSL_REDIRECT = config('USE_SSL', default=False, cast=bool)
-    SESSION_COOKIE_SECURE = config('USE_SSL', default=False, cast=bool)
-    CSRF_COOKIE_SECURE = config('USE_SSL', default=False, cast=bool)
+    _use_ssl = _env_bool('USE_SSL', default='False')
+    SECURE_SSL_REDIRECT = _use_ssl
+    SESSION_COOKIE_SECURE = _use_ssl
+    CSRF_COOKIE_SECURE = _use_ssl
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 else:
     # Explicitly disable for tests and debug mode
@@ -52,11 +60,10 @@ CONTAINER_REGISTRY_URL = config(
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 # ZH-010 FIX: Webhook secret MUST be set in production (fail-closed)
-if DEBUG:
+if IS_TESTING:
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='test-github-webhook-secret')
+elif DEBUG:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
-    # Keep local/tests deterministic without weakening production behavior.
-    if IS_TESTING and not GITHUB_WEBHOOK_SECRET:
-        GITHUB_WEBHOOK_SECRET = 'test-github-webhook-secret'
 else:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
 # SECURITY: No wildcard default - prevents host header injection

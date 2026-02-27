@@ -14,6 +14,7 @@ from rest_framework.test import APITestCase
 from apps.billing.models import PricingPlan, UserSubscription
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
+from apps.licensing.models import PlatformLicense, PlatformTier
 from services.caddy_manager import generate_caddyfile
 
 
@@ -78,6 +79,13 @@ class InstantCustomDomainApiTests(APITestCase):
     """Domain add/remove should sync routing instantly with no redeploy."""
 
     def setUp(self):
+        license_obj = PlatformLicense.load()
+        license_obj.tier = PlatformTier.PRO
+        license_obj.is_valid = True
+        license_obj.max_services = 100
+        license_obj.max_team_members = 100
+        license_obj.save(update_fields=['tier', 'is_valid', 'max_services', 'max_team_members'])
+
         self.user = User.objects.create_user(
             username='domain-owner',
             email='domain-owner@example.com',

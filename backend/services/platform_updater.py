@@ -30,7 +30,9 @@ class PlatformUpdateError(Exception):
 
 INSTALL_DIR = os.environ.get('INSTALL_DIR', '/opt/smsly-hosting')
 COMPOSE_FILE = os.path.join(INSTALL_DIR, 'docker-compose.prod.yml')
-HEALTH_CHECK_URL = 'http://localhost:8090/api/v1/system/config/'
+# Use a public liveness endpoint for post-update validation. Admin-only API
+# routes return 401/403 and can cause false rollback failures.
+HEALTH_CHECK_URL = os.environ.get('PLATFORM_HEALTH_CHECK_URL', 'http://localhost:8090/health')
 HEALTH_CHECK_RETRIES = 10
 HEALTH_CHECK_INTERVAL = 5  # seconds
 
