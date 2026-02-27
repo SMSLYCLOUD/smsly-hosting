@@ -66,8 +66,12 @@ def _fetch_bare(bare_dir: Path, remote_url: str, env: dict):
         timeout=60,
         env=env,
     )
+    # Use explicit refspec to force-update local branch refs directly.
+    # Without this, `git fetch --all` only updates refs/remotes/origin/*
+    # but the worktree clone uses `--branch main` which reads the stale
+    # refs/heads/main frozen at original bare-clone time.
     subprocess.run(
-        ['git', 'fetch', '--all', '--prune'],
+        ['git', 'fetch', 'origin', '+refs/heads/*:refs/heads/*', '--prune'],
         cwd=str(bare_dir),
         check=True,
         capture_output=True,
