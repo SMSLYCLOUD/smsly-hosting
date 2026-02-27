@@ -1547,6 +1547,9 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
 
 $DOMAIN {
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
     reverse_proxy localhost:8090
     encode gzip
     log {
