@@ -610,6 +610,11 @@ if [ -n "$UPDATE_MODE" ]; then
     echo -e "${YELLOW}[UPDATE] Running in update mode: $UPDATE_MODE${NC}"
     echo -e "${BLUE}  -> Safe update: preserves database/redis volumes and addon data.${NC}"
 
+    # Ensure repo cache directory exists for user service builds
+    mkdir -p /opt/smsly-cache/repos
+    chmod 775 /opt/smsly-cache
+    chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
+
     # ─── Pre-flight ──────────────────────────────────────────────────────────
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"

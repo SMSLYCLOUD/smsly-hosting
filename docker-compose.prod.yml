@@ -115,6 +115,7 @@ services:
       - caddy_config:/caddy-config
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
+      - /opt/smsly-cache:/opt/smsly-cache
       # SECURITY: Use socket-proxy instead of direct socket mount
       # - /var/run/docker.sock:/var/run/docker.sock  # REMOVED - security risk
     healthcheck:
@@ -157,6 +158,7 @@ services:
       - caddy_config:/caddy-config
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
+      - /opt/smsly-cache:/opt/smsly-cache
     healthcheck:
       test: ["CMD-SHELL", "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
       interval: 30s
