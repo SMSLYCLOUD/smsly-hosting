@@ -243,8 +243,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         hc_port = (
             (healthcheck or {}).get('port')
-            or env.get('PORT')
-            or '8000'
+            or port  # Use the same port as Traefik routing (env.PORT or 8000)
         )
         if healthcheck and healthcheck.get('path'):
             hc_path = _normalize_health_path(healthcheck['path'])
