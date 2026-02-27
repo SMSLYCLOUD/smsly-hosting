@@ -12,6 +12,8 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import DataError, IntegrityError
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
+from apps.licensing.models import PlatformLicense
+from apps.licensing.decorators import require_tier
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .serializers import (
     ServiceSerializer, DeploymentSerializer,
@@ -190,6 +192,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
+        deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
+        if deploy_type == 'FUNCTION':
+            license = PlatformLicense.load()
+            if license.is_community:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Serverless Functions require Pro tier.")
         serializer.save(owner=self.request.user)
 
     def perform_destroy(self, instance):
@@ -830,6 +838,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_404_NOT_FOUND)
 
     @action(detail=True, methods=['post'], url_path='verify-domain')
+    @require_tier('pro', 'enterprise')
     def verify_domain(self, request, pk=None):
         """
         Verify that a custom domain's DNS points to this service's server.
@@ -964,6 +973,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
+    @require_tier('pro', 'enterprise')
     def add_domain(self, request, pk=None):
         """
         Add a custom domain to the service.
@@ -1036,6 +1046,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='delete-domain')
+    @require_tier('pro', 'enterprise')
     def delete_domain(self, request, pk=None):
         """
         Remove a custom domain from the service.
@@ -1524,6 +1535,14 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @require_tier('enterprise')
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @require_tier('enterprise')
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
+
     def get_queryset(self):
         """ZH-001 FIX: Filter audit logs to only show entries for the requesting user."""
         if self.request.user.is_superuser:
@@ -1811,6 +1830,18 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @require_tier('pro', 'enterprise')
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def retrieve(self, request, *args, **kwargs):
+        return super().retrieve(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
@@ -1865,6 +1896,14 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     queryset = BackupSchedule.objects.all()
     serializer_class = BackupScheduleSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    @require_tier('pro', 'enterprise')
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user)

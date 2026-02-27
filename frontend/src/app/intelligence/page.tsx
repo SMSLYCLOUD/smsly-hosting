@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -170,6 +171,7 @@ export default function IntelligencePage() {
 
   return (
     <DashboardShell>
+      <RequiresTier tier="pro">
       <div className="flex-1 p-8 relative z-10">
         <motion.div
           className="max-w-6xl mx-auto space-y-8"
@@ -504,6 +506,7 @@ export default function IntelligencePage() {
 
         </motion.div>
       </div>
+      </RequiresTier>
     </DashboardShell>
   );
 }

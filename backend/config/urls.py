@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/teams/', include('apps.teams.urls')),
     path('api/v1/billing/', include('apps.billing.urls')),
+    path('api/v1/licensing/', include('apps.licensing.urls')),
     path('api/v1/ai/', include('apps.intelligence.urls')),
     path('api/v1/autoscaler/', include('apps.autoscaler.urls')),
     path('api/v1/', include('apps.core.urls')),
