@@ -140,7 +140,12 @@ export default function ActivityPage() {
                                                 </p>
                                                 <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
                                                     <Clock size={10} />
-                                                    {formatDistanceToNow(new Date(log.created_at), { addSuffix: true })}
+                                                    {(() => {
+                                                        try {
+                                                            const d = new Date(log.created_at);
+                                                            return isNaN(d.getTime()) ? 'recently' : formatDistanceToNow(d, { addSuffix: true });
+                                                        } catch { return 'recently'; }
+                                                    })()}
                                                     <span className="w-1 h-1 rounded-full bg-zinc-700" />
                                                     {log.ip_address}
                                                 </p>
