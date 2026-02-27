@@ -1,7 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import api from '@/lib/api';
+import React, { createContext, useContext } from 'react';
 
 export type PlatformTier = 'community' | 'pro' | 'enterprise';
 
@@ -41,56 +40,44 @@ interface TierContextType {
 
 const TierContext = createContext<TierContextType | undefined>(undefined);
 
+// Owner edition: all features always unlocked. No API call needed.
+const OWNER_LICENSE: LicenseStatus = {
+  tier: 'enterprise',
+  is_valid: true,
+  expires_at: null,
+  features: {
+    ai_features: true,
+    autoscaler: true,
+    custom_domains: true,
+    ssl_certificates: true,
+    marketplace: true,
+    functions: true,
+    tunnels: true,
+    topology: true,
+    transfers: true,
+    backups_automated: true,
+    sso: true,
+    audit_logs: true,
+    white_label: true,
+    rbac: true,
+    multi_node: true,
+  },
+  max_services: -1,
+  max_team_members: -1,
+};
+
 export function TierProvider({ children }: { children: React.ReactNode }) {
-  const [license, setLicense] = useState<LicenseStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const refreshLicense = async () => {
-    try {
-      const { data } = await api.get('/licensing/status/');
-      setLicense(data);
-    } catch (error) {
-      console.error('Failed to fetch license status:', error);
-      // Fallback to community if fetch fails
-      setLicense({
-        tier: 'community',
-        is_valid: false,
-        expires_at: null,
-        features: {
-          ai_features: false,
-          autoscaler: false,
-          custom_domains: false,
-          ssl_certificates: false,
-          marketplace: false,
-          functions: false,
-          tunnels: false,
-          topology: false,
-          transfers: false,
-          backups_automated: false,
-          sso: false,
-          audit_logs: false,
-          white_label: false,
-          rbac: false,
-          multi_node: false,
-        },
-        max_services: 3,
-        max_team_members: 1,
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    refreshLicense();
-  }, []);
-
-  const isCommunity = license?.tier === 'community';
-  const isPro = license?.tier === 'pro' || license?.tier === 'enterprise';
-  const isEnterprise = license?.tier === 'enterprise';
+  const refreshLicense = async () => { /* no-op for owner edition */ };
 
   return (
-    <TierContext.Provider value={{ license, isLoading, refreshLicense, isCommunity, isPro, isEnterprise }}>
+    <TierContext.Provider value={{
+      license: OWNER_LICENSE,
+      isLoading: false,
+      refreshLicense,
+      isCommunity: false,
+      isPro: true,
+      isEnterprise: true,
+    }}>
       {children}
     </TierContext.Provider>
   );

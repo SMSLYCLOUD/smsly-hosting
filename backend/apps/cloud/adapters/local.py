@@ -216,14 +216,7 @@ class LocalAdapter(BaseCloudAdapter):
             in {"1", "true", "yes", "on"}
         )
 
-        # New container uses DISABLED Traefik routing during health check.
-        # Traffic continues to flow to the old container. After cutover we
-        # re-label the new container with the real routing labels.
-        labels = {
-            'managed_by': 'smsly-hosting',
-            'traefik.enable': 'false',  # Disabled until health check passes
-            f'traefik.http.services.{name}.loadbalancer.server.port': port
-        }
+        # Routing labels are configured after health check parameters are known.
 
         # Docker-native healthcheck.
         low_resource_profile = _is_low_resource_profile(cpu, memory)
@@ -282,6 +275,42 @@ class LocalAdapter(BaseCloudAdapter):
             retries=hc_retries,
             start_period=start_period_seconds * 1_000_000_000,
         )
+
+        # Keep Traefik routing labels active from container creation time.
+        # This prevents transient "no active route" fallback pages during cutover.
+        labels = {
+            'managed_by': 'smsly-hosting',
+            'traefik.enable': 'true' if is_public else 'false',
+            f'traefik.http.services.{name}.loadbalancer.server.port': port,
+            f'traefik.http.services.{name}.loadbalancer.healthcheck.path': hc_path if healthcheck and healthcheck.get('path') else '/',
+            f'traefik.http.services.{name}.loadbalancer.healthcheck.interval': f'{hc_interval}s',
+            f'traefik.http.services.{name}.loadbalancer.healthcheck.timeout': f'{hc_timeout}s',
+        }
+        if is_public and use_ssl and enable_traefik_tls:
+            labels.update({
+                f'traefik.http.routers.{name}-http.rule': host_rule,
+                f'traefik.http.routers.{name}-http.entrypoints': 'web',
+                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
+                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'websecure',
+                f'traefik.http.routers.{name}.tls': 'true',
+                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
+            })
+        elif is_public:
+            labels.update({
+                f'traefik.http.routers.{name}.rule': host_rule,
+                f'traefik.http.routers.{name}.entrypoints': 'web',
+            })
+            if use_ssl:
+                middleware_name = f'{name}-forwarded-https'
+                labels.update({
+                    f'traefik.http.routers.{name}.middlewares': middleware_name,
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
+                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
+                })
 
         # Resource limits
         run_kwargs = {}
@@ -356,55 +385,7 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as exc:
             logger.warning("Blue-green: rename %s -> %s failed: %s", temp_name, name, exc)
 
-        # ── Apply real Traefik routing labels ──
-        # Docker SDK doesn't support label updates on running containers, so we
-        # disconnect and reconnect with proper aliases. Traefik discovers routing
-        # from container labels, which were set at create-time. We need to update
-        # labels by using the low-level API.
-        final_labels = {
-            'managed_by': 'smsly-hosting',
-            'traefik.enable': 'true' if is_public else 'false',
-            f'traefik.http.services.{name}.loadbalancer.server.port': port,
-        }
-        if not is_public:
-            pass
-        elif use_ssl and enable_traefik_tls:
-            final_labels.update({
-                f'traefik.http.routers.{name}-http.rule': host_rule,
-                f'traefik.http.routers.{name}-http.entrypoints': 'web',
-                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'websecure',
-                f'traefik.http.routers.{name}.tls': 'true',
-                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
-            })
-        else:
-            final_labels.update({
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'web',
-            })
-            if use_ssl:
-                middleware_name = f'{name}-forwarded-https'
-                final_labels.update({
-                    f'traefik.http.routers.{name}.middlewares': middleware_name,
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
-                })
-
-        # Update labels on the running container via low-level Docker API.
-        # This turns on Traefik routing now that the container is healthy + renamed.
-        try:
-            self.docker_client.api.update_container(
-                new_container.id, labels=final_labels,
-            )
-        except Exception:
-            # Fallback: some Docker versions don't support label update via
-            # update_container. In that case, reconnect with proper network aliases
-            # so Docker DNS resolves the canonical name.
-            pass
+        # Labels are already active; no runtime relabeling required.
 
         # Ensure canonical network aliases are set
         try:

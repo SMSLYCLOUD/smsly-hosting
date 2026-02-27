@@ -1,4 +1,5 @@
 from rest_framework.exceptions import PermissionDenied
+from django.conf import settings
 from apps.billing.services.metering import UsageMeter
 
 class QuotaEnforcementMiddleware:
@@ -10,16 +11,22 @@ class QuotaEnforcementMiddleware:
         self.meter = UsageMeter()
 
     def check_service_limit(self, user):
+        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+            return
         allowed, remaining = self.meter.check_quota(user, 'SERVICE')
         if not allowed:
             raise PermissionDenied("Service limit reached for your plan. Please upgrade to create more services.")
 
     def check_addon_limit(self, user):
+        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+            return
         allowed, remaining = self.meter.check_quota(user, 'ADDON')
         if not allowed:
             raise PermissionDenied("Addon limit reached for your plan. Please upgrade to create more addons.")
 
     def check_storage_limit(self, user, requested_gb=1):
+        if bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False)):
+            return
         allowed, remaining = self.meter.check_quota(user, 'STORAGE', requested_gb)
         if not allowed:
             raise PermissionDenied(f"Storage limit reached. You have {remaining}GB remaining.")

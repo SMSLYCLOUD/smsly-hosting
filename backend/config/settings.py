@@ -31,6 +31,7 @@ except Exception as e:
     raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'") from e
 DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
+SMSLY_DISABLE_TIER_GATES = _env_bool('SMSLY_DISABLE_TIER_GATES', default='False')
 
 # Security hardening
 # Force insecure settings when running tests to prevent 301 redirects

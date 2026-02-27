@@ -1,9 +1,10 @@
 # pylint: disable=too-few-public-methods,wrong-import-order
-"""Orchestrator module — production hardened."""
+"""Orchestrator module - production hardened."""
 # pylint: disable=no-member
 import signal
 import logging
 import threading
+from datetime import timedelta
 
 from django.utils import timezone
 from django.conf import settings
@@ -21,6 +22,9 @@ DEPLOYMENT_TIMEOUT = getattr(settings, 'DEPLOYMENT_TIMEOUT_SECONDS', 600)
 
 # Number of consecutive failures before auto-rollback triggers
 AUTO_ROLLBACK_THRESHOLD = getattr(settings, 'AUTO_ROLLBACK_THRESHOLD', 3)
+AUTO_ROLLBACK_COOLDOWN_MINUTES = getattr(
+    settings, 'AUTO_ROLLBACK_COOLDOWN_MINUTES', 10
+)
 
 
 class DeploymentTimeoutError(Exception):
@@ -169,7 +173,7 @@ class Orchestrator:
         service = self.deployment.service
         recent = (
             Deployment.objects
-            .filter(service=service)
+            .filter(service=service, is_rollback=False)
             .order_by('-created_at')[:AUTO_ROLLBACK_THRESHOLD]
         )
 
@@ -198,6 +202,38 @@ class Orchestrator:
             )
             return
 
+        in_progress_statuses = [
+            Deployment.Status.QUEUED,
+            Deployment.Status.REVIEW,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+        ]
+        if Deployment.objects.filter(
+            service=service,
+            is_rollback=True,
+            status__in=in_progress_statuses,
+        ).exists():
+            logger.info(
+                "Auto-rollback suppressed for %s: rollback deployment already in progress",
+                service.name,
+            )
+            return
+
+        cutoff = timezone.now() - timedelta(minutes=AUTO_ROLLBACK_COOLDOWN_MINUTES)
+        if Deployment.objects.filter(
+            service=service,
+            is_rollback=True,
+            commit_hash=last_good.commit_hash,
+            created_at__gte=cutoff,
+        ).exclude(status=Deployment.Status.ACTIVE).exists():
+            logger.info(
+                "Auto-rollback suppressed for %s: recent rollback to %s exists",
+                service.name,
+                last_good.commit_hash,
+            )
+            return
+
         logger.warning(
             "Auto-rollback triggered for %s: %d consecutive failures. "
             "Rolling back to deployment %s (commit %s)",
@@ -214,12 +250,16 @@ class Orchestrator:
             commit_hash=last_good.commit_hash,
             commit_message=(
                 f"AUTO-ROLLBACK: {AUTO_ROLLBACK_THRESHOLD} consecutive "
-                f"failures → reverting to {last_good.commit_hash[:7]}"
+                f"failures -> reverting to {last_good.commit_hash[:7]}"
             ),
+            is_rollback=True,
+            rollback_from=self.deployment,
         )
 
         # Trigger async deployment (import here to avoid circular)
         from apps.deployments.tasks import smart_deploy_task
         provider = service.provider
         if provider:
-            smart_deploy_task.delay(str(rollback.id), str(provider.id))
+            smart_deploy_task.delay(str(rollback.id), str(provider.id), skip_review=True)
+
+

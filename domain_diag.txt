@@ -1,0 +1,64 @@
+DNS: pcloud.distinctionlabs.org -> 163.245.216.249
+
+
+=== 163.245.216.249 ===
+  [ports]: LISTEN 0      511        127.0.0.1:8082      0.0.0.0:*    users:(("docker-proxy",pid=2212,fd=8))   
+LISTEN 0      511        127.0.0.1:8081      0.0.0.0:*    users:(("docker-proxy",pid=2195,fd=8))   
+LISTEN 0      511        127.0.0.1:8090      0.0.0.0:*    users:(("docker-proxy",pid=2328,fd=8))   
+LISTEN 0      511                *:80              *:*    users:(("caddy",pid=755,fd=7))
+  [traefik_routers]: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.10/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+  File "/usr/lib/python3.10/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+  File "/usr/lib/python3.10/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "/usr/lib/python3.10/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0
+  [nginx_upstream]: grep: /opt/smsly-hosting/nginx/: No such file or directory
+  [external_test]: 200
+  [iptables_80]: 
+
+=== 163.245.214.62 ===
+  [ports]: LISTEN 0      511        127.0.0.1:8090       0.0.0.0:*    users:(("docker-proxy",pid=1220522,fd=8))
+LISTEN 0      511        127.0.0.1:8081       0.0.0.0:*    users:(("docker-proxy",pid=1215932,fd=8))
+LISTEN 0      511        127.0.0.1:8082       0.0.0.0:*    users:(("docker-proxy",pid=1215948,fd=8))
+LISTEN 0      511                *:80               *:*    users:(("caddy",pid=1219965,fd=9))       
+LISTEN 0      511                *:443              *:*    users:(("caddy",pid=1219965,fd=7))
+  [traefik_routers]: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.10/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+  File "/usr/lib/python3.10/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+  File "/usr/lib/python3.10/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "/usr/lib/python3.10/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0
+  [nginx_upstream]: grep: /opt/smsly-hosting/nginx/: No such file or directory
+  [external_test]: 200
+  [iptables_80]: 
+
+=== 163.245.216.248 ===
+  [ports]: LISTEN 0      511        127.0.0.1:8090      0.0.0.0:*    users:(("docker-proxy",pid=630435,fd=8)) 
+LISTEN 0      511        127.0.0.1:8082      0.0.0.0:*    users:(("docker-proxy",pid=629968,fd=8)) 
+LISTEN 0      511        127.0.0.1:8081      0.0.0.0:*    users:(("docker-proxy",pid=629952,fd=8)) 
+LISTEN 0      511                *:80              *:*    users:(("caddy",pid=19794,fd=12))        
+LISTEN 0      511                *:443             *:*    users:(("caddy",pid=19794,fd=4))
+  [traefik_routers]: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.10/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+  File "/usr/lib/python3.10/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+  File "/usr/lib/python3.10/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "/usr/lib/python3.10/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0
+  [nginx_upstream]: grep: /opt/smsly-hosting/nginx/: No such file or directory
+  [external_test]: 200
+  [iptables_80]: 

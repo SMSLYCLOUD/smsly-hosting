@@ -1,0 +1,26 @@
+=== 163.245.216.249 ===
+  frontend: 200
+  api: 403
+  platform_health: ALL HEALTHY
+  customer_apps: smsly-hosting-route-fallback-1 Up 3 hours
+distinction-lab Up 3 hours (healthy)
+  unhealthy: SMSLY-MARKETER Exited (1) 3 hours ago
+
+=== 163.245.214.62 ===
+  frontend: 200
+  api: 301
+  platform_health: ALL HEALTHY
+  customer_apps: smsly-hosting-route-fallback-1 Up 3 hours
+SMSLY-MARKETER Up 16 hours (healthy)
+Ucoin-frontend Up 20 hours (healthy)
+Ucoin Up 20 hours (healthy)
+lina-deluxe Up 24 hours (healthy)
+lina-deluxe-frontend Up 24 hours (healthy)
+  unhealthy: (empty)
+
+=== 163.245.216.248 ===
+  frontend: 200
+  api: 502
+  platform_health: ALL HEALTHY
+  customer_apps: smsly-hosting-route-fallback-1 Up 3 hours
+  unhealthy: (empty)

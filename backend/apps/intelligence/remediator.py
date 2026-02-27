@@ -2,7 +2,9 @@
 from typing import Dict, Optional
 import logging
 import subprocess
+from datetime import timedelta
 from django.db import transaction
+from django.utils import timezone
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.tasks import smart_deploy_task
@@ -17,6 +19,14 @@ class RemediationEngine:
     """
 
     MAX_MEMORY_LIMIT = 2048  # 2GB Hard Limit
+    AUTO_DEPLOY_COOLDOWN_MINUTES = 10
+    IN_PROGRESS_STATUSES = (
+        Deployment.Status.QUEUED,
+        Deployment.Status.REVIEW,
+        Deployment.Status.BUILDING,
+        Deployment.Status.DEPLOYING,
+        Deployment.Status.HEALTH_CHECK,
+    )
 
     RECOMMENDATIONS = {
         'OOM_KILLED': {
@@ -116,8 +126,7 @@ class RemediationEngine:
                         target=service.name,
                         metadata={"old_mb": old_mem, "new_mb": service.memory_mb, "reason": "OOM"}
                     )
-                    self._trigger_redeploy(service, fix['message'])
-                    return True
+                    return self._trigger_redeploy(service, fix['message'])
 
                 if action == 'SCALE_UP' and fix['resource'] == 'REPLICAS':
                     service.min_replicas += 1
@@ -128,8 +137,7 @@ class RemediationEngine:
                         target=service.name,
                         metadata={"new_replicas": service.min_replicas, "reason": "TIMEOUT"}
                     )
-                    self._trigger_redeploy(service, fix['message'])
-                    return True
+                    return self._trigger_redeploy(service, fix['message'])
 
                 if action == 'ROLLBACK':
                     return self._handle_rollback(service)
@@ -152,8 +160,8 @@ class RemediationEngine:
                         return False
 
                 if action == 'REBUILD':
-                    self._trigger_redeploy(service, fix['message']) # Trigger build without cache logic is tricky here, default deploy for now
-                    return True
+                    # Trigger build without cache logic is tricky here, default deploy for now.
+                    return self._trigger_redeploy(service, fix['message'])
 
                 if action == 'NOTIFY_AND_DIAGNOSE':
                     last_deploy = service.deployments.filter(status='FAILED').first()
@@ -177,8 +185,7 @@ class RemediationEngine:
                 if action == 'RESTART_OR_ROLLBACK':
                     # Simple restart via API call equivalent (not fully implemented here, assume redeploy works as restart)
                     # Ideally we check uptime. If short uptime, rollback. If long uptime, restart.
-                    self._trigger_redeploy(service, "Restarting due to health check failure")
-                    return True
+                    return self._trigger_redeploy(service, "Restarting due to health check failure")
 
                 if action == 'NOTIFY_ADMIN':
                     AuditLog.objects.create(
@@ -195,8 +202,34 @@ class RemediationEngine:
             logger.error("Service %s not found", service_id)
             return False
 
+    def _has_in_progress_deployment(self, service: Service) -> bool:
+        return service.deployments.filter(
+            status__in=self.IN_PROGRESS_STATUSES
+        ).exists()
+
+    def _has_recent_auto_deployment(self, service: Service, prefix: str) -> bool:
+        cutoff = timezone.now() - timedelta(minutes=self.AUTO_DEPLOY_COOLDOWN_MINUTES)
+        return service.deployments.filter(
+            commit_message__startswith=prefix,
+            created_at__gte=cutoff,
+        ).exclude(status=Deployment.Status.ACTIVE).exists()
+
     def _trigger_redeploy(self, service: Service, message: str):
         """Trigger a new deployment based on the latest active one."""
+        if self._has_in_progress_deployment(service):
+            logger.info(
+                "Skipping auto-remediation deploy for %s: deployment already in progress",
+                service.name,
+            )
+            return False
+
+        if self._has_recent_auto_deployment(service, "Auto-Remediation:"):
+            logger.info(
+                "Skipping auto-remediation deploy for %s: cooldown window active",
+                service.name,
+            )
+            return False
+
         last_deploy = service.deployments.filter(status='ACTIVE').first()
         if last_deploy:
             new_deploy = Deployment.objects.create(
@@ -207,26 +240,49 @@ class RemediationEngine:
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(str(new_deploy.id), provider_id)
+                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
+                return True
+        return False
 
     def _handle_rollback(self, service: Service) -> bool:
         """Handle automated rollback logic."""
+        if self._has_in_progress_deployment(service):
+            logger.info(
+                "Skipping auto-rollback for %s: deployment already in progress",
+                service.name,
+            )
+            return False
+
         # Find previous successful deployment
+        latest_deploy = service.deployments.order_by('-created_at').first()
         last_good_deploy = service.deployments.filter(
             status='ACTIVE'
         ).exclude(
-            id=service.deployments.latest(
-                'created_at').id if service.deployments.exists() else None
+            id=latest_deploy.id if latest_deploy else None
         ).order_by('-finished_at').first()
 
         if last_good_deploy:
+            cutoff = timezone.now() - timedelta(minutes=self.AUTO_DEPLOY_COOLDOWN_MINUTES)
+            recent_duplicate = service.deployments.filter(
+                is_rollback=True,
+                commit_hash=last_good_deploy.commit_hash,
+                commit_message__startswith='Auto-Rollback:',
+                created_at__gte=cutoff,
+            ).exclude(status=Deployment.Status.ACTIVE).exists()
+            if recent_duplicate:
+                logger.info(
+                    "Skipping auto-rollback for %s: recent rollback to commit %s already queued",
+                    service.name,
+                    last_good_deploy.commit_hash,
+                )
+                return False
+
             AuditLog.objects.create(
                 actor="AI_REMEDIATOR",
                 action="ROLLBACK",
                 target=service.name,
                 metadata={
-                    "from_commit": service.deployments.latest(
-                        'created_at').commit_hash if service.deployments.exists() else "unknown",
+                    "from_commit": latest_deploy.commit_hash if latest_deploy else "unknown",
                     "to_commit": last_good_deploy.commit_hash,
                     "reason": "CRASH_LOOP detected"
                 }
@@ -236,12 +292,14 @@ class RemediationEngine:
                 service=service,
                 status=Deployment.Status.QUEUED,
                 commit_hash=last_good_deploy.commit_hash,
-                commit_message=f"Auto-Rollback: Reverted to {last_good_deploy.commit_hash[:7]}"
+                commit_message=f"Auto-Rollback: Reverted to {last_good_deploy.commit_hash[:7]}",
+                is_rollback=True,
+                rollback_from=latest_deploy,
             )
 
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(str(new_deploy.id), provider_id)
+                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
                 logger.info("Rollback triggered for %s", service.name)
                 return True
             return False
