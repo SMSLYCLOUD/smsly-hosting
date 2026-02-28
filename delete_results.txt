@@ -1,0 +1,50 @@
+
+=== .249 - Delete buyforfront services ===
+=== BEFORE ===
+buyforfront Up 6 minutes (healthy)
+buyforfront-frontend Up 2 hours (healthy)
+
+=== DELETE SERVICES FROM DB ===
+Deleting service: buyforfront (id=1a7c8798-4bcf-490b-9d87-c63ab714547e)
+  Deleting 54 deployments...
+  Deleted!
+Deleting service: buyforfront-frontend (id=cdd01137-2a69-4c6d-8a5d-bfbec8f12d90)
+  Deleting 46 deployments...
+  Deleted!
+Done deleting buyforfront services from DB
+
+=== REMOVE CONTAINERS ===
+buyforfront
+buyforfront-frontend
+buyforfront
+buyforfront-frontend
+Containers removed
+
+=== AFTER ===
+(should be empty)
+
+=== .62 - Delete smsly-helper services ===
+=== BEFORE ===
+smsly-helper-green-712025ed Up 49 minutes (unhealthy)
+smsly-helper-frontend-green-9699d52a Up About an hour (healthy)
+
+=== DELETE SERVICES FROM DB ===
+Deleting service: smsly-helper (id=9869b942-e260-4cd5-8013-c215d09396d8)
+  Deleting 349 deployments...
+  Deleted!
+Deleting service: smsly-helper-frontend (id=b098e471-bd4b-4bb1-a28d-b40435e415a3)
+  Deleting 19 deployments...
+  Deleted!
+Done deleting smsly-helper services from DB
+
+=== REMOVE CONTAINERS ===
+smsly-helper-green-712025ed
+smsly-helper-green-712025ed
+Removed: smsly-helper-green-712025ed
+smsly-helper-frontend-green-9699d52a
+smsly-helper-frontend-green-9699d52a
+Removed: smsly-helper-frontend-green-9699d52a
+Containers removed
+
+=== AFTER ===
+(should be empty)

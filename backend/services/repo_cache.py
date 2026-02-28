@@ -17,7 +17,19 @@ import logging
 import hashlib
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
-from filelock import FileLock
+try:
+    from filelock import FileLock
+except ImportError:
+    class FileLock:  # type: ignore[override]
+        """No-op fallback when optional filelock dependency is unavailable."""
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +39,10 @@ CACHE_MAX_AGE_DAYS = int(os.environ.get('REPO_CACHE_MAX_AGE_DAYS', '7'))
 
 def _safe_stderr(exc: subprocess.CalledProcessError) -> str:
     """Extract stderr for diagnostics without raising."""
-    return ((exc.stderr or '') or (exc.stdout or '')).strip()
+    payload = (exc.stderr or '') or (exc.stdout or '')
+    if isinstance(payload, bytes):
+        payload = payload.decode('utf-8', errors='replace')
+    return str(payload).strip()
 
 
 def _is_auth_error(stderr: str) -> bool:
@@ -77,6 +92,57 @@ def _fetch_bare(bare_dir: Path, remote_url: str, env: dict):
         capture_output=True,
         timeout=120,
         env=env,
+    )
+
+
+def _detect_bare_default_branch(bare_dir: Path) -> str:
+    """Resolve default branch from bare clone HEAD, falling back to common names."""
+    try:
+        head = subprocess.run(
+            ['git', 'symbolic-ref', '--short', 'HEAD'],
+            cwd=str(bare_dir),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout.strip()
+        if head.startswith('refs/heads/'):
+            head = head[len('refs/heads/'):]
+        if head:
+            return head
+    except subprocess.CalledProcessError:
+        pass
+
+    try:
+        refs = subprocess.run(
+            ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+            cwd=str(bare_dir),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout.splitlines()
+        branches = [line.strip() for line in refs if line.strip()]
+        for candidate in ('main', 'master'):
+            if candidate in branches:
+                return candidate
+        if branches:
+            return branches[0]
+    except subprocess.CalledProcessError:
+        pass
+
+    return 'main'
+
+
+def _clone_worktree(bare_dir: Path, branch: str, worktree_dir: Path):
+    """Clone a shallow worktree from bare cache."""
+    subprocess.run(
+        ['git', 'clone', '--local', '--branch', branch,
+         '--single-branch', '--depth', '1',
+         str(bare_dir), str(worktree_dir)],
+        check=True,
+        capture_output=True,
+        timeout=60,
     )
 
 
@@ -239,18 +305,46 @@ def get_or_clone(repo_url: str, branch: str = 'main', token: str = None) -> str:
     (cache / '.last_used').write_text(str(time.time()))
 
     # Create a fresh worktree checkout for this build
-    worktree_dir = cache / f'worktree-{branch}-{int(time.time())}'
+    requested_branch = (branch or 'main').strip() or 'main'
+    worktree_dir = cache / f'worktree-{requested_branch}-{int(time.time())}'
     if worktree_dir.exists():
         shutil.rmtree(str(worktree_dir))
 
-    subprocess.run(
-        ['git', 'clone', '--local', '--branch', branch,
-         '--single-branch', '--depth', '1',
-         str(bare_dir), str(worktree_dir)],
-        check=True,
-        capture_output=True,
-        timeout=60,
-    )
+    try:
+        _clone_worktree(bare_dir, requested_branch, worktree_dir)
+    except subprocess.CalledProcessError as clone_error:
+        stderr = _safe_stderr(clone_error).lower()
+        branch_missing = (
+            'remote branch' in stderr and 'not found' in stderr
+        ) or (
+            'couldn\'t find remote ref' in stderr
+        ) or (
+            'not a commit' in stderr
+        )
+        if not branch_missing:
+            raise RuntimeError(f"git worktree clone failed: {stderr}") from clone_error
+
+        fallback_branch = _detect_bare_default_branch(bare_dir)
+        if fallback_branch == requested_branch:
+            raise RuntimeError(f"git worktree clone failed: {stderr}") from clone_error
+
+        logger.warning(
+            "Requested branch '%s' missing for %s; retrying with default branch '%s'",
+            requested_branch,
+            repo_url,
+            fallback_branch,
+        )
+        worktree_dir = cache / f'worktree-{fallback_branch}-{int(time.time())}'
+        if worktree_dir.exists():
+            shutil.rmtree(str(worktree_dir))
+        try:
+            _clone_worktree(bare_dir, fallback_branch, worktree_dir)
+        except subprocess.CalledProcessError as fallback_error:
+            fallback_stderr = _safe_stderr(fallback_error)
+            raise RuntimeError(
+                f"git worktree clone failed for branch '{requested_branch}', "
+                f"fallback '{fallback_branch}' also failed: {fallback_stderr}"
+            ) from fallback_error
 
     return str(worktree_dir)
 

@@ -216,7 +216,7 @@ export default function IntelligencePage() {
                        <Shield className="text-purple-500" size={18} /> Configure AI Providers
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                       {["openai", "grok", "gemini", "claude"].map(provider => (
+                       {["openai", "grok", "gemini", "claude", "jules"].map(provider => (
                          <div key={provider} className="space-y-2">
                            <label className="text-sm font-medium uppercase text-muted-foreground">{provider} API Key</label>
                            <Input

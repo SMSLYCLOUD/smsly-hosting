@@ -1,0 +1,27 @@
+=== ALL CONTAINERS ===
+NAMES                            STATUS                       IMAGE
+smsly-hosting-celery-1           Up 8 minutes (healthy)       smsly-hosting-celery
+smsly-hosting-celery-beat-1      Up 8 minutes (healthy)       smsly-hosting-celery-beat
+smsly-hosting-backend-1          Up 8 minutes (healthy)       smsly-hosting-backend
+buyforfront-frontend             Up 43 minutes (healthy)      registry:5000/smsly/buyforfront-frontend:9ee3911
+smsly-hosting-frontend-1         Up About an hour (healthy)   smsly-hosting-frontend
+buyforfront                      Up About an hour (healthy)   registry:5000/smsly/buyforfront:9ee3911
+smsly-hosting-nginx-1            Up 44 minutes (healthy)      nginx:1.25-alpine
+smsly-hosting-pgbouncer-1        Up 5 hours (healthy)         smsly-hosting-pgbouncer
+smsly-hosting-traefik-1          Up 5 hours                   traefik:v3.6
+smsly-hosting-db-1               Up 5 hours (healthy)         postgres:16-alpine
+smsly-hosting-redis-1            Up 5 hours (healthy)         redis:7-alpine
+smsly-hosting-socket-proxy-1     Up 5 hours                   tecnativa/docker-socket-proxy:latest
+smsly-hosting-route-fallback-1   Up 5 hours                   nginx:1.25-alpine
+smsly-hosting-registry-1         Up 5 hours                   registry:2
+distinction-lab                  Up 5 hours (healthy)         registry:5000/smsly/distinction-lab:f415c3f
+SMSLY-MARKETER                   Exited (1) 5 hours ago       registry:5000/smsly/smsly-marketer:b49d180
+buildx_buildkit_default          Up 5 hours                   moby/buildkit:buildx-stable-1
+
+=== DISTINCTION-LAB NGINX CONF ===
+cat: /etc/nginx/conf.d/default.conf: No such file or directory
+
+=== FIND BACKEND CONTAINER ===
+distinction-lab Up 5 hours (healthy) registry:5000/smsly/distinction-lab:f415c3f
+buyforfront-frontend Up 43 minutes (healthy) registry:5000/smsly/buyforfront-frontend:9ee3911
+buyforfront Up About an hour (healthy) registry:5000/smsly/buyforfront:9ee3911

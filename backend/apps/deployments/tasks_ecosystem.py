@@ -4,27 +4,48 @@ Celery tasks for ecosystem-level deployment.
 
 Pipeline:
 1. Scan repositories -> generate deploy plan.
-2. Deploy plan -> create/update services, apply env vars, queue deployments.
+2. Materialize all services/deployments from plan.
+3. Execute deployments in dependency-aware waves with strict gating.
 """
 
 import logging
+import os
 import re
 import secrets
 import string
-from typing import Any, Dict
+from collections import defaultdict
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from celery import shared_task
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 _SECRET_HINTS = ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN")
 _EXTERNAL_SECRETS = {
     "OPENAI_API_KEY",
+    "GROK_API_KEY",
     "GEMINI_API_KEY",
+    "CLAUDE_API_KEY",
+    "JULES_API_KEY",
     "ANTHROPIC_API_KEY",
     "STRIPE_SECRET_KEY",
     "API_KEY",
 }
+
+_DEFAULT_WAVE_SIZE = 10
+_MAX_WAVE_SIZE = 50
+_WAVE_RECHECK_SECONDS = 15
+_MAX_WAVE_RECHECKS = 480  # 2h (480 * 15s)
+
+
+def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> int:
+    """Read bounded int from env."""
+    try:
+        parsed = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
 
 
 def _generate_secret(length: int = 50) -> str:
@@ -97,6 +118,20 @@ def _normalize_env_vars(raw_env: Any) -> Dict[str, str]:
     return normalized
 
 
+def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
+    """Inject safe runtime defaults per stack."""
+    stack_l = str(stack or "").strip().lower()
+    defaults: Dict[str, str] = {"PORT": str(max(1, int(port or 3000)))}
+
+    if stack_l in {"node", "nextjs", "nuxt"}:
+        defaults["NODE_ENV"] = "production"
+    if stack_l in {"python", "django"}:
+        defaults["PYTHONUNBUFFERED"] = "1"
+        defaults["PYTHONDONTWRITEBYTECODE"] = "1"
+
+    return defaults
+
+
 def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
@@ -113,7 +148,7 @@ def _resolve_env_placeholders(
 
         if value_text.startswith("{{SERVICE:") and value_text.endswith("}}"):
             ref_name = value_text[10:-2].strip()
-            ref_service = created_services.get(ref_name)
+            ref_service = created_services.get(ref_name) or created_services.get(ref_name.lower())
             if ref_service:
                 host = ref_service.name
                 port = ref_service.internal_port or 3000
@@ -152,6 +187,267 @@ def _runtime_watch_defaults(user) -> Dict[str, str]:
     return defaults
 
 
+def _order_key(item: Any) -> int:
+    """Sort helper for deploy order."""
+    if not isinstance(item, dict):
+        return 99
+    try:
+        return int(item.get("deploy_order", 99))
+    except (TypeError, ValueError):
+        return 99
+
+
+def _normalize_buildpack(raw: Any) -> str:
+    """Map ecosystem plan build strategy to Service.buildpack choices."""
+    build = str(raw or "").strip().lower()
+    if build in {"docker", "dockerfile", "docker-file"}:
+        return "DOCKER"
+    if build in {"static", "static-site", "static_site"}:
+        return "STATIC"
+    return "NIXPACKS"
+
+
+def _normalize_deploy_mode(svc_plan: Dict[str, Any]) -> Tuple[str, str, str]:
+    """
+    Resolve deploy mode and compose hints from plan.
+
+    Returns: (deploy_mode, compose_file, compose_main_service)
+    """
+    mode_raw = str(svc_plan.get("deploy_mode") or "").strip().upper()
+    build_raw = str(svc_plan.get("build") or "").strip().lower()
+    compose_file = str(
+        svc_plan.get("compose_file")
+        or svc_plan.get("docker_compose_file")
+        or ""
+    ).strip()
+    compose_main = str(
+        svc_plan.get("compose_main_service")
+        or svc_plan.get("main_service")
+        or ""
+    ).strip()
+
+    if mode_raw == "COMPOSE" or build_raw in {"docker-compose", "compose"} or compose_file:
+        return "COMPOSE", (compose_file or "docker-compose.yml"), compose_main
+    return "SINGLE", "", ""
+
+
+def _extract_dependencies(raw_depends: Any) -> List[str]:
+    """Normalize depends_on values to a flat list of tokens."""
+    if isinstance(raw_depends, str):
+        text = raw_depends.strip()
+        if not text:
+            return []
+        if "," in text:
+            return [token.strip() for token in text.split(",") if token.strip()]
+        return [text]
+
+    if isinstance(raw_depends, list):
+        values = []
+        for item in raw_depends:
+            token = str(item or "").strip()
+            if token:
+                values.append(token)
+        return values
+
+    return []
+
+
+def _chunked(items: List[str], size: int) -> Iterable[List[str]]:
+    """Yield fixed-size chunks."""
+    for idx in range(0, len(items), size):
+        yield items[idx:idx + size]
+
+
+def _build_dependency_waves(
+    entries_by_key: Dict[str, Dict[str, Any]],
+    dependencies: Dict[str, Set[str]],
+    wave_size: int,
+) -> Tuple[List[List[str]], List[str]]:
+    """
+    Build deployment waves from dependency graph.
+
+    Returns:
+    - waves: list of canonical repo keys grouped for parallel deploy
+    - cyclic_or_unresolved: keys that could not be topologically sorted
+    """
+    dependents: Dict[str, Set[str]] = defaultdict(set)
+    indegree: Dict[str, int] = {}
+
+    for key in entries_by_key:
+        deps = set(dep for dep in dependencies.get(key, set()) if dep in entries_by_key)
+        dependencies[key] = deps
+        indegree[key] = len(deps)
+        for dep in deps:
+            dependents[dep].add(key)
+
+    def _entry_order(repo_key: str) -> int:
+        return int(entries_by_key[repo_key].get("deploy_order", 99))
+
+    ready = sorted(
+        [key for key, degree in indegree.items() if degree == 0],
+        key=_entry_order,
+    )
+    processed: Set[str] = set()
+    waves: List[List[str]] = []
+
+    while ready:
+        layer = ready
+        ready = []
+
+        for chunk in _chunked(layer, wave_size):
+            waves.append(chunk)
+
+        for node in layer:
+            processed.add(node)
+            for dependent in dependents.get(node, set()):
+                if dependent in processed:
+                    continue
+                indegree[dependent] = max(0, indegree[dependent] - 1)
+                if indegree[dependent] == 0:
+                    ready.append(dependent)
+
+        ready.sort(key=_entry_order)
+
+    unresolved = [
+        key for key in sorted(entries_by_key.keys(), key=_entry_order)
+        if key not in processed
+    ]
+
+    if unresolved:
+        for chunk in _chunked(unresolved, wave_size):
+            waves.append(chunk)
+
+    return waves, unresolved
+
+
+def _resolve_dependency_map(
+    entries_by_key: Dict[str, Dict[str, Any]],
+) -> Dict[str, Set[str]]:
+    """Resolve depends_on aliases to canonical repo keys."""
+    alias_owner: Dict[str, str | None] = {}
+
+    for key, entry in entries_by_key.items():
+        repo = str(entry["repo"]).strip().lower()
+        repo_name = repo.split("/")[-1]
+        aliases = {
+            repo,
+            repo_name,
+            str(entry.get("name") or "").strip().lower(),
+            str(entry.get("requested_name") or "").strip().lower(),
+        }
+        for alias in aliases:
+            if not alias:
+                continue
+            if alias in alias_owner and alias_owner[alias] != key:
+                alias_owner[alias] = None
+            else:
+                alias_owner[alias] = key
+
+    alias_to_key = {
+        alias: owner for alias, owner in alias_owner.items()
+        if owner is not None
+    }
+
+    resolved: Dict[str, Set[str]] = {}
+    for key, entry in entries_by_key.items():
+        deps: Set[str] = set()
+        for token in _extract_dependencies(entry.get("depends_on", [])):
+            dep = alias_to_key.get(token.strip().lower())
+            if dep and dep != key:
+                deps.add(dep)
+        resolved[key] = deps
+    return resolved
+
+
+def _queue_wave(app, deployment_ids: List[str], provider_id: str, wave_index: int) -> int:
+    """Queue all QUEUED deployments in this wave."""
+    from apps.deployments.models import Deployment
+
+    queued = 0
+    for deployment_id in deployment_ids:
+        deployment = Deployment.objects.filter(id=deployment_id).first()
+        if not deployment:
+            continue
+        if deployment.status != Deployment.Status.QUEUED:
+            continue
+
+        deployment.build_logs = (
+            f"{deployment.build_logs or ''}"
+            f"\n[Ecosystem] Queued in wave {wave_index + 1}.\n"
+        )
+        deployment.save(update_fields=["build_logs"])
+
+        app.send_task(
+            "apps.deployments.tasks.smart_deploy_task",
+            args=[str(deployment.id), str(provider_id)],
+            kwargs={"skip_review": True},
+        )
+        queued += 1
+
+    return queued
+
+
+def _cancel_remaining_waves(
+    waves: List[List[str]],
+    from_wave_index: int,
+    reason: str,
+) -> int:
+    """Cancel queued deployments in unreleased waves."""
+    from apps.deployments.models import Deployment
+
+    remaining_ids: List[str] = []
+    for wave in waves[from_wave_index:]:
+        remaining_ids.extend(str(dep_id) for dep_id in wave)
+
+    cancelled = 0
+    for deployment in Deployment.objects.filter(id__in=remaining_ids):
+        if deployment.status != Deployment.Status.QUEUED:
+            continue
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.finished_at = timezone.now()
+        deployment.build_logs = (
+            f"{deployment.build_logs or ''}"
+            f"\n[Ecosystem] Cancelled before execution: {reason}\n"
+        )
+        deployment.save(update_fields=["status", "finished_at", "build_logs"])
+        cancelled += 1
+
+    return cancelled
+
+
+def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: int):
+    """Apply ecosystem plan profile to a service with production defaults."""
+    buildpack = _normalize_buildpack(svc_plan.get("build"))
+    deploy_mode, compose_file, compose_main = _normalize_deploy_mode(svc_plan)
+    root_directory = str(svc_plan.get("root_directory") or service.root_directory or "/").strip()
+    if not root_directory.startswith("/"):
+        root_directory = f"/{root_directory.lstrip('/')}"
+    root_directory = root_directory or "/"
+
+    service.repository_url = f"https://github.com/{svc_plan['repo']}"
+    resolved_branch = str(
+        svc_plan.get("branch")
+        or svc_plan.get("default_branch")
+        or service.branch
+        or "main"
+    ).strip() or "main"
+    service.branch = resolved_branch
+    service.internal_port = int(port)
+    service.buildpack = buildpack
+    service.deploy_mode = deploy_mode
+    service.compose_file = compose_file if deploy_mode == "COMPOSE" else ""
+    service.compose_main_service = compose_main if deploy_mode == "COMPOSE" else ""
+    service.root_directory = root_directory
+    if not service.provider:
+        service.provider = provider
+
+    health_path = str(svc_plan.get("health_check_path") or "").strip()
+    if health_path:
+        service.health_check_path = health_path if health_path.startswith("/") else f"/{health_path}"
+
+    service.save()
+
+
 @shared_task(bind=True, soft_time_limit=120, time_limit=180)
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30) -> dict:
     """
@@ -181,13 +477,105 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30) -> dict:
         return {"error": f"Scan failed: {str(exc)}"}
 
 
+@shared_task(bind=True, soft_time_limit=120, time_limit=180)
+def ecosystem_release_wave_task(
+    self,
+    provider_id: str,
+    waves: List[List[str]],
+    wave_index: int = 1,
+    recheck_count: int = 0,
+    max_rechecks: int = _MAX_WAVE_RECHECKS,
+) -> dict:
+    """Release next wave only when previous wave is terminal and successful."""
+    from apps.deployments.models import Deployment
+
+    if not waves or wave_index >= len(waves):
+        return {"status": "completed", "waves": len(waves or [])}
+
+    previous_wave = [str(dep_id) for dep_id in waves[wave_index - 1]]
+    statuses = list(
+        Deployment.objects.filter(id__in=previous_wave).values_list("status", flat=True)
+    )
+    if not statuses:
+        cancelled = _cancel_remaining_waves(
+            waves,
+            from_wave_index=wave_index,
+            reason="missing previous-wave deployments",
+        )
+        return {
+            "status": "blocked",
+            "reason": "previous wave not found",
+            "cancelled": cancelled,
+        }
+
+    failed_states = {Deployment.Status.FAILED, Deployment.Status.CANCELLED}
+    if any(status in failed_states for status in statuses):
+        cancelled = _cancel_remaining_waves(
+            waves,
+            from_wave_index=wave_index,
+            reason="upstream dependency deployment failed",
+        )
+        return {
+            "status": "blocked",
+            "reason": "previous wave had failures",
+            "cancelled": cancelled,
+        }
+
+    if all(status == Deployment.Status.ACTIVE for status in statuses):
+        queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
+        if wave_index + 1 < len(waves):
+            self.app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                args=[provider_id, waves, wave_index + 1, 0, max_rechecks],
+                countdown=_env_int(
+                    "ECOSYSTEM_WAVE_RECHECK_SECONDS",
+                    _WAVE_RECHECK_SECONDS,
+                    minimum=5,
+                    maximum=120,
+                ),
+            )
+        return {
+            "status": "released",
+            "wave": wave_index + 1,
+            "queued": queued,
+        }
+
+    if recheck_count >= max_rechecks:
+        cancelled = _cancel_remaining_waves(
+            waves,
+            from_wave_index=wave_index,
+            reason="previous wave timed out waiting for ACTIVE",
+        )
+        return {
+            "status": "timed_out",
+            "wave": wave_index,
+            "cancelled": cancelled,
+        }
+
+    self.app.send_task(
+        "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+        args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks],
+        countdown=_env_int(
+            "ECOSYSTEM_WAVE_RECHECK_SECONDS",
+            _WAVE_RECHECK_SECONDS,
+            minimum=5,
+            maximum=120,
+        ),
+    )
+    return {
+        "status": "waiting",
+        "wave": wave_index,
+        "recheck_count": recheck_count + 1,
+    }
+
+
 @shared_task(bind=True, soft_time_limit=900, time_limit=1200)
 def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     """
-    Deploy all services in the plan, in dependency order.
+    Deploy all services in the plan using dependency-aware waves.
 
     This creates Service + Deployment records for each repo and triggers
-    individual deployments via smart_deploy_task.
+    smart_deploy_task with skip_review=True as each wave becomes eligible.
     """
     from django.contrib.auth import get_user_model
     from apps.deployments.models import Service, Deployment, EnvironmentVariable
@@ -210,40 +598,69 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     if not provider:
         return {"error": "No cloud provider configured. Add one in Settings -> Cloud Providers."}
 
-    def _order_key(item: Any) -> int:
-        if not isinstance(item, dict):
-            return 99
-        try:
-            return int(item.get("deploy_order", 99))
-        except (TypeError, ValueError):
-            return 99
+    requested_wave_size = plan.get("wave_size", _DEFAULT_WAVE_SIZE)
+    try:
+        requested_wave_size = int(requested_wave_size)
+    except (TypeError, ValueError):
+        requested_wave_size = _DEFAULT_WAVE_SIZE
+    wave_size = max(1, min(_MAX_WAVE_SIZE, requested_wave_size))
+    wave_size = _env_int("ECOSYSTEM_DEPLOY_WAVE_SIZE", wave_size, minimum=1, maximum=_MAX_WAVE_SIZE)
 
-    services_plan.sort(key=_order_key)
-
-    results = []
-    created_services: Dict[str, Any] = {}
-
+    entries_by_key: Dict[str, Dict[str, Any]] = {}
     for svc_plan in services_plan:
         if not isinstance(svc_plan, dict):
             continue
-
         if svc_plan.get("skip"):
-            results.append({"repo": svc_plan.get("repo", ""), "status": "skipped"})
             continue
 
         repo = str(svc_plan.get("repo") or "").strip()
         if not repo:
-            results.append({"repo": "", "status": "failed", "error": "Missing repo"})
             continue
+        repo_key = repo.lower()
 
         source_name = str(svc_plan.get("name") or repo.split("/")[-1]).strip()
         requested_name = _slugify_name(source_name)
+        entry = {
+            "repo": repo,
+            "repo_key": repo_key,
+            "name": source_name,
+            "requested_name": requested_name,
+            "stack": str(svc_plan.get("stack") or "unknown"),
+            "build": str(svc_plan.get("build") or "nixpacks"),
+            "deploy_order": _order_key(svc_plan),
+            "depends_on": svc_plan.get("depends_on", []),
+            "plan": svc_plan,
+        }
+        entries_by_key[repo_key] = entry
+
+    if not entries_by_key:
+        return {"error": "No deployable services in plan"}
+
+    dependencies = _resolve_dependency_map(entries_by_key)
+    waves_repo_keys, unresolved = _build_dependency_waves(
+        entries_by_key=entries_by_key,
+        dependencies=dependencies,
+        wave_size=wave_size,
+    )
+
+    ordered_keys = [key for wave in waves_repo_keys for key in wave]
+    results = []
+    created_services: Dict[str, Any] = {}
+    deployment_by_repo_key: Dict[str, str] = {}
+
+    for repo_key in ordered_keys:
+        entry = entries_by_key[repo_key]
+        svc_plan = entry["plan"]
+        repo = entry["repo"]
+        requested_name = entry["requested_name"]
+        stack = entry["stack"]
+        build_method = entry["build"]
+
         try:
             port = int(svc_plan.get("port", 3000) or 3000)
         except (TypeError, ValueError):
             port = 3000
-        stack = str(svc_plan.get("stack") or "unknown")
-        build_method = str(svc_plan.get("build") or "nixpacks")
+        port = max(1, min(65535, port))
 
         try:
             service = Service.objects.filter(owner=user, name=requested_name).first()
@@ -253,26 +670,38 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     name=final_name,
                     owner=user,
                     repository_url=f"https://github.com/{repo}",
-                    branch="main",
+                    branch=str(
+                        svc_plan.get("branch")
+                        or svc_plan.get("default_branch")
+                        or "main"
+                    ).strip() or "main",
                     internal_port=port,
                     provider=provider,
                 )
-            else:
-                service.repository_url = f"https://github.com/{repo}"
-                service.branch = "main"
-                service.internal_port = port
-                if not service.provider:
-                    service.provider = provider
-                service.save()
+
+            _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
 
             # Keep multiple aliases for inter-service references.
-            created_services[source_name] = service
-            created_services[requested_name] = service
-            created_services[service.name] = service
-            created_services[repo.split("/")[-1]] = service
+            aliases = {
+                entry["name"],
+                entry["name"].lower(),
+                requested_name,
+                requested_name.lower(),
+                service.name,
+                service.name.lower(),
+                repo,
+                repo.lower(),
+                repo.split("/")[-1],
+                repo.split("/")[-1].lower(),
+            }
+            for alias in aliases:
+                created_services[alias] = service
 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
             resolved_env = _resolve_env_placeholders(env_vars, created_services)
+
+            for key, value in _stack_runtime_defaults(stack, port).items():
+                resolved_env.setdefault(key, value)
             for key, value in _runtime_watch_defaults(user).items():
                 resolved_env.setdefault(key, value)
 
@@ -295,15 +724,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 build_logs=(
                     f"Ecosystem deploy: {repo} ({stack})\n"
                     f"Port: {port} | Build: {build_method}\n"
-                    f"Env vars: {len(resolved_env)} configured\n\n"
+                    f"Env vars: {len(resolved_env)} configured\n"
+                    f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
                 ),
             )
 
-            self.app.send_task(
-                "apps.deployments.tasks.smart_deploy_task",
-                args=[str(deployment.id), str(provider.id)],
-            )
-
+            deployment_by_repo_key[repo_key] = str(deployment.id)
             results.append({
                 "repo": repo,
                 "name": service.name,
@@ -314,7 +740,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 "port": port,
             })
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to deploy %s: %s", repo, exc)
+            logger.error("Failed to prepare deploy for %s: %s", repo, exc)
             results.append({
                 "repo": repo,
                 "name": requested_name,
@@ -322,11 +748,41 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 "error": str(exc),
             })
 
+    waves: List[List[str]] = []
+    for wave in waves_repo_keys:
+        deployment_ids = [
+            deployment_by_repo_key[repo_key]
+            for repo_key in wave
+            if repo_key in deployment_by_repo_key
+        ]
+        if deployment_ids:
+            waves.append(deployment_ids)
+
+    queued_now = 0
+    if waves:
+        queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
+        if len(waves) > 1:
+            self.app.send_task(
+                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS],
+                countdown=_env_int(
+                    "ECOSYSTEM_WAVE_RECHECK_SECONDS",
+                    _WAVE_RECHECK_SECONDS,
+                    minimum=5,
+                    maximum=120,
+                ),
+            )
+
     return {
         "status": "deploying",
         "total": len(services_plan),
+        "prepared": len(results),
+        "queued_immediately": queued_now,
+        "waves": len(waves),
+        "wave_size": wave_size,
+        "unresolved_dependency_nodes": unresolved,
         "queued": len([r for r in results if r["status"] == "queued"]),
-        "skipped": len([r for r in results if r["status"] == "skipped"]),
+        "skipped": len([s for s in services_plan if isinstance(s, dict) and s.get("skip")]),
         "failed": len([r for r in results if r["status"] == "failed"]),
         "services": results,
     }

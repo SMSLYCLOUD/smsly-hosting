@@ -32,6 +32,24 @@ class AIProviderSettings(models.Model):
     claude_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     claude_model = models.CharField(max_length=100, default="claude-sonnet-4-20250514", blank=True)
 
+    jules_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    jules_model = models.CharField(max_length=100, default="jules-latest", blank=True)
+    jules_base_url = models.CharField(
+        max_length=255,
+        default="https://api.jules.google.com/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for Jules provider",
+    )
+
+    ecosystem_wave_size = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="Maximum services deployed concurrently per dependency wave",
+    )
+    ecosystem_wave_recheck_seconds = models.PositiveSmallIntegerField(
+        default=15,
+        help_text="Seconds between dependency-wave status checks",
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod

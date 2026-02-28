@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from django.test import SimpleTestCase
 
 from apps.deployments.tasks_ecosystem import (
+    _apply_service_profile,
     _normalize_env_vars,
     _resolve_env_placeholders,
     _runtime_watch_defaults,
@@ -46,3 +47,29 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
 
         self.assertEqual(out["JULES_RUNTIME_WATCH"], "true")
         self.assertEqual(out["ALERT_EMAIL"], "alerts@example.com")
+
+    def test_apply_service_profile_prefers_plan_default_branch(self):
+        service = SimpleNamespace(
+            repository_url="",
+            branch="",
+            internal_port=0,
+            buildpack="NIXPACKS",
+            deploy_mode="SINGLE",
+            compose_file="",
+            compose_main_service="",
+            root_directory="/",
+            provider=None,
+            health_check_path="/health",
+            save=lambda *args, **kwargs: None,
+        )
+        plan = {
+            "repo": "owner/repo",
+            "default_branch": "master",
+            "build": "nixpacks",
+        }
+
+        _apply_service_profile(service, plan, provider=None, port=8080)
+
+        self.assertEqual(service.repository_url, "https://github.com/owner/repo")
+        self.assertEqual(service.branch, "master")
+        self.assertEqual(service.internal_port, 8080)

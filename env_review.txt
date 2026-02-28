@@ -1,0 +1,24 @@
+=== SMSLY-MARKETER ===
+SMSLY-MARKETER: Up 6 minutes (healthy)
+
+=== TRAEFIK HEALTH LOGS (latest) ===
+[90m2026-02-27T21:35:26Z[0m [33mWRN[0m [1mHealth check failed.[0m [36merror=[0m[31m[1m"HTTP request failed: Get \"https://localhost/health\": dial tcp [::1]:443: connect: connection refused"[0m[0m [36mserviceName=[0mSMSLY-MARKETER@docker [36mtargetURL=[0mhttp://172.18.0.25:8000
+[90m2026-02-27T21:35:56Z[0m [33mWRN[0m [1mHealth check failed.[0m [36merror=[0m[31m[1m"HTTP request failed: Get \"https://localhost/health\": dial tcp [::1]:443: connect: connection refused"[0m[0m [36mserviceName=[0mSMSLY-MARKETER@docker [36mtargetURL=[0mhttp://172.18.0.25:8000
+
+=== VIA TRAEFIK ===
+HTTP 308  SMSLY-MARKETER
+HTTP 308  smsly-helper
+
+=== MARKETER DIRECT ===
+HTTP 301  (localhost host)
+HTTP 301  (/health localhost)
+HTTP 301  (domain host)
+=== .249 VPS BUYFORFRONT ===
+=== VIA TRAEFIK ===
+HTTP 308  buyforfront (via Traefik)
+HTTP 308  buyforfront.com (via Traefik)
+
+=== TRAEFIK HEALTH LOGS ===
+
+=== LEGAL ENDPOINT TEST ===
+HTTP 200  /api/legal/agreements/active/

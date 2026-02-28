@@ -1,0 +1,29 @@
+
+=== .249 - Deploy BuyForFront ===
+Owner: admin, Provider: Local Docker (LOCAL)
+Project: buyforfront
+Created backend service: buyforfront (domain: buyforfront-0398be.pcloud.distinctionlabs.org)
+  Added 11 env vars
+  Deployment: 28aa29aa-e83d-4115-8530-b9225cc0696c
+  Deploy task queued!
+Created frontend service: buyforfront-frontend (domain: buyforfront-frontend-f0f19d.pcloud.distinctionlabs.org)
+  Added 6 env vars
+  Deployment: de76b66b-da2f-458e-9268-b34315a7d065
+  Deploy task queued!
+
+=== BUYFORFRONT DEPLOY COMPLETE ===
+
+STDERR: /usr/local/lib/python3.11/site-packages/django/db/backends/utils.py:98: RuntimeWarning: Accessing the database during app initialization is discouraged. To fix this warning, avoid executing queries in AppConfig.ready() or when your app modules are imported.
+  warnings.warn(self.APPS_NOT_READY_WARNING_MSG, category=RuntimeWarning)
+
+=== .62 - Deploy SMSLY-Helper ===
+Owner: admin, Provider: Local Docker (LOCAL)
+Created service: smsly-helper (domain: smsly-helper-dbc499.pcloud.linadeluxe.com)
+  Deploy task queued! Deployment: 12826665-84e4-476b-844c-e7ea04e6e98c
+Created service: smsly-helper-frontend (domain: smsly-helper-frontend-8052c6.pcloud.linadeluxe.com)
+  Deploy task queued! Deployment: fa6974ea-8e08-4198-ae95-d8f58c175b4b
+
+=== SMSLY-HELPER DEPLOY COMPLETE ===
+
+STDERR: /usr/local/lib/python3.11/site-packages/django/db/backends/utils.py:98: RuntimeWarning: Accessing the database during app initialization is discouraged. To fix this warning, avoid executing queries in AppConfig.ready() or when your app modules are imported.
+  warnings.warn(self.APPS_NOT_READY_WARNING_MSG, category=RuntimeWarning)

@@ -1,0 +1,7 @@
+Before: buyforfront -> root_directory='/'
+After:  buyforfront -> root_directory='backend/'
+
+Before: buyforfront-frontend -> root_directory='web/'
+After:  buyforfront-frontend -> root_directory='web/'
+
+=== VERIFICATION ===

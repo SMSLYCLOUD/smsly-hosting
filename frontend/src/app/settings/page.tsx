@@ -756,6 +756,7 @@ export default function SettingsPage() {
                       grok: ['grok-3-mini', 'grok-3', 'grok-2', 'grok-beta'],
                       gemini: ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
                       claude: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+                      jules: ['jules-latest', 'jules-pro'],
                     };
                     return (
                       <div
@@ -821,7 +822,7 @@ export default function SettingsPage() {
                       setSaving(true);
                       try {
                         const data: Record<string, string> = {};
-                        ['openai', 'grok', 'gemini', 'claude'].forEach((id) => {
+                        ['openai', 'grok', 'gemini', 'claude', 'jules'].forEach((id) => {
                           if (aiKeys[id]) data[`${id}_api_key`] = aiKeys[id];
                           if (aiModels[id]) data[`${id}_model`] = aiModels[id];
                         });
@@ -854,7 +855,7 @@ export default function SettingsPage() {
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, etc.), or admin panel.
+                  Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY), or admin panel.
                 </p>
               </CardContent>
             </Card>

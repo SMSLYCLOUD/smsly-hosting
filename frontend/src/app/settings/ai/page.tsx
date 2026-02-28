@@ -10,6 +10,7 @@ const BRAND: Record<string, { gradient: string; icon: string }> = {
   grok:    { gradient: 'from-blue-500 to-indigo-600',  icon: '🔵' },
   gemini:  { gradient: 'from-purple-500 to-pink-600',  icon: '🟣' },
   claude:  { gradient: 'from-orange-500 to-amber-600', icon: '🟠' },
+  jules:   { gradient: 'from-fuchsia-500 to-rose-600', icon: '🔴' },
 };
 
 const MODE_BADGE: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -239,7 +240,7 @@ export default function AISettingsPage() {
 
       {/* Configuration Note */}
       <div className="text-xs text-gray-500 text-center pb-4">
-        Configure API keys via environment variables (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY) 
+        Configure API keys via environment variables (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY) 
         or the admin panel. Models are set via OPENAI_MODEL, GROK_MODEL, etc.
       </div>
     </div>
