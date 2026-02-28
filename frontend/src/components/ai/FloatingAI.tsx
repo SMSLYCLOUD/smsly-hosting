@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Send, Bot, User, Loader2, Sparkles } from 'lucide-react';
+import { X, Send, Bot, User, Loader2, MessageSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface Message {
@@ -19,7 +19,7 @@ export function FloatingAI() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Hi! I'm your CloudNeuron AI Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
+      content: "Hi! I'm your CloudNeuron Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
       provider: 'System',
       timestamp: new Date(),
     },
@@ -113,10 +113,10 @@ export function FloatingAI() {
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0, opacity: 0 }}
             onClick={() => setIsOpen(true)}
-            className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30 flex items-center justify-center hover:scale-110 transition-transform"
-            aria-label="Open AI Assistant"
+            className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-emerald-600 text-white shadow-lg flex items-center justify-center hover:scale-110 transition-transform"
+            aria-label="Open Assistant"
           >
-            <Sparkles size={24} />
+            <MessageSquare size={24} />
           </motion.button>
         )}
       </AnimatePresence>
@@ -132,20 +132,20 @@ export function FloatingAI() {
             className="fixed bottom-6 right-6 z-50 w-[400px] h-[560px] bg-card border border-border rounded-2xl shadow-2xl flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-emerald-500/10 to-teal-500/10">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-emerald-50/50 dark:bg-emerald-950/20">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
-                  <Bot size={16} className="text-white" />
+                <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center">
+                  <MessageSquare size={16} className="text-white" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">AI Assistant</h3>
-                  <p className="text-[10px] text-muted-foreground">Powered by CloudNeuron Intelligence</p>
+                  <h3 className="text-sm font-semibold text-foreground">Assistant</h3>
+                  <p className="text-[10px] text-muted-foreground">CloudNeuron Support</p>
                 </div>
               </div>
               <button
                 onClick={() => setIsOpen(false)}
                 className="p-1.5 rounded-md hover:bg-muted transition-colors"
-                aria-label="Close AI Assistant"
+                aria-label="Close Assistant"
               >
                 <X size={16} />
               </button>
@@ -160,13 +160,13 @@ export function FloatingAI() {
                 >
                   {msg.role === 'assistant' && (
                     <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0 mt-1">
-                      <Bot size={12} className="text-emerald-600 dark:text-emerald-400" />
+                      <MessageSquare size={12} className="text-emerald-600 dark:text-emerald-400" />
                     </div>
                   )}
                   <div
                     className={`max-w-[80%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
                       msg.role === 'user'
-                        ? 'bg-emerald-500 text-white rounded-br-sm'
+                        ? 'bg-emerald-600 text-white rounded-br-sm'
                         : 'bg-muted text-foreground rounded-bl-sm'
                     }`}
                   >
@@ -186,7 +186,7 @@ export function FloatingAI() {
               {isLoading && (
                 <div className="flex gap-2 justify-start">
                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
-                    <Bot size={12} className="text-emerald-600 dark:text-emerald-400" />
+                    <MessageSquare size={12} className="text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div className="bg-muted px-3 py-2 rounded-xl rounded-bl-sm">
                     <Loader2 size={14} className="animate-spin text-muted-foreground" />
