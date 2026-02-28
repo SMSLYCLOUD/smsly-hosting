@@ -47,7 +47,11 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,7 +69,11 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG"]
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -101,7 +109,7 @@ services:
     env_file: .env
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
-      DOCKER_HOST: tcp://socket-proxy:2375  # Connect via restricted proxy
+      DOCKER_HOST: tcp://socket-proxy:2375 # Connect via restricted proxy
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -130,7 +138,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
 
   celery:
@@ -160,7 +168,11 @@ services:
       - ./:/platform-src:ro
       - /opt/smsly-cache:/opt/smsly-cache
     healthcheck:
-      test: ["CMD-SHELL", "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
+        ]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -189,7 +201,11 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD-SHELL", "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
+        ]
       interval: 60s
       timeout: 15s
       retries: 3
@@ -207,7 +223,8 @@ services:
     restart: unless-stopped
     env_file: .env
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -217,14 +234,14 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
 
   nginx:
     image: nginx:1.25-alpine
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8090:80"  # Security: Bind to localhost only
+      - "127.0.0.1:8090:80" # Security: Bind to localhost only
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - static_volume:/app/staticfiles:ro
@@ -233,7 +250,11 @@ services:
       - backend
       - frontend
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/nginx-health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:80/nginx-health || exit 1",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -271,7 +292,17 @@ services:
       CONFIGS: 0
       SECRETS: 0
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only mount
+      - /var/run/docker.sock:/var/run/docker.sock:ro # Read-only mount
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     networks:
       - smsly-net
       - socket-proxy
@@ -295,7 +326,7 @@ services:
       - smsly-net
 
   traefik:
-    image: traefik:v3.6  # v3.6.1+ required for Docker 29 API compatibility
+    image: traefik:v3.6 # v3.6.1+ required for Docker 29 API compatibility
     restart: unless-stopped
     command:
       - "--providers.docker=true"
@@ -306,11 +337,11 @@ services:
       - "--entrypoints.web.address=:80"
       - "--log.level=WARN"
     ports:
-      - "127.0.0.1:8081:80"      # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
-      - "127.0.0.1:8082:8080"    # Traefik dashboard (optional debug)
+      - "127.0.0.1:8081:80" # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
+      - "127.0.0.1:8082:8080" # Traefik dashboard (optional debug)
     depends_on:
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
     security_opt:
       - no-new-privileges:true
     networks:
