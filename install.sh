@@ -972,7 +972,7 @@ if not created and not cp.is_active:
     fi
 
     # ─── Caddy: Regenerate Caddyfile from DB (picks up new service domains) ──
-    if command -v caddy &> /dev/null && systemctl is-active --quiet caddy 2>/dev/null; then
+    if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
         docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
@@ -983,9 +983,67 @@ result = apply_caddyfile(content)
 print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
 " 2>/dev/null || echo -e "${YELLOW}  ⚠ Caddyfile regeneration skipped (backend not ready)${NC}"
 
+        # ── Sync Cloudflare token to Caddy systemd override ──
+        # The Caddyfile uses {env.CLOUDFLARE_API_TOKEN} — Caddy reads this from
+        # its systemd environment. If the override is missing or token is empty,
+        # Caddy will crash. This ensures the token is always synced.
+        CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
+        CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
+        CF_TOKEN=""
+
+        # Priority: existing systemd override > .env file
+        if [ -f "$CADDY_OVERRIDE_FILE" ]; then
+            CF_TOKEN="$(grep 'CLOUDFLARE_API_TOKEN=' "$CADDY_OVERRIDE_FILE" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)"
+        fi
+        if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+            CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        fi
+
+        if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
+            # Token available — ensure systemd override is set
+            mkdir -p "$CADDY_OVERRIDE_DIR"
+            cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
+[Service]
+ExecStart=
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+Environment="CLOUDFLARE_API_TOKEN=$CF_TOKEN"
+ENVEOF
+            chmod 600 "$CADDY_OVERRIDE_FILE"
+            systemctl daemon-reload
+            echo -e "${GREEN}  ✓ Cloudflare token synced to Caddy${NC}"
+        else
+            # No valid token — strip dns cloudflare blocks to prevent crash
+            if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
+                echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
+                sed -i '/tls {/{N;/dns cloudflare/d}' /etc/caddy/Caddyfile
+                sed -i '/^[[:space:]]*tls {[[:space:]]*$/,/^[[:space:]]*}[[:space:]]*$/{/dns cloudflare/d}' /etc/caddy/Caddyfile
+                # Remove empty tls {} blocks
+                python3 -c "
+import re
+with open('/etc/caddy/Caddyfile') as f:
+    content = f.read()
+# Remove tls blocks that are empty or only have whitespace
+content = re.sub(r'\n\s*tls\s*\{\s*\n\s*\}\s*\n', '\n', content)
+with open('/etc/caddy/Caddyfile', 'w') as f:
+    f.write(content)
+print('Stripped empty tls blocks')
+" 2>/dev/null || true
+                echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
+            fi
+        fi
+
+        # Restart Caddy (even if it was failed/stopped)
+        systemctl restart caddy 2>/dev/null || true
         # Restart caddy-watcher to pick up the new file
         systemctl restart caddy-watcher 2>/dev/null || true
-        echo -e "${GREEN}  ✓ Caddy config regenerated${NC}"
+
+        # Verify Caddy is running
+        sleep 2
+        if systemctl is-active --quiet caddy 2>/dev/null; then
+            echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
+        fi
     fi
 
     # ─── Verification ────────────────────────────────────────────────────────
