@@ -12,8 +12,12 @@ from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import DataError, IntegrityError, transaction
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
+from apps.deployments.services.github_webhooks import setup_github_webhook
+import threading
 from apps.licensing.models import PlatformLicense
 from apps.licensing.decorators import require_tier
+from apps.deployments.services.github_webhooks import setup_github_webhook
+import threading
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .serializers import (
     ServiceSerializer, DeploymentSerializer,
@@ -217,7 +221,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if license.is_community:
                 from rest_framework.exceptions import PermissionDenied
                 raise PermissionDenied("Serverless Functions require Pro tier.")
-        serializer.save(owner=self.request.user)
+
+        service = serializer.save(owner=self.request.user)
+
+        # Setup GitHub Webhook if applicable
+        if service.deploy_type == 'GIT' and service.repository_url:
+            threading.Thread(
+                target=setup_github_webhook,
+                args=(self.request.user, service.repository_url),
+                daemon=True
+            ).start()
 
     def perform_destroy(self, instance):
         """Stop all deployments and audit-log before deleting the service."""

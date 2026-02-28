@@ -463,6 +463,11 @@ export default function NewServicePage() {
                           to browse your repositories.
                         </p>
                       )}
+                      {ghConnected && (
+                        <p className="text-xs text-muted-foreground text-emerald-500/80">
+                          ✓ Push and Pull Request Webhooks will be configured automatically.
+                        </p>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label className="flex items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /> Branch</Label>
