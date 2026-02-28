@@ -1199,7 +1199,7 @@ def auto_promote_task(self, deployment_id: str, provider_id: str):
         broadcast_status(deployment)
 
 
-@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
+@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=360)
 def promote_deployment_task(self, deployment_id: str, provider_id: str):
     """
     Manually promote a STAGED deployment (triggered by 'Promote Now' button).
