@@ -163,24 +163,12 @@ class LocalAdapter(BaseCloudAdapter):
                 docker_volumes[vol_name] = {
                     'bind': vol['mount_path'], 'mode': 'rw'}
 
-        # ── Blue-Green: detect old container ──
+        # ── Detect & remove old container ──
         old_container = None
         try:
             old_container = self.docker_client.containers.get(name)
         except docker.errors.NotFound:
             pass
-
-        # Use temporary name for the new container so the old one keeps serving.
-        temp_name = f"{name}-green-{secrets.token_hex(4)}"
-
-        # Networking: use temp_name aliases initially; swap to real name after cutover.
-        # The old container still holds the canonical aliases, so Traefik routes
-        # traffic to it until we remove it and rename the new one.
-        networking_config = self.docker_client.api.create_networking_config({
-            network_name: self.docker_client.api.create_endpoint_config(
-                aliases=[temp_name, f"{name}.{project_id}.internal.green"]
-            )
-        })
 
         # Traefik Labels — support primary domain + custom domains
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
@@ -275,33 +263,16 @@ class LocalAdapter(BaseCloudAdapter):
             start_period=start_period_seconds * 1_000_000_000,
         )
 
-        # ── Traefik Labels ──
-        # When no old container exists → enable Traefik immediately (instant domain)
-        # When old container exists → disable until promote_container() swaps
+        # ── Traefik Labels — ALWAYS ENABLED ──
+        # Every container gets Traefik routing labels at creation.
+        # No blue-green label toggling — Docker doesn't support live
+        # label updates, making the toggle approach unreliable.
         router_name = name.replace('.', '-').replace('_', '-')
-
-        if old_container is None:
-            # No blue-green needed — enable routing from the start
-            labels = {
-                'managed_by': 'smsly-hosting',
-                'traefik.enable': str(is_public).lower(),
-                f'traefik.http.routers.{router_name}.rule': host_rule,
-                f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
-            }
-            if enable_traefik_tls:
-                labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
-                labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
-            else:
-                labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
-        else:
-            # Blue-green: old container keeps traffic until promotion
-            labels = {
-                'managed_by': 'smsly-hosting',
-                'traefik.enable': 'false',
-            }
-
-        # Store blue-green metadata in both cases (for promote_container)
-        labels.update({
+        labels = {
+            'managed_by': 'smsly-hosting',
+            'traefik.enable': str(is_public).lower(),
+            f'traefik.http.routers.{router_name}.rule': host_rule,
+            f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
             'smsly.blue_green.canonical_name': name,
             'smsly.blue_green.is_public': str(is_public),
             'smsly.blue_green.port': port,
@@ -311,7 +282,12 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_path': hc_path if healthcheck and healthcheck.get('path') else '/',
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
-        })
+        }
+        if enable_traefik_tls:
+            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
+            labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
+        else:
+            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
 
         # Resource limits
         run_kwargs = {}
@@ -329,10 +305,27 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             rp = {"Name": restart_policy, "MaximumRetryCount": 5}
 
-        # ── Create & start new container with temp name ──
+        # ── Stop old container FIRST, then start new one ──
+        # Simple replace strategy: brief downtime during redeploy is
+        # acceptable. More reliable than blue-green label toggling.
+        if old_container:
+            logger.info("Stopping old container %s before starting new one", name)
+            try:
+                old_container.stop(timeout=10)
+                old_container.remove(force=True)
+            except Exception as exc:
+                logger.warning("Failed to stop old container %s: %s", name, exc)
+
+        # ── Create & start new container with canonical name ──
+        networking_config = self.docker_client.api.create_networking_config({
+            network_name: self.docker_client.api.create_endpoint_config(
+                aliases=[name, f"{name}.default.internal"]
+            )
+        })
+
         new_container = self.docker_client.containers.create(
             image,
-            name=temp_name,
+            name=name,
             environment=env,
             network=network_name,
             networking_config=networking_config,
@@ -343,10 +336,9 @@ class LocalAdapter(BaseCloudAdapter):
             **run_kwargs
         )
         new_container.start()
-        logger.info("Blue-green: started new container %s (old: %s)",
-                     temp_name, name if old_container else "none")
+        logger.info("Started container %s with Traefik labels enabled", name)
 
-        # ── Wait for new container to become healthy ──
+        # ── Wait for container to become healthy ──
         health_timeout_default = 360 if low_resource_profile else 240
         health_timeout = _env_int(
             'BLUE_GREEN_HEALTH_TIMEOUT',
@@ -358,28 +350,16 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         if not new_healthy:
-            # New container failed health — remove it, keep old running
-            logger.error(
-                "Blue-green: new container %s failed health check, keeping old %s",
-                temp_name, name,
-            )
+            logger.error("Container %s failed health check", name)
             try:
                 new_container.remove(force=True)
             except Exception:
                 pass
             raise RuntimeError(
-                f"New container {temp_name} failed health check. "
-                f"Old container {name} is still serving traffic."
+                f"Container {name} failed health check after deploy."
             )
 
-        # ── STAGED: Do NOT cutover yet. Return green container ID. ──
-        # Old container keeps serving traffic. Promotion happens later
-        # via promote_container() after bake time or manual trigger.
-        logger.info(
-            "Blue-green: container %s healthy, entering STAGED. "
-            "Old %s still serving traffic.",
-            temp_name, name if old_container else "none",
-        )
+        logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
 
     def promote_container(self, name: str, green_container_id: str) -> str:
