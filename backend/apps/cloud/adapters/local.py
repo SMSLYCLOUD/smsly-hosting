@@ -365,9 +365,9 @@ class LocalAdapter(BaseCloudAdapter):
         """
         Promote a staged green container to live.
 
-        1. Enable Traefik routing on the green container
-        2. Stop and remove the old container
-        3. Rename green → canonical name
+        1. Stop old container
+        2. Rename green → canonical name
+        3. Recreate container with Traefik labels ENABLED
         4. Update network aliases
         """
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
@@ -412,35 +412,122 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as exc:
             logger.warning("Blue-green promote: failed to remove old %s: %s", name, exc)
 
-        # ── Step 2: Rename green → canonical name ──
-        try:
-            green.rename(name)
-        except Exception as exc:
-            logger.warning("Blue-green promote: rename failed: %s", exc)
+        # ── Step 2: Build Traefik labels for the promoted container ──
+        router_name = name.replace('.', '-').replace('_', '-')
+        traefik_labels = {
+            'managed_by': 'smsly-hosting',
+            'traefik.enable': str(is_public).lower(),
+            f'traefik.http.routers.{router_name}.rule': host_rule,
+            f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
+        }
+        if enable_tls:
+            traefik_labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
+            traefik_labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
+        else:
+            traefik_labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
 
-        # ── Step 3: Update network aliases ──
+        # Keep blue-green metadata labels
+        for k, v in green_labels.items():
+            if k.startswith('smsly.'):
+                traefik_labels[k] = v
+
+        # ── Step 3: Commit green to temp image, recreate with Traefik labels ──
+        # Docker doesn't support live label updates, so we commit + recreate.
         try:
-            net = self.docker_client.networks.get(network_name)
-            net.disconnect(green)
-            net.connect(
-                green,
-                aliases=[name, f"{name}.default.internal"],
+            temp_image_tag = f"smsly-promote/{name}:latest"
+            green.commit(repository=f"smsly-promote/{name}", tag="latest")
+
+            # Gather existing config for recreation
+            green_config = green.attrs.get('Config', {})
+            green_host_config = green.attrs.get('HostConfig', {})
+            green_env = green_config.get('Env', [])
+            green_cmd = green_config.get('Cmd')
+            green_entrypoint = green_config.get('Entrypoint')
+            green_healthcheck = green_config.get('Healthcheck')
+            green_volumes = green_host_config.get('Binds')
+
+            # Stop and remove the green container
+            green.stop(timeout=10)
+            green.remove(force=True)
+
+            # Resource limits from original
+            run_kwargs = {}
+            mem_limit = green_host_config.get('Memory')
+            if mem_limit and mem_limit > 0:
+                run_kwargs['mem_limit'] = mem_limit
+            cpu_period = green_host_config.get('CpuPeriod')
+            cpu_quota = green_host_config.get('CpuQuota')
+            if cpu_period and cpu_quota:
+                run_kwargs['cpu_period'] = cpu_period
+                run_kwargs['cpu_quota'] = cpu_quota
+
+            # Restart policy
+            rp_config = green_host_config.get('RestartPolicy', {})
+            rp = None
+            if rp_config.get('Name'):
+                rp = {"Name": rp_config['Name']}
+                if rp_config.get('MaximumRetryCount'):
+                    rp['MaximumRetryCount'] = rp_config['MaximumRetryCount']
+
+            # Recreate with Traefik labels enabled
+            new_container = self.docker_client.containers.run(
+                temp_image_tag,
+                name=name,
+                environment=green_env,
+                network=network_name,
+                labels=traefik_labels,
+                volumes=green_volumes,
+                healthcheck=green_healthcheck,
+                command=green_cmd,
+                entrypoint=green_entrypoint,
+                restart_policy=rp,
+                detach=True,
+                **run_kwargs,
             )
-        except Exception as exc:
-            logger.warning("Blue-green promote: network alias update failed: %s", exc)
 
-        # ── Step 4: Enable Traefik routing via label update ──
-        # Docker doesn't support live label updates, so we use the API
-        # to update container config. The approach: since we can't update
-        # labels on a running container, we recreate the container with
-        # routing labels. However, for simplicity we rely on Caddy routing
-        # (which _regenerate_caddyfile handles) rather than Traefik labels.
-        # The canonical name + network alias is what Caddy uses for upstream.
-        logger.info(
-            "Blue-green promote: cutover complete — %s is now serving",
-            name,
-        )
-        return green.id
+            # Update network aliases
+            try:
+                net = self.docker_client.networks.get(network_name)
+                net.disconnect(new_container)
+                net.connect(
+                    new_container,
+                    aliases=[name, f"{name}.default.internal"],
+                )
+            except Exception as exc:
+                logger.warning("Blue-green promote: network alias update failed: %s", exc)
+
+            # Clean up temp image
+            try:
+                self.docker_client.images.remove(temp_image_tag, force=True)
+            except Exception:
+                pass
+
+            logger.info(
+                "Blue-green promote: cutover complete — %s is now serving "
+                "with Traefik labels enabled (public=%s)",
+                name, is_public,
+            )
+            return new_container.id
+
+        except Exception as exc:
+            logger.error(
+                "Blue-green promote: failed to recreate container with "
+                "Traefik labels for %s: %s. Falling back to rename-only.",
+                name, exc,
+            )
+            # Fallback: try to just rename green if it still exists
+            try:
+                green = self.docker_client.containers.get(green_container_id)
+                green.rename(name)
+                try:
+                    net = self.docker_client.networks.get(network_name)
+                    net.disconnect(green)
+                    net.connect(green, aliases=[name, f"{name}.default.internal"])
+                except Exception:
+                    pass
+                return green.id
+            except Exception:
+                raise exc
 
     def _wait_container_healthy(
         self, container_id: str, timeout_seconds: int = 240, poll_seconds: int = 5
