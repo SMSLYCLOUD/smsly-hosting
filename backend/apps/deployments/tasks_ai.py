@@ -23,7 +23,12 @@ def analyze_failure_task(deployment_id):
 
         # Call Jules AI
         agent = DevOpsAgent()
-        diagnosis = agent.diagnose_logs(deployment.build_logs)
+
+        # SECURITY: Sanitize logs to prevent prompt injection and limit token count
+        # 4000 tokens ~= 16000 chars roughly. Let's cap at 15000 to be safe.
+        safe_logs = deployment.build_logs[-15000:]
+
+        diagnosis = agent.diagnose_logs(safe_logs)
 
         # Update deployment with AI insight
         deployment.ai_diagnosis = diagnosis
