@@ -1689,6 +1689,11 @@ CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
 CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
 
 if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+    # Ensure token is sourced from .env if present (idempotent runs)
+    if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+        CLOUDFLARE_API_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+    fi
+
     if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
         # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
         cat > /etc/caddy/Caddyfile <<CADDYEOF
