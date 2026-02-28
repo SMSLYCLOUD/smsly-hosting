@@ -133,8 +133,8 @@ export function Navbar() {
 
         {/* Logo - Left */}
         <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
-            <Image src="/images/logo.svg" alt="SMSLY Hosting Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
-            {!user && <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">SMSLY Hosting</span>}
+            <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
+            {!user && <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
