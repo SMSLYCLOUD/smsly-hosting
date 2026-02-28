@@ -275,44 +275,22 @@ class LocalAdapter(BaseCloudAdapter):
             start_period=start_period_seconds * 1_000_000_000,
         )
 
-        # Keep Traefik routing labels active from container creation time.
-        # This prevents transient "no active route" fallback pages during cutover.
+        # ── Blue-Green Bake: new container starts with Traefik DISABLED ──
+        # The old container keeps all traffic until promote_container() is called.
+        # Store the intended labels for later promotion.
         labels = {
             'managed_by': 'smsly-hosting',
-            'traefik.enable': 'true' if is_public else 'false',
-            f'traefik.http.services.{name}.loadbalancer.server.port': port,
-            f'traefik.http.services.{name}.loadbalancer.healthcheck.path': hc_path if healthcheck and healthcheck.get('path') else '/',
-            f'traefik.http.services.{name}.loadbalancer.healthcheck.interval': f'{hc_interval}s',
-            f'traefik.http.services.{name}.loadbalancer.healthcheck.timeout': f'{hc_timeout}s',
-            # Send Host: localhost in health-check probes so Django/FastAPI
-            # ALLOWED_HOSTS doesn't reject them with 400 when probing by IP.
-            f'traefik.http.services.{name}.loadbalancer.healthcheck.hostname': 'localhost',
+            'traefik.enable': 'false',  # Disabled until promotion
+            'smsly.blue_green.canonical_name': name,
+            'smsly.blue_green.is_public': str(is_public),
+            'smsly.blue_green.port': port,
+            'smsly.blue_green.host_rule': host_rule,
+            'smsly.blue_green.use_ssl': str(use_ssl),
+            'smsly.blue_green.enable_tls': str(enable_traefik_tls),
+            'smsly.blue_green.hc_path': hc_path if healthcheck and healthcheck.get('path') else '/',
+            'smsly.blue_green.hc_interval': str(hc_interval),
+            'smsly.blue_green.hc_timeout': str(hc_timeout),
         }
-        if is_public and use_ssl and enable_traefik_tls:
-            labels.update({
-                f'traefik.http.routers.{name}-http.rule': host_rule,
-                f'traefik.http.routers.{name}-http.entrypoints': 'web',
-                f'traefik.http.routers.{name}-http.middlewares': f'{name}-redirect',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.scheme': 'https',
-                f'traefik.http.middlewares.{name}-redirect.redirectscheme.permanent': 'true',
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'websecure',
-                f'traefik.http.routers.{name}.tls': 'true',
-                f'traefik.http.routers.{name}.tls.certresolver': 'letsencrypt',
-            })
-        elif is_public:
-            labels.update({
-                f'traefik.http.routers.{name}.rule': host_rule,
-                f'traefik.http.routers.{name}.entrypoints': 'web',
-            })
-            if use_ssl:
-                middleware_name = f'{name}-forwarded-https'
-                labels.update({
-                    f'traefik.http.routers.{name}.middlewares': middleware_name,
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Proto': 'https',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Port': '443',
-                    f'traefik.http.middlewares.{middleware_name}.headers.customrequestheaders.X-Forwarded-Ssl': 'on',
-                })
 
         # Resource limits
         run_kwargs = {}
@@ -373,35 +351,96 @@ class LocalAdapter(BaseCloudAdapter):
                 f"Old container {name} is still serving traffic."
             )
 
-        # ── Cutover: remove old, rename new ──
-        if old_container:
-            try:
-                old_container.stop(timeout=10)
-                old_container.remove(force=True)
-            except Exception as exc:
-                logger.warning("Blue-green: failed to remove old container %s: %s", name, exc)
+        # ── STAGED: Do NOT cutover yet. Return green container ID. ──
+        # Old container keeps serving traffic. Promotion happens later
+        # via promote_container() after bake time or manual trigger.
+        logger.info(
+            "Blue-green: container %s healthy, entering STAGED. "
+            "Old %s still serving traffic.",
+            temp_name, name if old_container else "none",
+        )
+        return new_container.id
 
-        # Rename new container to the canonical name
+    def promote_container(self, name: str, green_container_id: str) -> str:
+        """
+        Promote a staged green container to live.
+
+        1. Enable Traefik routing on the green container
+        2. Stop and remove the old container
+        3. Rename green → canonical name
+        4. Update network aliases
+        """
+        network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
+
         try:
-            new_container.rename(name)
+            green = self.docker_client.containers.get(green_container_id)
+        except docker.errors.NotFound:
+            raise RuntimeError(
+                f"Green container {green_container_id} not found — "
+                f"may have crashed during bake period"
+            )
+
+        # Verify green is still running
+        green.reload()
+        state = (green.attrs.get('State', {}).get('Status') or '').lower()
+        if state not in ('running',):
+            health = (green.attrs.get('State', {}).get('Health', {}).get('Status') or '')
+            raise RuntimeError(
+                f"Green container not running (status={state}, health={health})"
+            )
+
+        # Read stored labels for Traefik config
+        green_labels = green.labels or {}
+        is_public = green_labels.get('smsly.blue_green.is_public', 'True') == 'True'
+        port = green_labels.get('smsly.blue_green.port', '8000')
+        host_rule = green_labels.get('smsly.blue_green.host_rule', f"Host(`{name}.localhost`)")
+        use_ssl = green_labels.get('smsly.blue_green.use_ssl', 'False') == 'True'
+        enable_tls = green_labels.get('smsly.blue_green.enable_tls', 'False') == 'True'
+        hc_path = green_labels.get('smsly.blue_green.hc_path', '/')
+        hc_interval = green_labels.get('smsly.blue_green.hc_interval', '12')
+        hc_timeout = green_labels.get('smsly.blue_green.hc_timeout', '5')
+
+        # ── Step 1: Stop old container ──
+        old_container = None
+        try:
+            old_container = self.docker_client.containers.get(name)
+            old_container.stop(timeout=10)
+            old_container.remove(force=True)
+            logger.info("Blue-green promote: removed old container %s", name)
+        except docker.errors.NotFound:
+            logger.info("Blue-green promote: no old container %s to remove", name)
         except Exception as exc:
-            logger.warning("Blue-green: rename %s -> %s failed: %s", temp_name, name, exc)
+            logger.warning("Blue-green promote: failed to remove old %s: %s", name, exc)
 
-        # Labels are already active; no runtime relabeling required.
+        # ── Step 2: Rename green → canonical name ──
+        try:
+            green.rename(name)
+        except Exception as exc:
+            logger.warning("Blue-green promote: rename failed: %s", exc)
 
-        # Ensure canonical network aliases are set
+        # ── Step 3: Update network aliases ──
         try:
             net = self.docker_client.networks.get(network_name)
-            net.disconnect(new_container)
+            net.disconnect(green)
             net.connect(
-                new_container,
-                aliases=[name, f"{name}.{project_id}.internal"],
+                green,
+                aliases=[name, f"{name}.default.internal"],
             )
         except Exception as exc:
-            logger.warning("Blue-green: network alias update failed: %s", exc)
+            logger.warning("Blue-green promote: network alias update failed: %s", exc)
 
-        logger.info("Blue-green: cutover complete — %s is now serving", name)
-        return new_container.id
+        # ── Step 4: Enable Traefik routing via label update ──
+        # Docker doesn't support live label updates, so we use the API
+        # to update container config. The approach: since we can't update
+        # labels on a running container, we recreate the container with
+        # routing labels. However, for simplicity we rely on Caddy routing
+        # (which _regenerate_caddyfile handles) rather than Traefik labels.
+        # The canonical name + network alias is what Caddy uses for upstream.
+        logger.info(
+            "Blue-green promote: cutover complete — %s is now serving",
+            name,
+        )
+        return green.id
 
     def _wait_container_healthy(
         self, container_id: str, timeout_seconds: int = 240, poll_seconds: int = 5

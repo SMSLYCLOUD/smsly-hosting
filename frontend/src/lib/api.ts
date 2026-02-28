@@ -254,6 +254,10 @@ export const servicesApi = {
     const response = await api.post('/deployments/bulk-cancel/', { deployment_ids: deploymentIds });
     return response.data;
   },
+  promoteDeployment: async (deploymentId: string): Promise<any> => {
+    const response = await api.post(`/deployments/${deploymentId}/promote/`);
+    return response.data;
+  },
 
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
@@ -263,6 +267,18 @@ export const servicesApi = {
   createEnvVar: async (serviceId: string, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.post(`/services/${serviceId}/env_vars/`, data);
     return response.data;
+  },
+  upsertEnvVars: async (
+    serviceId: string,
+    vars: Array<{ key: string; value: string; is_secret?: boolean }>,
+  ): Promise<{ added: number; updated: number; count: number; env_vars: EnvVar[] }> => {
+    const response = await api.post(`/services/${serviceId}/env_vars/`, { vars });
+    return {
+      added: Number(response.data?.added || 0),
+      updated: Number(response.data?.updated || 0),
+      count: Number(response.data?.count || vars.length || 0),
+      env_vars: Array.isArray(response.data?.env_vars) ? response.data.env_vars : [],
+    };
   },
   deleteEnvVar: async (serviceId: string, envVarId: number): Promise<void> => {
     await api.delete(`/services/${serviceId}/env_vars/${envVarId}/`);
@@ -681,23 +697,60 @@ export interface ReservedSubdomain {
   created_at: string;
 }
 
+function normalizeTunnel(raw: any): Tunnel {
+  return {
+    tunnel_id: String(raw?.tunnel_id ?? raw?.tunnelId ?? raw?.id ?? ''),
+    subdomain: String(raw?.subdomain ?? ''),
+    public_url: String(raw?.public_url ?? raw?.publicUrl ?? ''),
+    local_port: Number(raw?.local_port ?? raw?.localPort ?? 0),
+    type: raw?.type === 'tcp' ? 'tcp' : 'http',
+    is_active: Boolean(raw?.is_active ?? raw?.isActive ?? true),
+    created_at: String(raw?.created_at ?? raw?.createdAt ?? new Date().toISOString()),
+    expires_at: raw?.expires_at ?? null,
+    request_count: Number(raw?.request_count ?? raw?.requestCount ?? 0),
+    bandwidth_used: Number(raw?.bandwidth_used ?? raw?.bandwidthUsed ?? 0),
+    shared_with: Array.isArray(raw?.shared_with)
+      ? raw.shared_with
+      : (Array.isArray(raw?.sharedWith) ? raw.sharedWith : []),
+    user_id: String(raw?.user_id ?? raw?.userId ?? ''),
+    tier: String(raw?.tier ?? ''),
+  };
+}
+
+function normalizeTunnelRequest(raw: any): TunnelRequest {
+  return {
+    id: String(raw?.id ?? ''),
+    method: String(raw?.method ?? 'GET'),
+    path: String(raw?.path ?? '/'),
+    status: Number(raw?.status ?? 0),
+    duration: Number(raw?.duration ?? raw?.response_time_ms ?? raw?.responseTimeMs ?? 0),
+    timestamp: String(raw?.timestamp ?? new Date().toISOString()),
+    headers: raw?.headers && typeof raw.headers === 'object' ? raw.headers : {},
+    body: typeof raw?.body === 'string' ? raw.body : undefined,
+    response_body: typeof raw?.response_body === 'string' ? raw.response_body : undefined,
+  };
+}
+
 export const tunnelsApi = {
   /** List active tunnels for the current user */
   list: async (): Promise<Tunnel[]> => {
     const res = await api.get('/tunnels/');
-    return res.data?.tunnels || res.data || [];
+    const rows = Array.isArray(res.data?.tunnels)
+      ? res.data.tunnels
+      : (Array.isArray(res.data) ? res.data : []);
+    return rows.map(normalizeTunnel);
   },
 
   /** Create a new tunnel */
   create: async (data: { local_port: number; subdomain?: string; type?: string }): Promise<Tunnel> => {
     const res = await api.post('/tunnels/', data);
-    return res.data;
+    return normalizeTunnel(res.data);
   },
 
   /** Get detail of a specific tunnel */
   get: async (id: string): Promise<Tunnel> => {
     const res = await api.get(`/tunnels/${id}/`);
-    return res.data;
+    return normalizeTunnel(res.data);
   },
 
   /** Delete / close a tunnel */
@@ -708,12 +761,15 @@ export const tunnelsApi = {
   /** Get request logs for a tunnel */
   requests: async (id: string): Promise<TunnelRequest[]> => {
     const res = await api.get(`/tunnels/${id}/requests/`);
-    return res.data?.requests || [];
+    const rows = Array.isArray(res.data?.requests)
+      ? res.data.requests
+      : (Array.isArray(res.data) ? res.data : []);
+    return rows.map(normalizeTunnelRequest);
   },
 
   /** Replay a request */
   replay: async (tunnelId: string, requestId: string): Promise<any> => {
-    const res = await api.post(`/tunnels/${tunnelId}/requests/${requestId}/replay/`);
+    const res = await api.post(`/tunnels/${tunnelId}/replay/${requestId}/`);
     return res.data;
   },
 

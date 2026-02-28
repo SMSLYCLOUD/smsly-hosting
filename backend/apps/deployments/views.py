@@ -10,7 +10,7 @@ from django.utils import timezone
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
-from django.db import DataError, IntegrityError
+from django.db import DataError, IntegrityError, transaction
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from apps.licensing.models import PlatformLicense
 from apps.licensing.decorators import require_tier
@@ -30,6 +30,7 @@ from apps.cloud.models import CloudProvider
 import os
 import uuid
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,23 @@ def _parse_bool(value):
     if isinstance(value, (int, float)):
         return bool(value)
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+_ENV_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+_MASKED_SECRET_PATTERN = re.compile(r'^[\*\u2022]{4,}$')
+
+
+def _is_valid_env_key(key: str) -> bool:
+    """Return True when an env var key is in shell-safe format."""
+    return bool(_ENV_KEY_PATTERN.match(str(key or '').strip()))
+
+
+def _looks_masked_secret(value: str) -> bool:
+    """
+    Detect masked secret placeholders from UI payloads.
+    Accepts repeated asterisks or bullet characters.
+    """
+    return bool(_MASKED_SECRET_PATTERN.match(str(value or '').strip()))
 
 
 class ServiceViewSet(viewsets.ModelViewSet):
@@ -793,21 +811,129 @@ class ServiceViewSet(viewsets.ModelViewSet):
             serializer = EnvVarSerializer(vars, many=True)
             return Response(serializer.data)
 
+        payload_vars = request.data.get('vars')
+        if payload_vars is not None:
+            if not isinstance(payload_vars, list):
+                return Response(
+                    {'error': '"vars" must be a list of objects.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            normalized = []
+            seen_keys = set()
+
+            for idx, row in enumerate(payload_vars):
+                if not isinstance(row, dict):
+                    return Response(
+                        {'error': f'Invalid item at index {idx}; expected object.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                key = str(row.get('key') or '').strip()
+                if not key:
+                    return Response(
+                        {'error': f'Missing key at index {idx}.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not _is_valid_env_key(key):
+                    return Response(
+                        {'error': f'Invalid environment variable key "{key}".'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if key in seen_keys:
+                    return Response(
+                        {'error': f'Duplicate key "{key}" in import payload.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                seen_keys.add(key)
+
+                existing = EnvironmentVariable.objects.filter(
+                    service=service, key=key).first()
+                value = str(row.get('value', '') or '')
+                if existing and existing.is_secret and _looks_masked_secret(value):
+                    value = existing.value
+
+                if 'is_secret' in row:
+                    is_secret = _parse_bool(row.get('is_secret'))
+                else:
+                    is_secret = bool(existing.is_secret) if existing else False
+
+                normalized.append({
+                    'key': key,
+                    'value': value,
+                    'is_secret': is_secret,
+                })
+
+            added = 0
+            updated = 0
+            try:
+                with transaction.atomic():
+                    for item in normalized:
+                        _, created = EnvironmentVariable.objects.update_or_create(
+                            service=service,
+                            key=item['key'],
+                            defaults={
+                                'value': item['value'],
+                                'is_secret': item['is_secret'],
+                                'source': 'USER',
+                            },
+                        )
+                        if created:
+                            added += 1
+                        else:
+                            updated += 1
+            except (ValidationError, DataError, IntegrityError) as exc:
+                logger.warning(
+                    "Invalid bulk env payload for service %s: %s",
+                    service.id, exc,
+                )
+                return Response(
+                    {'error': 'Invalid environment variable payload.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error(
+                    "Failed bulk env upsert for service %s: %s", service.id, exc)
+                return Response(
+                    {'error': 'Failed to save environment variables'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            serializer = EnvVarSerializer(
+                service.env_vars.all().order_by('key'), many=True)
+            return Response({
+                'added': added,
+                'updated': updated,
+                'count': len(normalized),
+                'env_vars': serializer.data,
+            })
+
         # Allow partial data — key is required, value can be empty
         key = str(request.data.get('key') or '').strip()
         if not key:
             return Response(
                 {'key': ['This field is required.']},
                 status=status.HTTP_400_BAD_REQUEST)
+        if not _is_valid_env_key(key):
+            return Response(
+                {'key': ['Use letters, numbers, and underscore; cannot start with a number.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
+        existing = EnvironmentVariable.objects.filter(service=service, key=key).first()
         value = str(request.data.get('value', '') or '')
-        is_secret = _parse_bool(request.data.get('is_secret', False))
+        if existing and existing.is_secret and _looks_masked_secret(value):
+            value = existing.value
+        if 'is_secret' in request.data:
+            is_secret = _parse_bool(request.data.get('is_secret'))
+        else:
+            is_secret = bool(existing.is_secret) if existing else False
 
         try:
             env_var, created = EnvironmentVariable.objects.update_or_create(
                 service=service,
                 key=key,
-                defaults={'value': value, 'is_secret': is_secret},
+                defaults={'value': value, 'is_secret': is_secret, 'source': 'USER'},
             )
         except (ValidationError, DataError, IntegrityError) as exc:
             logger.warning("Invalid env var payload for service %s key=%s: %s", service.id, key, exc)
@@ -1371,6 +1497,39 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         return Response({
             'message': 'Deployment approved — build starting',
+            'deployment': DeploymentSerializer(deployment).data,
+        })
+
+    @action(detail=True, methods=['post'])
+    def promote(self, request, pk=None):
+        """
+        Manually promote a STAGED deployment to ACTIVE (immediate swap).
+        POST /api/v1/deployments/{id}/promote/
+
+        Skips the bake timer and performs immediate blue-green cutover.
+        Used for development/testing when you want instant promotion.
+        """
+        deployment = self.get_object()
+
+        if deployment.status != Deployment.Status.STAGED:
+            return Response(
+                {'error': f'Cannot promote: deployment is {deployment.status}, '
+                          'not STAGED.'},
+                status=status.HTTP_409_CONFLICT)
+
+        provider = _resolve_provider_for_service(deployment.service)
+        if not provider:
+            return Response(
+                {'error': 'No active cloud provider configured'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.deployments.tasks import promote_deployment_task
+        promote_deployment_task.delay(
+            str(deployment.id), str(provider.id)
+        )
+
+        return Response({
+            'message': 'Promotion triggered — routing will swap momentarily',
             'deployment': DeploymentSerializer(deployment).data,
         })
 

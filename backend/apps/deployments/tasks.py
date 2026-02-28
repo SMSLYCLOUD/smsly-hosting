@@ -1051,24 +1051,12 @@ def _deploy_container(deployment, provider, image_name):
         )
 
         deployment.status = Deployment.Status.HEALTH_CHECK
-        deployment.container_id = resource.resource_id
-        deployment.save(update_fields=['status', 'container_id'])
+        deployment.green_container_id = resource.resource_id
+        deployment.save(update_fields=['status', 'green_container_id'])
         broadcast_status(deployment)
 
         if provider.provider_type == CloudProvider.ProviderType.LOCAL:
-            route_timeout = _local_route_timeout_seconds(service)
             container_timeout = _local_container_timeout_seconds(service)
-            route_ready = _wait_for_local_route_ready(
-                deployment,
-                service,
-                timeout_seconds=route_timeout,
-            )
-            if not route_ready:
-                append_log(
-                    deployment,
-                    "[ROUTE-CHECK] WARNING: Route readiness check failed; "
-                    "continuing because container health will be validated.\n",
-                )
             container_ready = _wait_for_local_container_healthy(
                 deployment,
                 resource.resource_id,
@@ -1079,22 +1067,34 @@ def _deploy_container(deployment, provider, image_name):
                     f"Container failed readiness checks for service {service.name}"
                 )
 
-        deployment.status = Deployment.Status.ACTIVE
-        deployment.finished_at = timezone.now()
-        deployment.save(update_fields=['status', 'finished_at'])
+        # ── Blue-Green Bake: enter STAGED instead of ACTIVE ──
+        # Old container keeps serving traffic. New container is healthy
+        # but not yet receiving traffic. Auto-promote after bake period.
+        deployment.status = Deployment.Status.STAGED
+        deployment.staged_at = timezone.now()
+        deployment.save(update_fields=['status', 'staged_at'])
 
         update_stage(
             deployment,
             'Deploy',
-            'success',
+            'staged',
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
-        _regenerate_caddyfile()
-        append_log(deployment, f"[OK] Deployment successful. ID: {resource.resource_id}\n")
+        append_log(
+            deployment,
+            f"[STAGED] Container healthy. Old container still serving traffic.\n"
+            f"Auto-promote in 30 minutes. Use 'Promote Now' for immediate swap.\n"
+        )
 
-        # Post-deploy runtime monitor
-        # Monitor container logs for ~30s to catch runtime crashes early
+        # Schedule auto-promotion after bake period (default 30 minutes)
+        bake_seconds = int(os.environ.get('BLUE_GREEN_BAKE_SECONDS', 1800))
+        auto_promote_task.apply_async(
+            args=[str(deployment.id), str(provider.id)],
+            countdown=bake_seconds,
+        )
+
+        # Post-deploy runtime monitor (watches for crashes during bake)
         _post_deploy_monitor.delay(
             str(deployment.id),
             str(provider.id),
@@ -1105,6 +1105,135 @@ def _deploy_container(deployment, provider, image_name):
     except Exception as e:
         update_stage(deployment, 'Deploy', 'failed')
         raise e
+
+
+def _do_promote(deployment, provider):
+    """
+    Shared promotion logic for both auto and manual promote.
+
+    1. Verify green container is still healthy
+    2. Call adapter.promote_container() to swap old ← green
+    3. Mark deployment ACTIVE
+    4. Regenerate Caddyfile routing
+    """
+    service = deployment.service
+    green_id = deployment.green_container_id
+    if not green_id:
+        raise RuntimeError("No green container ID on deployment — cannot promote")
+
+    compute = ComputeService(provider)
+    adapter = compute.adapter
+
+    # Only LocalAdapter supports promote_container
+    if not hasattr(adapter, 'promote_container'):
+        # Non-local providers: just mark ACTIVE (they handle routing differently)
+        deployment.container_id = green_id
+        deployment.status = Deployment.Status.ACTIVE
+        deployment.finished_at = timezone.now()
+        deployment.save(update_fields=['status', 'container_id', 'finished_at'])
+        broadcast_status(deployment)
+        _regenerate_caddyfile()
+        return
+
+    # Perform atomic cutover
+    promoted_id = adapter.promote_container(service.name, green_id)
+
+    deployment.container_id = promoted_id
+    deployment.status = Deployment.Status.ACTIVE
+    deployment.finished_at = timezone.now()
+    deployment.save(update_fields=['status', 'container_id', 'finished_at'])
+
+    broadcast_status(deployment)
+    _regenerate_caddyfile()
+    append_log(
+        deployment,
+        f"[OK] Deployment promoted to ACTIVE. Container: {promoted_id}\n"
+    )
+
+    # Route readiness check after promotion
+    if provider.provider_type == CloudProvider.ProviderType.LOCAL:
+        route_timeout = _local_route_timeout_seconds(service)
+        _wait_for_local_route_ready(
+            deployment, service, timeout_seconds=route_timeout,
+        )
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=360)
+def auto_promote_task(self, deployment_id: str, provider_id: str):
+    """
+    Auto-promote a STAGED deployment after bake period.
+
+    Scheduled with countdown=1800 (30 minutes) when deployment enters STAGED.
+    Only promotes if still in STAGED status (user may have already promoted
+    manually or the deployment may have been cancelled/failed).
+    """
+    try:
+        deployment = Deployment.objects.get(id=deployment_id)
+    except Deployment.DoesNotExist:
+        return
+
+    # Only promote if still STAGED (not already promoted or failed)
+    if deployment.status != 'STAGED':
+        logger.info(
+            "Auto-promote skipped for %s: status is %s (not STAGED)",
+            deployment_id, deployment.status,
+        )
+        return
+
+    try:
+        provider = CloudProvider.objects.get(id=provider_id)
+    except CloudProvider.DoesNotExist:
+        logger.error("Auto-promote: provider %s not found", provider_id)
+        return
+
+    try:
+        append_log(deployment, "\n⏰ Bake period complete. Auto-promoting...\n")
+        _do_promote(deployment, provider)
+    except Exception as e:
+        logger.error("Auto-promote failed for %s: %s", deployment_id, e)
+        append_log(deployment, f"\n❌ Auto-promote failed: {e}\n")
+        deployment.status = 'FAILED'
+        deployment.finished_at = timezone.now()
+        deployment.build_logs += f"\n--- Auto-Promote Failure ---\n{str(e)}\n"
+        deployment.save()
+        broadcast_status(deployment)
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
+def promote_deployment_task(self, deployment_id: str, provider_id: str):
+    """
+    Manually promote a STAGED deployment (triggered by 'Promote Now' button).
+    Immediate cutover — no bake wait.
+    """
+    try:
+        deployment = Deployment.objects.get(id=deployment_id)
+    except Deployment.DoesNotExist:
+        return
+
+    if deployment.status != 'STAGED':
+        logger.warning(
+            "Manual promote skipped for %s: status is %s",
+            deployment_id, deployment.status,
+        )
+        return
+
+    try:
+        provider = CloudProvider.objects.get(id=provider_id)
+    except CloudProvider.DoesNotExist:
+        logger.error("Manual promote: provider %s not found", provider_id)
+        return
+
+    try:
+        append_log(deployment, "\n🚀 Manual promotion triggered (Promote Now)...\n")
+        _do_promote(deployment, provider)
+    except Exception as e:
+        logger.error("Manual promote failed for %s: %s", deployment_id, e)
+        append_log(deployment, f"\n❌ Manual promote failed: {e}\n")
+        deployment.status = 'FAILED'
+        deployment.finished_at = timezone.now()
+        deployment.build_logs += f"\n--- Manual Promote Failure ---\n{str(e)}\n"
+        deployment.save()
+        broadcast_status(deployment)
 
 
 @shared_task(bind=True, max_retries=0, soft_time_limit=120, time_limit=150)
