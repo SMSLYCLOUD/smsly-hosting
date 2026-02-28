@@ -763,10 +763,10 @@ def _local_route_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
             "LOCAL_ROUTE_READY_TIMEOUT_LOW_RESOURCE_SECONDS",
-            300,
-            minimum=30,
+            45,
+            minimum=10,
         )
-    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 180, minimum=30)
+    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 30, minimum=10)
 
 
 def _local_container_timeout_seconds(service: Service) -> int:
@@ -866,19 +866,19 @@ def _wait_for_local_container_healthy(
 def _wait_for_local_route_ready(
     deployment,
     service,
-    timeout_seconds: int = 180,
-    poll_seconds: int = 5,
+    timeout_seconds: int = 0,
+    poll_seconds: int = 3,
 ) -> bool:
     """
     Wait until Traefik has picked up host routing for this service.
+
+    If timeout_seconds <= 0, polls indefinitely (capped by Celery task timeout).
     """
     host = (service.public_domain or "").strip()
     if not host:
         return True
 
     # Probe through both internal ingress and the actual public hostname.
-    # Internal addresses can be unreachable from inside the backend container,
-    # so public-host probes prevent false negatives during healthy deploys.
     probe_candidates = []
 
     def _add_probe(base_url: str, headers=None, verify=True):
@@ -925,15 +925,20 @@ def _wait_for_local_route_ready(
             seen_paths.add(path)
             paths.append(path)
 
+    use_deadline = timeout_seconds > 0
     append_log(
         deployment,
-        f"[ROUTE-CHECK] Waiting for routing on host {host} "
-        f"(timeout {timeout_seconds}s)\n",
+        f"[ROUTE-CHECK] Polling route for host {host} "
+        f"({'until active' if not use_deadline else f'timeout {timeout_seconds}s'})\n",
     )
 
-    deadline = time.monotonic() + timeout_seconds
+    deadline = time.monotonic() + timeout_seconds if use_deadline else 0
     last_error = ""
-    while time.monotonic() < deadline:
+    attempt = 0
+    while True:
+        if use_deadline and time.monotonic() > deadline:
+            break
+        attempt += 1
         for probe in probes:
             base_url = probe["base_url"]
             for path in paths:
@@ -961,7 +966,8 @@ def _wait_for_local_route_ready(
 
                 append_log(
                     deployment,
-                    f"[ROUTE-CHECK] Route ready via {url} (HTTP {response.status_code})\n",
+                    f"[ROUTE-CHECK] Route active via {url} "
+                    f"(HTTP {response.status_code}, attempt {attempt})\n",
                 )
                 return True
 
@@ -995,23 +1001,18 @@ def _deploy_container(deployment, provider, image_name):
             if provider.provider_type == CloudProvider.ProviderType.LOCAL:
                 route_timeout = _local_route_timeout_seconds(service)
                 container_timeout = _local_container_timeout_seconds(service)
-                # Only check route if public
-                if service.is_public:
-                    route_ready = _wait_for_local_route_ready(
-                        deployment, service, timeout_seconds=route_timeout,
-                    )
-                    if not route_ready:
-                        append_log(
-                            deployment,
-                            "[ROUTE-CHECK] WARNING: Route readiness check "
-                            "failed; continuing with container health.\n",
-                        )
                 container_ready = _wait_for_local_container_healthy(
                     deployment, container_name, timeout_seconds=container_timeout,
                 )
                 if not container_ready:
                     raise RuntimeError(
                         f"Container failed readiness checks: {container_name}"
+                    )
+                # Route check AFTER container is healthy — poll until active
+                if service.is_public:
+                    _wait_for_local_route_ready(
+                        deployment, service,
+                        timeout_seconds=0,  # keep polling until active
                     )
 
             deployment.status = Deployment.Status.ACTIVE
@@ -1093,6 +1094,18 @@ def _deploy_container(deployment, provider, image_name):
                 raise RuntimeError(
                     f"Container failed readiness checks for service {service.name}"
                 )
+            # Route check after container is healthy (standard deploy)
+            if service.is_public:
+                route_timeout = _local_route_timeout_seconds(service)
+                route_ready = _wait_for_local_route_ready(
+                    deployment, service, timeout_seconds=route_timeout,
+                )
+                if not route_ready:
+                    append_log(
+                        deployment,
+                        "[ROUTE-CHECK] WARNING: Route not ready before STAGED. "
+                        "Will recheck at promotion.\n",
+                    )
 
         # ── Blue-Green Bake: enter STAGED instead of ACTIVE ──
         # Old container keeps serving traffic. New container is healthy
