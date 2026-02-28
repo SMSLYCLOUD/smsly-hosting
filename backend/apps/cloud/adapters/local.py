@@ -275,12 +275,33 @@ class LocalAdapter(BaseCloudAdapter):
             start_period=start_period_seconds * 1_000_000_000,
         )
 
-        # ── Blue-Green Bake: new container starts with Traefik DISABLED ──
-        # The old container keeps all traffic until promote_container() is called.
-        # Store the intended labels for later promotion.
-        labels = {
-            'managed_by': 'smsly-hosting',
-            'traefik.enable': 'false',  # Disabled until promotion
+        # ── Traefik Labels ──
+        # When no old container exists → enable Traefik immediately (instant domain)
+        # When old container exists → disable until promote_container() swaps
+        router_name = name.replace('.', '-').replace('_', '-')
+
+        if old_container is None:
+            # No blue-green needed — enable routing from the start
+            labels = {
+                'managed_by': 'smsly-hosting',
+                'traefik.enable': str(is_public).lower(),
+                f'traefik.http.routers.{router_name}.rule': host_rule,
+                f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
+            }
+            if enable_traefik_tls:
+                labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
+                labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
+            else:
+                labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
+        else:
+            # Blue-green: old container keeps traffic until promotion
+            labels = {
+                'managed_by': 'smsly-hosting',
+                'traefik.enable': 'false',
+            }
+
+        # Store blue-green metadata in both cases (for promote_container)
+        labels.update({
             'smsly.blue_green.canonical_name': name,
             'smsly.blue_green.is_public': str(is_public),
             'smsly.blue_green.port': port,
@@ -290,7 +311,7 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_path': hc_path if healthcheck and healthcheck.get('path') else '/',
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
-        }
+        })
 
         # Resource limits
         run_kwargs = {}
