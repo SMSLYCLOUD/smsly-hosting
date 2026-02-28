@@ -65,7 +65,7 @@ REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
 if IS_TESTING:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='test-github-webhook-secret')
 elif DEBUG:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='')
+    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='replace_me_with_random_string')
 else:
     GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
 # SECURITY: No wildcard default - prevents host header injection
