@@ -3,9 +3,9 @@ import { Cloud, Globe, GitBranch } from 'lucide-react';
 
 export function Footer() {
     return (
-        <footer className="py-16 px-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
+        <footer className="py-12 md:py-16 px-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
             <div className="max-w-7xl mx-auto">
-                <div className="grid md:grid-cols-4 gap-12 mb-12">
+                <div className="grid md:grid-cols-4 gap-8 md:gap-12 mb-8 md:mb-12">
                     <div className="col-span-1 md:col-span-1">
                         <div className="flex items-center gap-3 mb-6">
                             <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
@@ -28,7 +28,7 @@ export function Footer() {
                     </div>
 
                     <div>
-                        <h4 className="font-bold text-slate-900 dark:text-white mb-6">Product</h4>
+                        <h4 className="font-bold text-slate-900 dark:text-white mb-4 md:mb-6">Product</h4>
                         <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
                             <li><Link href="/#features" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Features</Link></li>
                             <li><Link href="/pricing" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Pricing</Link></li>
@@ -39,7 +39,7 @@ export function Footer() {
                     </div>
 
                     <div>
-                        <h4 className="font-bold text-slate-900 dark:text-white mb-6">Resources</h4>
+                        <h4 className="font-bold text-slate-900 dark:text-white mb-4 md:mb-6">Resources</h4>
                         <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
                             <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Documentation</Link></li>
                             <li><Link href="/docs/install" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Guides</Link></li>
@@ -49,7 +49,7 @@ export function Footer() {
                     </div>
 
                     <div>
-                        <h4 className="font-bold text-slate-900 dark:text-white mb-6">Legal</h4>
+                        <h4 className="font-bold text-slate-900 dark:text-white mb-4 md:mb-6">Legal</h4>
                         <ul className="space-y-3 text-sm text-slate-500 dark:text-slate-400">
                             <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Privacy Policy</Link></li>
                             <li><Link href="/docs" className="hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors">Terms of Service</Link></li>
