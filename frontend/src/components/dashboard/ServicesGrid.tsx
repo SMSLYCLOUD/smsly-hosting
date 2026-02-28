@@ -62,7 +62,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
   };
 
   const handleRestart = async (serviceId: string) => {
-    if (!await confirm({ title: 'Restart service?', message: 'Restart this service now? A fresh deployment will be queued.', confirmText: 'Restart' })) return;
+    if (!await confirm({ title: 'Restart service?', message: 'Fast-restart the container (~5 seconds). No rebuild required.', confirmText: 'Restart' })) return;
     setActionLoading(serviceId);
     try {
       await servicesApi.restart(serviceId);

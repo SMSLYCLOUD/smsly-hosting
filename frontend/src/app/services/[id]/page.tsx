@@ -187,7 +187,7 @@ export default function ServiceDetailPage() {
 
     const handleRestart = async () => {
         if (!service) return;
-        if (!await confirm({ title: 'Restart service?', message: 'Restart this service now? A fresh deployment will be queued.', confirmText: 'Restart' })) return;
+        if (!await confirm({ title: 'Restart service?', message: 'Fast-restart the container (~5 seconds). No rebuild required.', confirmText: 'Restart' })) return;
         try {
             setRedeploying(true);
             await servicesApi.restart(service.id);

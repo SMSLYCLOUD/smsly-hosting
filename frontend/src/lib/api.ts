@@ -216,8 +216,12 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/deploy/`, { ref });
     return response.data;
   },
-  restart: async (id: string): Promise<any> => {
-    const response = await api.post(`/services/${id}/restart/`);
+  restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {
+    const response = await api.post(`/services/${id}/restart/`, { force_rebuild: forceRebuild });
+    return response.data;
+  },
+  forceRebuild: async (id: string): Promise<any> => {
+    const response = await api.post(`/services/${id}/restart/`, { force_rebuild: true });
     return response.data;
   },
   stop: async (id: string): Promise<any> => {
