@@ -307,16 +307,72 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def restart(self, request, pk=None):
         """
-        Restart a service by stopping it and triggering a new deployment.
+        Fast-restart a service by restarting its existing Docker container.
         POST /api/v1/services/{id}/restart/
+        Body: { "force_rebuild": true } to trigger a full rebuild instead.
+
+        Default behaviour (<5 seconds):
+          1. Find the active deployment's container
+          2. `docker restart` it
+          3. Re-mark it ACTIVE
+
+        With force_rebuild=true (full pipeline, minutes):
+          1. Cancel active deployments
+          2. Queue a fresh build + deploy
         """
         service = self.get_object()
+        force_rebuild = _parse_bool(request.data.get('force_rebuild', False))
 
         # Clear health monitor restart state (ends exponential backoff)
         from apps.deployments.services.health_monitor import reset_restart_state
         reset_restart_state(str(service.id))
 
-        # Stop active deployments first
+        # ── Fast restart path: just docker restart the container ──
+        if not force_rebuild:
+            active_deploy = (
+                service.deployments
+                .filter(status=Deployment.Status.ACTIVE)
+                .order_by('-created_at')
+                .first()
+            )
+            container_id = active_deploy.container_id if active_deploy else None
+
+            if container_id:
+                try:
+                    import docker as docker_lib
+                    client = docker_lib.from_env()
+                    container = client.containers.get(container_id)
+                    container.restart(timeout=10)
+
+                    # Update health status
+                    service.health_status = 'starting'
+                    service.save(update_fields=['health_status', 'updated_at'])
+
+                    AuditLog(
+                        actor=request.user.get_username(),
+                        action='SERVICE_FAST_RESTART',
+                        target=f'Service: {service.name}',
+                        metadata={
+                            'service_id': str(service.id),
+                            'container_id': container_id,
+                            'method': 'docker_restart',
+                        },
+                    ).save()
+
+                    return Response({
+                        'message': f'Service {service.name} restarted (fast)',
+                        'method': 'docker_restart',
+                        'container_id': container_id,
+                    })
+                except Exception as exc:
+                    logger.warning(
+                        "Fast restart failed for %s (container=%s): %s. "
+                        "Falling back to full rebuild.",
+                        service.name, container_id, exc,
+                    )
+                    # Fall through to full rebuild
+
+        # ── Full rebuild path ──
         service.deployments.filter(
             status__in=[
                 Deployment.Status.ACTIVE,
@@ -328,7 +384,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
             finished_at=timezone.now(),
         )
 
-        # Create a new deployment
         provider = _resolve_provider_for_service(service)
         if not provider:
             return Response({'error': 'No active cloud provider configured'},
@@ -338,7 +393,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash='latest',
-            commit_message='Service restart',
+            commit_message='Service restart (full rebuild)',
         )
 
         smart_deploy_task.delay(str(deployment.id), str(provider.id),
@@ -352,7 +407,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         ).save()
 
         return Response({
-            'message': f'Service {service.name} restarting',
+            'message': f'Service {service.name} restarting (full rebuild)',
+            'method': 'full_rebuild',
             'deployment': DeploymentSerializer(deployment).data,
         }, status=status.HTTP_201_CREATED)
 

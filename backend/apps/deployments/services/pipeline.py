@@ -1029,7 +1029,7 @@ class PipelineManager:
             return ''
 
     def _build_image(self):
-        """Step 2: Build Image."""
+        """Step 2: Build Image (with cache check)."""
         update_stage(self.deployment, 'Build', 'running')
         start_time = timezone.now()
         self._check_cancellation('Build')
@@ -1037,6 +1037,25 @@ class PipelineManager:
         try:
             tag_hash = self.deployment.commit_hash[:7]
             self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
+
+            # ── Build cache: skip if image already exists locally ──
+            if tag_hash != 'latest':
+                try:
+                    import docker as docker_lib
+                    client = docker_lib.from_env()
+                    client.images.get(self.image_name)
+                    # Image exists — skip entire build
+                    update_stage(
+                        self.deployment, 'Build', 'success',
+                        (timezone.now() - start_time).total_seconds()
+                    )
+                    append_log(
+                        self.deployment,
+                        f"✓ Build skipped — cached image found: {self.image_name}\n"
+                    )
+                    return
+                except Exception:
+                    pass  # Image not found — proceed with build
 
             # Compose mode: build + start all compose services
             if self.service.deploy_mode == 'COMPOSE':
