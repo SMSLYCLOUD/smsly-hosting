@@ -352,6 +352,30 @@ services:
         limits:
           memory: 128M
 
+  # FRP Tunnel Relay — exposes local dev servers via *.tunnel.{domain}
+  frps:
+    image: snowdreamtech/frps:latest
+    restart: unless-stopped
+    volumes:
+      - ./infrastructure/frps/frps.toml:/etc/frp/frps.toml:ro
+    ports:
+      - "7000:7000"   # Client control connections
+      - "127.0.0.1:7080:7080"  # vhost HTTP (Caddy → here)
+      - "127.0.0.1:7500:7500"  # Admin dashboard (internal)
+    command: ["-c", "/etc/frp/frps.toml"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7000 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - smsly-net
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
 networks:
   smsly-net:
     external: true
