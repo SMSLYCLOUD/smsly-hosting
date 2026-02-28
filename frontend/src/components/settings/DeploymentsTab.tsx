@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi, Deployment } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2 } from 'lucide-react';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -21,6 +21,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [approvingId, setApprovingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [bulkCancelling, setBulkCancelling] = useState(false);
+    const [promotingId, setPromotingId] = useState<string | null>(null);
 
     const loadDeployments = useCallback(async () => {
         try {
@@ -107,6 +108,21 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handlePromote = async (deployment: Deployment) => {
+        try {
+            setPromotingId(deployment.id);
+            await servicesApi.promoteDeployment(deployment.id);
+            toast({ title: "Promotion triggered", description: "Routing will swap to the new container momentarily." });
+            setTimeout(() => { void loadDeployments(); }, 2000);
+        } catch (err: any) {
+            console.error(err);
+            const msg = err?.response?.data?.error || 'Promote failed';
+            toast({ title: msg, variant: "destructive" });
+        } finally {
+            setPromotingId(null);
+        }
+    };
+
     const toggleSelect = (id: string) => {
         setSelectedIds(prev => {
             const next = new Set(prev);
@@ -167,6 +183,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const getStatusIcon = (status: string) => {
         switch (status) {
             case 'ACTIVE': return <CheckCircle2 className="w-5 h-5 text-emerald-500" />;
+            case 'STAGED': return <ArrowUpCircle className="w-5 h-5 text-amber-500 animate-pulse" />;
             case 'FAILED': return <XCircle className="w-5 h-5 text-red-500" />;
             case 'CANCELLED': return <Ban className="w-5 h-5 text-muted-foreground" />;
             case 'REVIEW': return <Eye className="w-5 h-5 text-amber-500 animate-pulse" />;
@@ -179,6 +196,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'ACTIVE': return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30';
+            case 'STAGED': return 'bg-amber-500/10 text-amber-500 border-amber-500/30';
             case 'FAILED': return 'bg-red-500/10 text-red-500 border-red-500/30';
             case 'REVIEW': return 'bg-amber-500/10 text-amber-500 border-amber-500/30';
             case 'BUILDING':
@@ -307,6 +325,22 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                                         <Loader2 className="w-4 h-4 animate-spin" />
                                                     ) : (
                                                         <><CheckCheck className="w-4 h-4 mr-1" /> Approve</>
+                                                    )}
+                                                </Button>
+                                            )}
+                                            {/* Promote Now button for STAGED */}
+                                            {d.status === 'STAGED' && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-amber-500 hover:text-amber-400 hover:bg-amber-500/10"
+                                                    onClick={(e) => { e.stopPropagation(); handlePromote(d); }}
+                                                    disabled={!!promotingId}
+                                                >
+                                                    {promotingId === d.id ? (
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                    ) : (
+                                                        <><ArrowUpCircle className="w-4 h-4 mr-1" /> Promote Now</>
                                                     )}
                                                 </Button>
                                             )}

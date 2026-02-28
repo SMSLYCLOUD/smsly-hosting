@@ -368,6 +368,7 @@ class Deployment(TimeStampedModel):
         BUILDING = 'BUILDING', _('Building')
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
+        STAGED = 'STAGED', _('Staged')
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
@@ -407,8 +408,16 @@ class Deployment(TimeStampedModel):
 
     container_id = models.CharField(max_length=255, blank=True, null=True)
 
+    # Blue-green bake: stores the new (green) container ID while STAGED
+    green_container_id = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Temp container ID during STAGED bake period")
+
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    staged_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When container entered STAGED status (bake clock start)")
 
     # Rollback tracking
     is_rollback = models.BooleanField(
