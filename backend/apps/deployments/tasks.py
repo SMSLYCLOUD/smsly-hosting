@@ -355,6 +355,7 @@ def _link_ecosystem(service: Service, env_vars: dict):
             new_url = rewrite_database_url(old_url, db_name)
             if new_url != old_url:
                 env_vars['DATABASE_URL'] = new_url
+                _ensure_database_exists(old_url, db_name)
                 logger.info(
                     "Ecosystem: rewrote DATABASE_URL for '%s' → db=%s",
                     service.name, db_name,
@@ -369,6 +370,7 @@ def _link_ecosystem(service: Service, env_vars: dict):
             base_url = shared_addons['POSTGRES']
             if db_name:
                 env_vars['DATABASE_URL'] = rewrite_database_url(base_url, db_name)
+                _ensure_database_exists(base_url, db_name)
                 logger.info(
                     "Ecosystem: injected shared DATABASE_URL for '%s' → db=%s",
                     service.name, db_name,
@@ -459,6 +461,31 @@ def _infer_database_name(service: Service) -> str:
 
     # 3. Sanitized service name
     return re.sub(r'[^a-z0-9_]', '_', svc_name)[:63]
+
+
+def _ensure_database_exists(base_url: str, db_name: str):
+    """
+    Ensure the target database exists on the shared Postgres server.
+    """
+    try:
+        import psycopg2
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+        from psycopg2 import sql
+        
+        # Connect to the base URL (e.g. postgres database)
+        conn = psycopg2.connect(base_url)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+            if not cur.fetchone():
+                query = sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name))
+                cur.execute(query)
+                logger.info("Ecosystem: Auto-provisioned shared database '%s'", db_name)
+    except Exception as exc:
+        logger.warning("Ecosystem: Failed to auto-provision database '%s': %s", db_name, exc)
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 
 
 
