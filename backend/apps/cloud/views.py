@@ -32,6 +32,36 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
         # This is a placeholder for actual cloud sync logic
         return Response({'status': 'Sync started'})
 
+    @action(detail=True, methods=['post'])
+    def validate_credentials(self, request, pk=None):
+        provider = self.get_object()
+
+        # Only admins can trigger validation
+        if not request.user.is_staff:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            from apps.cloud.services.compute import ComputeService
+            compute_service = ComputeService(provider)
+            adapter = compute_service.adapter
+            is_valid = adapter.authenticate()
+            return Response({
+                'status': 'success' if is_valid else 'failed',
+                'message': 'Credentials are valid' if is_valid else 'Authentication failed'
+            })
+        except Exception as e:
+            # Mask the exact error if it contains sensitive keys
+            error_msg = str(e)
+            if provider.api_key and provider.api_key in error_msg:
+                error_msg = error_msg.replace(provider.api_key, '***')
+            if provider.api_secret and provider.api_secret in error_msg:
+                error_msg = error_msg.replace(provider.api_secret, '***')
+
+            return Response({
+                'status': 'error',
+                'message': f'Validation failed: {error_msg}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=False, methods=['get'])
     def available_regions(self, request):
         # Return mocked regions for now
