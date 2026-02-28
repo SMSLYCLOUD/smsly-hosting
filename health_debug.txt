@@ -1,0 +1,67 @@
+=== ENV ===
+ALLOWED_HOSTS=*
+API_INTERNAL_URL=http://127.0.0.1:3000
+API_PROXY_TARGET=http://buyforfront:8000
+AWS_S3_REGION_NAME=us-east-1
+CACHE_URL=redis://:24XPjMxxYXL2bpJ_QzkwJxxrUuYqwxVl@smsly-addon-redis-3bde72cf-1bcd-48f0-84cb-8b694798b1b4:6379/0
+CELERY_BROKER_URL=redis://:24XPjMxxYXL2bpJ_QzkwJxxrUuYqwxVl@smsly-addon-redis-3bde72cf-1bcd-48f0-84cb-8b694798b1b4:6379/0
+CELERY_RESULT_BACKEND=redis://:24XPjMxxYXL2bpJ_QzkwJxxrUuYqwxVl@smsly-addon-redis-3bde72cf-1bcd-48f0-84cb-8b694798b1b4:6379/1
+CORS_ALLOWED_ORIGINS=*
+CSRF_TRUSTED_ORIGINS=http://localhost:3000
+DATABASE_URL=postgresql://postgres_buyforfront_frontend:ZZOOIGx0DJ3mvxMYg9EgxbraZrqaHLez@postgres-buyforfront-frontend:5432/buyforfront_frontend
+DB_HOST=postgres-buyforfront-frontend
+DB_NAME=buyforfront_frontend
+DB_PASSWORD=ZZOOIGx0DJ3mvxMYg9EgxbraZrqaHLez
+DB_PORT=5432
+DB_USER=postgres_buyforfront_frontend
+DEBUG=false
+DEFAULT_FROM_EMAIL=BuyForFront <noreply@customer.buyforfront.com>
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,buyforfront-frontend-f0f19d.pcloud.distinctionlabs.org
+ELASTICSEARCH_URL=http://smsly-addon-elasticsearch-84c4debe-a5a2-48c0-8a66-fbaa223ddbd4:9200
+EXPO_PUBLIC_API_URL=http://10.0.2.2:8000/api
+FRONTEND_URL=http://localhost:3000
+HOME=/home/nextjs
+HOSTNAME=0.0.0.0
+MARKETER_ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,buyforfront-frontend-f0f19d.pcloud.distinctionlabs.org
+MARKETER_DB_PASSWORD=ZZOOIGx0DJ3mvxMYg9EgxbraZrqaHLez
+NEXT_PUBLIC_API_URL=/api
+NEXT_PUBLIC_SITE_URL=https://buyforfront.com
+NEXT_PUBLIC_WS_URL=wss://buyforfront.com
+NODE_ENV=production
+NODE_VERSION=18.20.8
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PAYSTACK_PUBLIC_KEY=pk_test_buyforfront_placeholder
+PAYSTACK_SECRET_KEY=vMkULteKCElxL4MAtxmreO5fh65M-abgyoUlubJk8n7flfk72eMa_C1tL2WIPJNA_1c
+PORT=3000
+POSTGRES_DB=buyforfront_frontend
+POSTGRES_HOST=postgres-buyforfront-frontend
+POSTGRES_PASSWORD=oRHdLd9iwrs_omqLtaXWArHbjok2nccX
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres_buyforfront_frontend
+PUBLIC_DOMAIN=buyforfront-frontend-f0f19d.pcloud.distinctionlabs.org
+REDIS_HOST=redis
+REDIS_URL=redis://:24XPjMxxYXL2bpJ_QzkwJxxrUuYqwxVl@smsly-addon-redis-3bde72cf-1bcd-48f0-84cb-8b694798b1b4:6379/0
+SECRET_KEY=nRviU4ukBPKQxvNL9TyTEGO84__tyxLOvJFHDAhskPVjpqulPEINtQcJxBuxtE7dYGA
+SECURE_SSL_REDIRECT=false
+SMSLY_API_KEY=smsly_TmpE4-cu5lOizAmgi1oJmAzi2LtTDUYpIZdnLla2Xh8
+SMSLY_BACKEND_URL=http://127.0.0.1:3000
+USE_S3=False
+YARN_VERSION=1.22.22
+
+=== HEALTHCHECK CONFIG ===
+{"Test":["CMD-SHELL","if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null \"http://127.0.0.1:3000/health\" >/dev/null 2>&1 && exit 0 || exit 1; fi; if command -v curl >/dev/null 2>&1; then curl -fsS \"http://127.0.0.1:3000/health\" >/dev/null 2>&1 && exit 0 || exit 1; fi; if command -v python3 >/dev/null 2>&1; then python3 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=15)\" >/dev/null 2>&1 && exit 0 || exit 1; fi; if command -v python >/dev/null 2>&1; then python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=15)\" >/dev/null 2>&1 && exit 0 || exit 1; fi; exit 0"],"Interval":60000000000,"Timeout":15000000000,"StartPeriod":60000000000,"Retries":8}
+
+=== HEALTH STATUS ===
+healthy
+
+=== LAST HEALTH LOG ===
+EXIT=0 OUT=---EXIT=0 OUT=---EXIT=0 OUT=---EXIT=0 OUT=---EXIT=0 OUT=---
+
+=== NETSTAT ===
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                     
+   0: 0B00007F:8495 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1668221 2 0000000000000000 100 0 0 10 0                   
+   1: 00000000:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 1669300 1 0000000000000000 100 0 0 10 0                   
+   2: 0100007F:A59A 0100007F:0BB8 06 00000000:00000000 03:00000FB1 00000000     0        0 0 3 0000000000000000                                      
+   3: 0100007F:0BB8 0100007F:DF7E 06 00000000:00000000 03:0000046A 00000000     0        0 0 3 0000000000000000                                      
+   4: 0100007F:0BB8 0100007F:DF7A 06 00000000:00000000 03:00000454 00000000     0        0 0 3 0000000000000000                                      
+   5: 150012AC:0BB8 080012AC:B340 06 00000000:00000000 03:00001546 00000000     0        0 0 3 0000000000000000

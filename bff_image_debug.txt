@@ -1,0 +1,48 @@
+buyforfront
+buyforfront
+=== IMAGE ENV ===
+PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LANG=C.UTF-8
+GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305
+PYTHON_VERSION=3.12.12
+PYTHON_SHA256=fb85a13414b028c49ba18bbd523c2d055a30b56b18b92ce454ea2c51edc656c4
+PYTHONDONTWRITEBYTECODE=1
+PYTHONUNBUFFERED=1
+
+=== IMAGE CMD ===
+["sh","-c","python manage.py migrate --noinput 2>&1 || echo 'WARNING: migrate failed (non-fatal)'; exec daphne -b 0.0.0.0 -p 8000 buyforfront.asgi:application"]
+
+=== IMAGE ENTRYPOINT ===
+null
+
+=== FIND SETTINGS ===
+/app/buyforfront/wsgi.py
+/app/buyforfront/settings.py
+
+=== FIND MANAGE.PY ===
+#!/usr/bin/env python
+"""Django's command-line utility for administrative tasks."""
+import os
+import sys
+
+---
+Dockerfile
+analytics
+backend-dev.err
+buyforfront
+chat
+currency
+legal
+logistics
+manage.py
+marketing
+moderation
+notifications
+orders
+payments
+populate_agreements.py
+products
+recommendations
+requirements.txt
+reviews
+startup_err.txt

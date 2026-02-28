@@ -49,3 +49,15 @@ class AIProviderSettingsTests(APITestCase):
         _sync_db_to_env()
 
         self.assertNotIn("OPENAI_API_KEY", os.environ)
+
+    def test_admin_can_update_jules_provider(self):
+        response = self.client.post(
+            self.url,
+            {"jules_api_key": "jules-test-key-1234", "jules_model": "jules-pro"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        settings = AIProviderSettings.get_solo()
+        self.assertTrue(settings.jules_api_key)
+        self.assertEqual(settings.jules_model, "jules-pro")

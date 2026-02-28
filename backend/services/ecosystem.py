@@ -207,6 +207,7 @@ _ENV_HINTS: Dict[str, dict] = {
     'OPENAI_API_KEY':      {'hint': 'sk-... from platform.openai.com', 'is_secret': True, 'required': True, 'user_required': True},
     'GEMINI_API_KEY':      {'hint': 'From aistudio.google.com',        'is_secret': True, 'required': True, 'user_required': True},
     'ANTHROPIC_API_KEY':   {'hint': 'sk-ant-... from console.anthropic.com', 'is_secret': True, 'required': True, 'user_required': True},
+    'JULES_API_KEY':       {'hint': 'From your Jules console/provider', 'is_secret': True, 'required': True, 'user_required': True},
     'STRIPE_SECRET_KEY':   {'hint': 'sk_live_... from Stripe', 'is_secret': True, 'required': True, 'user_required': True},
     'STRIPE_PUBLISHABLE_KEY': {'hint': 'pk_live_... from Stripe', 'required': True, 'user_required': True},
     'NEXT_PUBLIC_API_URL': {'hint': 'https://api.example.com', 'required': False},
@@ -216,7 +217,7 @@ _ENV_HINTS: Dict[str, dict] = {
     'RUST_LOG':            {'hint': 'info, debug, or warn',   'default': 'info',  'required': False},
     'PORT':                {'hint': 'Listening port',         'required': False},
     'ALLOWED_HOSTS':       {'hint': 'Comma-separated or *',  'default': '*',     'required': False},
-    'AI_PROVIDER':         {'hint': 'openai | gemini | anthropic | auto', 'required': True, 'user_required': True},
+    'AI_PROVIDER':         {'hint': 'openai | grok | gemini | claude | jules | auto', 'required': True, 'user_required': True},
     'QDRANT_PORT':         {'hint': 'Default: 6333',         'default': '6333',  'required': True},
     'QDRANT_HOST':         {'hint': 'Qdrant hostname',       'required': True,   'user_required': True},
     'SENTRY_DSN':          {'hint': 'https://...@sentry.io/...', 'is_secret': True, 'required': False, 'user_required': True},
@@ -399,6 +400,7 @@ def analyze_ecosystem(repos_data: List[dict]) -> dict:
             for svc in plan["services"]:
                 if isinstance(svc, dict):
                     svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
+            _apply_plan_repo_defaults(plan["services"], repos_data)
         plan["ai_provider"] = provider
         return plan
     except (json.JSONDecodeError, IndexError) as e:
@@ -448,6 +450,45 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
     return env_map
 
 
+def _apply_plan_repo_defaults(services: List[dict], repos_data: List[dict]):
+    """Fill missing service branch values from GitHub repo metadata."""
+    by_full_repo: Dict[str, str] = {}
+    by_repo_name: Dict[str, str | None] = {}
+
+    for repo_data in repos_data:
+        repo_full = str(repo_data.get("repo") or "").strip().lower()
+        if not repo_full:
+            continue
+        default_branch = str(repo_data.get("default_branch") or "main").strip() or "main"
+        by_full_repo[repo_full] = default_branch
+
+        repo_name = repo_full.split("/")[-1]
+        if repo_name in by_repo_name and by_repo_name[repo_name] != default_branch:
+            by_repo_name[repo_name] = None
+        elif repo_name not in by_repo_name:
+            by_repo_name[repo_name] = default_branch
+
+    for svc in services:
+        if not isinstance(svc, dict):
+            continue
+        current_branch = str(svc.get("branch") or "").strip()
+        if current_branch:
+            continue
+
+        repo_ref = str(svc.get("repo") or "").strip().lower()
+        fallback_branch = ""
+        if repo_ref:
+            fallback_branch = by_full_repo.get(repo_ref, "")
+            if not fallback_branch and "/" not in repo_ref:
+                fallback_branch = by_repo_name.get(repo_ref) or ""
+        if not fallback_branch:
+            svc_name = str(svc.get("name") or "").strip().lower()
+            if svc_name:
+                fallback_branch = by_repo_name.get(svc_name) or ""
+
+        svc["branch"] = fallback_branch or "main"
+
+
 def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
     """Build a basic deploy plan from heuristics when AI fails."""
     services = []
@@ -463,6 +504,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
         svc = {
             "repo": rd["repo"],
             "name": name,
+            "branch": str(rd.get("default_branch") or "main"),
             "stack": h.get("stack", "unknown"),
             "port": h.get("port", 3000),
             "build": h.get("build", "nixpacks"),

@@ -24,7 +24,9 @@ class NixpacksBuilder:
         source_dir: str,
         image_name: str,
         env_vars: Optional[dict] = None,
-        cache_dir: Optional[str] = None
+        cache_dir: Optional[str] = None,
+        start_cmd: Optional[str] = None,
+        allow_missing_start: bool = False,
     ) -> dict:
         """
         Builds a Docker image using Nixpacks.
@@ -58,12 +60,20 @@ class NixpacksBuilder:
             source_dir,
             "--name", image_name,
             "--verbose",
+            # Buildx docker-container driver requires explicit output.
+            # "type=docker" loads image into local daemon so push_image() can find it.
+            "--docker-output", "type=docker",
             # Use base name as cache key
             "--cache-key", image_name.split(":")[0],
         ]
 
         # Add inline cache for Docker layer caching
         command.extend(["--inline-cache"])
+
+        if start_cmd and str(start_cmd).strip():
+            command.extend(["--start-cmd", str(start_cmd).strip()])
+        elif allow_missing_start:
+            command.append("--no-error-without-start")
 
         if env_vars:
             for k, v in env_vars.items():

@@ -75,6 +75,7 @@ def ai_providers_update(request):
         "grok_api_key", "grok_model",
         "gemini_api_key", "gemini_model",
         "claude_api_key", "claude_model",
+        "jules_api_key", "jules_model",
     ]
 
     updated = []

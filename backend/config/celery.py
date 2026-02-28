@@ -26,6 +26,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.services.health_monitor  # noqa: F401
     import apps.deployments.services.provisioner  # noqa: F401
     import apps.deployments.tasks_alerts  # noqa: F401
+    import apps.deployments.tasks_ai  # noqa: F401
     import apps.deployments.tasks_ecosystem  # noqa: F401
     import apps.deployments.tasks_metrics  # noqa: F401
 

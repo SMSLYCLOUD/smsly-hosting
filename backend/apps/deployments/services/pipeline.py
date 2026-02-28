@@ -6,6 +6,7 @@ Handles the build pipeline steps: Clone -> Analyze -> Build -> Push.
 Refactored from monolithic tasks.py to improve maintainability and error isolation.
 """
 import logging
+import json
 import os
 import re
 import shutil
@@ -329,9 +330,13 @@ class PipelineManager:
         """Step 1: Clone Repository."""
         update_stage(self.deployment, 'Clone', 'running')
         start_time = timezone.now()
+        requested_branch = (self.service.branch or 'main').strip() or 'main'
 
         try:
-            append_log(self.deployment, f"Cloning {self.service.repository_url}...\n")
+            append_log(
+                self.deployment,
+                f"Cloning {self.service.repository_url} (branch: {requested_branch})...\n"
+            )
 
             repo_token = None
             try:
@@ -352,7 +357,7 @@ class PipelineManager:
             from services.repo_cache import get_or_clone
             self.source_dir = get_or_clone(
                 repo_url=self.service.repository_url,
-                branch=self.service.branch or 'main',
+                branch=requested_branch,
                 token=repo_token,
             )
 
@@ -1361,16 +1366,117 @@ class PipelineManager:
 
         self._run_subprocess(cmd, context_dir)
 
+    def _detect_django_project_module(self, context_dir: str) -> str:
+        """Best-effort discovery of Django project module for gunicorn startup."""
+        for root, _, files in os.walk(context_dir):
+            if "settings.py" not in files:
+                continue
+            if "__init__.py" not in files:
+                continue
+            rel_path = os.path.relpath(root, context_dir).strip(".\\/")
+            if rel_path:
+                return rel_path.replace(os.sep, ".")
+        return ""
+
+    def _resolve_nixpacks_start_command(self, context_dir: str) -> str:
+        """Infer an explicit start command when the repo does not declare one."""
+        explicit = str(self.service.start_command or "").strip()
+        if explicit:
+            return explicit
+
+        procfile_path = os.path.join(context_dir, "Procfile")
+        if os.path.isfile(procfile_path):
+            try:
+                with open(procfile_path, "r", encoding="utf-8", errors="replace") as handle:
+                    for raw_line in handle:
+                        line = raw_line.strip()
+                        if not line or line.startswith("#") or ":" not in line:
+                            continue
+                        proc_name, cmd = line.split(":", 1)
+                        if proc_name.strip().lower() == "web" and cmd.strip():
+                            return cmd.strip()
+            except OSError:
+                pass
+
+        package_json = os.path.join(context_dir, "package.json")
+        if os.path.isfile(package_json):
+            try:
+                with open(package_json, "r", encoding="utf-8", errors="replace") as handle:
+                    pkg = json.load(handle)
+                scripts = pkg.get("scripts", {}) if isinstance(pkg, dict) else {}
+                if isinstance(scripts, dict) and str(scripts.get("start", "")).strip():
+                    if os.path.isfile(os.path.join(context_dir, "pnpm-lock.yaml")):
+                        return "pnpm start"
+                    if os.path.isfile(os.path.join(context_dir, "yarn.lock")):
+                        return "yarn start"
+                    if os.path.isfile(os.path.join(context_dir, "bun.lockb")):
+                        return "bun run start"
+                    return "npm run start"
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        if os.path.isfile(os.path.join(context_dir, "manage.py")):
+            project_module = self._detect_django_project_module(context_dir)
+            if project_module:
+                return (
+                    f"gunicorn {project_module}.wsgi:application "
+                    "--bind 0.0.0.0:${PORT:-8000}"
+                )
+            return "python manage.py runserver 0.0.0.0:${PORT:-8000}"
+
+        main_py = os.path.join(context_dir, "main.py")
+        if os.path.isfile(main_py):
+            try:
+                with open(main_py, "r", encoding="utf-8", errors="replace") as handle:
+                    main_text = handle.read()
+                if "FastAPI(" in main_text or "fastapi.FastAPI(" in main_text:
+                    return "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+            except OSError:
+                pass
+
+        return ""
+
     def _build_with_nixpacks(self, context_dir: str):
         """Execute Nixpacks build."""
         append_log(self.deployment, "Building with Nixpacks...\n")
         env_map = {env.key: env.value for env in self.service.env_vars.all()}
+        start_cmd = self._resolve_nixpacks_start_command(context_dir)
+        allow_missing_start = not bool(start_cmd)
 
-        result = NixpacksBuilder.build_image(
-            source_dir=context_dir,
-            image_name=self.image_name,
-            env_vars=env_map
-        )
+        if start_cmd:
+            append_log(
+                self.deployment,
+                f"Using start command for Nixpacks: {start_cmd}\n",
+            )
+        else:
+            append_log(
+                self.deployment,
+                "No start command detected; building with --no-error-without-start.\n",
+            )
+
+        try:
+            result = NixpacksBuilder.build_image(
+                source_dir=context_dir,
+                image_name=self.image_name,
+                env_vars=env_map,
+                start_cmd=start_cmd or None,
+                allow_missing_start=allow_missing_start,
+            )
+        except RuntimeError as exc:
+            # Defensive retry path for environments where start command probing is unstable.
+            if "no start command could be found" not in str(exc).lower():
+                raise
+            append_log(
+                self.deployment,
+                "Retrying Nixpacks build with --no-error-without-start.\n",
+            )
+            result = NixpacksBuilder.build_image(
+                source_dir=context_dir,
+                image_name=self.image_name,
+                env_vars=env_map,
+                start_cmd=None,
+                allow_missing_start=True,
+            )
 
         # NixpacksBuilder returns dict with stdout/stderr
         if result.get("stderr"):

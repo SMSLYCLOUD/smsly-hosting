@@ -1,7 +1,7 @@
 """
 AI Provider abstraction for SMSLY Hosting.
 
-Supports OpenAI, Grok (xAI), Google Gemini, and Claude (Anthropic).
+Supports OpenAI, Grok (xAI), Google Gemini, Claude (Anthropic), and Jules.
 All providers work together when multiple keys are configured:
 - 1 provider: uses it solo
 - 2+ providers: collaborative consensus mode
@@ -381,6 +381,70 @@ class ClaudeProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
+# Jules Provider
+# ---------------------------------------------------------------------------
+
+class JulesProvider(AIProvider):
+    """
+    Jules provider.
+
+    Uses an OpenAI-compatible `/chat/completions` API endpoint so it can run
+    against managed Jules-compatible gateways without custom SDK coupling.
+    """
+
+    def __init__(self):
+        self.api_key = os.environ.get("JULES_API_KEY", "")
+        self.model = os.environ.get("JULES_MODEL", "jules-latest")
+        self.base_url = os.environ.get(
+            "JULES_BASE_URL",
+            "https://api.jules.google.com/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"Jules ({self.model})"
+
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[Jules] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Jules ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        """Jules balance API is provider-specific; surface configuration state."""
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {
+            "balance": "Active (check Jules billing console)",
+            "currency": "USD",
+            "raw": {},
+        }
+
+
+# ---------------------------------------------------------------------------
 # Mock Provider (fallback when no API keys configured)
 # ---------------------------------------------------------------------------
 
@@ -420,6 +484,7 @@ PROVIDERS = {
     "grok": GrokProvider,
     "gemini": GeminiProvider,
     "claude": ClaudeProvider,
+    "jules": JulesProvider,
     "mock": MockProvider,
 }
 
@@ -428,6 +493,7 @@ ENV_KEY_MAP = {
     "grok": "GROK_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "claude": "CLAUDE_API_KEY",
+    "jules": "JULES_API_KEY",
 }
 
 SYSTEM_PROMPT = (
@@ -478,6 +544,7 @@ def _get_db_settings():
                     "grok_api_key", "grok_model",
                     "gemini_api_key", "gemini_model",
                     "claude_api_key", "claude_model",
+                    "jules_api_key", "jules_model",
                 ]
                 available = [f for f in known_fields if f in columns]
                 if not available:
@@ -533,6 +600,8 @@ def _sync_db_to_env():
         ("gemini_model", "GEMINI_MODEL", "gemini-2.0-flash"),
         ("claude_api_key", "CLAUDE_API_KEY", ""),
         ("claude_model", "CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        ("jules_api_key", "JULES_API_KEY", ""),
+        ("jules_model", "JULES_MODEL", "jules-latest"),
     ]
     for attr, env_key, default in pairs:
         val = _effective_env_value(getattr(cfg, attr, None), env_key, default)
