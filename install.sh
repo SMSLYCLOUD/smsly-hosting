@@ -1172,11 +1172,14 @@ except Exception as e:
     FAIL_COUNT=0
 
     # ── Check 1: Backend API health (internal — bypasses Caddy/Nginx) ──
-    echo -e "${BLUE}  [1/3] Backend API health (localhost:8090)...${NC}"
+    EP1_URL="http://127.0.0.1:8090/health"
+    echo -e "${BLUE}  [1/3] Backend API health...${NC}"
+    echo -e "${BLUE}        Endpoint: $EP1_URL${NC}"
     BACKEND_OK=false
+    EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
-        HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8090/health 2>/dev/null || echo "000")
-        if [ "$HTTP_CODE" = "200" ]; then
+        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null || echo "000")
+        if [ "$EP1_CODE" = "200" ]; then
             BACKEND_OK=true
             break
         fi
@@ -1186,10 +1189,12 @@ except Exception as e:
         sleep 3
     done
     if [ "$BACKEND_OK" = "true" ]; then
-        echo -e "${GREEN}  ✓ [1/3] Backend API: PASS (HTTP 200)${NC}"
+        EP1_RESULT="${GREEN}PASS${NC}"
+        echo -e "${GREEN}  ✓ [1/3] PASS — HTTP $EP1_CODE${NC}"
         PASS_COUNT=$((PASS_COUNT + 1))
     else
-        echo -e "${RED}  ✗ [1/3] Backend API: FAIL (HTTP $HTTP_CODE)${NC}"
+        EP1_RESULT="${RED}FAIL${NC}"
+        echo -e "${RED}  ✗ [1/3] FAIL — HTTP $EP1_CODE${NC}"
         echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=30 backend${NC}"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
@@ -1209,85 +1214,123 @@ if d and d != 'localhost':
         EP_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
     fi
     HTTPS_OK=false
+    EP2_CODE="---"
+    EP2_URL="(skipped)"
     if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ]; then
+        EP2_URL="https://${EP_DOMAIN}/health"
+        echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
-            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "https://${EP_DOMAIN}/health" 2>/dev/null || echo "000")
-            if [ "$HTTP_CODE" = "200" ]; then
+            EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$EP2_URL" 2>/dev/null || echo "000")
+            if [ "$EP2_CODE" = "200" ]; then
                 HTTPS_OK=true
                 break
             fi
             sleep 3
         done
         if [ "$HTTPS_OK" = "true" ]; then
-            echo -e "${GREEN}  ✓ [2/3] HTTPS domain ($EP_DOMAIN): PASS (HTTP 200)${NC}"
+            EP2_RESULT="${GREEN}PASS${NC}"
+            echo -e "${GREEN}  ✓ [2/3] PASS — HTTP $EP2_CODE${NC}"
             PASS_COUNT=$((PASS_COUNT + 1))
         else
-            echo -e "${RED}  ✗ [2/3] HTTPS domain ($EP_DOMAIN): FAIL (HTTP $HTTP_CODE)${NC}"
+            EP2_RESULT="${RED}FAIL${NC}"
+            echo -e "${RED}  ✗ [2/3] FAIL — HTTP $EP2_CODE${NC}"
             echo -e "${YELLOW}        Fix: systemctl status caddy && journalctl -u caddy --no-pager -n 15${NC}"
             FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
     else
-        echo -e "${YELLOW}  ⊘ [2/3] HTTPS domain: SKIPPED (no domain configured)${NC}"
+        EP2_RESULT="${YELLOW}SKIP${NC}"
+        echo -e "${YELLOW}  ⊘ [2/3] SKIPPED (no domain configured)${NC}"
     fi
 
-    # ── Check 3: Deployed service reachability (auto-discovers first active service) ──
-    echo -e "${BLUE}  [3/3] Deployed services routing...${NC}"
-    # Auto-discover first active deployed service domain from DB
-    SVC_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    # ── Check 3+: ALL deployed services (auto-discovered from DB) ──
+    echo -e "${BLUE}  [3/N] Deployed services routing...${NC}"
+
+    # Query ALL active service domains from the DB
+    ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
-svc = Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain='').first()
-if svc:
-    print(svc.public_domain.strip())
-" 2>/dev/null | tr -d '[:space:]' || true)"
-    TRAEFIK_OK=false
-    if [ -n "$SVC_DOMAIN" ]; then
-        # Test actual deployed service through Caddy/Traefik end-to-end
-        for attempt in 1 2 3; do
-            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "https://${SVC_DOMAIN}/" 2>/dev/null || echo "000")
-            if [ "$HTTP_CODE" != "000" ] && [ "$HTTP_CODE" != "502" ] && [ "$HTTP_CODE" != "503" ]; then
-                TRAEFIK_OK=true
-                break
-            fi
-            sleep 3
-        done
-        if [ "$TRAEFIK_OK" = "true" ]; then
-            echo -e "${GREEN}  ✓ [3/3] Service ($SVC_DOMAIN): PASS (HTTP $HTTP_CODE)${NC}"
-            PASS_COUNT=$((PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ [3/3] Service ($SVC_DOMAIN): FAIL (HTTP $HTTP_CODE)${NC}"
-            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=20 traefik${NC}"
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
+for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain='').order_by('name'):
+    print(f'{svc.name}|{svc.public_domain.strip()}')
+" 2>/dev/null | tr -d '\r' || true)"
+
+    # Also check Traefik port directly
+    EP3_URL="http://127.0.0.1:8081/"
+    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null || echo "000")
+    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ] && [ "$EP3_CODE" != "503" ]; then
+        EP3_RESULT="${GREEN}PASS${NC}"
+        echo -e "${GREEN}  ✓ Traefik proxy ($EP3_URL) — HTTP $EP3_CODE${NC}"
+        PASS_COUNT=$((PASS_COUNT + 1))
     else
-        # No deployed services — fall back to Traefik port check
-        for attempt in 1 2 3; do
-            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/ 2>/dev/null || echo "000")
-            if [ "$HTTP_CODE" != "000" ] && [ "$HTTP_CODE" != "502" ] && [ "$HTTP_CODE" != "503" ]; then
-                TRAEFIK_OK=true
-                break
-            fi
-            sleep 3
-        done
-        if [ "$TRAEFIK_OK" = "true" ]; then
-            echo -e "${GREEN}  ✓ [3/3] Traefik routing: PASS (HTTP $HTTP_CODE — no services deployed)${NC}"
-            PASS_COUNT=$((PASS_COUNT + 1))
-        else
-            echo -e "${RED}  ✗ [3/3] Traefik routing: FAIL (HTTP $HTTP_CODE)${NC}"
-            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=20 traefik${NC}"
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
+        EP3_RESULT="${RED}FAIL${NC}"
+        echo -e "${RED}  ✗ Traefik proxy ($EP3_URL) — HTTP $EP3_CODE${NC}"
+        echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=20 traefik${NC}"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
+
+    # Collect service results for the table
+    SVC_RESULTS=""
+    SVC_COUNT=0
+    if [ -n "$ALL_SVC_DOMAINS" ]; then
+        while IFS='|' read -r svc_name svc_domain; do
+            [ -z "$svc_domain" ] && continue
+            SVC_COUNT=$((SVC_COUNT + 1))
+            svc_url="https://${svc_domain}/"
+            echo -e "${BLUE}        Testing: $svc_name → $svc_url${NC}"
+            svc_code="000"
+            svc_ok=false
+            for attempt in 1 2 3; do
+                svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$svc_url" 2>/dev/null || echo "000")
+                if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
+                    svc_ok=true
+                    break
+                fi
+                sleep 2
+            done
+            if [ "$svc_ok" = "true" ]; then
+                svc_result="${GREEN}PASS${NC}"
+                echo -e "${GREEN}  ✓ $svc_name: HTTP $svc_code${NC}"
+                PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                svc_result="${RED}FAIL${NC}"
+                echo -e "${RED}  ✗ $svc_name: HTTP $svc_code${NC}"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+            SVC_RESULTS="${SVC_RESULTS}${svc_name}|${svc_url}|${svc_code}|${svc_result}\n"
+        done <<< "$ALL_SVC_DOMAINS"
+    fi
+    if [ "$SVC_COUNT" -eq 0 ]; then
+        echo -e "${YELLOW}        No active services deployed${NC}"
+    fi
+
+    # ── Results Table ──
+    TOTAL_CHECKS=$((PASS_COUNT + FAIL_COUNT))
+    echo ""
+    echo -e "${BLUE}  ╔══════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}  ║                        ENDPOINT VERIFICATION REPORT                     ║${NC}"
+    echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╦══════╦══════════╣${NC}"
+    echo -e "${BLUE}  ║  Endpoint                                            ║ HTTP ║  Result  ║${NC}"
+    echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╬══════╬══════════╣${NC}"
+    printf "  ║  %-52s ║ %-4s ║ " "Backend: $EP1_URL" "$EP1_CODE"
+    echo -e " $EP1_RESULT  ║"
+    printf "  ║  %-52s ║ %-4s ║ " "HTTPS: $EP2_URL" "$EP2_CODE"
+    echo -e " $EP2_RESULT  ║"
+    printf "  ║  %-52s ║ %-4s ║ " "Traefik: $EP3_URL" "$EP3_CODE"
+    echo -e " $EP3_RESULT  ║"
+    # Print each deployed service row
+    if [ -n "$SVC_RESULTS" ]; then
+        echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╬══════╬══════════╣${NC}"
+        echo -e "$SVC_RESULTS" | while IFS='|' read -r s_name s_url s_code s_result; do
+            [ -z "$s_name" ] && continue
+            printf "  ║  %-52s ║ %-4s ║ " "$s_name" "$s_code"
+            echo -e " $s_result  ║"
+        done
+    fi
+    echo -e "${BLUE}  ╚════════════════════════════════════════════════════════╩══════╩══════════╝${NC}"
 
     # ── Summary ──
-    echo ""
     if [ "$FAIL_COUNT" -eq 0 ]; then
-        echo -e "${GREEN}  ════════════════════════════════════════════${NC}"
-        echo -e "${GREEN}  ✓ All $PASS_COUNT/$((PASS_COUNT + FAIL_COUNT)) endpoint checks passed${NC}"
-        echo -e "${GREEN}  ════════════════════════════════════════════${NC}"
+        echo -e "\n${GREEN}  ✓ All $PASS_COUNT/$TOTAL_CHECKS endpoint checks passed${NC}"
     else
-        echo -e "${YELLOW}  ════════════════════════════════════════════${NC}"
-        echo -e "${YELLOW}  ⚠ $PASS_COUNT passed, $FAIL_COUNT failed — check logs above${NC}"
-        echo -e "${YELLOW}  ════════════════════════════════════════════${NC}"
+        echo -e "\n${YELLOW}  ⚠ $PASS_COUNT passed, $FAIL_COUNT failed out of $TOTAL_CHECKS checks${NC}"
     fi
 
     # Show container status
