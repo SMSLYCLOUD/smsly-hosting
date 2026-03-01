@@ -1112,14 +1112,7 @@ def _deploy_container(deployment, provider, image_name):
         # and Traefik labels enabled. No staging/promotion needed.
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id
-        deployment.save(update_fields=['status', 'container_id'])
-
-        # Deactivate previous deployments
-        service.deployments.filter(
-            status=Deployment.Status.ACTIVE,
-        ).exclude(id=deployment.id).update(
-            status=Deployment.Status.SUPERSEDED,
-        )
+        deployment.save()  # full save() triggers model hook that cancels other ACTIVE deploys
 
         update_stage(
             deployment,
