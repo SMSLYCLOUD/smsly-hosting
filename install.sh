@@ -46,7 +46,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     # Skip collection if values are already pre-seeded via env vars, or if
     # this is an --update / --wipe run (those don't need interactive input).
     _ARG1="${1:-}"
-    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--debug" ]] && [ -z "${USE_SSL:-}" ]; then
+    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
         # Detect public IP for the mode selection prompt
         _detect_ip() {
             local c="" ep=""
