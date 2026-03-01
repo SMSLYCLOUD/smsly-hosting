@@ -332,17 +332,11 @@ class BackupService:
             os.makedirs(temp_dir, exist_ok=True)
 
             # 1. Database Dump
-            # Assuming we are running in a container or have pg_dump installed.
             # If DB is in a container, we use docker exec.
             db_file = os.path.join(temp_dir, "db_dump.sql")
 
-            # Try to find postgres container
+            # Find the actual postgres container (not pgbouncer)
             try:
-                # Look for a container with 'postgres' in name or check settings
-                # For now, let's assume a standard name or configured via env
-                # If running on metal, use pg_dump directly.
-
-                # Check DATABASE_URL
                 db_url = settings.DATABASES['default']
                 host = db_url.get('HOST', 'localhost')
                 port = db_url.get('PORT', '5432')
@@ -353,26 +347,61 @@ class BackupService:
                 env = os.environ.copy()
                 env['PGPASSWORD'] = password
 
-                # Check if host is a container name
+                # Smart container discovery: find the actual postgres container
+                # The DB HOST in settings is often 'pgbouncer', but pg_dump
+                # must run inside the real postgres container.
+                pg_container = None
                 try:
-                    self.docker_client.containers.get(host)
-                    is_container = True
+                    for c in self.docker_client.containers.list():
+                        c_name = c.name.lower()
+                        c_image = (c.image.tags[0] if c.image.tags else '').lower()
+                        # Match containers with 'db' in name and postgres image
+                        if ('postgres' in c_image and 'pgbouncer' not in c_name):
+                            pg_container = c
+                            break
+                        # Fallback: match '-db-' in container name
+                        if ('-db-' in c_name or c_name.endswith('-db')
+                                and 'pgbouncer' not in c_name
+                                and 'redis' not in c_name):
+                            pg_container = c
                 except Exception:
-                    is_container = False
+                    pass
 
-                if is_container:
-                    # Exec inside container
-                    cmd = ["pg_dump", "-U", user, name]
-                    container = self.docker_client.containers.get(host)
-                    # This returns (exit_code, output)
-                    res = container.exec_run(cmd)
+                if pg_container:
+                    # Read DB name/user from container env if available
+                    c_env = {e.split('=', 1)[0]: e.split('=', 1)[1]
+                             for e in (pg_container.attrs.get('Config', {})
+                                       .get('Env', []))
+                             if '=' in e}
+                    pg_user = c_env.get('POSTGRES_USER', user)
+                    pg_db = c_env.get('POSTGRES_DB', name)
+
+                    cmd = ["pg_dump", "-U", pg_user, pg_db]
+                    res = pg_container.exec_run(cmd)
                     if res.exit_code == 0:
                         with open(db_file, 'wb') as f:
                             f.write(res.output)
                     else:
                         raise Exception(f"pg_dump failed: {res.output}")
+
+                elif host not in ('pgbouncer', 'localhost', '127.0.0.1'):
+                    # Host is a remote address, try direct pg_dump
+                    try:
+                        self.docker_client.containers.get(host)
+                        container = self.docker_client.containers.get(host)
+                        res = container.exec_run(["pg_dump", "-U", user, name])
+                        if res.exit_code == 0:
+                            with open(db_file, 'wb') as f:
+                                f.write(res.output)
+                        else:
+                            raise Exception(f"pg_dump failed: {res.output}")
+                    except Exception:
+                        import subprocess
+                        cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name]
+                        with open(db_file, 'w') as f:
+                            subprocess.run(cmd, env=env, stdout=f, check=True)
                 else:
-                    # Run local
+                    # Fallback: run pg_dump locally via pgbouncer's upstream
                     import subprocess
                     cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name]
                     with open(db_file, 'w') as f:
