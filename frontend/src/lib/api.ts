@@ -495,6 +495,48 @@ export const codeAnalysisApi = {
   },
 };
 
+// ─── Preview Environments API ───────────────────────────────────────────────
+
+export interface PreviewEnvironment {
+  id: string;
+  name: string;
+  branch: string;
+  pr_number: number | null;
+  preview_url: string;
+  health_status: string;
+  created_at: string;
+  latest_deployment: {
+    id: string;
+    status: string;
+    created_at: string;
+  } | null;
+}
+
+export const previewApi = {
+  /** Create a preview environment for a service */
+  create: async (serviceId: string, branch: string, prNumber?: number): Promise<any> => {
+    const res = await api.post(`/services/${serviceId}/create-preview/`, {
+      branch,
+      ...(prNumber ? { pr_number: prNumber } : {}),
+    });
+    return res.data;
+  },
+
+  /** List all previews for a service */
+  list: async (serviceId: string): Promise<{ count: number; results: PreviewEnvironment[] }> => {
+    const res = await api.get(`/services/${serviceId}/previews/`);
+    return res.data;
+  },
+
+  /** Destroy a preview */
+  destroy: async (serviceId: string, previewId: string): Promise<{ message: string }> => {
+    const res = await api.delete(`/services/${serviceId}/destroy-preview/`, {
+      data: { preview_id: previewId },
+    });
+    return res.data;
+  },
+};
+
 // ─── Teams API ──────────────────────────────────────────────────────────────
 
 export interface Team {

@@ -510,6 +510,192 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
         return Response(DeploymentSerializer(deployment).data)
 
+    # ── Preview Environments ─────────────────────────────────────────────
+    @action(detail=True, methods=['post'], url_path='create-preview')
+    def create_preview(self, request, pk=None):
+        """
+        Create a preview environment from a specific branch/PR.
+        POST /api/v1/services/{id}/create-preview/
+        Body: { "branch": "feature/login", "pr_number": 42 }
+
+        Clones the parent service config, sets is_preview=True, deploys
+        on the specified branch with a unique subdomain.
+        """
+        parent = self.get_object()
+        branch = request.data.get('branch')
+        pr_number = request.data.get('pr_number')
+
+        if not branch:
+            return Response(
+                {'error': 'branch is required'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        # Check for existing preview on same branch
+        existing = Service.objects.filter(
+            parent_service=parent, branch=branch, is_preview=True
+        ).first()
+        if existing:
+            return Response({
+                'error': f'Preview already exists for branch "{branch}"',
+                'preview_id': str(existing.id),
+                'preview_url': existing.service_url,
+            }, status=status.HTTP_409_CONFLICT)
+
+        # Build preview name: pr-42-myservice or preview-feature-login-myservice
+        slug_branch = re.sub(r'[^a-z0-9]+', '-', branch.lower()).strip('-')[:30]
+        if pr_number:
+            preview_name = f"pr-{pr_number}-{parent.name}"[:255]
+        else:
+            preview_name = f"preview-{slug_branch}-{parent.name}"[:255]
+
+        # Ensure unique name
+        base_name = preview_name
+        counter = 1
+        while Service.objects.filter(name=preview_name).exists():
+            preview_name = f"{base_name}-{counter}"[:255]
+            counter += 1
+
+        try:
+            with transaction.atomic():
+                preview = Service.objects.create(
+                    name=preview_name,
+                    repository_url=parent.repository_url,
+                    branch=branch,
+                    deploy_type=parent.deploy_type,
+                    buildpack=parent.buildpack,
+                    docker_image=parent.docker_image,
+                    owner=parent.owner,
+                    project=parent.project,
+                    provider=parent.provider,
+                    build_command=parent.build_command,
+                    start_command=parent.start_command,
+                    root_directory=parent.root_directory,
+                    internal_port=parent.internal_port,
+                    cpu_cores=parent.cpu_cores,
+                    memory_mb=parent.memory_mb,
+                    health_check_path=parent.health_check_path,
+                    health_check_interval=parent.health_check_interval,
+                    health_check_timeout=parent.health_check_timeout,
+                    health_check_retries=parent.health_check_retries,
+                    restart_policy=parent.restart_policy,
+                    deploy_mode=parent.deploy_mode,
+                    compose_file=parent.compose_file,
+                    compose_main_service=parent.compose_main_service,
+                    is_preview=True,
+                    parent_service=parent,
+                    pr_number=pr_number,
+                )
+
+                # Copy env vars from parent
+                for env in parent.env_vars.all():
+                    EnvironmentVariable.objects.create(
+                        service=preview,
+                        key=env.key,
+                        value=env.value,
+                        is_secret=env.is_secret,
+                        source=env.source,
+                    )
+
+                # Create and trigger deployment
+                deployment = Deployment.objects.create(
+                    service=preview,
+                    status=Deployment.Status.QUEUED,
+                    commit_hash='HEAD',
+                    commit_message=f"Preview deploy: {branch}"
+                    + (f" (PR #{pr_number})" if pr_number else ""),
+                )
+
+                provider = _resolve_provider_for_service(preview)
+                if provider:
+                    smart_deploy_task.delay(
+                        str(deployment.id), str(provider.id))
+
+        except (IntegrityError, ValidationError) as exc:
+            return Response(
+                {'error': f'Failed to create preview: {str(exc)}'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            'preview': ServiceSerializer(preview).data,
+            'deployment': DeploymentSerializer(deployment).data,
+            'preview_url': preview.service_url,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='previews')
+    def list_previews(self, request, pk=None):
+        """
+        List all preview environments for a service.
+        GET /api/v1/services/{id}/previews/
+        """
+        parent = self.get_object()
+        previews = Service.objects.filter(
+            parent_service=parent, is_preview=True
+        ).order_by('-created_at')
+
+        data = []
+        for preview in previews:
+            latest_deploy = preview.deployments.order_by('-created_at').first()
+            data.append({
+                'id': str(preview.id),
+                'name': preview.name,
+                'branch': preview.branch,
+                'pr_number': preview.pr_number,
+                'preview_url': preview.service_url,
+                'health_status': preview.health_status,
+                'created_at': preview.created_at.isoformat(),
+                'latest_deployment': {
+                    'id': str(latest_deploy.id),
+                    'status': latest_deploy.status,
+                    'created_at': latest_deploy.created_at.isoformat(),
+                } if latest_deploy else None,
+            })
+
+        return Response({'count': len(data), 'results': data})
+
+    @action(detail=True, methods=['delete'], url_path='destroy-preview')
+    def destroy_preview(self, request, pk=None):
+        """
+        Destroy a preview environment.
+        DELETE /api/v1/services/{id}/destroy-preview/
+        Body: { "preview_id": "uuid" }
+        """
+        parent = self.get_object()
+        preview_id = request.data.get('preview_id')
+
+        if not preview_id:
+            return Response(
+                {'error': 'preview_id is required'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            preview = Service.objects.get(
+                id=preview_id, parent_service=parent, is_preview=True)
+        except Service.DoesNotExist:
+            return Response(
+                {'error': 'Preview not found'},
+                status=status.HTTP_404_NOT_FOUND)
+
+        # Stop the container if running
+        try:
+            provider = _resolve_provider_for_service(preview)
+            if provider:
+                from apps.cloud.adapter import get_adapter
+                adapter = get_adapter(provider)
+                last_deploy = preview.deployments.filter(
+                    status=Deployment.Status.ACTIVE
+                ).first()
+                if last_deploy and last_deploy.container_id:
+                    adapter.stop_container(last_deploy.container_id)
+        except Exception:
+            logger.warning("Could not stop preview container for %s", preview_id)
+
+        preview_name = preview.name
+        preview.delete()
+
+        return Response({
+            'message': f'Preview "{preview_name}" destroyed',
+        })
+
     @action(detail=True, methods=['post'], url_path='multi-deploy')
     def multi_deploy(self, request, pk=None):
         """
