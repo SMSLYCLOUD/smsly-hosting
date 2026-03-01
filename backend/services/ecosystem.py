@@ -122,6 +122,92 @@ BUILD_STRATEGY = {
 }
 
 
+def _detect_addons_from_imports(clone_dir: str) -> dict:
+    """
+    Scan source files in a cloned repo for import patterns that indicate
+    required addons (databases, caches, queues, search engines, storage).
+
+    Returns: {
+        "addons": set of addon names,
+        "api_calls": list of detected external API URLs,
+        "frameworks": list of detected framework patterns,
+    }
+    """
+    if not clone_dir or not os.path.isdir(clone_dir):
+        return {"addons": set(), "api_calls": [], "frameworks": []}
+
+    # Import → addon mapping
+    IMPORT_ADDON_MAP = {
+        # Python imports
+        "psycopg2": "POSTGRES", "asyncpg": "POSTGRES", "sqlalchemy": "POSTGRES",
+        "django.db": "POSTGRES", "databases": "POSTGRES",
+        "redis": "REDIS", "aioredis": "REDIS", "celery": "REDIS",
+        "rq": "REDIS", "django_redis": "REDIS",
+        "pymongo": "MONGODB", "motor": "MONGODB", "mongoengine": "MONGODB",
+        "elasticsearch": "ELASTICSEARCH", "opensearchpy": "ELASTICSEARCH",
+        "pika": "RABBITMQ", "aio_pika": "RABBITMQ", "kombu": "RABBITMQ",
+        "qdrant_client": "QDRANT", "qdrant": "QDRANT",
+        "minio": "MINIO", "boto3": "MINIO",
+        "mysql": "MYSQL", "pymysql": "MYSQL", "aiomysql": "MYSQL",
+        # JS/TS imports
+        "pg": "POSTGRES", "sequelize": "POSTGRES", "prisma": "POSTGRES",
+        "typeorm": "POSTGRES", "knex": "POSTGRES",
+        "ioredis": "REDIS", "bull": "REDIS", "bullmq": "REDIS",
+        "mongoose": "MONGODB", "mongodb": "MONGODB",
+        "@elastic/elasticsearch": "ELASTICSEARCH",
+        "amqplib": "RABBITMQ",
+        "@aws-sdk/client-s3": "MINIO",
+    }
+
+    addons = set()
+    api_calls = []
+    frameworks = []
+
+    skip_dirs = {'node_modules', '.git', '__pycache__', 'venv', '.venv',
+                 '.next', 'dist', 'build', '.cache', 'coverage'}
+
+    for root, dirs, filenames in os.walk(clone_dir, topdown=True):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+
+        for fname in filenames:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in ('.py', '.js', '.ts', '.tsx', '.jsx'):
+                continue
+
+            full_path = os.path.join(root, fname)
+            try:
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(50_000)  # Cap at 50KB per file
+            except OSError:
+                continue
+
+            # Check imports against addon map
+            for import_name, addon in IMPORT_ADDON_MAP.items():
+                if import_name in content:
+                    addons.add(addon)
+
+            # Detect external API calls
+            import re
+            for m in re.finditer(r'https?://[^\s\'"`,)]+', content):
+                url = m.group(0)
+                if not any(skip in url for skip in ['localhost', '127.0.0.1', 'example.com']):
+                    api_calls.append(url[:120])
+
+            # Detect framework patterns
+            if 'FastAPI' in content or 'fastapi' in content:
+                frameworks.append('fastapi')
+            if 'express' in content:
+                frameworks.append('express')
+            if 'NestFactory' in content:
+                frameworks.append('nestjs')
+
+    return {
+        "addons": addons,
+        "api_calls": list(set(api_calls))[:20],  # Dedupe + cap
+        "frameworks": list(set(frameworks)),
+    }
+
+
 def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
     """Fast local analysis without AI calls. Optionally scans cloned files for env vars."""
     languages = []
@@ -162,13 +248,18 @@ def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
         if "mongo" in f_lower:
             addons.add("MONGODB")
 
+    # ── Deep Import Scan (Code Analysis Integration) ─────────────────
+    # If we have a cloned directory, scan actual imports for precise addons
+    import_scan = _detect_addons_from_imports(clone_dir)
+    addons |= import_scan["addons"]
+
     # Primary stack is the first detected, but expose all languages
     stack = languages[0] if languages else "unknown"
 
     # ── Env Var Detection ──
     env_vars = _detect_env_vars(files, stack, port, clone_dir)
 
-    return {
+    result = {
         "stack": stack,
         "languages": languages,
         "port": port,
@@ -176,6 +267,14 @@ def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
         "addons": list(addons),
         "env_vars": env_vars,
     }
+
+    # Attach deep analysis metadata if available
+    if import_scan["frameworks"]:
+        result["detected_frameworks"] = import_scan["frameworks"]
+    if import_scan["api_calls"]:
+        result["external_apis"] = import_scan["api_calls"]
+
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -6,8 +6,10 @@ import {
   Brain, Cpu, Zap, Shield, Eye, Activity, BarChart3, Sparkles,
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
   Gauge, CircuitBoard, Bot, MessageSquare, AlertTriangle, Flame,
-  Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock
+  Target, Lightbulb, DollarSign, Clock, ArrowUpRight, Settings, Save, Lock,
+  Code2
 } from 'lucide-react';
+import CodeMapView from '@/components/intelligence/CodeMapView';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { aiApi, type AIProvidersResponse } from '@/lib/api';
 import api from '@/lib/api';
@@ -291,10 +293,11 @@ export default function IntelligencePage() {
           </div>
 
           <Tabs defaultValue="dashboard" className="w-full">
-            <TabsList className="grid w-full grid-cols-4 bg-muted/20">
+            <TabsList className="grid w-full grid-cols-5 bg-muted/20">
               <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
               <TabsTrigger value="anomalies">Anomalies</TabsTrigger>
-              <TabsTrigger value="cost">Cost Intelligence</TabsTrigger>
+              <TabsTrigger value="cost">Cost Intel</TabsTrigger>
+              <TabsTrigger value="codemap"><Code2 className="w-3.5 h-3.5 mr-1 inline" />Code Map</TabsTrigger>
               <TabsTrigger value="chat">AI Chat</TabsTrigger>
             </TabsList>
 
@@ -500,6 +503,11 @@ export default function IntelligencePage() {
                      </div>
                   </CardContent>
                </Card>
+            </TabsContent>
+
+            {/* ── Code Map Tab ─────────────────────────────────────────── */}
+            <TabsContent value="codemap" className="mt-6">
+              <CodeMapView />
             </TabsContent>
 
           </Tabs>
