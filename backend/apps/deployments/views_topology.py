@@ -37,7 +37,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
             owner=request.user
         ).prefetch_related(
             'addons', 'volumes', 'env_vars',
-            'custom_domains', 'cron_jobs',
+            'cron_jobs',
         )
 
         nodes = []
@@ -177,29 +177,31 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 })
 
             # ── Custom domain nodes + edges ──────────────────────────
-            if hasattr(service, 'custom_domains'):
-                for domain in service.custom_domains.all():
-                    domain_id = f"domain-{domain.id}"
-                    nodes.append({
-                        'id': domain_id,
-                        'type': 'domain',
-                        'data': {
-                            'name': domain.domain,
-                            'label': domain.domain,
-                            'kind': 'EXTERNAL',
-                            'subtype': 'DOMAIN',
-                            'status': getattr(domain, 'verification_status', 'pending'),
-                            'region': '',
-                            'ssl': getattr(domain, 'ssl_enabled', False),
-                        }
-                    })
-                    edges.append({
-                        'id': _edge_id(),
-                        'source': domain_id,
-                        'target': svc_id,
-                        'type': 'DOMAIN',
-                        'label': 'routes to',
-                    })
+            # custom_domains is a JSONField (list of strings), not a relation
+            domains_list = getattr(service, 'custom_domains', None) or []
+            for idx, domain_str in enumerate(domains_list):
+                if not domain_str:
+                    continue
+                domain_id = f"domain-{svc_id}-{idx}"
+                nodes.append({
+                    'id': domain_id,
+                    'type': 'domain',
+                    'data': {
+                        'name': domain_str,
+                        'label': domain_str,
+                        'kind': 'EXTERNAL',
+                        'subtype': 'DOMAIN',
+                        'status': 'ACTIVE',
+                        'region': '',
+                    }
+                })
+                edges.append({
+                    'id': _edge_id(),
+                    'source': domain_id,
+                    'target': svc_id,
+                    'type': 'DOMAIN',
+                    'label': 'routes to',
+                })
 
             # ── Cron job nodes + edges ───────────────────────────────
             if hasattr(service, 'cron_jobs'):
