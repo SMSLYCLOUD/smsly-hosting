@@ -30,6 +30,7 @@ class ServerBackup(models.Model):
     file_path = models.CharField(max_length=500, blank=True)
     size_bytes = models.BigIntegerField(default=0)
     services_included = models.JSONField(default=list)
+    error_message = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

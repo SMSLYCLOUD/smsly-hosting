@@ -5,6 +5,7 @@ import json
 import uuid
 import logging
 import shutil
+import traceback
 import docker
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.utils import timezone
@@ -18,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 class BackupService:
     def __init__(self):
-        self.docker_client = docker.from_env()
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            self.docker_client = get_docker_client(timeout=120)
+        except Exception as e:
+            logger.warning("Docker client init failed (backups requiring Docker will fail): %s", e)
+            self.docker_client = None
 
     def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
         service = Service.objects.get(id=service_id)
@@ -461,7 +467,9 @@ class BackupService:
             return backup
 
         except Exception as e:
+            logger.error("Server backup failed: %s\n%s", e, traceback.format_exc())
             backup.status = 'FAILED'
+            backup.error_message = str(e)[:2000]
             backup.save()
             raise
         finally:
