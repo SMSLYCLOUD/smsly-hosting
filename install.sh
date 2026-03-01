@@ -1776,8 +1776,15 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
         chmod +x /usr/bin/caddy
         echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
     else
-        echo -e "${YELLOW}  ⚠ Custom Caddy build failed — falling back to standard Caddy...${NC}"
-        if ! command -v caddy &> /dev/null; then
+        echo -e "${YELLOW}  ⚠ Custom Caddy build failed — trying pre-built download...${NC}"
+        # Fallback 1: Download pre-built Caddy with Cloudflare DNS from Caddy's download API
+        if curl -fsSL -o /usr/bin/caddy \
+            "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/cloudflare" 2>/dev/null; then
+            chmod +x /usr/bin/caddy
+            echo -e "${GREEN}  ✓ Pre-built Caddy with Cloudflare DNS downloaded${NC}"
+        elif ! command -v caddy &> /dev/null; then
+            # Fallback 2: Install stock Caddy from apt (no wildcard SSL, but basic HTTPS works)
+            echo -e "${YELLOW}  ⚠ Download also failed — installing stock Caddy (no wildcard SSL)...${NC}"
             apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
