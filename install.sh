@@ -404,6 +404,7 @@ case "${1:-}" in
     --wipe)            WIPE_MODE="true" ;;
     --recover)         RECOVER_MODE="true" ;;
     --debug)           DEBUG_MODE="true" ;;
+    --verify)          VERIFY_MODE="true" ;;
     --help|-h)
         echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--recover|--debug|--wipe]"
         echo ""
@@ -413,6 +414,7 @@ case "${1:-}" in
         echo "  --update-backend   Pull latest code and rebuild backend only"
         echo "  --recover          Restart Docker/network/runtime stack without deleting data"
         echo "  --debug            Print deep runtime diagnostics (containers, networks, health, logs)"
+        echo "  --verify           Run endpoint verification only (no changes)"
         echo "  --wipe             Delete existing install artifacts (for fresh VPS reset)"
         exit 0
         ;;
@@ -838,6 +840,83 @@ if [ "$RECOVER_MODE" = "true" ]; then
     ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
     recover_runtime_stack
     debug_platform_status
+    exit 0
+fi
+
+# =============================================================================
+# VERIFY MODE — Run endpoint checks only (no changes)
+# =============================================================================
+if [ "${VERIFY_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --verify)${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR" 2>/dev/null || { echo -e "${RED}x $INSTALL_DIR not found. Run fresh install first.${NC}"; exit 1; }
+
+    DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
+
+    echo -e "\n${BLUE}  → Running endpoint verification...${NC}"
+    PASS_COUNT=0
+    FAIL_COUNT=0
+
+    # Backend health
+    EP1_URL="http://127.0.0.1:8090/health"
+    EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -L "$EP1_URL" 2>/dev/null || echo "000")
+    if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
+        echo -e "${GREEN}  ✓ Backend: HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Backend: HTTP $EP1_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+
+    # HTTPS domain
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+        EP2_URL="https://${DOMAIN}/health"
+        EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 -L "$EP2_URL" 2>/dev/null || echo "000")
+        if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
+            echo -e "${GREEN}  ✓ HTTPS: HTTP $EP2_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ HTTPS: HTTP $EP2_CODE ($EP2_URL)${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    fi
+
+    # Traefik
+    EP3_URL="http://127.0.0.1:8081/"
+    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null || echo "000")
+    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ] && [ "$EP3_CODE" != "503" ]; then
+        echo -e "${GREEN}  ✓ Traefik: HTTP $EP3_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+    else
+        echo -e "${RED}  ✗ Traefik: HTTP $EP3_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+
+    # Deployed service domains
+    ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import Service
+for s in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain=''):
+    print(f'{s.name}|{s.public_domain.strip()}')
+" 2>/dev/null | tr -d '\r' || true)"
+
+    if [ -n "$ALL_SVC_DOMAINS" ]; then
+        while IFS='|' read -r svc_name svc_domain; do
+            [ -z "$svc_domain" ] && continue
+            svc_url="https://${svc_domain}/"
+            svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$svc_url" 2>/dev/null || echo "000")
+            if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
+                echo -e "${GREEN}  ✓ $svc_name ($svc_domain): HTTP $svc_code${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                echo -e "${RED}  ✗ $svc_name ($svc_domain): HTTP $svc_code${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        done <<< "$ALL_SVC_DOMAINS"
+    fi
+
+    TOTAL=$((PASS_COUNT + FAIL_COUNT))
+    if [ "$FAIL_COUNT" -eq 0 ]; then
+        echo -e "\n${GREEN}  ✓ All $PASS_COUNT/$TOTAL checks passed${NC}"
+    else
+        echo -e "\n${YELLOW}  ⚠ $PASS_COUNT passed, $FAIL_COUNT failed out of $TOTAL checks${NC}"
+    fi
+
+    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null || \
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
     exit 0
 fi
 
@@ -1351,20 +1430,20 @@ for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=
     echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╦══════╦══════════╣${NC}"
     echo -e "${BLUE}  ║  Endpoint                                            ║ HTTP ║  Result  ║${NC}"
     echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╬══════╬══════════╣${NC}"
-    printf "  ║  %-52s ║ %-4s ║ " "Backend: $EP1_URL" "$EP1_CODE"
+    printf "  ║  %-52.52s ║ %-4s ║ " "Backend: $EP1_URL" "$EP1_CODE"
     echo -e " $EP1_RESULT  ║"
-    printf "  ║  %-52s ║ %-4s ║ " "HTTPS: $EP2_URL" "$EP2_CODE"
+    printf "  ║  %-52.52s ║ %-4s ║ " "HTTPS: $EP2_URL" "$EP2_CODE"
     echo -e " $EP2_RESULT  ║"
-    printf "  ║  %-52s ║ %-4s ║ " "Traefik: $EP3_URL" "$EP3_CODE"
+    printf "  ║  %-52.52s ║ %-4s ║ " "Traefik: $EP3_URL" "$EP3_CODE"
     echo -e " $EP3_RESULT  ║"
     # Print each deployed service row
     if [ -n "$SVC_RESULTS" ]; then
         echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╬══════╬══════════╣${NC}"
-        echo -e "$SVC_RESULTS" | while IFS='|' read -r s_name s_url s_code s_result; do
+        while IFS='|' read -r s_name s_url s_code s_result; do
             [ -z "$s_name" ] && continue
-            printf "  ║  %-52s ║ %-4s ║ " "$s_name" "$s_code"
+            printf "  ║  %-52.52s ║ %-4s ║ " "$s_name" "$s_code"
             echo -e " $s_result  ║"
-        done
+        done <<< "$(echo -e "$SVC_RESULTS")"
     fi
     echo -e "${BLUE}  ╚════════════════════════════════════════════════════════╩══════╩══════════╝${NC}"
 
