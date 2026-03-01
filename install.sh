@@ -36,7 +36,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
 # To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
+if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
