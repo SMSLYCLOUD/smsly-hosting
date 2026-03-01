@@ -335,6 +335,10 @@ services:
       # Read Docker metadata via restricted socket-proxy
       - "--providers.docker.endpoint=tcp://socket-proxy:2375"
       - "--entrypoints.web.address=:80"
+      # Trust X-Forwarded-* headers from Caddy (localhost).
+      # Without this, Traefik overrides X-Forwarded-Proto to 'http'
+      # causing redirect loops in apps that check the proto header.
+      - "--entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
       - "--log.level=WARN"
     ports:
       - "127.0.0.1:8081:80" # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
