@@ -1151,17 +1151,13 @@ if not created and not cp.is_active:
         echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
     fi
 
-    # ─── Caddy: Regenerate Caddyfile from DB (picks up new service domains) ──
+    # ─── Caddy: Regenerate Caddyfile with service domains (writes directly to host) ──
     if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import PlatformConfig
-from services.caddy_manager import generate_caddyfile, apply_caddyfile
-config = PlatformConfig.load()
-content = generate_caddyfile(config)
-result = apply_caddyfile(content)
-print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
-" 2>/dev/null || echo -e "${YELLOW}  ⚠ Caddyfile regeneration skipped (backend not ready)${NC}"
+
+        # Always regenerate directly to /etc/caddy/Caddyfile with service blocks.
+        # This is more reliable than the Django caddy_manager → container volume → watcher chain.
+        generate_safe_caddyfile "update flow caddy regen"
 
         # ── Sync Cloudflare token to Caddy systemd override ──
         # The Caddyfile uses {env.CLOUDFLARE_API_TOKEN} — Caddy reads this from
@@ -1229,9 +1225,9 @@ print('Stripped tls blocks')
             fi
         fi
 
-        # ROBUST SAFETY: Use shared function (C4 fix — single source of truth)
+        # Final validation — if still broken, regenerate one more time
         if caddy_needs_fix; then
-            generate_safe_caddyfile "update flow validation"
+            generate_safe_caddyfile "post-token-strip validation"
         fi
 
         systemctl restart caddy 2>/dev/null || true
