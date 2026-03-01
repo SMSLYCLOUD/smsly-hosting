@@ -1112,8 +1112,7 @@ def _deploy_container(deployment, provider, image_name):
         # and Traefik labels enabled. No staging/promotion needed.
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id
-        deployment.promoted_at = timezone.now()
-        deployment.save(update_fields=['status', 'container_id', 'promoted_at'])
+        deployment.save(update_fields=['status', 'container_id'])
 
         # Deactivate previous deployments
         service.deployments.filter(
