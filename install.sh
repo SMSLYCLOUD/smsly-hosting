@@ -602,7 +602,7 @@ if d and d != 'localhost':
     local svc_blocks=""
     svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
-for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain=''):
+for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
     d = svc.public_domain.strip()
     if d:
         print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
@@ -966,8 +966,9 @@ if [ -n "$UPDATE_MODE" ]; then
         touch "$INSTALL_DIR/.git-stash-marker"
     fi
 
-    echo -e "${BLUE}  → Pulling latest code from GitHub...${NC}"
-    git pull origin main
+    echo -e "${BLUE}  → Force-pulling latest code from GitHub...${NC}"
+    git fetch origin main
+    git reset --hard origin/main
 
     # Clean up stash marker (pull succeeded, we commit to the new code)
     rm -f "$INSTALL_DIR/.git-stash-marker"
@@ -1262,7 +1263,7 @@ try:
         print('WARN: No active cloud provider')
     else:
         count = 0
-        for svc in Service.objects.filter(is_active=True):
+        for svc in Service.objects.all():
             dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
             if not dep or not dep.commit_hash:
                 continue
@@ -1342,7 +1343,7 @@ if d and d != 'localhost':
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
             EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$EP2_URL" 2>/dev/null || echo "000")
-            if [ "$EP2_CODE" = "200" ]; then
+            if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
                 HTTPS_OK=true
                 break
             fi
