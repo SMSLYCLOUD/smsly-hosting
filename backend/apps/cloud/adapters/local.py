@@ -283,11 +283,9 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
         }
-        if enable_traefik_tls:
-            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
-            labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
-        else:
-            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
+        # Always use 'web' entrypoint — Caddy handles TLS termination,
+        # Traefik only runs on HTTP (:80). No 'websecure' entrypoint exists.
+        labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
 
         # Resource limits
         run_kwargs = {}
