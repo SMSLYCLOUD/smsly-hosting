@@ -2346,8 +2346,8 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     queryset = ServerBackup.objects.all().order_by('-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(status='PENDING')
-        create_server_backup_task.delay()
+        backup = serializer.save(status='PENDING')
+        create_server_backup_task.delay(backup_id=str(backup.id))
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
