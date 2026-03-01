@@ -1015,18 +1015,16 @@ ENVEOF
             # No valid token — strip dns cloudflare blocks to prevent crash
             if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
-                sed -i '/tls {/{N;/dns cloudflare/d}' /etc/caddy/Caddyfile
-                sed -i '/^[[:space:]]*tls {[[:space:]]*$/,/^[[:space:]]*}[[:space:]]*$/{/dns cloudflare/d}' /etc/caddy/Caddyfile
-                # Remove empty tls {} blocks
+                # Remove entire tls { ... } blocks (sed left orphan } before)
                 python3 -c "
 import re
 with open('/etc/caddy/Caddyfile') as f:
     content = f.read()
-# Remove tls blocks that are empty or only have whitespace
-content = re.sub(r'\n\s*tls\s*\{\s*\n\s*\}\s*\n', '\n', content)
+# Remove tls blocks including opening brace, contents, and closing brace
+content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
 with open('/etc/caddy/Caddyfile', 'w') as f:
     f.write(content)
-print('Stripped empty tls blocks')
+print('Stripped tls blocks')
 " 2>/dev/null || true
                 echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
             fi
