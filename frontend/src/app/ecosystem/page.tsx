@@ -103,6 +103,7 @@ export default function EcosystemPage() {
     const [deployResults, setDeployResults] = useState<DeployResult[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
+    const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
 
     // Poll for scan task completion
     const pollTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
@@ -204,6 +205,74 @@ export default function EcosystemPage() {
             skip: !updated.services[index].skip,
         };
         setPlan(updated);
+    };
+
+    // Update env var
+    const updateEnvVar = (serviceIndex: number, key: string, value: string) => {
+        if (!plan) return;
+        const updated = { ...plan };
+        updated.services = [...updated.services];
+        const newEnv = { ...updated.services[serviceIndex].env_vars };
+        newEnv[key] = value;
+        updated.services[serviceIndex] = {
+            ...updated.services[serviceIndex],
+            env_vars: newEnv,
+        };
+        setPlan(updated);
+    };
+
+    // Handle paste .env
+    const handlePasteEnv = async (serviceIndex: number) => {
+        try {
+            const text = await navigator.clipboard.readText();
+            const lines = text.split('\n');
+            const newEnvVars: Record<string, string> = {};
+
+            lines.forEach((line) => {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('#')) {
+                    const match = trimmed.match(/^([^=]+)=(.*)$/);
+                    if (match) {
+                        const [, key, val] = match;
+                        // Remove surrounding quotes if present
+                        let cleanVal = val.trim();
+                        if (cleanVal.startsWith('"') && cleanVal.endsWith('"')) {
+                            cleanVal = cleanVal.slice(1, -1);
+                        } else if (cleanVal.startsWith("'") && cleanVal.endsWith("'")) {
+                            cleanVal = cleanVal.slice(1, -1);
+                        }
+                        newEnvVars[key.trim()] = cleanVal;
+                    }
+                }
+            });
+
+            if (Object.keys(newEnvVars).length > 0 && plan) {
+                const updated = { ...plan };
+                updated.services = [...updated.services];
+                const existingEnv = updated.services[serviceIndex].env_vars || {};
+                updated.services[serviceIndex] = {
+                    ...updated.services[serviceIndex],
+                    env_vars: { ...existingEnv, ...newEnvVars },
+                };
+                setPlan(updated);
+            }
+        } catch (err) {
+            console.error('Failed to read clipboard', err);
+        }
+    };
+
+    // Handle individual retry
+    const handleRetry = async (deploymentId: string, repoIndex: number) => {
+        try {
+            const data = await apiPost(`/api/v1/cloud/deployments/${deploymentId}/retry/`);
+            if (data) {
+                const updatedResults = [...deployResults];
+                updatedResults[repoIndex].status = 'queued';
+                setDeployResults(updatedResults);
+            }
+        } catch (err: any) {
+            setError(err.message || 'Failed to retry deployment');
+        }
     };
 
     return (
@@ -350,8 +419,8 @@ export default function EcosystemPage() {
                                 {plan.services
                                     .sort((a, b) => a.deploy_order - b.deploy_order)
                                     .map((svc, idx) => (
+                                        <div key={svc.repo}>
                                         <motion.div
-                                            key={svc.repo}
                                             initial={{ opacity: 0, x: -20 }}
                                             animate={{ opacity: 1, x: 0 }}
                                             transition={{ delay: idx * 0.05 }}
@@ -387,23 +456,63 @@ export default function EcosystemPage() {
                                                             </span>
                                                         ))}
                                                         {Object.keys(svc.env_vars || {}).length > 0 && (
-                                                            <span className="text-xs text-muted-foreground">
-                                                                {Object.keys(svc.env_vars).length} env vars
-                                                            </span>
+                                                            <button
+                                                                onClick={() => setExpandedEnv(expandedEnv === idx ? null : idx)}
+                                                                className="text-xs text-primary hover:underline"
+                                                            >
+                                                                {Object.keys(svc.env_vars).length} env vars {expandedEnv === idx ? '▲' : '▼'}
+                                                            </button>
                                                         )}
                                                     </div>
                                                 </div>
                                             </div>
-                                            <button
-                                                onClick={() => toggleSkip(idx)}
-                                                className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${svc.skip
-                                                        ? 'border-border text-muted-foreground hover:text-foreground'
-                                                        : 'border-emerald-500/30 text-emerald-500 bg-emerald-500/10'
-                                                    }`}
-                                            >
-                                                {svc.skip ? 'Skipped' : 'Include'}
-                                            </button>
+                                            <div className="flex flex-col gap-2 items-end">
+                                                <button
+                                                    onClick={() => toggleSkip(idx)}
+                                                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${svc.skip
+                                                            ? 'border-border text-muted-foreground hover:text-foreground'
+                                                            : 'border-emerald-500/30 text-emerald-500 bg-emerald-500/10'
+                                                        }`}
+                                                >
+                                                    {svc.skip ? 'Skipped' : 'Include'}
+                                                </button>
+                                            </div>
                                         </motion.div>
+                                        {expandedEnv === idx && !svc.skip && (
+                                            <motion.div
+                                                initial={{ opacity: 0, height: 0 }}
+                                                animate={{ opacity: 1, height: 'auto' }}
+                                                className="bg-card border border-t-0 rounded-b-xl p-4 -mt-2 space-y-3"
+                                            >
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <h4 className="text-sm font-semibold text-muted-foreground">Environment Variables</h4>
+                                                    <button
+                                                        onClick={() => handlePasteEnv(idx)}
+                                                        className="text-xs text-primary bg-primary/10 px-2 py-1 rounded hover:bg-primary/20"
+                                                    >
+                                                        Paste .env
+                                                    </button>
+                                                </div>
+                                                {Object.entries(svc.env_vars || {}).map(([key, value]) => (
+                                                    <div key={key} className="flex gap-2 items-center">
+                                                        <input
+                                                            type="text"
+                                                            value={key}
+                                                            disabled
+                                                            className="text-xs font-mono bg-muted border border-border rounded px-2 py-1.5 w-1/3"
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            value={value}
+                                                            onChange={(e) => updateEnvVar(idx, key, e.target.value)}
+                                                            className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
+                                                            placeholder="Empty value"
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </motion.div>
+                                        )}
+                                        </div>
                                     ))}
                             </div>
 
@@ -462,7 +571,7 @@ export default function EcosystemPage() {
 
                             {/* Results */}
                             <div className="space-y-2">
-                                {deployResults.map((r) => (
+                                {deployResults.map((r, idx) => (
                                     <div
                                         key={r.repo}
                                         className="bg-card border border-border p-4 rounded-xl flex items-center justify-between"
@@ -484,14 +593,24 @@ export default function EcosystemPage() {
                                                 </p>
                                             </div>
                                         </div>
-                                        {r.deployment_id && (
-                                            <Link
-                                                href={`/services/${r.service_id}?tab=logs`}
-                                                className="text-xs text-primary hover:underline"
-                                            >
-                                                View Logs →
-                                            </Link>
-                                        )}
+                                        <div className="flex gap-3 items-center">
+                                            {r.status === 'failed' && r.deployment_id && (
+                                                <button
+                                                    onClick={() => handleRetry(r.deployment_id!, idx)}
+                                                    className="text-xs flex items-center gap-1 text-primary bg-primary/10 hover:bg-primary/20 px-2 py-1 rounded"
+                                                >
+                                                    <RefreshCw size={12} /> Retry
+                                                </button>
+                                            )}
+                                            {r.deployment_id && (
+                                                <Link
+                                                    href={`/services/${r.service_id}?tab=logs`}
+                                                    className="text-xs text-primary hover:underline"
+                                                >
+                                                    View Logs →
+                                                </Link>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>

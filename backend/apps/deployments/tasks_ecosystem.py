@@ -135,9 +135,11 @@ def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
 def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
+    shared_addons: Dict[str, str] = None,
 ) -> Dict[str, str]:
     """Resolve known placeholders into concrete values."""
     resolved: Dict[str, str] = {}
+    shared_addons = shared_addons or {}
 
     for key, value in env_vars.items():
         value_text = str(value or "")
@@ -159,11 +161,15 @@ def _resolve_env_placeholders(
             continue
 
         if value_text == "{{POSTGRES_URL}}":
-            resolved[key] = "postgresql://smsly:smsly@postgres:5432/smsly"
+            resolved[key] = shared_addons.get("POSTGRES", "postgresql://smsly:smsly@postgres:5432/smsly")
             continue
 
         if value_text == "{{REDIS_URL}}":
-            resolved[key] = "redis://redis:6379/0"
+            resolved[key] = shared_addons.get("REDIS", "redis://redis:6379/0")
+            continue
+
+        if value_text == "{{ELASTICSEARCH_URL}}":
+            resolved[key] = shared_addons.get("ELASTICSEARCH", "http://elasticsearch:9200")
             continue
 
         resolved[key] = value_text
@@ -387,20 +393,57 @@ def _queue_wave(app, deployment_ids: List[str], provider_id: str, wave_index: in
     return queued
 
 
-def _cancel_remaining_waves(
+def _cancel_dependent_deployments(
     waves: List[List[str]],
     from_wave_index: int,
+    failed_deployment_ids: List[str],
+    dependencies: Dict[str, Set[str]],
+    deployment_by_repo_key: Dict[str, str],
     reason: str,
 ) -> int:
-    """Cancel queued deployments in unreleased waves."""
+    """Cancel queued deployments in unreleased waves that depend on failed deployments."""
     from apps.deployments.models import Deployment
 
-    remaining_ids: List[str] = []
-    for wave in waves[from_wave_index:]:
-        remaining_ids.extend(str(dep_id) for dep_id in wave)
+    # Reverse the mapping to find the repo_key from deployment_id
+    repo_key_by_deployment = {v: k for k, v in deployment_by_repo_key.items()}
+
+    # Identify which repo_keys failed
+    failed_keys = {
+        repo_key_by_deployment[dep_id]
+        for dep_id in failed_deployment_ids
+        if dep_id in repo_key_by_deployment
+    }
+
+    if not failed_keys:
+        return 0
+
+    # Build dependents map: parent -> set of children
+    dependents: Dict[str, Set[str]] = defaultdict(set)
+    for key, deps in dependencies.items():
+        for dep in deps:
+            dependents[dep].add(key)
+
+    # Transitively find all nodes that depend on a failed node
+    to_cancel_keys: Set[str] = set()
+    stack = list(failed_keys)
+    while stack:
+        node = stack.pop()
+        for child in dependents.get(node, set()):
+            if child not in to_cancel_keys and child not in failed_keys:
+                to_cancel_keys.add(child)
+                stack.append(child)
+
+    if not to_cancel_keys:
+        return 0
+
+    to_cancel_ids = [
+        deployment_by_repo_key[key]
+        for key in to_cancel_keys
+        if key in deployment_by_repo_key
+    ]
 
     cancelled = 0
-    for deployment in Deployment.objects.filter(id__in=remaining_ids):
+    for deployment in Deployment.objects.filter(id__in=to_cancel_ids):
         if deployment.status != Deployment.Status.QUEUED:
             continue
         deployment.status = Deployment.Status.CANCELLED
@@ -499,87 +542,121 @@ def ecosystem_release_wave_task(
     wave_index: int = 1,
     recheck_count: int = 0,
     max_rechecks: int = _MAX_WAVE_RECHECKS,
+    dependencies: Dict[str, Set[str]] = None,
+    deployment_by_repo_key: Dict[str, str] = None,
 ) -> dict:
-    """Release next wave only when previous wave is terminal and successful."""
+    """Release next wave, continuing successful branches and cancelling failed branches."""
     from apps.deployments.models import Deployment
 
     if not waves or wave_index >= len(waves):
         return {"status": "completed", "waves": len(waves or [])}
 
     previous_wave = [str(dep_id) for dep_id in waves[wave_index - 1]]
-    statuses = list(
-        Deployment.objects.filter(id__in=previous_wave).values_list("status", flat=True)
-    )
+    deployments = list(Deployment.objects.filter(id__in=previous_wave).values("id", "status"))
+    statuses = [dep["status"] for dep in deployments]
+
     if not statuses:
-        cancelled = _cancel_remaining_waves(
-            waves,
-            from_wave_index=wave_index,
-            reason="missing previous-wave deployments",
-        )
+        # If the wave is missing entirely, we don't have enough context to continue branches
         return {
             "status": "blocked",
             "reason": "previous wave not found",
-            "cancelled": cancelled,
+            "cancelled": 0,
         }
 
     failed_states = {Deployment.Status.FAILED, Deployment.Status.CANCELLED}
-    if any(status in failed_states for status in statuses):
-        cancelled = _cancel_remaining_waves(
+    in_progress_states = {Deployment.Status.QUEUED, Deployment.Status.BUILDING, Deployment.Status.HEALTH_CHECK, "STARTING"}
+
+    # Bug 5 Fix: Retry failed deployments once before permanently failing them.
+    for dep in deployments:
+        if dep["status"] == Deployment.Status.FAILED:
+            dep_obj = Deployment.objects.filter(id=dep["id"]).first()
+            if dep_obj and not dep_obj.build_logs.endswith("\n[Ecosystem] Retrying once...\n"):
+                # Mark as queued to retry once, and append a marker
+                dep_obj.status = Deployment.Status.QUEUED
+                dep_obj.build_logs = (dep_obj.build_logs or "") + "\n[Ecosystem] Retrying once...\n"
+                dep_obj.save(update_fields=["status", "build_logs"])
+
+                # Re-queue the individual task
+                self.app.send_task(
+                    "apps.deployments.tasks.smart_deploy_task",
+                    args=[str(dep_obj.id), provider_id],
+                    kwargs={"skip_review": True},
+                )
+                # Update local list to consider this in-progress instead of failed
+                dep["status"] = Deployment.Status.QUEUED
+
+    # Re-evaluate statuses after possible retries
+    statuses = [dep["status"] for dep in deployments]
+    failed_ids = [str(dep["id"]) for dep in deployments if dep["status"] in failed_states]
+    in_progress = any(status in in_progress_states for status in statuses)
+
+    if in_progress:
+        if recheck_count >= max_rechecks:
+            # Time out waiting for remaining ones
+            failed_ids.extend([str(dep["id"]) for dep in deployments if dep["status"] in in_progress_states])
+            if dependencies and deployment_by_repo_key:
+                cancelled = _cancel_dependent_deployments(
+                    waves,
+                    from_wave_index=wave_index,
+                    failed_deployment_ids=failed_ids,
+                    dependencies=dependencies,
+                    deployment_by_repo_key=deployment_by_repo_key,
+                    reason="previous wave timed out waiting for success",
+                )
+            else:
+                cancelled = 0
+            return {
+                "status": "timed_out",
+                "wave": wave_index,
+                "cancelled": cancelled,
+            }
+
+        self.app.send_task(
+            "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+            args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks, dependencies, deployment_by_repo_key],
+            countdown=_env_int(
+                "ECOSYSTEM_WAVE_RECHECK_SECONDS",
+                _WAVE_RECHECK_SECONDS,
+                minimum=5,
+                maximum=120,
+            ),
+        )
+        return {
+            "status": "waiting",
+            "wave": wave_index,
+            "recheck_count": recheck_count + 1,
+        }
+
+    # At this point, everything is either terminal (ACTIVE/STAGED or FAILED/CANCELLED)
+    cancelled = 0
+    if failed_ids and dependencies and deployment_by_repo_key:
+        cancelled = _cancel_dependent_deployments(
             waves,
             from_wave_index=wave_index,
+            failed_deployment_ids=failed_ids,
+            dependencies=dependencies,
+            deployment_by_repo_key=deployment_by_repo_key,
             reason="upstream dependency deployment failed",
         )
-        return {
-            "status": "blocked",
-            "reason": "previous wave had failures",
-            "cancelled": cancelled,
-        }
 
-    if all(status == Deployment.Status.ACTIVE for status in statuses):
-        queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
-        if wave_index + 1 < len(waves):
-            self.app.send_task(
-                "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[provider_id, waves, wave_index + 1, 0, max_rechecks],
-                countdown=_env_int(
-                    "ECOSYSTEM_WAVE_RECHECK_SECONDS",
-                    _WAVE_RECHECK_SECONDS,
-                    minimum=5,
-                    maximum=120,
-                ),
-            )
-        return {
-            "status": "released",
-            "wave": wave_index + 1,
-            "queued": queued,
-        }
-
-    if recheck_count >= max_rechecks:
-        cancelled = _cancel_remaining_waves(
-            waves,
-            from_wave_index=wave_index,
-            reason="previous wave timed out waiting for ACTIVE",
+    # We queue the next wave (which ignores CANCELLED statuses so only viable nodes deploy)
+    queued = _queue_wave(self.app, waves[wave_index], provider_id, wave_index)
+    if wave_index + 1 < len(waves):
+        self.app.send_task(
+            "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
+            args=[provider_id, waves, wave_index + 1, 0, max_rechecks, dependencies, deployment_by_repo_key],
+            countdown=_env_int(
+                "ECOSYSTEM_WAVE_RECHECK_SECONDS",
+                _WAVE_RECHECK_SECONDS,
+                minimum=5,
+                maximum=120,
+            ),
         )
-        return {
-            "status": "timed_out",
-            "wave": wave_index,
-            "cancelled": cancelled,
-        }
-
-    self.app.send_task(
-        "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-        args=[provider_id, waves, wave_index, recheck_count + 1, max_rechecks],
-        countdown=_env_int(
-            "ECOSYSTEM_WAVE_RECHECK_SECONDS",
-            _WAVE_RECHECK_SECONDS,
-            minimum=5,
-            maximum=120,
-        ),
-    )
     return {
-        "status": "waiting",
-        "wave": wave_index,
-        "recheck_count": recheck_count + 1,
+        "status": "released",
+        "wave": wave_index + 1,
+        "queued": queued,
+        "cancelled_dependents": cancelled,
     }
 
 
@@ -662,6 +739,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     created_services: Dict[str, Any] = {}
     deployment_by_repo_key: Dict[str, str] = {}
 
+    # Bug 4 Fix: Provision required addons synchronously before wave 1.
+    from apps.deployments.models_addons import Addon
+    from services.addon_provisioner import addon_provisioner
+    from apps.deployments.models import Service
+
+    # Collect all needed addons across all services
+    required_addons = set()
+    for svc_plan in services_plan:
+        if isinstance(svc_plan, dict) and not svc_plan.get("skip"):
+            addons_list = svc_plan.get("addons", [])
+            for a in addons_list:
+                required_addons.add(str(a).strip().upper())
+
+    first_service = None
+
     for repo_key in ordered_keys:
         entry = entries_by_key[repo_key]
         svc_plan = entry["plan"]
@@ -695,6 +787,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
 
             _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
 
+            if first_service is None:
+                first_service = service
+
             # Keep multiple aliases for inter-service references.
             aliases = {
                 entry["name"],
@@ -712,7 +807,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 created_services[alias] = service
 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
-            resolved_env = _resolve_env_placeholders(env_vars, created_services)
+
+            shared_addons_urls = {}
+            if first_service:
+                from services.ecosystem_graph import build_ecosystem_graph
+                graph = build_ecosystem_graph(first_service)
+                shared_addons_urls = graph.get("shared_addons", {})
+
+            resolved_env = _resolve_env_placeholders(
+                env_vars,
+                created_services,
+                shared_addons=shared_addons_urls
+            )
 
             for key, value in _stack_runtime_defaults(stack, port).items():
                 resolved_env.setdefault(key, value)
@@ -772,13 +878,60 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
         if deployment_ids:
             waves.append(deployment_ids)
 
+    # Synchronously provision required addons onto the first service
+    if first_service and required_addons:
+        supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
+        for addon_type in required_addons:
+            if addon_type not in supported_addons:
+                logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+                continue
+
+            # Check if addon already exists
+            existing_addon = Addon.objects.filter(service=first_service, addon_type=addon_type).first()
+            if existing_addon and existing_addon.status == Addon.Status.ACTIVE:
+                continue
+
+            if not existing_addon:
+                existing_addon = Addon.objects.create(
+                    service=first_service,
+                    name=f"{addon_type.lower()}-shared"[:255],
+                    addon_type=addon_type,
+                    status=Addon.Status.PROVISIONING,
+                )
+
+            try:
+                logger.info("Provisioning shared addon %s for ecosystem", addon_type)
+                cid, url = addon_provisioner.provision(existing_addon)
+                existing_addon.connection_url = url
+                existing_addon.status = Addon.Status.ACTIVE
+                existing_addon.save()
+
+                key_map = {
+                    'POSTGRES': 'DATABASE_URL',
+                    'REDIS': 'REDIS_URL',
+                    'ELASTICSEARCH': 'ELASTICSEARCH_URL',
+                }
+                key = key_map.get(addon_type, f"{addon_type}_URL")
+                EnvironmentVariable.objects.update_or_create(
+                    service=first_service,
+                    key=key,
+                    defaults={"value": url, "is_secret": True}
+                )
+            except Exception as e:
+                logger.error("Failed to provision shared addon %s: %s", addon_type, e)
+                existing_addon.status = Addon.Status.FAILED
+                existing_addon.save()
+
     queued_now = 0
+    # Pass dependencies to the wave task
+    safe_dependencies = {k: list(v) for k, v in dependencies.items()} if dependencies else {}
+
     if waves:
         queued_now = _queue_wave(self.app, waves[0], str(provider.id), wave_index=0)
         if len(waves) > 1:
             self.app.send_task(
                 "apps.deployments.tasks_ecosystem.ecosystem_release_wave_task",
-                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS],
+                args=[str(provider.id), waves, 1, 0, _MAX_WAVE_RECHECKS, safe_dependencies, deployment_by_repo_key],
                 countdown=_env_int(
                     "ECOSYSTEM_WAVE_RECHECK_SECONDS",
                     _WAVE_RECHECK_SECONDS,

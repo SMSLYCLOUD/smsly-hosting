@@ -208,6 +208,52 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         return Response({'task_id': task.id, 'status': 'scanning'})
 
     @action(detail=False, methods=['post'])
+    def ecosystem_bulk_env(self, request):
+        """
+        Set environment variables across multiple services at once.
+        """
+        env_vars = request.data.get('env_vars')
+        service_ids = request.data.get('service_ids')
+
+        if not isinstance(env_vars, dict) or not isinstance(service_ids, list):
+            return Response(
+                {'error': 'env_vars (dict) and service_ids (list) are required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from apps.deployments.models import Service, EnvironmentVariable
+
+        services = Service.objects.filter(id__in=service_ids, owner=request.user)
+        if not services.exists():
+            return Response(
+                {'error': 'No matching services found or access denied'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        updated_count = 0
+        for service in services:
+            for key, value in env_vars.items():
+                key_upper = str(key).strip().upper()
+                if not key_upper:
+                    continue
+
+                # Simple heuristic for secrets
+                is_secret = any(hint in key_upper for hint in ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN"))
+
+                EnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=key_upper,
+                    defaults={'value': str(value), 'is_secret': is_secret}
+                )
+            updated_count += 1
+
+        return Response({
+            'status': 'success',
+            'services_updated': updated_count,
+            'keys_set': len(env_vars)
+        })
+
+    @action(detail=False, methods=['post'])
     def ecosystem_deploy(self, request):
         """
         Deploy a previously generated ecosystem plan.

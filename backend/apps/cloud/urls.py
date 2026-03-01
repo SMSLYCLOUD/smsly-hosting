@@ -28,4 +28,9 @@ urlpatterns = [
         IntelligenceViewSet.as_view({'get': 'task_status'}),
         name='ecosystem-task-status',
     ),
+    path(
+        'ecosystem/bulk-env/',
+        IntelligenceViewSet.as_view({'post': 'ecosystem_bulk_env'}),
+        name='ecosystem-bulk-env',
+    ),
 ]

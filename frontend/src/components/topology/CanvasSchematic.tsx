@@ -42,8 +42,9 @@ const CustomNode = ({ data }: { data: any }) => {
     switch (kind) {
       case 'COMPUTE': return Server;
       case 'DATABASE': return Database;
-      case 'CACHE': return DatabaseZap; // approximated
+      case 'CACHE': return DatabaseZap;
       case 'STORAGE': return HardDrive;
+      case 'EXTERNAL': return Globe;
       default: return Box;
     }
   }, [kind]);
@@ -131,19 +132,30 @@ export function CanvasSchematic() {
           position: { x: 0, y: 0 },
         }));
 
-        const initialEdges: any[] = (data.edges || []).map((e: TopologyEdge) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-          type: 'smoothstep',
-          animated: e.type === 'CONNECTS_TO',
-          label: e.data?.protocol,
-          style: { stroke: e.type === 'OWNS' ? '#52525b' : '#3b82f6', strokeWidth: 2 },
-          markerEnd: {
-              type: MarkerType.ArrowClosed,
-              color: e.type === 'OWNS' ? '#52525b' : '#3b82f6',
-          },
-        }));
+        const initialEdges: any[] = (data.edges || []).map((e: TopologyEdge, idx: number) => {
+          // Color by edge type
+          const edgeColors: Record<string, string> = {
+            DATABASE: '#818cf8', CACHE: '#f87171', STORAGE: '#fbbf24',
+            API: '#3b82f6', DOMAIN: '#10b981', CRON: '#a78bfa',
+            TUNNEL: '#06b6d4', QUEUE: '#fb923c', SEARCH: '#38bdf8',
+            ADDON: '#6366f1',
+          };
+          const color = edgeColors[e.type] || '#52525b';
+
+          return {
+            id: e.id || `edge-${idx}`,
+            source: e.source,
+            target: e.target,
+            type: 'smoothstep',
+            animated: e.type === 'API' || e.type === 'TUNNEL',
+            label: e.label,
+            style: { stroke: color, strokeWidth: 2 },
+            markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color,
+            },
+          };
+        });
 
         const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
           initialNodes,
