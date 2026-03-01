@@ -142,6 +142,10 @@ def generate_caddyfile(config) -> str:
     sections = []
     domain = ""
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+    # Reject placeholder/dummy tokens
+    _FAKE_TOKENS = {"fake", "changeme", "your_cloudflare_api_token", "test", ""}
+    if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
+        cloudflare_token = ""
 
     if config.domain:
         try:
