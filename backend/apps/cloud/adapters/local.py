@@ -117,7 +117,8 @@ class LocalAdapter(BaseCloudAdapter):
         restart_policy = kwargs.get('restart_policy', 'unless-stopped')
         if self.k8s_client:
             return self._deploy_k8s(
-                service_name, image, env_vars, cpu, memory, replicas)
+                service_name, image, env_vars, cpu, memory, replicas,
+                healthcheck=healthcheck)
         elif self.docker_client:
             return self._deploy_docker(
                 service_name, image, env_vars, volumes=volumes,
@@ -559,8 +560,37 @@ class LocalAdapter(BaseCloudAdapter):
         return False
 
     def _deploy_k8s(self, name: str, image: str,
-                    env: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
+                    env: Dict[str, str], cpu: int, memory: int,
+                    replicas: int = 1, healthcheck: Dict = None) -> str:
         namespace = 'default'
+        port = int(env.get('PORT', 8000))
+
+        # Build liveness/readiness probes from healthcheck config
+        probes = {}
+        if healthcheck and healthcheck.get('path'):
+            hc_path = healthcheck['path']
+            if not hc_path.startswith('/'):
+                hc_path = f'/{hc_path}'
+            hc_port = int(healthcheck.get('port', port))
+            hc_interval = int(healthcheck.get('interval', 30))
+            hc_timeout = int(healthcheck.get('timeout', 5))
+            http_probe = client.V1HTTPGetAction(
+                path=hc_path, port=hc_port
+            )
+            probes['liveness_probe'] = client.V1Probe(
+                http_get=http_probe,
+                initial_delay_seconds=30,
+                period_seconds=hc_interval,
+                timeout_seconds=hc_timeout,
+                failure_threshold=3,
+            )
+            probes['readiness_probe'] = client.V1Probe(
+                http_get=http_probe,
+                initial_delay_seconds=10,
+                period_seconds=max(10, hc_interval // 2),
+                timeout_seconds=hc_timeout,
+                failure_threshold=3,
+            )
 
         # 1. Deployment
         deployment = client.V1Deployment(
@@ -575,6 +605,7 @@ class LocalAdapter(BaseCloudAdapter):
                             client.V1Container(
                                 name=name,
                                 image=image,
+                                ports=[client.V1ContainerPort(container_port=port)],
                                 env=[
                                     client.V1EnvVar(
                                         name=k,
@@ -585,7 +616,8 @@ class LocalAdapter(BaseCloudAdapter):
                                         "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
                                     limits={"cpu": f"{cpu * 2}m",
                                             "memory": f"{memory * 2}Mi"}
-                                )
+                                ),
+                                **probes,
                             )
                         ]
                     )
@@ -611,10 +643,7 @@ class LocalAdapter(BaseCloudAdapter):
                 ports=[
                     client.V1ServicePort(
                         port=80,
-                        target_port=int(
-                            env.get(
-                                'PORT',
-                                8000)))],
+                        target_port=port)],
                 type="ClusterIP"
             )
         )

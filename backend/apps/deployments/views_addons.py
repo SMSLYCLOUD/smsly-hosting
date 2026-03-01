@@ -166,5 +166,13 @@ class AddonViewSet(viewsets.ModelViewSet):
         if not os.path.exists(backup.file_path):
             return Response({'error': 'File not found on disk'}, status=status.HTTP_404_NOT_FOUND)
 
+        # Security: ensure the file path is within the expected backups directory
+        from django.conf import settings as django_settings
+        backups_root = os.path.realpath(os.path.join(django_settings.BASE_DIR, 'backups'))
+        real_path = os.path.realpath(backup.file_path)
+        if not real_path.startswith(backups_root):
+            logger.warning("Blocked backup download path traversal: %s", backup.file_path)
+            return Response({'error': 'Invalid backup path'}, status=status.HTTP_403_FORBIDDEN)
+
         response = FileResponse(open(backup.file_path, 'rb'), as_attachment=True, filename=os.path.basename(backup.file_path))
         return response

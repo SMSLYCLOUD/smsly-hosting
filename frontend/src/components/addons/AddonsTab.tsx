@@ -4,16 +4,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { addonsApi } from '@/lib/api';
+import { addonsApi, Addon } from '@/lib/api';
 
-interface Addon {
-    id: string;
-    service: string;
-    name: string;
-    addon_type: string;
-    status: 'PROVISIONING' | 'ACTIVE' | 'FAILED' | 'DELETED';
-    created_at: string;
-}
+
 
 interface Backup {
     id: string;
@@ -39,15 +32,7 @@ const ADDON_TYPES = [
     { value: 'QDRANT', label: 'Qdrant', logo: '/logos/addons/qdrant.svg', color: 'text-violet-400', description: 'Vector database (AI)' },
 ];
 
-function getHeaders(): Record<string, string> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-    return token ? { 'Authorization': `Token ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
-}
 
-function apiUrl(path: string) {
-    const base = typeof window !== 'undefined' ? `${window.location.origin}/api/v1` : '/api/v1';
-    return `${base}${path}`;
-}
 
 export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const confirm = useConfirm();
@@ -66,13 +51,8 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
 
     const fetchAddons = useCallback(async () => {
         try {
-            const res = await fetch(apiUrl('/addons/'), { headers: getHeaders() });
-            if (res.ok) {
-                const data = await res.json();
-                const list = Array.isArray(data) ? data : (data?.results || []);
-                // Filter to service if serviceId is provided
-                setAddons(serviceId ? list.filter((a: Addon) => a.service === serviceId) : list);
-            }
+            const list = await addonsApi.list();
+            setAddons(serviceId ? list.filter((a: Addon) => a.service === serviceId) : list);
         } catch (e) {
             console.error('Failed to fetch addons:', e);
         } finally {
@@ -92,16 +72,10 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             const svcId = serviceId || newServiceId;
             if (!svcId) { alert('Select a service first'); setCreating(false); return; }
             const name = newName || `${newType.toLowerCase()}-${Date.now().toString(36)}`;
-            const res = await fetch(apiUrl('/addons/'), {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({ service: svcId, addon_type: newType, name }),
-            });
-            if (res.ok) {
-                setShowCreate(false);
-                setNewName('');
-                fetchAddons();
-            }
+            await addonsApi.create({ service: svcId, addon_type: newType, name } as any);
+            setShowCreate(false);
+            setNewName('');
+            fetchAddons();
         } catch (e) {
             console.error('Failed to create addon:', e);
         } finally {
@@ -112,10 +86,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
     const handleDeprovision = async (addonId: string) => {
         if (!await confirm({ title: 'Delete addon?', message: 'This will permanently delete this addon and all its data. Continue?', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
-            await fetch(apiUrl(`/addons/${addonId}/deprovision/`), {
-                method: 'POST',
-                headers: getHeaders(),
-            });
+            await addonsApi.deprovision(addonId);
             fetchAddons();
         } catch (e) {
             console.error('Failed to deprovision:', e);
@@ -124,10 +95,7 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
 
     const handleBackup = async (addonId: string) => {
         try {
-            await fetch(apiUrl(`/addons/${addonId}/backup/`), {
-                method: 'POST',
-                headers: getHeaders(),
-            });
+            await addonsApi.backup(addonId);
             fetchBackups(addonId);
         } catch (e) {
             console.error('Failed to trigger backup:', e);
@@ -136,11 +104,8 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
 
     const fetchBackups = async (addonId: string) => {
         try {
-            const res = await fetch(apiUrl(`/addons/${addonId}/backups/`), { headers: getHeaders() });
-            if (res.ok) {
-                const data = await res.json();
-                setBackups(prev => ({ ...prev, [addonId]: Array.isArray(data) ? data : [] }));
-            }
+            const data = await addonsApi.backups(addonId);
+            setBackups(prev => ({ ...prev, [addonId]: data }));
         } catch (e) {
             console.error('Failed to fetch backups:', e);
         }

@@ -170,24 +170,27 @@ def _build_targets(service, active_deployment):
             )
 
     # Last-resort direct container target.
+    # Use the service name as Docker DNS hostname (container IDs don't
+    # resolve via Docker DNS; only names and network aliases do).
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         port = service.internal_port or 8000
         direct_headers = {"Host": public_domain} if public_domain else {}
-        candidates = []
+
+        # Primary: service name is the most reliable Docker DNS target
+        service_name = (service.name or "").strip()
+        if service_name:
+            _add(
+                f"http://{service_name}:{port}{path}",
+                headers=direct_headers,
+                verify=False,
+            )
+
         # Compose deployments store container names like "app-web-1".
         # Keep full names intact; truncation breaks Docker DNS resolution.
         if "-" in container_id:
-            candidates.append(container_id)
-        else:
-            short_id = container_id[:12]
-            candidates.append(short_id)
-            if short_id != container_id:
-                candidates.append(container_id)
-
-        for candidate in candidates:
             _add(
-                f"http://{candidate}:{port}{path}",
+                f"http://{container_id}:{port}{path}",
                 headers=direct_headers,
                 verify=False,
             )

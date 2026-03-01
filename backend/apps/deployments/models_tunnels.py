@@ -12,6 +12,11 @@ from django.conf import settings
 
 class Tunnel(models.Model):
     """An active development tunnel exposing a local port."""
+    TUNNEL_TYPES = [
+        ('http', 'HTTP'),
+        ('tcp', 'TCP'),
+    ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -20,7 +25,13 @@ class Tunnel(models.Model):
     subdomain = models.CharField(max_length=63, unique=True)
     public_url = models.URLField()
     local_port = models.IntegerField()
+    type = models.CharField(max_length=4, choices=TUNNEL_TYPES, default='http')
     is_active = models.BooleanField(default=True)
+    shared_with = models.JSONField(default=list, blank=True,
+        help_text='List of email addresses this tunnel is shared with')
+    bandwidth_bytes = models.BigIntegerField(default=0,
+        help_text='Total bandwidth used in bytes')
+    expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -55,3 +66,20 @@ class TunnelRequest(models.Model):
 
     def __str__(self):
         return f"{self.method} {self.path} → {self.status or 'pending'}"
+
+
+class ReservedSubdomain(models.Model):
+    """A subdomain reserved by a user for persistent tunnel URLs."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='reserved_subdomains')
+    subdomain = models.CharField(max_length=63, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.subdomain} (reserved by {self.owner})"

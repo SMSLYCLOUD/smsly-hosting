@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -198,4 +199,4 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupSchedule
         fields = '__all__'
-from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer
+

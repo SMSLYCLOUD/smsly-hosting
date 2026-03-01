@@ -984,9 +984,10 @@ export const coreApi = {
 
 export interface Addon {
     id: string;
+    service: string;
     name: string;
-    addon_type: 'POSTGRES' | 'REDIS' | 'MONGODB' | 'MINIO';
-    status: 'PROVISIONING' | 'RUNNING' | 'FAILED' | 'STOPPED';
+    addon_type: 'POSTGRES' | 'REDIS' | 'MONGODB' | 'MINIO' | 'MYSQL' | 'ELASTICSEARCH' | 'RABBITMQ' | 'MEMCACHED' | 'CLICKHOUSE' | 'MARIADB' | 'QDRANT';
+    status: 'PROVISIONING' | 'ACTIVE' | 'RUNNING' | 'FAILED' | 'STOPPED' | 'DELETED';
     created_at: string;
     connection_url?: string;
     config: Record<string, any>;
@@ -1008,6 +1009,10 @@ export const addonsApi = {
     delete: async (id: string): Promise<void> => {
         await api.delete(`/addons/${id}/`);
     },
+    deprovision: async (id: string): Promise<any> => {
+        const res = await api.post(`/addons/${id}/deprovision/`);
+        return res.data;
+    },
     rotateCredentials: async (id: string): Promise<{ connection_url: string }> => {
         const res = await api.post(`/addons/${id}/rotate-credentials/`);
         return res.data;
@@ -1023,6 +1028,22 @@ export const addonsApi = {
     addonCredentials: async (addonId: string): Promise<Record<string, string>> => {
       const res = await api.get(`/addons/${addonId}/credentials/`);
       return res.data;
+    },
+    statusCheck: async (addonId: string): Promise<any> => {
+      const res = await api.get(`/addons/${addonId}/status_check/`);
+      return res.data;
+    },
+    backup: async (addonId: string): Promise<any> => {
+      const res = await api.post(`/addons/${addonId}/backup/`);
+      return res.data;
+    },
+    restore: async (addonId: string, backupId: string): Promise<any> => {
+      const res = await api.post(`/addons/${addonId}/restore/`, { backup_id: backupId });
+      return res.data;
+    },
+    backups: async (addonId: string): Promise<any[]> => {
+      const res = await api.get(`/addons/${addonId}/backups/`);
+      return Array.isArray(res.data) ? res.data : [];
     },
 };
 

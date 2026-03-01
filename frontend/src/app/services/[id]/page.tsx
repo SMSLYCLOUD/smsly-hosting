@@ -243,6 +243,24 @@ export default function ServiceDetailPage() {
         if (tabParam) setActiveTab(tabParam);
     }, [tabParam]);
 
+    // Auto-verify domain on first load if domain exists but is not verified.
+    // This triggers the backend to check DNS and persist domain_verified=True
+    // so the "Pending" badge updates without user intervention.
+    const domainVerifyTriggered = useRef(false);
+    useEffect(() => {
+        if (
+            service &&
+            service.public_domain &&
+            !service.domain_verified &&
+            !domainVerifyTriggered.current
+        ) {
+            domainVerifyTriggered.current = true;
+            servicesApi.verifyDomain(service.id, service.public_domain).catch(() => {
+                // Silent — verification is best-effort on load
+            });
+        }
+    }, [service]);
+
     if (!service) return <div className="h-screen flex items-center justify-center bg-background text-muted-foreground">Loading...</div>;
 
     // Simple cost estimation logic (use defaults if not set)

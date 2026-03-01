@@ -126,8 +126,14 @@ def github_repos(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    page = int(request.query_params.get("page", 1))
-    per_page = min(int(request.query_params.get("per_page", 30)), 100)
+    try:
+        page = int(request.query_params.get("page", 1))
+    except (TypeError, ValueError):
+        page = 1
+    try:
+        per_page = min(int(request.query_params.get("per_page", 30)), 100)
+    except (TypeError, ValueError):
+        per_page = 30
     sort = request.query_params.get("sort", "updated")
     q = request.query_params.get("q", "").strip()
 
