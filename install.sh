@@ -861,7 +861,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     # Backend health
     EP1_URL="http://127.0.0.1:8090/health"
-    EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -L "$EP1_URL" 2>/dev/null || echo "000")
+    EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
     if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
         echo -e "${GREEN}  ✓ Backend: HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
     else
@@ -871,7 +871,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     # HTTPS domain
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
         EP2_URL="https://${DOMAIN}/health"
-        EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 -L "$EP2_URL" 2>/dev/null || echo "000")
+        EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
         if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
             echo -e "${GREEN}  ✓ HTTPS: HTTP $EP2_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
         else
@@ -881,8 +881,8 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     # Traefik
     EP3_URL="http://127.0.0.1:8081/"
-    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null || echo "000")
-    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ] && [ "$EP3_CODE" != "503" ]; then
+    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
+    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         echo -e "${GREEN}  ✓ Traefik: HTTP $EP3_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
     else
         echo -e "${RED}  ✗ Traefik: HTTP $EP3_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -891,7 +891,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     # Deployed service domains
     ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
-for s in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain=''):
+for s in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
     print(f'{s.name}|{s.public_domain.strip()}')
 " 2>/dev/null | tr -d '\r' || true)"
 
@@ -899,7 +899,7 @@ for s in Service.objects.filter(is_active=True).exclude(public_domain__isnull=Tr
         while IFS='|' read -r svc_name svc_domain; do
             [ -z "$svc_domain" ] && continue
             svc_url="https://${svc_domain}/"
-            svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$svc_url" 2>/dev/null || echo "000")
+            svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" 2>/dev/null) || svc_code="000"
             if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
                 echo -e "${GREEN}  ✓ $svc_name ($svc_domain): HTTP $svc_code${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
             else
@@ -1300,7 +1300,7 @@ except Exception as e:
     BACKEND_OK=false
     EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
-        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -L "$EP1_URL" 2>/dev/null || echo "000")
+        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
         if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
             BACKEND_OK=true
             break
@@ -1342,7 +1342,7 @@ if d and d != 'localhost':
         EP2_URL="https://${EP_DOMAIN}/health"
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
-            EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$EP2_URL" 2>/dev/null || echo "000")
+            EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
             if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
                 HTTPS_OK=true
                 break
@@ -1370,14 +1370,14 @@ if d and d != 'localhost':
     # Query ALL active service domains from the DB
     ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
-for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain='').order_by('name'):
+for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain='').order_by('name'):
     print(f'{svc.name}|{svc.public_domain.strip()}')
 " 2>/dev/null | tr -d '\r' || true)"
 
     # Also check Traefik port directly
     EP3_URL="http://127.0.0.1:8081/"
-    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null || echo "000")
-    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ] && [ "$EP3_CODE" != "503" ]; then
+    EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
+    if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         EP3_RESULT="${GREEN}PASS${NC}"
         echo -e "${GREEN}  ✓ Traefik proxy ($EP3_URL) — HTTP $EP3_CODE${NC}"
         PASS_COUNT=$((PASS_COUNT + 1))
@@ -1400,7 +1400,7 @@ for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=
             svc_code="000"
             svc_ok=false
             for attempt in 1 2 3; do
-                svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "$svc_url" 2>/dev/null || echo "000")
+                svc_code=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$svc_url" 2>/dev/null) || svc_code="000"
                 if [ "$svc_code" != "000" ] && [ "$svc_code" != "502" ] && [ "$svc_code" != "503" ]; then
                     svc_ok=true
                     break
