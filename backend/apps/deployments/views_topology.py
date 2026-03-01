@@ -1,14 +1,25 @@
 """Views Topology module — enriched topology data for canvas visualization."""
+import re
+import logging
+import uuid
+
 from rest_framework import serializers, viewsets
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from apps.licensing.decorators import require_tier
 from .models import Service, Deployment
 
+logger = logging.getLogger(__name__)
+
 
 class TopologySerializer(serializers.Serializer):
     nodes = serializers.JSONField()
     edges = serializers.JSONField()
+
+
+def _edge_id():
+    """Generate a short unique edge ID."""
+    return f"e-{uuid.uuid4().hex[:8]}"
 
 
 class TopologyViewSet(viewsets.GenericViewSet):
@@ -24,14 +35,18 @@ class TopologyViewSet(viewsets.GenericViewSet):
         """
         user_services = Service.objects.filter(
             owner=request.user
-        ).prefetch_related('addons', 'volumes', 'env_vars')
+        ).prefetch_related(
+            'addons', 'volumes', 'env_vars',
+            'custom_domains', 'cron_jobs',
+        )
 
         nodes = []
         edges = []
         service_ids = set()
 
         for service in user_services:
-            service_ids.add(str(service.id))
+            svc_id = str(service.id)
+            service_ids.add(svc_id)
 
             # Get latest deployment status
             latest_deploy = Deployment.objects.filter(
@@ -49,18 +64,26 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     if latest_deploy.created_at else None
                 )
 
-            # Map deploy status to a canonical status for the frontend
+            # Map deploy status to canonical status
             status = {
                 'SUCCESS': 'ACTIVE', 'RUNNING': 'ACTIVE',
                 'FAILED': 'FAILED', 'ERROR': 'FAILED',
             }.get(deploy_status, deploy_status)
 
+            # Gather project info if available
+            project_id = None
+            project_name = None
+            if hasattr(service, 'project') and service.project:
+                project_id = str(service.project.id)
+                project_name = service.project.name
+
             nodes.append({
-                'id': str(service.id),
+                'id': svc_id,
                 'type': 'service',
                 'data': {
                     'name': service.name,
-                    'status': status,  # Used by Solar System view
+                    'label': service.name,
+                    'status': status,
                     'kind': 'COMPUTE',
                     'subtype': getattr(
                         service, 'build_strategy', 'DOCKERFILE'),
@@ -75,6 +98,8 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'deploy_time': deploy_time,
                     'build_strategy': getattr(
                         service, 'build_strategy', 'DOCKERFILE'),
+                    'project_id': project_id,
+                    'project_name': project_name,
                     'metadata': {
                         'replicas': getattr(service, 'min_replicas', 1),
                         'port': service.internal_port,
@@ -82,19 +107,23 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 }
             })
 
-            # Addon nodes + edges
+            # ── Addon nodes + edges ──────────────────────────────────
             for addon in service.addons.all():
                 addon_id = f"addon-{addon.id}"
-                # Map addon_type to kind for frontend Solar System view
                 addon_upper = (addon.addon_type or '').upper()
-                if addon_upper in ('POSTGRES', 'MYSQL', 'MONGODB'):
+                if addon_upper in ('POSTGRES', 'MYSQL', 'MONGODB',
+                                   'MARIADB', 'CLICKHOUSE'):
                     addon_kind = 'DATABASE'
-                elif addon_upper == 'REDIS':
+                elif addon_upper in ('REDIS', 'MEMCACHED'):
                     addon_kind = 'CACHE'
                 elif addon_upper in ('RABBITMQ', 'KAFKA'):
                     addon_kind = 'QUEUE'
                 elif addon_upper == 'ELASTICSEARCH':
                     addon_kind = 'SEARCH'
+                elif addon_upper == 'QDRANT':
+                    addon_kind = 'SEARCH'
+                elif addon_upper == 'MINIO':
+                    addon_kind = 'STORAGE'
                 else:
                     addon_kind = 'STORAGE'
 
@@ -103,43 +132,140 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'type': 'addon',
                     'data': {
                         'name': addon.name,
+                        'label': f"{addon.name} ({addon.addon_type})",
                         'status': addon.status,
-                        'kind': addon_kind,  # Used by Solar System view
+                        'kind': addon_kind,
                         'subtype': addon.addon_type,
                         'region': '',
                         'addon_type': addon.addon_type,
                     }
                 })
 
-                # Reuse addon_kind for link type (they map identically)
                 link_type = addon_kind if addon_kind != 'STORAGE' else 'ADDON'
-
                 edges.append({
-                    'source': str(service.id),
+                    'id': _edge_id(),
+                    'source': svc_id,
                     'target': addon_id,
                     'type': link_type,
+                    'label': addon.addon_type,
                 })
 
-            # Volume nodes + edges
+            # ── Volume nodes + edges ─────────────────────────────────
             for volume in service.volumes.all():
                 volume_id = f"volume-{volume.id}"
+                vol_name = getattr(volume, 'name', volume.mount_path)
                 nodes.append({
                     'id': volume_id,
                     'type': 'volume',
                     'data': {
-                        'name': getattr(volume, 'name', volume.mount_path),
+                        'name': vol_name,
+                        'label': f"{vol_name} ({volume.size_gb}GB)",
+                        'kind': 'STORAGE',
+                        'subtype': 'VOLUME',
                         'mount_path': volume.mount_path,
                         'size_gb': volume.size_gb,
+                        'status': 'ACTIVE',
+                        'region': '',
                     }
                 })
                 edges.append({
-                    'source': str(service.id),
+                    'id': _edge_id(),
+                    'source': svc_id,
                     'target': volume_id,
                     'type': 'STORAGE',
+                    'label': volume.mount_path,
                 })
 
-        # Detect inter-service dependencies from env vars
-        import re
+            # ── Custom domain nodes + edges ──────────────────────────
+            if hasattr(service, 'custom_domains'):
+                for domain in service.custom_domains.all():
+                    domain_id = f"domain-{domain.id}"
+                    nodes.append({
+                        'id': domain_id,
+                        'type': 'domain',
+                        'data': {
+                            'name': domain.domain,
+                            'label': domain.domain,
+                            'kind': 'EXTERNAL',
+                            'subtype': 'DOMAIN',
+                            'status': getattr(domain, 'verification_status', 'pending'),
+                            'region': '',
+                            'ssl': getattr(domain, 'ssl_enabled', False),
+                        }
+                    })
+                    edges.append({
+                        'id': _edge_id(),
+                        'source': domain_id,
+                        'target': svc_id,
+                        'type': 'DOMAIN',
+                        'label': 'routes to',
+                    })
+
+            # ── Cron job nodes + edges ───────────────────────────────
+            if hasattr(service, 'cron_jobs'):
+                for cron in service.cron_jobs.all():
+                    cron_id = f"cron-{cron.id}"
+                    nodes.append({
+                        'id': cron_id,
+                        'type': 'cron',
+                        'data': {
+                            'name': cron.name,
+                            'label': f"{cron.name} ({cron.schedule})",
+                            'kind': 'COMPUTE',
+                            'subtype': 'CRON',
+                            'schedule': cron.schedule,
+                            'command': cron.command,
+                            'status': 'ACTIVE' if getattr(cron, 'enabled', True) else 'STOPPED',
+                            'region': '',
+                        }
+                    })
+                    edges.append({
+                        'id': _edge_id(),
+                        'source': svc_id,
+                        'target': cron_id,
+                        'type': 'CRON',
+                        'label': cron.schedule,
+                    })
+
+        # ── Tunnel nodes + edges ─────────────────────────────────────
+        try:
+            from .models_tunnels import Tunnel
+            tunnels = Tunnel.objects.filter(
+                user=request.user, is_active=True
+            )
+            for tunnel in tunnels:
+                tunnel_id = f"tunnel-{tunnel.id}"
+                nodes.append({
+                    'id': tunnel_id,
+                    'type': 'tunnel',
+                    'data': {
+                        'name': tunnel.subdomain or f"tunnel-{tunnel.local_port}",
+                        'label': f":{tunnel.local_port} → {tunnel.subdomain or 'auto'}.tunnel",
+                        'kind': 'EXTERNAL',
+                        'subtype': 'TUNNEL',
+                        'status': 'ACTIVE',
+                        'region': '',
+                        'public_url': tunnel.public_url,
+                        'local_port': tunnel.local_port,
+                    }
+                })
+                # Tunnel doesn't directly link to a service in the model,
+                # but we can show it as a standalone external node.
+                # If we can match local_port to a service internal_port:
+                for service in user_services:
+                    if service.internal_port == tunnel.local_port:
+                        edges.append({
+                            'id': _edge_id(),
+                            'source': tunnel_id,
+                            'target': str(service.id),
+                            'type': 'TUNNEL',
+                            'label': f":{tunnel.local_port}",
+                        })
+                        break
+        except Exception as e:
+            logger.debug("Tunnels not available for topology: %s", e)
+
+        # ── Inter-service dependencies from env vars ─────────────────
         for service in user_services:
             svc_id = str(service.id)
             for var in service.env_vars.all():
@@ -152,9 +278,18 @@ class TopologyViewSet(viewsets.GenericViewSet):
                         val, re.IGNORECASE
                     ):
                         edges.append({
+                            'id': _edge_id(),
                             'source': svc_id,
                             'target': str(other.id),
                             'type': 'API',
+                            'label': var.key,
+                            'data': {
+                                'protocol': 'HTTP',
+                                'evidence': f"{var.key}={val[:50]}",
+                            },
                         })
 
         return Response({'nodes': nodes, 'edges': edges})
+"""
+    Exports: TopologyViewSet, TopologySerializer
+"""

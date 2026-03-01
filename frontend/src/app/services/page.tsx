@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import { Plus, LayoutGrid, Network, Store, Puzzle, GitFork, Building } from 'lucide-react';
+import { Plus, LayoutGrid, Radar, Puzzle, Orbit, Store } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -12,17 +12,12 @@ import { AddonsTab } from '@/components/addons/AddonsTab';
 import dynamic from 'next/dynamic';
 
 const ServiceCanvas = dynamic(() => import('@/components/canvas/ServiceCanvas').then(mod => mod.ServiceCanvas), {
-  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Canvas...</div>,
+  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Galaxy...</div>,
   ssr: false
 });
 
-const TopologyView = dynamic(() => import('@/components/topology/TopologyView').then(mod => mod.TopologyView), {
-  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Topology...</div>,
-  ssr: false
-});
-
-const CityTopologyView = dynamic(() => import('@/components/topology/CityTopologyView'), {
-  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading 3D City...</div>,
+const FleetRadar = dynamic(() => import('@/components/canvas/FleetRadar').then(mod => mod.FleetRadar), {
+  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Radar...</div>,
   ssr: false
 });
 
@@ -43,14 +38,13 @@ function buildServiceFingerprint(services: Service[]): string {
 
 export default function ServicesPage() {
   const router = useRouter();
-  const [viewMode, setViewMode] = useState<'GRID' | 'CANVAS' | 'TOPOLOGY' | 'CITY3D' | 'ADDONS'>('GRID');
+  const [viewMode, setViewMode] = useState<'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
   const fingerprintRef = useRef('');
-  const viewTabs: Array<{ id: 'GRID' | 'CANVAS' | 'TOPOLOGY' | 'CITY3D' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
+  const viewTabs: Array<{ id: 'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
-    { id: 'CANVAS', label: 'Canvas', icon: Network },
-    { id: 'TOPOLOGY', label: 'Topology', icon: GitFork },
-    { id: 'CITY3D', label: 'City 3D', icon: Building },
+    { id: 'GALAXY', label: 'Galaxy', icon: Orbit },
+    { id: 'RADAR', label: 'Radar', icon: Radar },
     { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
 
@@ -135,7 +129,7 @@ export default function ServicesPage() {
         transition={{ duration: 0.5 }}
         className="relative flex-1 min-h-0 overflow-hidden bg-dot-pattern"
       >
-        {viewMode === 'CANVAS' && (
+        {viewMode === 'GALAXY' && (
             <div className="h-full min-h-0">
                 <ServiceCanvas services={services} />
             </div>
@@ -145,14 +139,9 @@ export default function ServicesPage() {
                 <ServicesGrid services={services} />
             </div>
         )}
-        {viewMode === 'TOPOLOGY' && (
+        {viewMode === 'RADAR' && (
             <div className="h-full min-h-0">
-                <TopologyView />
-            </div>
-        )}
-        {viewMode === 'CITY3D' && (
-            <div className="h-full min-h-0">
-                <CityTopologyView />
+                <FleetRadar services={services} />
             </div>
         )}
         {viewMode === 'ADDONS' && (

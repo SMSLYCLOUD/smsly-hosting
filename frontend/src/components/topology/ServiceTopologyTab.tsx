@@ -8,6 +8,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2, Database } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import api from '@/lib/api';
+import { addonsApi } from '@/lib/api';
 
 // @ts-ignore
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
@@ -158,16 +160,7 @@ function createNode3D(node: GraphNode): any {
   return group;
 }
 
-/* ── Helpers ── */
-function getHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-  return token ? { 'Authorization': `Token ${token}` } : {};
-}
 
-function apiUrl(path: string) {
-  const base = typeof window !== 'undefined' ? `${window.location.origin}/api/v1` : '/api/v1';
-  return `${base}${path}`;
-}
 
 /* ── Component ── */
 export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: string; serviceName: string }) {
@@ -189,34 +182,30 @@ export function ServiceTopologyTab({ serviceId, serviceName }: { serviceId: stri
 
   const fetchData = useCallback(async () => {
     try {
-      const [addonsRes, volumesRes] = await Promise.all([
-        fetch(apiUrl('/addons/'), { headers: getHeaders() }),
-        fetch(apiUrl(`/services/${serviceId}/storage/`), { headers: getHeaders() }).catch(() => null),
+      const [allAddons, volumeRes] = await Promise.all([
+        addonsApi.list().catch(() => []),
+        api.get(`/services/${serviceId}/storage/`).catch(() => ({ data: [] })),
       ]);
+      const volumeData = volumeRes?.data || [];
 
       const nodes: GraphNode[] = [];
       const links: GraphLink[] = [];
 
       nodes.push({ id: serviceId, name: serviceName, nodeType: 'service', status: 'ACTIVE' });
 
-      if (addonsRes.ok) {
-        const data = await addonsRes.json();
-        const list = (Array.isArray(data) ? data : (data?.results || []))
-          .filter((a: any) => a.service === serviceId);
-        list.forEach((addon: Addon) => {
-          nodes.push({ id: addon.id, name: addon.name, nodeType: 'addon', subType: addon.addon_type, status: addon.status });
-          links.push({ source: serviceId, target: addon.id, linkType: addon.addon_type === 'REDIS' ? 'CACHE' : 'DATABASE' });
-        });
-      }
+      // Filter addons for this service
+      const serviceAddons = allAddons.filter((a: any) => a.service === serviceId);
+      serviceAddons.forEach((addon: Addon) => {
+        nodes.push({ id: addon.id, name: addon.name, nodeType: 'addon', subType: addon.addon_type, status: addon.status });
+        links.push({ source: serviceId, target: addon.id, linkType: addon.addon_type === 'REDIS' ? 'CACHE' : 'DATABASE' });
+      });
 
-      if (volumesRes?.ok) {
-        const data = await volumesRes.json();
-        const list = Array.isArray(data) ? data : (data?.results || []);
-        list.forEach((vol: Volume) => {
-          nodes.push({ id: vol.id, name: vol.name, nodeType: 'volume', detail: `${vol.mount_path} · ${vol.size_gb}GB` });
-          links.push({ source: serviceId, target: vol.id, linkType: 'STORAGE' });
-        });
-      }
+      // Volumes
+      const volumes = Array.isArray(volumeData) ? volumeData : (volumeData?.results || []);
+      volumes.forEach((vol: Volume) => {
+        nodes.push({ id: vol.id, name: vol.name, nodeType: 'volume', detail: `${vol.mount_path} · ${vol.size_gb}GB` });
+        links.push({ source: serviceId, target: vol.id, linkType: 'STORAGE' });
+      });
 
       setGraphData({ nodes, links });
     } catch (e) {

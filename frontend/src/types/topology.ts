@@ -8,6 +8,30 @@ export interface TopologyNodeData {
   url?: string;
   img?: string;
   parent_id?: string;
+  project_id?: string;
+  project_name?: string;
+  // Domain-specific
+  ssl?: boolean;
+  // Cron-specific
+  schedule?: string;
+  command?: string;
+  // Tunnel-specific
+  public_url?: string;
+  local_port?: number;
+  // Volume-specific
+  mount_path?: string;
+  size_gb?: number;
+  // Addon-specific
+  addon_type?: string;
+  // Deploy info
+  deploy_status?: string;
+  deploy_commit?: string;
+  deploy_time?: string;
+  build_strategy?: string;
+  health?: string;
+  domain?: string;
+  port?: number;
+  replicas?: number;
   metadata?: {
     replicas?: number;
     port?: number;
@@ -19,7 +43,7 @@ export interface TopologyNodeData {
 
 export interface TopologyNode {
   id: string;
-  type: 'SERVICE' | 'ADDON' | 'EXTERNAL';
+  type: 'service' | 'addon' | 'volume' | 'domain' | 'cron' | 'tunnel';
   data: TopologyNodeData;
   // Position fields populated by layout engine
   x?: number;
@@ -39,7 +63,7 @@ export interface TopologyEdge {
   id: string;
   source: string;
   target: string;
-  type: 'OWNS' | 'CONNECTS_TO';
+  type: 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'STORAGE' | 'ADDON' | 'API' | 'DOMAIN' | 'CRON' | 'TUNNEL';
   label?: string;
   data?: TopologyEdgeData;
 }
