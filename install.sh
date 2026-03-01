@@ -123,16 +123,16 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ]; then
     echo "═══════════════════════════════════════════════════════════"
     echo -e "\033[0m"
 
-    # Build env string to pass collected values into screen
+    # Build env string to pass collected values into screen (printf %q escapes special chars)
     _ENV_PASS="SKIP_SCREEN=1"
-    [ -n "${USE_SSL:-}" ]              && _ENV_PASS="$_ENV_PASS USE_SSL='$USE_SSL'"
-    [ -n "${DOMAIN:-}" ]               && _ENV_PASS="$_ENV_PASS DOMAIN='$DOMAIN'"
-    [ -n "${ACME_EMAIL:-}" ]           && _ENV_PASS="$_ENV_PASS ACME_EMAIL='$ACME_EMAIL'"
-    [ -n "${WILDCARD_SUBDOMAINS:-}" ]  && _ENV_PASS="$_ENV_PASS WILDCARD_SUBDOMAINS='$WILDCARD_SUBDOMAINS'"
-    [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN='$CLOUDFLARE_API_TOKEN'"
+    [ -n "${USE_SSL:-}" ]              && _ENV_PASS="$_ENV_PASS USE_SSL=$(printf '%q' "$USE_SSL")"
+    [ -n "${DOMAIN:-}" ]               && _ENV_PASS="$_ENV_PASS DOMAIN=$(printf '%q' "$DOMAIN")"
+    [ -n "${ACME_EMAIL:-}" ]           && _ENV_PASS="$_ENV_PASS ACME_EMAIL=$(printf '%q' "$ACME_EMAIL")"
+    [ -n "${WILDCARD_SUBDOMAINS:-}" ]  && _ENV_PASS="$_ENV_PASS WILDCARD_SUBDOMAINS=$(printf '%q' "$WILDCARD_SUBDOMAINS")"
+    [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN=$(printf '%q' "$CLOUDFLARE_API_TOKEN")"
 
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd '$SCRIPT_DIR'; $_ENV_PASS bash '$SCRIPT_PATH' $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
+    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
 fi
 
 # Ensure we start in a valid directory.
@@ -208,7 +208,8 @@ env_set_value() {
     local var_name="$2"
     local var_value="$3"
     if grep -q "^${var_name}=" "$env_file" 2>/dev/null; then
-        sed -i "s|^${var_name}=.*|${var_name}=${var_value}|" "$env_file"
+        # Use SOH (\x01) as sed delimiter — safe for URLs, passwords, pipes
+        sed -i "s\x01^${var_name}=.*\x01${var_name}=${var_value}\x01" "$env_file"
     else
         echo "${var_name}=${var_value}" >> "$env_file"
     fi
@@ -571,6 +572,98 @@ ensure_container_on_network() {
     docker network connect "$network_name" "$container_name" >/dev/null 2>&1 || true
 }
 
+# ─── Shared Caddy Safety Function ────────────────────────────────────────────
+# Called from: recover_runtime_stack, update flow, restart_edge_stack.
+# Generates a safe fallback Caddyfile when the current one is broken or risky.
+# - Discovers domain from DB first, falls back to .env
+# - Skips HTTPS blocks for IP addresses (certs can't be issued)
+# - Adds individual Caddy blocks for each deployed service (HTTP-01 SSL)
+# - Detects dns cloudflare + missing systemd override (validates passes, runtime crashes)
+generate_safe_caddyfile() {
+    local reason="${1:-unknown}"
+    echo -e "${YELLOW}  ⚠ Generating safe fallback Caddyfile (reason: $reason)...${NC}"
+
+    # 1. Discover domain: DB first, .env fallback
+    local domain=""
+    domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+c = PlatformConfig.load()
+d = (c.domain or '').strip()
+if d and d != 'localhost':
+    print(d)
+" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -z "$domain" ]; then
+        domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+    fi
+
+    # 2. Discover ALL deployed service domains from DB
+    local svc_blocks=""
+    svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import Service
+for svc in Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain=''):
+    d = svc.public_domain.strip()
+    if d:
+        print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+" 2>/dev/null | tr -d '\r' || true)"
+
+    # 3. Check if domain is a real hostname (not an IP address)
+    local is_real_domain=false
+    if [ -n "$domain" ] && [ "$domain" != "localhost" ]; then
+        if ! echo "$domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            is_real_domain=true
+        fi
+    fi
+
+    # 4. Build the Caddyfile
+    if [ "$is_real_domain" = "true" ]; then
+        cat > /etc/caddy/Caddyfile <<SAFECADDY
+# Auto-generated safe fallback (reason: $reason)
+# Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
+# Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
+${domain} {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+:80 {
+    reverse_proxy localhost:8090
+}
+
+${svc_blocks}
+SAFECADDY
+    else
+        cat > /etc/caddy/Caddyfile <<SAFECADDY
+# Auto-generated safe fallback (reason: $reason)
+:80 {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+${svc_blocks}
+SAFECADDY
+    fi
+    caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+    echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
+}
+
+# Returns 0 if Caddy config needs fixing, 1 if it's fine.
+caddy_needs_fix() {
+    if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        return 0  # Syntax error
+    fi
+    if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null \
+       && [ ! -f /etc/systemd/system/caddy.service.d/override.conf ]; then
+        return 0  # dns cloudflare without token override = runtime crash
+    fi
+    return 1  # Config is fine
+}
+
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
@@ -608,9 +701,14 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
-    # Refresh Caddy + watcher for external TLS/domain routing state.
-    systemctl restart caddy >/dev/null 2>&1 || true
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    # Validate Caddy config before restart (H1 fix)
+    if command -v caddy >/dev/null 2>&1; then
+        if caddy_needs_fix; then
+            generate_safe_caddyfile "restart_edge_stack validation"
+        fi
+        systemctl restart caddy >/dev/null 2>&1 || true
+        systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
 
@@ -671,39 +769,12 @@ recover_runtime_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     if command -v caddy >/dev/null 2>&1; then
-        # Safety: validate before restart to avoid crash loops.
-        # If validation fails (e.g. missing Cloudflare token), generate a safe
-        # fallback Caddyfile with the platform domain (regular HTTPS) but no
-        # wildcard/DNS challenge blocks.
-        if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-            RECOVER_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
-            if [ -n "$RECOVER_DOMAIN" ] && [ "$RECOVER_DOMAIN" != "localhost" ]; then
-                cat > /etc/caddy/Caddyfile <<SAFECADDY
-# Auto-generated safe fallback (wildcard HTTPS disabled — missing Cloudflare token)
-${RECOVER_DOMAIN} {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-SAFECADDY
-            else
-                cat > /etc/caddy/Caddyfile <<SAFECADDY
-:80 {
-    reverse_proxy localhost:8090
-}
-SAFECADDY
-            fi
-            caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+        if caddy_needs_fix; then
+            generate_safe_caddyfile "recover_runtime_stack"
         fi
         systemctl restart caddy >/dev/null 2>&1 || true
+        systemctl restart caddy-watcher >/dev/null 2>&1 || true
     fi
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
 
     echo -e "${GREEN}  OK Runtime recovery completed${NC}"
 }
@@ -872,8 +943,8 @@ if [ -n "$UPDATE_MODE" ]; then
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
 
-    # Force deterministic app rebuilds (frontend/backend cache bust).
-    bust_core_build_cache
+    # Cache bust only if disk is low (already runs in the disk check above when needed).
+    # Moved into case blocks below to avoid redundant double bust.
 
     case "$UPDATE_MODE" in
         frontend)
@@ -986,9 +1057,8 @@ if not created and not cp.is_active:
     echo -e "${GREEN}  ✓ Cloud provider ready${NC}"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
+    # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
-    # Hard recovery pass: ensure Docker networking and dependency ordering are correct.
-    recover_runtime_stack
 
     # Verify nginx loaded the correct custom config (not the default)
     sleep 2
@@ -1066,12 +1136,10 @@ ENVEOF
             # No valid token — strip dns cloudflare blocks to prevent crash
             if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
-                # Remove entire tls { ... } blocks (sed left orphan } before)
                 python3 -c "
 import re
 with open('/etc/caddy/Caddyfile') as f:
     content = f.read()
-# Remove tls blocks including opening brace, contents, and closing brace
 content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
 with open('/etc/caddy/Caddyfile', 'w') as f:
     f.write(content)
@@ -1081,42 +1149,12 @@ print('Stripped tls blocks')
             fi
         fi
 
-        # Restart Caddy (even if it was failed/stopped)
-        # SAFETY: Validate the Caddyfile before restarting.
-        # If validation fails (e.g. missing Cloudflare token), generate a safe
-        # fallback with the platform domain (regular HTTPS) but no wildcard.
-        if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-            echo -e "${YELLOW}  ⚠ Caddyfile validation failed — generating safe fallback${NC}"
-            FALLBACK_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
-            if [ -n "$FALLBACK_DOMAIN" ] && [ "$FALLBACK_DOMAIN" != "localhost" ]; then
-                cat > /etc/caddy/Caddyfile <<SAFECADDY
-# Auto-generated safe fallback (wildcard HTTPS disabled — missing Cloudflare token)
-# Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
-${FALLBACK_DOMAIN} {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-SAFECADDY
-            else
-                cat > /etc/caddy/Caddyfile <<SAFECADDY
-:80 {
-    reverse_proxy localhost:8090
-}
-SAFECADDY
-            fi
-            caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
-            echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
+        # ROBUST SAFETY: Use shared function (C4 fix — single source of truth)
+        if caddy_needs_fix; then
+            generate_safe_caddyfile "update flow validation"
         fi
 
         systemctl restart caddy 2>/dev/null || true
-        # Restart caddy-watcher to pick up the new file
         systemctl restart caddy-watcher 2>/dev/null || true
 
         # Verify Caddy is running
@@ -1128,9 +1166,12 @@ SAFECADDY
         fi
     fi
 
-    # ─── Auto-redeploy active services (ensures containers have latest labels) ──
-    echo -e "${BLUE}  → Auto-redeploying active services (ensures correct Traefik labels)...${NC}"
-    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+    # ─── Auto-redeploy active services (only if platform code changed) ──
+    # H6 fix: Only redeploy if git detected actual changes (prevents unnecessary deploys)
+    GIT_CHANGES="$(cd "$INSTALL_DIR" && git diff HEAD@{1} --name-only 2>/dev/null | head -5 || true)"
+    if [ -n "$GIT_CHANGES" ]; then
+        echo -e "${BLUE}  → Auto-redeploying active services (platform code changed)...${NC}"
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 import traceback
 try:
     from apps.deployments.models import Service, Deployment
@@ -1146,15 +1187,13 @@ try:
             dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
             if not dep or not dep.commit_hash:
                 continue
-            # Cancel existing active deployments
             svc.deployments.filter(status='ACTIVE').update(
                 status='CANCELLED', finished_at=timezone.now())
-            # Create new deployment
             new_dep = Deployment.objects.create(
                 service=svc,
                 status='QUEUED',
                 commit_hash=dep.commit_hash,
-                commit_message='Platform update — auto-redeploy for label fix',
+                commit_message='Platform update auto-redeploy',
             )
             smart_deploy_task.delay(str(new_dep.id), str(provider.id), skip_review=True)
             count += 1
@@ -1164,6 +1203,9 @@ except Exception as e:
     print(f'WARN: {e}')
     traceback.print_exc()
 " 2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+    else
+        echo -e "${GREEN}  ✓ No platform code changes detected — skipping auto-redeploy${NC}"
+    fi
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
@@ -1178,8 +1220,8 @@ except Exception as e:
     BACKEND_OK=false
     EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
-        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null || echo "000")
-        if [ "$EP1_CODE" = "200" ]; then
+        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -L "$EP1_URL" 2>/dev/null || echo "000")
+        if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
             BACKEND_OK=true
             break
         fi
@@ -1441,10 +1483,10 @@ done
 # This prevents: port conflicts, stale DB password volumes, orphan containers
 echo -e "${BLUE}  → Cleaning up previous SMSLY installation artifacts...${NC}"
 
-# Stop and remove all smsly-hosting containers (including orphans)
-SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly" -q 2>/dev/null || true)
+# Stop and remove stale smsly-hosting platform containers (NOT user-deployed services)
+SMSLY_CONTAINERS=$(docker ps -a --filter "name=smsly-hosting-" -q 2>/dev/null || true)
 if [ -n "$SMSLY_CONTAINERS" ]; then
-    echo -e "${YELLOW}  → Stopping ${#SMSLY_CONTAINERS} SMSLY container(s)...${NC}"
+    echo -e "${YELLOW}  → Stopping smsly-hosting platform container(s)...${NC}"
     docker stop $SMSLY_CONTAINERS 2>/dev/null || true
     docker rm -f $SMSLY_CONTAINERS 2>/dev/null || true
 fi
@@ -1673,8 +1715,9 @@ else
     # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
-    # Install cryptography lib
-    pip3 install cryptography -q 2>/dev/null || true
+    # Install cryptography lib (--break-system-packages for Python 3.12+ on Ubuntu 24.04)
+    pip3 install cryptography -q --break-system-packages 2>/dev/null || \
+        pip3 install cryptography -q 2>/dev/null || true
 
     # Generate secrets — Python is the ONLY source of truth for Fernet keys
     SECRETS_GENERATED=false
@@ -2103,7 +2146,7 @@ fi
 
 # ─── Create caddy-config volume directory for Settings UI writes ──────────────
 mkdir -p /opt/smsly-hosting/caddy-config
-chmod 777 /opt/smsly-hosting/caddy-config
+chmod 750 /opt/smsly-hosting/caddy-config
 
 # ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
 if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
@@ -2128,13 +2171,17 @@ WATCHEREOF
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 
-# Kill anything holding port 80/443 before Caddy binds
+# Kill non-Caddy/non-Docker processes holding port 80/443 before Caddy binds
 for port in 80 443; do
     PID=$(lsof -ti :$port 2>/dev/null || ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' || true)
     if [ -n "$PID" ] && [ "$PID" != "0" ]; then
-        echo -e "${YELLOW}  → Killing process holding port $port (PID: $PID)${NC}"
-        kill -9 $PID 2>/dev/null || true
-        sleep 1
+        PNAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
+        # Don't kill Caddy or Docker processes
+        if [[ "$PNAME" != "caddy" ]] && [[ "$PNAME" != "docker"* ]]; then
+            echo -e "${YELLOW}  → Killing $PNAME (PID: $PID) holding port $port${NC}"
+            kill -9 $PID 2>/dev/null || true
+            sleep 1
+        fi
     fi
 done
 
