@@ -671,6 +671,17 @@ recover_runtime_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     if command -v caddy >/dev/null 2>&1; then
+        # Safety: validate before restart to avoid crash loops
+        if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+            python3 -c "
+import re
+with open('/etc/caddy/Caddyfile') as f:
+    content = f.read()
+content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
+with open('/etc/caddy/Caddyfile', 'w') as f:
+    f.write(content)
+" 2>/dev/null || true
+        fi
         systemctl restart caddy >/dev/null 2>&1 || true
     fi
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
@@ -1052,6 +1063,23 @@ print('Stripped tls blocks')
         fi
 
         # Restart Caddy (even if it was failed/stopped)
+        # SAFETY: Validate the Caddyfile before restarting.
+        # If validation fails (e.g. missing Cloudflare token), strip tls blocks
+        # and retry. This prevents crash loops on update.
+        if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+            echo -e "${YELLOW}  ⚠ Caddyfile validation failed — auto-fixing by stripping tls blocks${NC}"
+            python3 -c "
+import re
+with open('/etc/caddy/Caddyfile') as f:
+    content = f.read()
+content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
+with open('/etc/caddy/Caddyfile', 'w') as f:
+    f.write(content)
+print('Stripped tls blocks for safety')
+" 2>/dev/null || true
+            caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+        fi
+
         systemctl restart caddy 2>/dev/null || true
         # Restart caddy-watcher to pick up the new file
         systemctl restart caddy-watcher 2>/dev/null || true
