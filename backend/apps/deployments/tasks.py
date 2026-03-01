@@ -1666,9 +1666,9 @@ def create_service_backup_task(self, service_id, backup_type='MANUAL'):
     backup_service.backup_service(service_id)
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
-def create_server_backup_task(self):
+def create_server_backup_task(self, backup_id=None):
     backup_service = BackupService()
-    backup_service.backup_server()
+    backup_service.backup_server(backup_id=backup_id)
 
 @shared_task(bind=True, soft_time_limit=3600)
 def restore_service_backup_task(self, backup_id, target_service_id=None, requesting_user_id=None):

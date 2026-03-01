@@ -316,14 +316,22 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def backup_server(self):
+    def backup_server(self, backup_id=None):
         """
         Full server backup:
         1. PG_DUMP of the database.
         2. Backup of all services (recursive).
         3. Backup of PlatformConfig/Secrets.
         """
-        backup = ServerBackup.objects.create(status='IN_PROGRESS')
+        if backup_id:
+            try:
+                backup = ServerBackup.objects.get(id=backup_id)
+                backup.status = 'IN_PROGRESS'
+                backup.save(update_fields=['status'])
+            except ServerBackup.DoesNotExist:
+                backup = ServerBackup.objects.create(status='IN_PROGRESS')
+        else:
+            backup = ServerBackup.objects.create(status='IN_PROGRESS')
         temp_dir = None
         try:
             backups_dir = os.path.join(settings.BASE_DIR, 'backups', 'server')
