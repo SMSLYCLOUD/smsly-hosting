@@ -1046,6 +1046,26 @@ print('Stripped empty tls blocks')
         fi
     fi
 
+    # ─── Auto-redeploy active services (ensures containers have latest labels) ──
+    echo -e "${BLUE}  → Auto-redeploying active services (ensures correct Traefik labels)...${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+import traceback
+try:
+    from apps.deployments.models import Service, Deployment
+    from apps.deployments.tasks import build_and_deploy
+    count = 0
+    for svc in Service.objects.filter(is_active=True):
+        dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
+        if dep and dep.commit_hash:
+            build_and_deploy.delay(str(svc.id), commit_hash=dep.commit_hash)
+            count += 1
+            print(f'  Queued redeploy: {svc.name} ({dep.commit_hash[:7]})')
+    print(f'OK: {count} service(s) queued for redeploy')
+except Exception as e:
+    print(f'WARN: {e}')
+    traceback.print_exc()
+" 2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+
     # ─── Verification ────────────────────────────────────────────────────────
     echo -e "${BLUE}  → Verifying containers...${NC}"
     sleep 5
