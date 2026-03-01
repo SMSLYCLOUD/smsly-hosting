@@ -671,16 +671,35 @@ recover_runtime_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     if command -v caddy >/dev/null 2>&1; then
-        # Safety: validate before restart to avoid crash loops
+        # Safety: validate before restart to avoid crash loops.
+        # If validation fails (e.g. missing Cloudflare token), generate a safe
+        # fallback Caddyfile with the platform domain (regular HTTPS) but no
+        # wildcard/DNS challenge blocks.
         if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-            python3 -c "
-import re
-with open('/etc/caddy/Caddyfile') as f:
-    content = f.read()
-content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
-with open('/etc/caddy/Caddyfile', 'w') as f:
-    f.write(content)
-" 2>/dev/null || true
+            RECOVER_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+            if [ -n "$RECOVER_DOMAIN" ] && [ "$RECOVER_DOMAIN" != "localhost" ]; then
+                cat > /etc/caddy/Caddyfile <<SAFECADDY
+# Auto-generated safe fallback (wildcard HTTPS disabled — missing Cloudflare token)
+${RECOVER_DOMAIN} {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+:80 {
+    reverse_proxy localhost:8090
+}
+SAFECADDY
+            else
+                cat > /etc/caddy/Caddyfile <<SAFECADDY
+:80 {
+    reverse_proxy localhost:8090
+}
+SAFECADDY
+            fi
+            caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
         fi
         systemctl restart caddy >/dev/null 2>&1 || true
     fi
@@ -1064,20 +1083,36 @@ print('Stripped tls blocks')
 
         # Restart Caddy (even if it was failed/stopped)
         # SAFETY: Validate the Caddyfile before restarting.
-        # If validation fails (e.g. missing Cloudflare token), strip tls blocks
-        # and retry. This prevents crash loops on update.
+        # If validation fails (e.g. missing Cloudflare token), generate a safe
+        # fallback with the platform domain (regular HTTPS) but no wildcard.
         if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-            echo -e "${YELLOW}  ⚠ Caddyfile validation failed — auto-fixing by stripping tls blocks${NC}"
-            python3 -c "
-import re
-with open('/etc/caddy/Caddyfile') as f:
-    content = f.read()
-content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
-with open('/etc/caddy/Caddyfile', 'w') as f:
-    f.write(content)
-print('Stripped tls blocks for safety')
-" 2>/dev/null || true
+            echo -e "${YELLOW}  ⚠ Caddyfile validation failed — generating safe fallback${NC}"
+            FALLBACK_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+            if [ -n "$FALLBACK_DOMAIN" ] && [ "$FALLBACK_DOMAIN" != "localhost" ]; then
+                cat > /etc/caddy/Caddyfile <<SAFECADDY
+# Auto-generated safe fallback (wildcard HTTPS disabled — missing Cloudflare token)
+# Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
+${FALLBACK_DOMAIN} {
+    reverse_proxy localhost:8090
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+:80 {
+    reverse_proxy localhost:8090
+}
+SAFECADDY
+            else
+                cat > /etc/caddy/Caddyfile <<SAFECADDY
+:80 {
+    reverse_proxy localhost:8090
+}
+SAFECADDY
+            fi
             caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+            echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
         fi
 
         systemctl restart caddy 2>/dev/null || true
@@ -1130,31 +1165,129 @@ except Exception as e:
     traceback.print_exc()
 " 2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
 
-    # ─── Verification ────────────────────────────────────────────────────────
-    echo -e "${BLUE}  → Verifying containers...${NC}"
+    # ─── Endpoint Verification (3 checks) ──────────────────────────────────
+    echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
     sleep 5
+    PASS_COUNT=0
+    FAIL_COUNT=0
 
-    HEALTH_OK=false
+    # ── Check 1: Backend API health (internal — bypasses Caddy/Nginx) ──
+    echo -e "${BLUE}  [1/3] Backend API health (localhost:8090)...${NC}"
+    BACKEND_OK=false
     for attempt in 1 2 3 4 5; do
-        if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
-            HEALTH_OK=true
-            break
-        elif curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
-            HEALTH_OK=true
+        HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8090/health 2>/dev/null || echo "000")
+        if [ "$HTTP_CODE" = "200" ]; then
+            BACKEND_OK=true
             break
         fi
-        echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
         if [ "$attempt" -eq 1 ]; then
             docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
         fi
-        sleep 5
+        sleep 3
     done
-
-    if [ "$HEALTH_OK" = "true" ]; then
-        echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
+    if [ "$BACKEND_OK" = "true" ]; then
+        echo -e "${GREEN}  ✓ [1/3] Backend API: PASS (HTTP 200)${NC}"
+        PASS_COUNT=$((PASS_COUNT + 1))
     else
-        echo -e "${YELLOW}  ⚠ Health check not responding. Check container logs:${NC}"
-        echo -e "${YELLOW}    docker compose -f $COMPOSE_FILE logs --tail=50${NC}"
+        echo -e "${RED}  ✗ [1/3] Backend API: FAIL (HTTP $HTTP_CODE)${NC}"
+        echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=30 backend${NC}"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+
+    # ── Check 2: HTTPS platform domain (auto-discovered from DB → through Caddy) ──
+    echo -e "${BLUE}  [2/3] HTTPS platform domain...${NC}"
+    # Auto-discover domain from PlatformConfig in DB — zero config needed
+    EP_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+config = PlatformConfig.load()
+d = (config.domain or '').strip()
+if d and d != 'localhost':
+    print(d)
+" 2>/dev/null | tr -d '[:space:]' || true)"
+    # Fallback to .env if DB query failed
+    if [ -z "$EP_DOMAIN" ]; then
+        EP_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+    fi
+    HTTPS_OK=false
+    if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ]; then
+        for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "https://${EP_DOMAIN}/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+                HTTPS_OK=true
+                break
+            fi
+            sleep 3
+        done
+        if [ "$HTTPS_OK" = "true" ]; then
+            echo -e "${GREEN}  ✓ [2/3] HTTPS domain ($EP_DOMAIN): PASS (HTTP 200)${NC}"
+            PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ [2/3] HTTPS domain ($EP_DOMAIN): FAIL (HTTP $HTTP_CODE)${NC}"
+            echo -e "${YELLOW}        Fix: systemctl status caddy && journalctl -u caddy --no-pager -n 15${NC}"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        echo -e "${YELLOW}  ⊘ [2/3] HTTPS domain: SKIPPED (no domain configured)${NC}"
+    fi
+
+    # ── Check 3: Deployed service reachability (auto-discovers first active service) ──
+    echo -e "${BLUE}  [3/3] Deployed services routing...${NC}"
+    # Auto-discover first active deployed service domain from DB
+    SVC_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import Service
+svc = Service.objects.filter(is_active=True).exclude(public_domain__isnull=True).exclude(public_domain='').first()
+if svc:
+    print(svc.public_domain.strip())
+" 2>/dev/null | tr -d '[:space:]' || true)"
+    TRAEFIK_OK=false
+    if [ -n "$SVC_DOMAIN" ]; then
+        # Test actual deployed service through Caddy/Traefik end-to-end
+        for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 -L "https://${SVC_DOMAIN}/" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" != "000" ] && [ "$HTTP_CODE" != "502" ] && [ "$HTTP_CODE" != "503" ]; then
+                TRAEFIK_OK=true
+                break
+            fi
+            sleep 3
+        done
+        if [ "$TRAEFIK_OK" = "true" ]; then
+            echo -e "${GREEN}  ✓ [3/3] Service ($SVC_DOMAIN): PASS (HTTP $HTTP_CODE)${NC}"
+            PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ [3/3] Service ($SVC_DOMAIN): FAIL (HTTP $HTTP_CODE)${NC}"
+            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=20 traefik${NC}"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        # No deployed services — fall back to Traefik port check
+        for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8081/ 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" != "000" ] && [ "$HTTP_CODE" != "502" ] && [ "$HTTP_CODE" != "503" ]; then
+                TRAEFIK_OK=true
+                break
+            fi
+            sleep 3
+        done
+        if [ "$TRAEFIK_OK" = "true" ]; then
+            echo -e "${GREEN}  ✓ [3/3] Traefik routing: PASS (HTTP $HTTP_CODE — no services deployed)${NC}"
+            PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ [3/3] Traefik routing: FAIL (HTTP $HTTP_CODE)${NC}"
+            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=20 traefik${NC}"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    fi
+
+    # ── Summary ──
+    echo ""
+    if [ "$FAIL_COUNT" -eq 0 ]; then
+        echo -e "${GREEN}  ════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}  ✓ All $PASS_COUNT/$((PASS_COUNT + FAIL_COUNT)) endpoint checks passed${NC}"
+        echo -e "${GREEN}  ════════════════════════════════════════════${NC}"
+    else
+        echo -e "${YELLOW}  ════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}  ⚠ $PASS_COUNT passed, $FAIL_COUNT failed — check logs above${NC}"
+        echo -e "${YELLOW}  ════════════════════════════════════════════${NC}"
     fi
 
     # Show container status
