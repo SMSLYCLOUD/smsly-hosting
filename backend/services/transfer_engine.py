@@ -15,6 +15,7 @@ import os
 import json
 import time
 import logging
+import shlex
 import tempfile
 import shutil
 import requests
@@ -54,6 +55,7 @@ class TransferEngine:
         except Exception as e:
             self.transfer.status = 'FAILED'
             self.transfer.error_message = str(e)
+            self.transfer.target_ssh_key = ''  # Scrub private key on failure too
             self._log(f"Transfer failed: {e}")
             self.transfer.save()
 
@@ -97,9 +99,10 @@ class TransferEngine:
         self._log(f"Uploading backup to {self.transfer.target_server_ip}...")
         self.transfer.save()
 
-        key_file = tempfile.NamedTemporaryFile(delete=False)
-        key_file.write(self.transfer.target_ssh_key.encode())
+        key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+        key_file.write(self.transfer.target_ssh_key)
         key_file.close()
+        os.chmod(key_file.name, 0o600)
 
         try:
             ssh = paramiko.SSHClient()
@@ -128,9 +131,10 @@ class TransferEngine:
 
         # Call target API to restore
 
-        key_file = tempfile.NamedTemporaryFile(delete=False)
-        key_file.write(self.transfer.target_ssh_key.encode())
+        key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+        key_file.write(self.transfer.target_ssh_key)
         key_file.close()
+        os.chmod(key_file.name, 0o600)
 
         try:
             ssh = paramiko.SSHClient()
@@ -142,7 +146,9 @@ class TransferEngine:
             )
 
             remote_path = f"/tmp/{os.path.basename(self.source_backup.file_path)}"
-            cmd = f"cd /opt/smsly-hosting/backend && python manage.py restore_service_backup --file {remote_path} --service-id {self.service.id}"
+            safe_path = shlex.quote(remote_path)
+            safe_sid = shlex.quote(str(self.service.id))
+            cmd = f"cd /opt/smsly-hosting/backend && python manage.py restore_service_backup --file {safe_path} --service-id {safe_sid}"
             stdin, stdout, stderr = ssh.exec_command(cmd)
             exit_status = stdout.channel.recv_exit_status()
 
@@ -176,5 +182,7 @@ class TransferEngine:
         self.transfer.status = 'COMPLETED'
         self.transfer.progress_percent = 100
         self.transfer.completed_at = timezone.now()
+        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=48)
+        self.transfer.target_ssh_key = ''  # Scrub private key after completion
         self._log("Transfer completed successfully")
         self.transfer.save()

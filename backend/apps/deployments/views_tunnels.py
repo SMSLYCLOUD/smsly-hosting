@@ -3,10 +3,14 @@ Views for SMSLY development tunnels.
 
 Provides endpoints for the TunnelDashboard frontend component:
   - GET  /api/v1/tunnels/              → list active tunnels
+  - POST /api/v1/tunnels/              → create a tunnel from UI
+  - DELETE /api/v1/tunnels/{id}/       → soft-delete (deactivate)
   - GET  /api/v1/tunnels/{id}/requests/ → list captured requests
   - POST /api/v1/tunnels/{id}/replay/{req_id}/ → replay a request
+  - POST /api/v1/tunnels/{id}/share/   → share tunnel with user
   - POST /api/v1/tunnels/register/     → register a new tunnel (CLI)
 """
+import uuid
 from rest_framework import viewsets, serializers, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -16,6 +20,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# ── Serializers ──────────────────────────────────────────────────────────────
 
 class TunnelRequestSerializer(serializers.ModelSerializer):
     responseTimeMs = serializers.IntegerField(
@@ -29,20 +35,57 @@ class TunnelRequestSerializer(serializers.ModelSerializer):
 
 
 class TunnelSerializer(serializers.ModelSerializer):
-    tunnelId = serializers.UUIDField(source='id', read_only=True)
-    publicUrl = serializers.URLField(source='public_url', read_only=True)
-    localPort = serializers.IntegerField(source='local_port', read_only=True)
-    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
-    requestCount = serializers.IntegerField(
-        source='request_count', read_only=True)
-    isActive = serializers.BooleanField(source='is_active', read_only=True)
+    """Read serializer — camelCase fields for frontend compatibility."""
+    tunnel_id = serializers.UUIDField(source='id', read_only=True)
+    public_url = serializers.URLField(read_only=True)
+    local_port = serializers.IntegerField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    request_count = serializers.IntegerField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    bandwidth_used = serializers.IntegerField(
+        source='bandwidth_bytes', read_only=True)
+    shared_with = serializers.JSONField(read_only=True)
+    expires_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Tunnel
         fields = [
-            'tunnelId', 'subdomain', 'publicUrl',
-            'localPort', 'createdAt', 'requestCount', 'isActive']
+            'tunnel_id', 'subdomain', 'public_url', 'local_port',
+            'type', 'created_at', 'request_count', 'is_active',
+            'bandwidth_used', 'shared_with', 'expires_at',
+        ]
 
+
+class TunnelCreateSerializer(serializers.Serializer):
+    """Write serializer for creating tunnels from the dashboard UI."""
+    local_port = serializers.IntegerField(min_value=1, max_value=65535)
+    subdomain = serializers.CharField(
+        max_length=63, required=False, allow_blank=True)
+    type = serializers.ChoiceField(
+        choices=['http', 'tcp'], default='http', required=False)
+
+    def validate_subdomain(self, value):
+        if not value:
+            return ''
+        value = value.strip().lower()
+        if not value.isalnum() and not all(
+            c.isalnum() or c == '-' for c in value
+        ):
+            raise serializers.ValidationError(
+                'Subdomain must contain only letters, numbers, and hyphens.')
+        if value.startswith('-') or value.endswith('-'):
+            raise serializers.ValidationError(
+                'Subdomain cannot start or end with a hyphen.')
+        # Check uniqueness
+        if Tunnel.objects.filter(
+            subdomain=value, is_active=True
+        ).exists():
+            raise serializers.ValidationError(
+                'This subdomain is already in use.')
+        return value
+
+
+# ── ViewSet ──────────────────────────────────────────────────────────────────
 
 class TunnelViewSet(viewsets.ModelViewSet):
     """
@@ -58,12 +101,54 @@ class TunnelViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(
             owner=self.request.user, is_active=True)
 
+    # ── List ─────────────────────────────────────────────────────────────
+
     @require_tier('pro', 'enterprise')
     def list(self, request):
         """GET /api/v1/tunnels/ — returns {tunnels: [...]}"""
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return Response({'tunnels': serializer.data})
+
+    # ── Create (from UI) ─────────────────────────────────────────────────
+
+    @require_tier('pro', 'enterprise')
+    def create(self, request):
+        """POST /api/v1/tunnels/ — create tunnel from dashboard."""
+        write_serializer = TunnelCreateSerializer(data=request.data)
+        write_serializer.is_valid(raise_exception=True)
+
+        local_port = write_serializer.validated_data['local_port']
+        subdomain = write_serializer.validated_data.get('subdomain', '')
+        tunnel_type = write_serializer.validated_data.get('type', 'http')
+
+        if not subdomain:
+            subdomain = f"{request.user.username}-{uuid.uuid4().hex[:6]}"
+
+        tunnel = Tunnel.objects.create(
+            owner=request.user,
+            subdomain=subdomain,
+            local_port=local_port,
+            type=tunnel_type,
+            public_url=f"https://{subdomain}.tunnel.smsly.cloud",
+            is_active=True,
+        )
+
+        return Response(
+            TunnelSerializer(tunnel).data,
+            status=status.HTTP_201_CREATED)
+
+    # ── Delete (soft-delete) ─────────────────────────────────────────────
+
+    @require_tier('pro', 'enterprise')
+    def destroy(self, request, pk=None):
+        """DELETE /api/v1/tunnels/{id}/ — soft-delete (deactivate)."""
+        tunnel = self.get_object()
+        tunnel.is_active = False
+        tunnel.save(update_fields=['is_active'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # ── Requests Inspector ───────────────────────────────────────────────
 
     @action(detail=True, methods=['get'], url_path='requests')
     @require_tier('pro', 'enterprise')
@@ -73,6 +158,8 @@ class TunnelViewSet(viewsets.ModelViewSet):
         tunnel_requests = tunnel.requests.all()[:100]
         serializer = TunnelRequestSerializer(tunnel_requests, many=True)
         return Response({'requests': serializer.data})
+
+    # ── Replay ───────────────────────────────────────────────────────────
 
     @action(
         detail=True,
@@ -90,7 +177,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
                 {'error': 'Request not found'},
                 status=status.HTTP_404_NOT_FOUND)
 
-        # Create a copy of the request for replay
         replayed = TunnelRequest.objects.create(
             tunnel=tunnel,
             method=tunnel_req.method,
@@ -99,11 +185,45 @@ class TunnelViewSet(viewsets.ModelViewSet):
             body_preview=tunnel_req.body_preview,
         )
         logger.info(
-            f"Replayed request {request_id} as {replayed.id} "
-            f"for tunnel {tunnel.subdomain}")
+            "Replayed request %s as %s for tunnel %s",
+            request_id, replayed.id, tunnel.subdomain)
         return Response(
             {'status': 'replayed', 'new_request_id': str(replayed.id)},
             status=status.HTTP_201_CREATED)
+
+    # ── Share ────────────────────────────────────────────────────────────
+
+    @action(detail=True, methods=['post'], url_path='share')
+    @require_tier('pro', 'enterprise')
+    def share(self, request, pk=None):
+        """POST /api/v1/tunnels/{id}/share/ — share tunnel with a user."""
+        tunnel = self.get_object()
+        email = request.data.get('email', '').strip().lower()
+
+        if not email or '@' not in email:
+            return Response(
+                {'error': 'Valid email address required.'},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        shared = list(tunnel.shared_with or [])
+        if email in shared:
+            return Response(
+                {'error': 'Already shared with this user.'},
+                status=status.HTTP_409_CONFLICT)
+
+        shared.append(email)
+        tunnel.shared_with = shared
+        tunnel.save(update_fields=['shared_with'])
+
+        logger.info(
+            "Tunnel %s shared with %s by %s",
+            tunnel.subdomain, email, request.user.username)
+        return Response({
+            'status': 'shared',
+            'shared_with': shared,
+        })
+
+    # ── Register (from CLI) ──────────────────────────────────────────────
 
     @action(detail=False, methods=['post'])
     @require_tier('pro', 'enterprise')

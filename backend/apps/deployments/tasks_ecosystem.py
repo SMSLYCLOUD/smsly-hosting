@@ -416,7 +416,13 @@ def _cancel_remaining_waves(
 
 
 def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: int):
-    """Apply ecosystem plan profile to a service with production defaults."""
+    """Apply ecosystem plan profile to a service with production defaults.
+
+    Important: user-customisable fields (health_check_path, internal_port,
+    cpu_cores, memory_mb) are only set from the plan when they still hold
+    their model defaults.  This prevents the ecosystem deploy from silently
+    overriding values the user changed through the web UI.
+    """
     buildpack = _normalize_buildpack(svc_plan.get("build"))
     deploy_mode, compose_file, compose_main = _normalize_deploy_mode(svc_plan)
     root_directory = str(svc_plan.get("root_directory") or service.root_directory or "/").strip()
@@ -432,7 +438,11 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
         or "main"
     ).strip() or "main"
     service.branch = resolved_branch
-    service.internal_port = int(port)
+
+    # Only set port from plan if still at model default (8000)
+    if service.internal_port == 8000:
+        service.internal_port = int(port)
+
     service.buildpack = buildpack
     service.deploy_mode = deploy_mode
     service.compose_file = compose_file if deploy_mode == "COMPOSE" else ""
@@ -441,9 +451,13 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     if not service.provider:
         service.provider = provider
 
+    # Only set health_check_path from plan if user hasn't customised it
+    # (still at model default "/health" or empty).
     health_path = str(svc_plan.get("health_check_path") or "").strip()
     if health_path:
-        service.health_check_path = health_path if health_path.startswith("/") else f"/{health_path}"
+        current_path = (service.health_check_path or "").strip()
+        if not current_path or current_path == "/health":
+            service.health_check_path = health_path if health_path.startswith("/") else f"/{health_path}"
 
     service.save()
 

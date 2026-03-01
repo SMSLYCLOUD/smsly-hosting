@@ -1079,6 +1079,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not is_valid and _cname_chain_contains(domain, cname_target):
             is_valid = True
 
+        # ── Persist the verification result on the Service model ──
+        # This is the critical step that was missing. Without this, the
+        # domain_verified field stays False forever and the frontend badge
+        # never updates.
+        if is_valid and not service.domain_verified:
+            service.domain_verified = True
+            service.save(update_fields=['domain_verified'])
+        elif not is_valid and service.domain_verified:
+            service.domain_verified = False
+            service.save(update_fields=['domain_verified'])
+
         return Response({
             'domain': domain,
             'verified': is_valid,
@@ -2112,6 +2123,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         create_service_backup_task.delay(str(backup.service.id), 'MANUAL')
 
     @action(detail=True, methods=['post'])
+    @require_tier('pro', 'enterprise')
     def restore(self, request, pk=None):
         backup = self.get_object()
         target_service_id = request.data.get('target_service_id')
@@ -2134,6 +2146,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         return Response({'status': 'restore_started'})
 
     @action(detail=True, methods=['get'])
+    @require_tier('pro', 'enterprise')
     def download(self, request, pk=None):
         backup = self.get_object()
         if not backup.file_path or not os.path.exists(backup.file_path):
@@ -2166,6 +2179,18 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def partial_update(self, request, *args, **kwargs):
+        return super().partial_update(request, *args, **kwargs)
+
+    @require_tier('pro', 'enterprise')
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user)

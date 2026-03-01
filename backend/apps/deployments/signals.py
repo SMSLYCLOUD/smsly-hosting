@@ -49,7 +49,13 @@ def audit_deployment_lifecycle(sender, instance, created, **kwargs):
             },
         ).save()
     else:
-        # Log terminal status transitions
+        # Only log terminal status transitions — not every save.
+        # When tasks call save(update_fields=[...]), we check if 'status'
+        # is in update_fields to avoid flooding audit logs on log appends.
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None and 'status' not in update_fields:
+            return
+
         if instance.status in (
             Deployment.Status.ACTIVE,
             Deployment.Status.FAILED,
@@ -65,3 +71,4 @@ def audit_deployment_lifecycle(sender, instance, created, **kwargs):
                     'status': instance.status,
                 },
             ).save()
+

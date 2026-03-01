@@ -18,6 +18,7 @@ from .views_analysis import RepoAnalysisView
 from .views_chat import AIChatView
 from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
+from .views_subdomains import subdomains_list_create, subdomains_release
 from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import (
     github_connection, github_connect, github_oauth_url, github_oauth_callback,
@@ -92,4 +93,7 @@ urlpatterns = router.urls + [
     path('tokens/', list_tokens, name='token-list'),
     path('tokens/create/', create_token, name='token-create'),
     path('tokens/<uuid:token_id>/revoke/', revoke_token, name='token-revoke'),
+    # Subdomain reservation
+    path('subdomains/', subdomains_list_create, name='subdomains-list-create'),
+    path('subdomains/<str:subdomain>/', subdomains_release, name='subdomains-release'),
 ]

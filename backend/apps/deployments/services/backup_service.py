@@ -29,8 +29,14 @@ class BackupService:
         )
         temp_dir = None
         try:
-            # Snapshot env vars
-            env_vars = list(EnvironmentVariable.objects.filter(service=service).values('key', 'value', 'is_secret'))
+            # Snapshot env vars — mask secrets to prevent credential leakage
+            env_vars_raw = list(EnvironmentVariable.objects.filter(service=service).values('key', 'value', 'is_secret'))
+            env_vars = []
+            for ev in env_vars_raw:
+                entry = dict(ev)
+                if entry.get('is_secret'):
+                    entry['value'] = '********'
+                env_vars.append(entry)
 
             # Save metadata
             metadata = {
@@ -178,8 +184,8 @@ class BackupService:
             if image_tag and image_tag.startswith("backup/"):
                 try:
                     self.docker_client.images.remove(image_tag, force=True)
-                except:
-                    pass
+                except Exception as cleanup_err:
+                    logger.warning("Failed to clean up temp image %s: %s", image_tag, cleanup_err)
 
             return backup
 
@@ -222,6 +228,10 @@ class BackupService:
         try:
             # 1. Extract Archive
             with tarfile.open(backup.file_path, "r:gz") as tar:
+                # Security: reject members with absolute paths or '..' traversal
+                for member in tar.getmembers():
+                    if member.name.startswith('/') or '..' in member.name:
+                        raise ValueError(f"Unsafe path in backup archive: {member.name}")
                 tar.extractall(path=temp_dir)
 
             with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
@@ -286,46 +296,15 @@ class BackupService:
                     vol_tar_path = os.path.join(temp_dir, vol_meta['filename'])
                     if os.path.exists(vol_tar_path):
                         logger.info(f"Restoring volume {vol_obj.name}...")
-                        # Run helper to extract
-                        # cat archive.tar.gz | docker run -i -v vol:/dest alpine tar -xzf - -C /dest
-
-                        restore_container = self.docker_client.containers.create(
-                            "alpine:latest",
-                            command=["tar", "-xzf", "-", "-C", "/volume_data"],
-                            volumes={vol_obj.name: {'bind': '/volume_data', 'mode': 'rw'}},
-                            stdin_open=True,
-                            detach=True
-                        )
-                        restore_container.start()
-
-                        # Stream the file to the container stdin
-                        with open(vol_tar_path, 'rb') as f:
-                            # put_archive is for files, checking if we can just pipe to stdin
-                            # SDK doesn't support easy stdin piping to running container except via socket.
-                            # Easy workaround: create container with command that sleeps, then put_archive?
-                            # No, put_archive extracts tar.
-                            # So we can just use put_archive!
-
-                            # But wait, our backup is a tar.gz of the CONTENTS.
-                            # put_archive expects a tar stream.
-                            pass
-
-                        # Actually, `put_archive` puts a TAR stream into a path.
-                        # If our file is `volume.tar.gz`, we can't just put it if it's compressed?
-                        # Docker API put_archive docs say: "Input stream must be a tar archive".
-                        # It doesn't explicitly say it handles compression auto-detection, but usually strictly tar.
-
-                        # Alternative: use the helper container method (netcat or just standard execution).
-                        # Or simple `subprocess` since we are on the host.
-                        # subprocess is easiest if we have local docker cli.
-
+                        # Use subprocess with Docker CLI to stream tar.gz into volume
                         import subprocess
-                        # Use list args to avoid shell injection
-                        cmd = ["docker", "run", "--rm", "-i", "-v", f"{vol_obj.name}:/dest", "alpine", "tar", "-xzf", "-", "-C", "/dest"]
+                        cmd = [
+                            "docker", "run", "--rm", "-i",
+                            "-v", f"{vol_obj.name}:/dest",
+                            "alpine", "tar", "-xzf", "-", "-C", "/dest",
+                        ]
                         with open(vol_tar_path, 'rb') as f:
                             subprocess.run(cmd, stdin=f, check=True)
-
-                        restore_container.remove(force=True)
 
             logger.info("Restore complete.")
             return True
@@ -378,12 +357,12 @@ class BackupService:
                 try:
                     self.docker_client.containers.get(host)
                     is_container = True
-                except:
+                except Exception:
                     is_container = False
 
                 if is_container:
                     # Exec inside container
-                    cmd = f"pg_dump -U {user} {name}"
+                    cmd = ["pg_dump", "-U", user, name]
                     container = self.docker_client.containers.get(host)
                     # This returns (exit_code, output)
                     res = container.exec_run(cmd)
@@ -469,6 +448,9 @@ class BackupService:
 
         try:
             with tarfile.open(backup.file_path, "r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.name.startswith('/') or '..' in member.name:
+                        raise ValueError(f"Unsafe path in server backup archive: {member.name}")
                 tar.extractall(path=temp_dir)
 
             # Restore DB?
@@ -490,12 +472,20 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def _restore_service_from_file(self, filepath):
-        # Unpack to temp
+    def _restore_service_from_file(self, filepath, owner=None):
+        """Restore a service from a backup archive file.
+        
+        Args:
+            filepath: Path to the service backup .tar.gz
+            owner: User who owns the restored service (required for new services)
+        """
         temp_dir = os.path.join(os.path.dirname(filepath), f"rest_tmp_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
         try:
             with tarfile.open(filepath, "r:gz") as tar:
+                for member in tar.getmembers():
+                    if member.name.startswith('/') or '..' in member.name:
+                        raise ValueError(f"Unsafe path in service backup archive: {member.name}")
                 tar.extractall(path=temp_dir)
 
             with open(os.path.join(temp_dir, "metadata.json"), 'r') as f:
@@ -503,22 +493,20 @@ class BackupService:
 
             # Create/Get Service
             service_name = metadata.get('service_name')
-            # Check if exists
             service = Service.objects.filter(name=service_name).first()
             if not service:
-                # Create it
+                if not owner:
+                    raise ValueError(
+                        f"Cannot create service '{service_name}' without an owner. "
+                        f"Pass owner to _restore_service_from_file.")
                 service = Service.objects.create(
                     name=service_name,
+                    owner=owner,
                     deploy_type=metadata.get('deploy_type', 'DOCKER'),
-                    repository_url=metadata.get('git_url')
+                    repository_url=metadata.get('git_url', '')
                 )
 
-            # Now call the main restore logic by creating a dummy backup record
-            # Or refactor restore_service to accept a path.
-            # Refactoring is cleaner but let's just do it inline or duplicate slightly for safety.
-
-            # Actually, I can just create a temporary ServiceBackup record pointing to this file
-            # and call restore_service.
+            # Create a temporary ServiceBackup record pointing to this file
             temp_backup = ServiceBackup.objects.create(
                 service=service,
                 file_path=filepath,

@@ -425,13 +425,14 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
 )
 
 # Django cache: use Redis (needed for accurate /health cache checks + rate limits).
-# Use a dedicated DB index to avoid colliding with Celery/Channels.
-REDIS_CACHE_URL = (
-    f"{_REDIS_BASE_URL}/2" if REDIS_PASSWORD else (
-        CELERY_BROKER_URL[:-2] + "/2" if isinstance(CELERY_BROKER_URL, str) and CELERY_BROKER_URL.endswith("/0")
-        else CELERY_BROKER_URL
-    )
-)
+# Use a dedicated DB index (2) to avoid colliding with Celery (0) / Channels (1).
+def _redis_url_with_db(base_url: str, db: int) -> str:
+    """Replace the DB number in a Redis URL (handles any DB suffix safely)."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(base_url)
+    return urlunparse(parsed._replace(path=f'/{db}'))
+
+REDIS_CACHE_URL = _redis_url_with_db(_REDIS_BASE_URL, 2)
 
 if IS_TESTING:
     CACHES = {

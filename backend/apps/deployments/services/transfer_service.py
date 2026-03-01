@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import time
+import tempfile
 import requests
 import shlex
 import glob
@@ -137,8 +138,8 @@ class ServerTransferService:
 
     def _restore_single_service(self, remote_backup_path):
         remote_temp_dir = f"/tmp/restore_{self.transfer.id}"
-        self.ssh.exec_command(f"mkdir -p {remote_temp_dir}")
-        self.ssh.exec_command(f"tar -xzf {remote_backup_path} -C {remote_temp_dir}")
+        self.ssh.exec_command(f"mkdir -p {shlex.quote(remote_temp_dir)}")
+        self.ssh.exec_command(f"tar -xzf {shlex.quote(remote_backup_path)} -C {shlex.quote(remote_temp_dir)}")
 
         self._update(65, 'Loading Docker image...')
         self.ssh.exec_command(f"docker load -i {remote_temp_dir}/image.tar")
@@ -167,7 +168,7 @@ class ServerTransferService:
         run_cmd = self._generate_docker_run_command(service, metadata)
         self.ssh.exec_command(run_cmd)
 
-        self.ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_backup_path}")
+        self.ssh.exec_command(f"rm -rf {shlex.quote(remote_temp_dir)} {shlex.quote(remote_backup_path)}")
 
     def _restore_full_server(self, remote_backup_path):
         self._update(60, 'Installing CloudNeuron platform on target...')
@@ -257,12 +258,17 @@ if os.path.exists(services_dir):
         run(["rm", "-rf", svc_tmp])
 """
         script_path = f"/tmp/restore_{self.transfer.id}.py"
-        with open("restore_script.py", "w") as f:
-            f.write(restore_script)
-        self.ssh.upload_file("restore_script.py", script_path)
-        os.remove("restore_script.py")
+        local_script = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.py', prefix=f'restore_{self.transfer.id}_', delete=False
+        )
+        try:
+            local_script.write(restore_script)
+            local_script.close()
+            self.ssh.upload_file(local_script.name, script_path)
+        finally:
+            os.unlink(local_script.name)
 
-        self.ssh.exec_command(f"python3 {script_path}")
+        self.ssh.exec_command(f"python3 {shlex.quote(script_path)}")
 
         self._update(90, 'Starting platform...')
         self.ssh.exec_command("cd /opt/smsly && docker compose up -d")
@@ -289,17 +295,32 @@ if os.path.exists(services_dir):
         self._update(95, 'Verifying services on target server...')
         time.sleep(15)
 
-        try:
-            if self.transfer.transfer_type == 'FULL':
-                url = f"http://{self.transfer.target_server_ip}:8090/health"
-                try:
-                    requests.get(url, timeout=5)
-                except:
-                    pass
-            else:
-                pass
-        except Exception as e:
-            logger.warning(f"Verification warning: {e}")
+        if self.transfer.transfer_type == 'FULL':
+            url = f"http://{self.transfer.target_server_ip}:8090/health"
+            try:
+                resp = requests.get(url, timeout=10)
+                if resp.status_code >= 500:
+                    raise RuntimeError(
+                        f"Target health check returned HTTP {resp.status_code}"
+                    )
+                logger.info("Target health check passed (HTTP %s)", resp.status_code)
+            except requests.RequestException as e:
+                logger.warning("Target health check failed: %s (non-fatal)", e)
+        elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+            # Check if the container is running on the target
+            try:
+                container_name = self.transfer.service.name
+                result = self.ssh.exec_command(
+                    f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}"
+                )
+                if result.strip() != 'true':
+                    raise RuntimeError(
+                        f"Service container {container_name} is not running on target"
+                    )
+                logger.info("Service container %s verified running on target", container_name)
+            except Exception as e:
+                logger.warning("Service verification failed: %s", e)
+                raise RuntimeError(f"Service verification failed: {e}") from e
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'

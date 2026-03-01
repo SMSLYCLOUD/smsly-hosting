@@ -39,16 +39,6 @@ from apps.deployments.utils import (
     broadcast_status,
     update_stage,
 )
-from apps.billing.services.metering import UsageMeter
-from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
-from services.addon_provisioner import addon_provisioner
-from .services.backup_service import BackupService
-from .services.transfer_service import ServerTransferService
-from .models_backup import BackupSchedule, ServiceBackup
-from .models_transfer import ServerTransfer
-
-logger = logging.getLogger(__name__)
-
 from services.addon_provisioner import addon_provisioner
 
 logger = logging.getLogger(__name__)
@@ -111,17 +101,6 @@ def _build_runtime_env(service: Service) -> dict:
     if 'SECRET_KEY' not in env_vars and 'DJANGO_SECRET_KEY' not in env_vars:
         env_vars['SECRET_KEY'] = secrets.token_urlsafe(50)
 
-    # ALLOWED_HOSTS: derive from the service's public domain + custom domains.
-    # Django rejects all requests if ALLOWED_HOSTS is empty in production.
-    if 'ALLOWED_HOSTS' not in env_vars and 'DJANGO_ALLOWED_HOSTS' not in env_vars:
-        hosts = ['localhost', '127.0.0.1', '0.0.0.0']
-        if service.public_domain:
-            hosts.append(service.public_domain)
-        for domain in (service.custom_domains or []):
-            if isinstance(domain, str) and domain.strip():
-                hosts.append(domain.strip())
-        env_vars['ALLOWED_HOSTS'] = ','.join(hosts)
-
     # ── Inject addon connection URLs (DATABASE_URL, REDIS_URL, etc.) ──
     # This ensures addon env vars are available in ALL deploy paths.
     try:
@@ -152,21 +131,25 @@ def _build_runtime_env(service: Service) -> dict:
     _smart_derive_redis_vars(env_vars)
 
     # ── Domain-aware injection ──
-    # Routing domains are platform-controlled and must not drift from service state.
+    # Build a unified hosts list from public domain + custom domains.
+    # Ensures ALLOWED_HOSTS, DJANGO_ALLOWED_HOSTS, and MARKETER_ALLOWED_HOSTS
+    # all receive the same comprehensive value (no divergence).
+    all_hosts = ['localhost', '127.0.0.1', '0.0.0.0']
     if service.public_domain:
         env_vars['PUBLIC_DOMAIN'] = service.public_domain
-
-        # Derive DJANGO_ALLOWED_HOSTS / MARKETER_ALLOWED_HOSTS from domain
-        all_hosts = ['localhost', '127.0.0.1', '0.0.0.0']
         all_hosts.append(service.public_domain)
-        for d in (service.custom_domains or []):
-            if isinstance(d, str) and d.strip():
-                all_hosts.append(d.strip())
-        hosts_csv = ','.join(all_hosts)
+    for d in (service.custom_domains or []):
+        if isinstance(d, str) and d.strip():
+            all_hosts.append(d.strip())
+    hosts_csv = ','.join(all_hosts)
 
-        # Set any *_ALLOWED_HOSTS variant the app might use
-        env_vars.setdefault('DJANGO_ALLOWED_HOSTS', hosts_csv)
-        env_vars.setdefault('MARKETER_ALLOWED_HOSTS', hosts_csv)
+    # Set all ALLOWED_HOSTS variants the app might use (only if not already set)
+    if 'ALLOWED_HOSTS' not in env_vars:
+        env_vars['ALLOWED_HOSTS'] = hosts_csv
+    env_vars.setdefault('DJANGO_ALLOWED_HOSTS', hosts_csv)
+    env_vars.setdefault('MARKETER_ALLOWED_HOSTS', hosts_csv)
+
+    if service.public_domain:
 
         # API_INTERNAL_URL: the internal URL the app can call itself at
         port = env_vars.get('PORT', '8000')
@@ -467,12 +450,12 @@ def _ensure_database_exists(base_url: str, db_name: str):
     """
     Ensure the target database exists on the shared Postgres server.
     """
+    conn = None
     try:
         import psycopg2
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql
-        
-        # Connect to the base URL (e.g. postgres database)
+
         conn = psycopg2.connect(base_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         with conn.cursor() as cur:
@@ -484,7 +467,7 @@ def _ensure_database_exists(base_url: str, db_name: str):
     except Exception as exc:
         logger.warning("Ecosystem: Failed to auto-provision database '%s': %s", db_name, exc)
     finally:
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close()
 
 
@@ -1751,3 +1734,17 @@ def platform_update_task(self, update_id: str):
         return
 
     perform_update(update)
+
+
+@shared_task(bind=True, max_retries=0)
+def platform_rollback_task(self, update_id: str):
+    """Execute platform rollback in background (avoids blocking the request thread)."""
+    from .models_updates import PlatformUpdate
+    from services.platform_updater import _rollback
+
+    try:
+        update = PlatformUpdate.objects.get(id=update_id)
+    except PlatformUpdate.DoesNotExist:
+        return
+
+    _rollback(update)
