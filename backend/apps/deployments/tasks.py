@@ -1107,34 +1107,35 @@ def _deploy_container(deployment, provider, image_name):
                         "Will recheck at promotion.\n",
                     )
 
-        # ── Blue-Green Bake: enter STAGED instead of ACTIVE ──
-        # Old container keeps serving traffic. New container is healthy
-        # but not yet receiving traffic. Auto-promote after bake period.
-        deployment.status = Deployment.Status.STAGED
-        deployment.staged_at = timezone.now()
-        deployment.save(update_fields=['status', 'staged_at'])
+        # ── Container is live with Traefik labels — mark ACTIVE ──
+        # _deploy_docker now creates containers with the canonical name
+        # and Traefik labels enabled. No staging/promotion needed.
+        deployment.status = Deployment.Status.ACTIVE
+        deployment.container_id = resource.resource_id
+        deployment.promoted_at = timezone.now()
+        deployment.save(update_fields=['status', 'container_id', 'promoted_at'])
+
+        # Deactivate previous deployments
+        service.deployments.filter(
+            status=Deployment.Status.ACTIVE,
+        ).exclude(id=deployment.id).update(
+            status=Deployment.Status.SUPERSEDED,
+        )
 
         update_stage(
             deployment,
             'Deploy',
-            'staged',
+            'done',
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
         append_log(
             deployment,
-            f"[STAGED] Container healthy. Old container still serving traffic.\n"
-            f"Auto-promote in 30 minutes. Use 'Promote Now' for immediate swap.\n"
+            f"[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
+            f"Domain should be accessible immediately.\n"
         )
 
-        # Schedule auto-promotion after bake period (default 30 minutes)
-        bake_seconds = int(os.environ.get('BLUE_GREEN_BAKE_SECONDS', 1800))
-        auto_promote_task.apply_async(
-            args=[str(deployment.id), str(provider.id)],
-            countdown=bake_seconds,
-        )
-
-        # Post-deploy runtime monitor (watches for crashes during bake)
+        # Post-deploy runtime monitor (watches for crashes)
         _post_deploy_monitor.delay(
             str(deployment.id),
             str(provider.id),
