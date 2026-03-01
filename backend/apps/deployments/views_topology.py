@@ -292,6 +292,3 @@ class TopologyViewSet(viewsets.GenericViewSet):
                         })
 
         return Response({'nodes': nodes, 'edges': edges})
-"""
-    Exports: TopologyViewSet, TopologySerializer
-"""

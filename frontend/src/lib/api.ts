@@ -469,6 +469,32 @@ export const aiApi = {
   },
 };
 
+// ─── Code Analysis API ──────────────────────────────────────────────────────
+
+export const codeAnalysisApi = {
+  /** Trigger async codebase analysis for a service */
+  analyze: async (serviceId: string): Promise<{ task_id: string; status: string; service: string }> => {
+    const res = await api.post('/cloud/code-analysis/analyze/', { service_id: serviceId });
+    return res.data;
+  },
+
+  /** Poll for analysis results */
+  getResult: async (taskId: string): Promise<{
+    status: 'pending' | 'analyzing' | 'complete' | 'failed';
+    data?: {
+      nodes: { id: string; type: string; data: Record<string, any> }[];
+      edges: { id: string; source: string; target: string; type: string; label?: string }[];
+      tech_stack: string[];
+      stats: { files: number; directories: number; lines: number; languages: Record<string, number> };
+      summary: string;
+    };
+    error?: string;
+  }> => {
+    const res = await api.get(`/cloud/code-analysis/result/${taskId}/`);
+    return res.data;
+  },
+};
+
 // ─── Teams API ──────────────────────────────────────────────────────────────
 
 export interface Team {

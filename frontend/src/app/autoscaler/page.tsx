@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Scaling, Activity, Cpu, Server, Layers, Radio, AlertTriangle,
   Zap, Clock, ArrowRight, Settings, RotateCw, Play, CheckCircle2,
-  AlertCircle, ChevronDown, ChevronUp, Save
+  AlertCircle, ChevronDown, ChevronUp, Save, Bell, BellRing, Mail,
+  Webhook, HardDrive, ShieldAlert, TrendingUp
 } from 'lucide-react';
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -70,6 +71,20 @@ export default function AutoscalerPage() {
   const [configOpen, setConfigOpen] = useState(false);
   const [localConfig, setLocalConfig] = useState<any>(null);
   const { toast } = useToast();
+
+  // Alert thresholds
+  const [alertConfig, setAlertConfig] = useState({
+    cpu_warning: 70,
+    cpu_critical: 90,
+    memory_warning: 75,
+    memory_critical: 90,
+    disk_warning: 80,
+    disk_critical: 95,
+    notify_email: true,
+    notify_webhook: false,
+    webhook_url: '',
+  });
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -575,6 +590,204 @@ export default function AutoscalerPage() {
                        }}>Reset to Current</Button>
                        <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={handleSaveConfig}>
                          <Save size={14} className="mr-2" /> Save Configuration
+                       </Button>
+                     </div>
+                   </CardContent>
+                 </Card>
+               </motion.div>
+             )}
+           </AnimatePresence>
+        </div>
+
+        {/* ── Resource Alerts ────────────────────────────────────────────── */}
+        <div className="pt-4">
+           <Button
+             variant="outline"
+             className="w-full flex justify-between items-center"
+             onClick={() => setAlertsOpen(!alertsOpen)}
+           >
+             <span className="flex items-center gap-2 font-bold"><BellRing size={16} /> Resource Alerts</span>
+             {alertsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+           </Button>
+
+           <AnimatePresence>
+             {alertsOpen && (
+               <motion.div
+                 initial={{ height: 0, opacity: 0 }}
+                 animate={{ height: 'auto', opacity: 1 }}
+                 exit={{ height: 0, opacity: 0 }}
+                 className="overflow-hidden"
+               >
+                 <Card className="mt-4 border-border/50 bg-muted/20">
+                   <CardContent className="p-6 space-y-6">
+                     {/* Active Alerts */}
+                     {status && (() => {
+                       const alerts: { service: string; metric: string; value: number; level: 'warning' | 'critical' }[] = [];
+                       Object.entries(status.services).forEach(([name, svc]) => {
+                         if (svc.cpu_percent >= alertConfig.cpu_critical)
+                           alerts.push({ service: name, metric: 'CPU', value: svc.cpu_percent, level: 'critical' });
+                         else if (svc.cpu_percent >= alertConfig.cpu_warning)
+                           alerts.push({ service: name, metric: 'CPU', value: svc.cpu_percent, level: 'warning' });
+                         if (svc.memory_percent >= alertConfig.memory_critical)
+                           alerts.push({ service: name, metric: 'Memory', value: svc.memory_percent, level: 'critical' });
+                         else if (svc.memory_percent >= alertConfig.memory_warning)
+                           alerts.push({ service: name, metric: 'Memory', value: svc.memory_percent, level: 'warning' });
+                       });
+
+                       return alerts.length > 0 ? (
+                         <div className="space-y-2">
+                           <h3 className="text-sm font-bold uppercase tracking-wider text-red-400 flex items-center gap-2">
+                             <ShieldAlert size={14} /> Active Alerts ({alerts.length})
+                           </h3>
+                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                             {alerts.map((a, i) => (
+                               <div
+                                 key={i}
+                                 className={cn(
+                                   "flex items-center gap-3 p-3 rounded-lg border",
+                                   a.level === 'critical'
+                                     ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                                     : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                                 )}
+                               >
+                                 {a.level === 'critical' ? <AlertCircle size={14} /> : <AlertTriangle size={14} />}
+                                 <div className="flex-1">
+                                   <span className="font-bold text-xs">{a.service}</span>
+                                   <span className="text-[10px] ml-2">{a.metric}: {a.value.toFixed(1)}%</span>
+                                 </div>
+                                 <span className="text-[10px] uppercase font-bold">{a.level}</span>
+                               </div>
+                             ))}
+                           </div>
+                         </div>
+                       ) : (
+                         <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                           <CheckCircle2 size={14} /> All services within thresholds
+                         </div>
+                       );
+                     })()}
+
+                     {/* Threshold Config */}
+                     <div className="space-y-4">
+                       <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b border-border/50 pb-2">
+                         Alert Thresholds
+                       </h3>
+                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                         {/* CPU */}
+                         <div className="space-y-3">
+                           <div className="flex items-center gap-2 text-sm font-medium"><Cpu size={14} className="text-blue-500" /> CPU</div>
+                           <div className="space-y-2">
+                             <div className="flex justify-between text-xs">
+                               <span className="text-amber-400">Warning</span>
+                               <span className="font-mono">{alertConfig.cpu_warning}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.cpu_warning]} min={30} max={95} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, cpu_warning: v })}
+                             />
+                             <div className="flex justify-between text-xs">
+                               <span className="text-red-400">Critical</span>
+                               <span className="font-mono">{alertConfig.cpu_critical}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.cpu_critical]} min={50} max={100} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, cpu_critical: v })}
+                             />
+                           </div>
+                         </div>
+
+                         {/* Memory */}
+                         <div className="space-y-3">
+                           <div className="flex items-center gap-2 text-sm font-medium"><TrendingUp size={14} className="text-purple-500" /> Memory</div>
+                           <div className="space-y-2">
+                             <div className="flex justify-between text-xs">
+                               <span className="text-amber-400">Warning</span>
+                               <span className="font-mono">{alertConfig.memory_warning}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.memory_warning]} min={30} max={95} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, memory_warning: v })}
+                             />
+                             <div className="flex justify-between text-xs">
+                               <span className="text-red-400">Critical</span>
+                               <span className="font-mono">{alertConfig.memory_critical}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.memory_critical]} min={50} max={100} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, memory_critical: v })}
+                             />
+                           </div>
+                         </div>
+
+                         {/* Disk */}
+                         <div className="space-y-3">
+                           <div className="flex items-center gap-2 text-sm font-medium"><HardDrive size={14} className="text-emerald-500" /> Disk</div>
+                           <div className="space-y-2">
+                             <div className="flex justify-between text-xs">
+                               <span className="text-amber-400">Warning</span>
+                               <span className="font-mono">{alertConfig.disk_warning}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.disk_warning]} min={50} max={95} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, disk_warning: v })}
+                             />
+                             <div className="flex justify-between text-xs">
+                               <span className="text-red-400">Critical</span>
+                               <span className="font-mono">{alertConfig.disk_critical}%</span>
+                             </div>
+                             <Slider
+                               value={[alertConfig.disk_critical]} min={60} max={100} step={5}
+                               onValueChange={([v]) => setAlertConfig({ ...alertConfig, disk_critical: v })}
+                             />
+                           </div>
+                         </div>
+                       </div>
+                     </div>
+
+                     {/* Notification Channels */}
+                     <div className="space-y-4">
+                       <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b border-border/50 pb-2">
+                         Notification Channels
+                       </h3>
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                         <div className="flex items-center justify-between p-3 bg-card rounded-lg border border-border">
+                           <div className="flex items-center gap-2">
+                             <Mail size={14} className="text-blue-400" />
+                             <span className="text-sm">Email Notifications</span>
+                           </div>
+                           <Switch
+                             checked={alertConfig.notify_email}
+                             onCheckedChange={(v) => setAlertConfig({ ...alertConfig, notify_email: v })}
+                           />
+                         </div>
+                         <div className="flex items-center justify-between p-3 bg-card rounded-lg border border-border">
+                           <div className="flex items-center gap-2">
+                             <Webhook size={14} className="text-purple-400" />
+                             <span className="text-sm">Webhook (Slack/Discord)</span>
+                           </div>
+                           <Switch
+                             checked={alertConfig.notify_webhook}
+                             onCheckedChange={(v) => setAlertConfig({ ...alertConfig, notify_webhook: v })}
+                           />
+                         </div>
+                       </div>
+                       {alertConfig.notify_webhook && (
+                         <input
+                           type="url"
+                           placeholder="https://hooks.slack.com/services/..."
+                           value={alertConfig.webhook_url}
+                           onChange={(e) => setAlertConfig({ ...alertConfig, webhook_url: e.target.value })}
+                           className="w-full px-4 py-2 text-sm rounded-lg bg-background border border-border"
+                         />
+                       )}
+                     </div>
+
+                     <div className="flex justify-end gap-3 pt-4 border-t border-border/50">
+                       <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => {
+                         toast({ title: 'Alert Config Saved', description: 'Resource alert thresholds updated.' });
+                         setAlertsOpen(false);
+                       }}>
+                         <Save size={14} className="mr-2" /> Save Alert Config
                        </Button>
                      </div>
                    </CardContent>

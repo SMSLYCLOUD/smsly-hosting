@@ -2,11 +2,13 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 from apps.cloud.views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
+from apps.cloud.views_code_analysis import CodeAnalysisViewSet
 
 router = DefaultRouter()
 router.register(r'providers', CloudProviderViewSet, basename='providers')
 router.register(r'resources', CloudResourceViewSet, basename='resources')
 router.register(r'intelligence', IntelligenceViewSet, basename='intelligence')
+router.register(r'code-analysis', CodeAnalysisViewSet, basename='code-analysis')
 # Ecosystem actions are now part of IntelligenceViewSet
 # router.register(r'ecosystem', EcosystemViewSet, basename='ecosystem')
 
