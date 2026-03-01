@@ -991,12 +991,33 @@ print('OK' if result.get('ok') else f'FAIL: {result.get(\"message\")}')
         CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
         CF_TOKEN=""
 
-        # Priority: existing systemd override > .env file
+        # Priority: existing systemd override > .env file > PlatformConfig DB
         if [ -f "$CADDY_OVERRIDE_FILE" ]; then
             CF_TOKEN="$(grep 'CLOUDFLARE_API_TOKEN=' "$CADDY_OVERRIDE_FILE" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"$//' || true)"
         fi
         if [ -z "$CF_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
             CF_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        fi
+        # Fallback: read from PlatformConfig in the database (set via Settings UI)
+        if [ -z "$CF_TOKEN" ] || [ "$CF_TOKEN" = "fake" ]; then
+            DB_TOKEN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+config = PlatformConfig.load()
+token = (getattr(config, 'cloudflare_api_token', '') or '').strip()
+if token and token.lower() not in ('fake', 'changeme', 'test', ''):
+    print(token)
+" 2>/dev/null || true)"
+            DB_TOKEN="$(echo "$DB_TOKEN" | tr -d '[:space:]')"
+            if [ -n "$DB_TOKEN" ]; then
+                CF_TOKEN="$DB_TOKEN"
+                echo -e "${GREEN}  ✓ Cloudflare token found in Settings DB${NC}"
+                # Sync back to .env so it persists
+                if grep -q 'CLOUDFLARE_API_TOKEN' "$INSTALL_DIR/.env" 2>/dev/null; then
+                    sed -i "s/CLOUDFLARE_API_TOKEN=.*/CLOUDFLARE_API_TOKEN=$CF_TOKEN/" "$INSTALL_DIR/.env"
+                else
+                    echo "CLOUDFLARE_API_TOKEN=$CF_TOKEN" >> "$INSTALL_DIR/.env"
+                fi
+            fi
         fi
 
         if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
