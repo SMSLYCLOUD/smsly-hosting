@@ -1052,15 +1052,32 @@ print('Stripped empty tls blocks')
 import traceback
 try:
     from apps.deployments.models import Service, Deployment
-    from apps.deployments.tasks import build_and_deploy
-    count = 0
-    for svc in Service.objects.filter(is_active=True):
-        dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
-        if dep and dep.commit_hash:
-            build_and_deploy.delay(str(svc.id), commit_hash=dep.commit_hash)
+    from apps.cloud.models import CloudProvider
+    from apps.deployments.tasks import smart_deploy_task
+    from django.utils import timezone
+    provider = CloudProvider.objects.filter(is_active=True).first()
+    if not provider:
+        print('WARN: No active cloud provider')
+    else:
+        count = 0
+        for svc in Service.objects.filter(is_active=True):
+            dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
+            if not dep or not dep.commit_hash:
+                continue
+            # Cancel existing active deployments
+            svc.deployments.filter(status='ACTIVE').update(
+                status='CANCELLED', finished_at=timezone.now())
+            # Create new deployment
+            new_dep = Deployment.objects.create(
+                service=svc,
+                status='QUEUED',
+                commit_hash=dep.commit_hash,
+                commit_message='Platform update — auto-redeploy for label fix',
+            )
+            smart_deploy_task.delay(str(new_dep.id), str(provider.id), skip_review=True)
             count += 1
-            print(f'  Queued redeploy: {svc.name} ({dep.commit_hash[:7]})')
-    print(f'OK: {count} service(s) queued for redeploy')
+            print(f'  Queued: {svc.name} ({dep.commit_hash[:7]})')
+        print(f'OK: {count} service(s) queued for redeploy')
 except Exception as e:
     print(f'WARN: {e}')
     traceback.print_exc()
