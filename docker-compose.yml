@@ -13,6 +13,7 @@ services:
       POST: 1
       BUILD: 1
       EXEC: 1
+      COMMIT: 1  # Required for backup service to snapshot container state
       # Deny dangerous operations
       AUTH: 0
       SECRETS: 0
