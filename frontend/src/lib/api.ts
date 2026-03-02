@@ -1054,7 +1054,7 @@ export interface Addon {
     id: string;
     service: string;
     name: string;
-    addon_type: 'POSTGRES' | 'REDIS' | 'MONGODB' | 'MINIO' | 'MYSQL' | 'ELASTICSEARCH' | 'RABBITMQ' | 'MEMCACHED' | 'CLICKHOUSE' | 'MARIADB' | 'QDRANT';
+    addon_type: string;
     status: 'PROVISIONING' | 'ACTIVE' | 'RUNNING' | 'FAILED' | 'STOPPED' | 'DELETED';
     created_at: string;
     connection_url?: string;
