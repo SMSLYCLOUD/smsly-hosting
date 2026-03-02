@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  LockOpen,
   RotateCcw,
   Pencil,
   Check,
@@ -216,6 +217,28 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     setVisibleValues((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleToggleLock = async (v: EnvVar) => {
+    try {
+      // Delete and recreate with toggled lock state
+      await servicesApi.deleteEnvVar(serviceId, v.id);
+      await servicesApi.createEnvVar(serviceId, {
+        key: v.key,
+        value: v.is_secret ? '' : v.value, // Secrets can't be read back
+        is_secret: v.is_secret,
+        is_locked: !v.is_locked,
+      });
+      await loadVars();
+      toast({
+        title: v.is_locked ? "Variable unlocked" : "Variable locked",
+        description: v.is_locked
+          ? `${v.key} can now be overridden by auto-injection.`
+          : `${v.key} is now protected from auto-injection.`,
+      });
+    } catch (err) {
+      toast({ title: "Failed to toggle lock", variant: "destructive" });
+    }
+  };
+
   if (loading)
     return (
       <div className="p-4 text-center">Loading environment variables...</div>
@@ -355,14 +378,22 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
             vars.map((v) => (
               <div
                 key={v.id}
-                className={`flex items-center gap-4 p-3 bg-card border rounded-lg group transition-colors ${v.value?.startsWith("CHANGE_ME") ? "border-red-500/50 bg-red-500/5" : "border-border hover:border-primary/50"}`}
+                className={`flex items-center gap-4 p-3 bg-card border rounded-lg group transition-colors ${v.is_locked ? "border-amber-500/40 bg-amber-500/5" : ""} ${v.value?.startsWith("CHANGE_ME") ? "border-red-500/50 bg-red-500/5" : "border-border hover:border-primary/50"}`}
               >
                 <div
                   className={`flex-1 font-mono font-bold text-sm min-w-[120px] ${v.value?.startsWith("CHANGE_ME") ? "text-red-500" : "text-primary"}`}
                 >
                   {v.key}
+                  {v.is_locked && (
+                    <span className="ml-2 text-[9px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5">
+                      <Lock className="w-2.5 h-2.5" /> LOCKED
+                    </span>
+                  )}
                   {v.source === 'ADDON' && (
                     <span className="ml-2 text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded">ADDON</span>
+                  )}
+                  {v.source === 'SYSTEM' && (
+                    <span className="ml-2 text-[9px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded">SYSTEM</span>
                   )}
                   {v.value?.startsWith("CHANGE_ME") && (
                     <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-medium normal-case">
@@ -423,6 +454,19 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                 {/* Actions */}
                 {editingId !== v.id && (
                   <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    {/* Lock/Unlock Toggle */}
+                    {v.source !== 'ADDON' && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={`h-8 w-8 ${v.is_locked ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-amber-500"}`}
+                        onClick={() => handleToggleLock(v)}
+                        title={v.is_locked ? "Unlock (allow auto-injection override)" : "Lock (prevent auto-injection override)"}
+                      >
+                        {v.is_locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
+                      </Button>
+                    )}
+
                     {/* Edit Button */}
                     {v.source !== 'ADDON' && (
                         <Button
@@ -470,10 +514,14 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
           )}
         </div>
 
-        <div className="mt-8 pt-6 border-t border-border">
+        <div className="mt-8 pt-6 border-t border-border space-y-2">
           <p className="text-xs text-muted-foreground">
             <strong className="text-foreground">Note:</strong> Changes to
             environment variables require a redeployment to take effect.
+          </p>
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <Lock className="w-3 h-3 text-amber-500" />
+            <strong className="text-foreground">Locked</strong> variables are protected from auto-injection by the platform during deployment.
           </p>
         </div>
       </Card>
