@@ -1,6 +1,11 @@
-# Generated migration for:
-# 1. ServerBackup.error_message (already exists on VPS from auto-generated 0034)
-# 2. Addon.addon_type expanded choices (11 -> 50 types)
+# Stable migration 0034
+#
+# Adds:
+#   1. ServerBackup.error_message (may already exist in DB on VPS)
+#   2. Expanded Addon.addon_type choices (11 -> 50)
+#
+# Uses SeparateDatabaseAndState for error_message so Django learns about the
+# field in its state without trying to create the column (which already exists).
 
 from django.db import migrations, models
 
@@ -12,15 +17,27 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # ServerBackup.error_message — safe: won't fail if column already exists
-        # because Django's AddField with db_column checks existence.
-        # However, VPS may already have this from an auto-generated migration.
-        # We use RunSQL with IF NOT EXISTS for safety.
-        migrations.RunSQL(
-            sql="ALTER TABLE deployments_serverbackup ADD COLUMN IF NOT EXISTS error_message text DEFAULT '' NOT NULL;",
-            reverse_sql=migrations.RunSQL.noop,
+        # 1. error_message: DB column already exists (created by earlier auto-migration).
+        #    We use SeparateDatabaseAndState so Django's state tracks the field
+        #    but we don't touch the DB (avoiding "column already exists" error).
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AddField(
+                    model_name='serverbackup',
+                    name='error_message',
+                    field=models.TextField(blank=True, default=''),
+                ),
+            ],
+            database_operations=[
+                # Column already exists; this is a no-op raw SQL that ensures
+                # it exists even on a fresh DB (belt-and-suspenders).
+                migrations.RunSQL(
+                    sql="ALTER TABLE deployments_serverbackup ADD COLUMN IF NOT EXISTS error_message text DEFAULT '' NOT NULL;",
+                    reverse_sql=migrations.RunSQL.noop,
+                ),
+            ],
         ),
-        # Update addon_type choices (no DB change needed — choices are app-level only)
+        # 2. Update addon_type choices (no DB change — choices are app-level only)
         migrations.AlterField(
             model_name='addon',
             name='addon_type',
