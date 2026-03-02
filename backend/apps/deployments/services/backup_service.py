@@ -26,6 +26,32 @@ class BackupService:
             logger.warning("Docker client init failed (backups requiring Docker will fail): %s", e)
             self.docker_client = None
 
+    @staticmethod
+    def _get_backups_dir(subdir: str) -> str:
+        """Get or create a writable backups directory.
+
+        Tries /app/backups/{subdir} first, then falls back to /tmp/backups/{subdir}
+        if /app/backups is not writable (container image may not have it created
+        with the correct ownership for the non-root user).
+        """
+        primary = os.path.join(settings.BASE_DIR, 'backups', subdir)
+        try:
+            os.makedirs(primary, exist_ok=True)
+            # Test write access by creating a temp file
+            test_file = os.path.join(primary, '.write_test')
+            with open(test_file, 'w') as f:
+                f.write('ok')
+            os.remove(test_file)
+            return primary
+        except (PermissionError, OSError) as e:
+            fallback = os.path.join('/tmp', 'backups', subdir)
+            logger.warning(
+                "Cannot write to %s (%s), falling back to %s",
+                primary, e, fallback
+            )
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
+
     def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
         service = Service.objects.get(id=service_id)
         backup = ServiceBackup.objects.create(
@@ -56,8 +82,7 @@ class BackupService:
             }
 
             # Prepare directories
-            backups_dir = os.path.join(settings.BASE_DIR, 'backups', 'services')
-            os.makedirs(backups_dir, exist_ok=True)
+            backups_dir = self._get_backups_dir('services')
 
             # Temporary build directory for assembling the tarball
             temp_dir = os.path.join(backups_dir, f"tmp_{uuid.uuid4().hex}")
@@ -340,8 +365,7 @@ class BackupService:
             backup = ServerBackup.objects.create(status='IN_PROGRESS')
         temp_dir = None
         try:
-            backups_dir = os.path.join(settings.BASE_DIR, 'backups', 'server')
-            os.makedirs(backups_dir, exist_ok=True)
+            backups_dir = self._get_backups_dir('server')
             temp_dir = os.path.join(backups_dir, f"tmp_srv_{uuid.uuid4().hex}")
             os.makedirs(temp_dir, exist_ok=True)
 
