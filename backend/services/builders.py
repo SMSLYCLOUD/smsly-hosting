@@ -289,7 +289,8 @@ class BuildManager:
         """
         Get the GitHub OAuth access token for the service owner (if linked).
 
-        This relies on django-allauth storing social tokens.
+        Checks token expiration and refreshes if needed. This relies on
+        django-allauth storing social tokens.
         """
         user = getattr(self.service, "owner", None)
         if not user:
@@ -308,12 +309,34 @@ class BuildManager:
         if not account:
             return None
 
-        token = (
+        token_obj = (
             SocialToken.objects.filter(account=account)
             .order_by("-id")
             .first()
         )
-        return getattr(token, "token", None) or None
+        if not token_obj or not token_obj.token:
+            return None
+
+        # Check if token is expired and attempt refresh
+        if token_obj.expires_at:
+            from django.utils import timezone
+            if token_obj.expires_at <= timezone.now():
+                logger.info("GitHub token expired for user %s, attempting refresh", user)
+                try:
+                    from apps.deployments.views_github import _refresh_github_token
+                    refreshed = _refresh_github_token(token_obj)
+                    if not refreshed:
+                        logger.warning(
+                            "GitHub token refresh failed for user %s — "
+                            "user may need to reconnect GitHub", user
+                        )
+                        return None
+                    logger.info("GitHub token refreshed successfully for deployment")
+                except Exception as exc:
+                    logger.error("GitHub token refresh error: %s", exc)
+                    return None
+
+        return token_obj.token
 
     def _clone_github_repo_with_token(self, repo_url: str, branch: str, token: str) -> None:
         """

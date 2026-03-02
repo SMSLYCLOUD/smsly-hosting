@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from urllib.parse import quote, urlencode
 
 import requests as http_requests
@@ -170,11 +171,18 @@ def github_oauth_url(request):
         "SCOPE", ["user", "repo", "read:org"]
     )
 
+    # Generate a random state param for CSRF protection
+    state = secrets.token_urlsafe(32)
+    # Store state in Django cache (valid for 10 minutes)
+    from django.core.cache import cache
+    cache.set(f"github_oauth_state:{state}", str(request.user.id), timeout=600)
+
     params = {
         "client_id": app.client_id,
         "redirect_uri": callback_url,
         "scope": " ".join(scopes),
         "response_type": "code",
+        "state": state,
     }
 
     authorize_url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
@@ -299,14 +307,28 @@ def github_oauth_callback(request):
             account.extra_data = profile
             account.save()
 
-        # Upsert the token
+        # Upsert the token — include expires_at if GitHub provides it
+        from django.utils import timezone
+        from datetime import timedelta
+
+        token_defaults = {
+            "token": access_token,
+            "token_secret": token_data.get("refresh_token", ""),
+            "app": app,
+        }
+
+        # GitHub Apps with token expiration return expires_in (default 8h = 28800s)
+        expires_in = token_data.get("expires_in")
+        if expires_in:
+            token_defaults["expires_at"] = timezone.now() + timedelta(seconds=int(expires_in))
+        else:
+            # Standard OAuth tokens don't expire — set far future
+            # but still set a value so refresh is attempted periodically
+            token_defaults["expires_at"] = timezone.now() + timedelta(days=365)
+
         SocialToken.objects.update_or_create(
             account=account,
-            defaults={
-                "token": access_token,
-                "token_secret": token_data.get("refresh_token", ""),
-                "app": app,
-            },
+            defaults=token_defaults,
         )
 
         logger.info(
