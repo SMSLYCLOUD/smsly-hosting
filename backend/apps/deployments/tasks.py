@@ -1596,9 +1596,9 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         smart_deploy_task.delay(str(deployment.id), str(provider.id))
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, max_retries=3)
 def provision_addon_task(self, addon_id: str):
-    """Legacy addon task."""
+    """Provision an addon Docker container and inject env vars."""
     try:
         addon = Addon.objects.get(id=addon_id)
         cid, url = addon_provisioner.provision(addon)
@@ -1620,6 +1620,16 @@ def provision_addon_task(self, addon_id: str):
                 }
             )
     except Exception as e:
+        logger.error("Addon provisioning failed for %s: %s", addon_id, e)
+        try:
+            addon = Addon.objects.get(id=addon_id)
+            if self.request.retries >= self.max_retries:
+                addon.status = Addon.Status.FAILED
+                addon.save()
+                logger.error("Addon %s marked FAILED after %d retries", addon_id, self.max_retries)
+                return
+        except Addon.DoesNotExist:
+            return
         raise self.retry(exc=e, countdown=30)
 
 
@@ -1636,9 +1646,10 @@ def deprovision_addon_task(addon_id: str):
         logger.error("Deprovision failed: %s", e)
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, max_retries=3)
 def backup_addon_task(self, addon_id: str):
     """Create a backup for the specified addon."""
+    backup = None
     try:
         addon = Addon.objects.get(id=addon_id)
         backup = Backup.objects.create(addon=addon, status=Backup.Status.PENDING)
@@ -1647,6 +1658,14 @@ def backup_addon_task(self, addon_id: str):
         backup.status = Backup.Status.COMPLETED
         backup.save()
     except Exception as e:
+        logger.error("Backup failed for addon %s: %s", addon_id, e)
+        if self.request.retries >= self.max_retries:
+            if backup:
+                backup.status = Backup.Status.FAILED
+                backup.error_message = str(e)[:500]
+                backup.save()
+            logger.error("Backup for addon %s marked FAILED after %d retries", addon_id, self.max_retries)
+            return
         raise self.retry(exc=e, countdown=30)
 
 
