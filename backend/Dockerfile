@@ -34,7 +34,7 @@ COPY . .
 
 # Security: Run as non-root user
 RUN chmod +x entrypoint.sh && \
-    mkdir -p /app/staticfiles && \
+    mkdir -p /app/staticfiles /app/backups && \
     useradd -m -u 1000 smsly && \
     chown -R smsly:smsly /app
 USER smsly
