@@ -16,8 +16,6 @@ from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
 from apps.licensing.models import PlatformLicense
 from apps.licensing.decorators import require_tier
-from apps.deployments.services.github_webhooks import setup_github_webhook
-import threading
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .serializers import (
     ServiceSerializer, DeploymentSerializer,
@@ -223,6 +221,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
             threading.Thread(
                 target=setup_github_webhook,
                 args=(self.request.user, service.repository_url),
+                daemon=True
+            ).start()
+
+    def perform_update(self, serializer):
+        old_repo_url = serializer.instance.repository_url if serializer.instance else None
+        service = serializer.save()
+
+        # Setup GitHub Webhook if repo URL changed or was newly set
+        new_repo_url = service.repository_url
+        if service.deploy_type == 'GIT' and new_repo_url and new_repo_url != old_repo_url:
+            threading.Thread(
+                target=setup_github_webhook,
+                args=(self.request.user, new_repo_url),
                 daemon=True
             ).start()
 
