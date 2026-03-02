@@ -169,7 +169,8 @@ export interface EnvVar {
   key: string;
   value: string;
   is_secret: boolean;
-  source?: 'USER' | 'ADDON' | 'SHORTCODE';
+  is_locked?: boolean;
+  source?: 'USER' | 'ADDON' | 'SHORTCODE' | 'SYSTEM';
 }
 
 export interface CronJob {

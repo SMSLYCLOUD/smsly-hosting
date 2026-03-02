@@ -339,10 +339,14 @@ class EnvironmentVariable(TimeStampedModel):
     key = models.CharField(max_length=255)
     value = EncryptedCharField(max_length=255, blank=True, default='')
     is_secret = models.BooleanField(default=False)
+    is_locked = models.BooleanField(
+        default=False,
+        help_text="Locked vars are never overridden by platform auto-injection during deployment")
     SOURCE_CHOICES = [
         ('USER', 'User Defined'),
         ('ADDON', 'Addon Auto-Injected'),
         ('SHORTCODE', 'Shortcode Resolved'),
+        ('SYSTEM', 'System Auto-Injected'),
     ]
     source = models.CharField(
         max_length=20, choices=SOURCE_CHOICES,

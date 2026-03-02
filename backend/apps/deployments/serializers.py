@@ -23,7 +23,7 @@ class EnvVarSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = EnvironmentVariable
-        fields = ['id', 'key', 'value', 'is_secret', 'source']
+        fields = ['id', 'key', 'value', 'is_secret', 'is_locked', 'source']
 
     def to_representation(self, instance):
         try:

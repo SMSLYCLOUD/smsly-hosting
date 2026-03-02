@@ -76,6 +76,11 @@ def _build_runtime_env(service: Service) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
 
+    # ── Locked keys: user has explicitly locked these — never override them ──
+    locked_keys = set(
+        service.env_vars.filter(is_locked=True).values_list('key', flat=True)
+    )
+
     # Resolve shortcodes in all env vars (e.g. {{addon.URL}})
     try:
         from services.env_resolver import resolve_shortcodes
@@ -85,15 +90,18 @@ def _build_runtime_env(service: Service) -> dict:
         logger.warning(f"Failed to resolve shortcodes for service {service.name}: {e}")
 
     # internal_port is the canonical port — override any stale PORT env var.
-    if service.internal_port:
-        env_vars['PORT'] = str(service.internal_port)
-    else:
-        env_vars.setdefault('PORT', '8000')
+    # UNLESS the user has locked PORT, in which case we respect their value.
+    if 'PORT' not in locked_keys:
+        if service.internal_port:
+            env_vars['PORT'] = str(service.internal_port)
+        else:
+            env_vars.setdefault('PORT', '8000')
 
     # Ensure the app binds to all interfaces so Docker health checks
     # (which probe 127.0.0.1) can reach it. Next.js standalone, for
     # example, defaults to binding to the container hostname only.
-    env_vars.setdefault('HOSTNAME', '0.0.0.0')
+    if 'HOSTNAME' not in locked_keys:
+        env_vars.setdefault('HOSTNAME', '0.0.0.0')
 
     # ── Auto-generate critical Django env vars ──────────────────────
     # SECRET_KEY: generate a secure random key if not explicitly set.
