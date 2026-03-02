@@ -374,7 +374,7 @@ class BackupService:
                             pg_container = c
                             break
                         # Fallback: match '-db-' in container name
-                        if ('-db-' in c_name or c_name.endswith('-db')
+                        if (('-db-' in c_name or c_name.endswith('-db'))
                                 and 'pgbouncer' not in c_name
                                 and 'redis' not in c_name):
                             pg_container = c
