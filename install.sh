@@ -1039,10 +1039,11 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
-            echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
+            echo -e "${BLUE}  → Running migrations...${NC}"
             sleep 10  # Wait for backend to start
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py makemigrations --noinput 2>&1 || \
-                echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
+            # Note: Do NOT run makemigrations here — migrations are committed in the repo.
+            # Running makemigrations auto-generates files inside the container that conflict
+            # with committed migrations on subsequent deploys.
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
@@ -1100,13 +1101,12 @@ if [ -n "$UPDATE_MODE" ]; then
             done
             docker restart smsly-hosting-traefik-1 2>/dev/null || true
 
-            # 8. Run migrations (as root to avoid PermissionError writing migration files)
-            echo -e "${BLUE}  → Running makemigrations + migrations...${NC}"
+            # 8. Run migrations
+            echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             sleep 10
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py makemigrations --noinput 2>&1 || \
-                echo -e "${YELLOW}  ⚠ makemigrations had issues (non-fatal)${NC}"
+            # Note: Do NOT run makemigrations — migrations are committed in the repo.
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
@@ -1965,8 +1965,8 @@ docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
 sleep 5
 
 echo -e "${BLUE}  → Running Migrations...${NC}"
-# Generate any pending migration files first (handles uncommitted model changes)
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py makemigrations --noinput 2>/dev/null || true
+# Note: Do NOT run makemigrations — migrations are committed in the repo.
+# Running makemigrations generates files inside the container that conflict on redeploy.
 MIGRATE_OK=false
 for attempt in 1 2 3; do
     if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
@@ -1987,7 +1987,7 @@ fi
 
 echo -e "${BLUE}  → Collecting Static Files...${NC}"
 # Fix volume ownership — Docker creates named volumes as root
-docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media 2>/dev/null || true
+docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
 # -----------------------------------------------------------------------------
