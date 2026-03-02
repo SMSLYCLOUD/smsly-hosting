@@ -14,6 +14,7 @@ export default function ServerBackupsPage() {
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    const [restoringId, setRestoringId] = useState<string | null>(null);
 
     useEffect(() => {
         loadBackups();
@@ -40,6 +41,20 @@ export default function ServerBackupsPage() {
             toast({ title: "Error", description: "Failed to start server backup.", variant: "destructive" });
         } finally {
             setCreating(false);
+        }
+    };
+
+    const handleRestore = async (backupId: string) => {
+        if (!confirm('Are you sure you want to restore this server backup? This will overwrite current state.')) return;
+        setRestoringId(backupId);
+        try {
+            await api.post(`/server/backups/${backupId}/restore/`);
+            toast({ title: "Restore Started", description: "Server will restart once restore is complete." });
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || "Failed to trigger restore.";
+            toast({ title: "Error", description: msg, variant: "destructive" });
+        } finally {
+            setRestoringId(null);
         }
     };
 
@@ -75,10 +90,26 @@ export default function ServerBackupsPage() {
                                         <TableCell>{new Date(backup.created_at).toLocaleString()}</TableCell>
                                         <TableCell>{backup.services_included?.length || 0}</TableCell>
                                         <TableCell>{(backup.size_bytes / 1024 / 1024).toFixed(2)} MB</TableCell>
-                                        <TableCell>{backup.status}</TableCell>
+                                        <TableCell>
+                                            <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                                backup.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                backup.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
+                                                'bg-yellow-500/10 text-yellow-500'
+                                            }`}>
+                                                {backup.status}
+                                            </span>
+                                        </TableCell>
                                         <TableCell className="text-right space-x-2">
-                                            <Button variant="ghost" size="sm" disabled title="Restore via CLI only">
-                                                <RotateCcw className="w-4 h-4" />
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => handleRestore(backup.id)}
+                                                disabled={backup.status !== 'COMPLETED' || restoringId === backup.id}
+                                                title="Restore this backup"
+                                            >
+                                                {restoringId === backup.id
+                                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                                    : <RotateCcw className="w-4 h-4" />}
                                             </Button>
                                             <Button variant="ghost" size="sm" asChild>
                                                 <a href={`/api/v1/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
@@ -103,3 +134,4 @@ export default function ServerBackupsPage() {
         </DashboardShell>
     );
 }
+

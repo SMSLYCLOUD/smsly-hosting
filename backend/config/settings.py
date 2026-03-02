@@ -379,10 +379,10 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.deployments.api_token_auth.APITokenAuthentication',
         'rest_framework.authentication.TokenAuthentication',
-        # Keep session auth as a fallback (used by /api/v1/auth/session-token/ after OAuth redirects),
-        # but prefer token auth to avoid CSRF failures when both session cookies and Authorization
-        # headers are present.
-        'rest_framework.authentication.SessionAuthentication',
+        # CSRF-exempt session auth: prevents 403 when token auth fails and
+        # DRF falls through to session auth (which enforces CSRF by default).
+        # API endpoints use token auth primarily; session is only a fallback.
+        'apps.core.auth.CsrfExemptSessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

@@ -45,12 +45,6 @@ class AddonViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(service__owner=self.request.user)
 
     def perform_create(self, serializer):
-        # Log license tier (addons are available on all tiers for self-hosted)
-        from apps.licensing.models import PlatformLicense
-        platform_license = PlatformLicense.load()
-        if not platform_license.is_pro:
-            logger.info("Addon created on %s tier (self-hosted)", platform_license.tier)
-
         # SECURITY: Verify user owns the service before creating addon
         service = serializer.validated_data.get('service')
         if service and service.owner != self.request.user:
