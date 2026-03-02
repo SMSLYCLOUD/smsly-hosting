@@ -13,6 +13,11 @@ class Addon(TimeStampedModel):
         MONGODB = 'MONGODB', 'MongoDB'
         QDRANT = 'QDRANT', 'Qdrant (Vector DB)'
         ELASTICSEARCH = 'ELASTICSEARCH', 'Elasticsearch'
+        RABBITMQ = 'RABBITMQ', 'RabbitMQ'
+        MEMCACHED = 'MEMCACHED', 'Memcached'
+        CLICKHOUSE = 'CLICKHOUSE', 'ClickHouse'
+        MARIADB = 'MARIADB', 'MariaDB'
+        MINIO = 'MINIO', 'MinIO'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'
