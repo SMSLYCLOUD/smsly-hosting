@@ -7,17 +7,70 @@ from .models import Service, TimeStampedModel
 
 class Addon(TimeStampedModel):
     class Type(models.TextChoices):
+        # ── Relational Databases ──
         POSTGRES = 'POSTGRES', 'PostgreSQL'
-        REDIS = 'REDIS', 'Redis'
         MYSQL = 'MYSQL', 'MySQL'
-        MONGODB = 'MONGODB', 'MongoDB'
-        QDRANT = 'QDRANT', 'Qdrant (Vector DB)'
-        ELASTICSEARCH = 'ELASTICSEARCH', 'Elasticsearch'
-        RABBITMQ = 'RABBITMQ', 'RabbitMQ'
-        MEMCACHED = 'MEMCACHED', 'Memcached'
-        CLICKHOUSE = 'CLICKHOUSE', 'ClickHouse'
         MARIADB = 'MARIADB', 'MariaDB'
+        COCKROACHDB = 'COCKROACHDB', 'CockroachDB'
+        TIMESCALEDB = 'TIMESCALEDB', 'TimescaleDB'
+        PERCONA = 'PERCONA', 'Percona Server'
+        VITESS = 'VITESS', 'Vitess'
+        # ── Document Databases ──
+        MONGODB = 'MONGODB', 'MongoDB'
+        COUCHDB = 'COUCHDB', 'CouchDB'
+        RETHINKDB = 'RETHINKDB', 'RethinkDB'
+        ARANGODB = 'ARANGODB', 'ArangoDB'
+        FERRETDB = 'FERRETDB', 'FerretDB'
+        SURREALDB = 'SURREALDB', 'SurrealDB'
+        # ── Key-Value Stores ──
+        REDIS = 'REDIS', 'Redis'
+        MEMCACHED = 'MEMCACHED', 'Memcached'
+        KEYDB = 'KEYDB', 'KeyDB'
+        VALKEY = 'VALKEY', 'Valkey'
+        DRAGONFLYDB = 'DRAGONFLYDB', 'DragonflyDB'
+        ETCD = 'ETCD', 'etcd'
+        # ── Column / Wide-Column ──
+        CLICKHOUSE = 'CLICKHOUSE', 'ClickHouse'
+        CASSANDRA = 'CASSANDRA', 'Cassandra'
+        SCYLLADB = 'SCYLLADB', 'ScyllaDB'
+        # ── Graph Databases ──
+        NEO4J = 'NEO4J', 'Neo4j'
+        DGRAPH = 'DGRAPH', 'Dgraph'
+        # ── Vector Databases (AI) ──
+        QDRANT = 'QDRANT', 'Qdrant'
+        WEAVIATE = 'WEAVIATE', 'Weaviate'
+        MILVUS = 'MILVUS', 'Milvus'
+        CHROMADB = 'CHROMADB', 'ChromaDB'
+        # ── Search Engines ──
+        ELASTICSEARCH = 'ELASTICSEARCH', 'Elasticsearch'
+        OPENSEARCH = 'OPENSEARCH', 'OpenSearch'
+        MEILISEARCH = 'MEILISEARCH', 'MeiliSearch'
+        TYPESENSE = 'TYPESENSE', 'Typesense'
+        SOLR = 'SOLR', 'Apache Solr'
+        # ── Message Queues / Streaming ──
+        RABBITMQ = 'RABBITMQ', 'RabbitMQ'
+        KAFKA = 'KAFKA', 'Apache Kafka'
+        NATS = 'NATS', 'NATS'
+        REDPANDA = 'REDPANDA', 'Redpanda'
+        PULSAR = 'PULSAR', 'Apache Pulsar'
+        ACTIVEMQ = 'ACTIVEMQ', 'ActiveMQ'
+        # ── Object Storage ──
         MINIO = 'MINIO', 'MinIO'
+        SEAWEEDFS = 'SEAWEEDFS', 'SeaweedFS'
+        # ── Time-Series ──
+        INFLUXDB = 'INFLUXDB', 'InfluxDB'
+        QUESTDB = 'QUESTDB', 'QuestDB'
+        VICTORIAMETRICS = 'VICTORIAMETRICS', 'VictoriaMetrics'
+        # ── Monitoring / Observability ──
+        PROMETHEUS = 'PROMETHEUS', 'Prometheus'
+        GRAFANA = 'GRAFANA', 'Grafana'
+        JAEGER = 'JAEGER', 'Jaeger'
+        # ── Workflow / Infrastructure ──
+        N8N = 'N8N', 'n8n'
+        TEMPORAL = 'TEMPORAL', 'Temporal'
+        VAULT = 'VAULT', 'HashiCorp Vault'
+        CONSUL = 'CONSUL', 'Consul'
+        KEYCLOAK = 'KEYCLOAK', 'Keycloak'
 
     class Status(models.TextChoices):
         PROVISIONING = 'PROVISIONING', 'Provisioning'
