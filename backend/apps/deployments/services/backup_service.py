@@ -122,9 +122,17 @@ class BackupService:
             if image_tag:
                 metadata['docker_image'] = image_tag
                 logger.info(f"Saving image {image_tag} to {image_filename}...")
-                with open(image_path, 'wb') as f:
-                    for chunk in self.docker_client.images.get(image_tag).stream():
-                        f.write(chunk)
+                try:
+                    image_obj = self.docker_client.images.get(image_tag)
+                    with open(image_path, 'wb') as f:
+                        for chunk in image_obj.save():
+                            f.write(chunk)
+                    logger.info(f"Image saved: {os.path.getsize(image_path)} bytes")
+                except Exception as img_err:
+                    logger.error(f"Failed to save image {image_tag}: {img_err}")
+                    # Remove partial file if it exists
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
 
             # 2. Backup Volumes
             volumes = Volume.objects.filter(service=service)
@@ -166,12 +174,6 @@ class BackupService:
 
                     try:
                         # Read the stream
-                        # logs(stream=True) yields bytes.
-                        # Note: logs() might include header frames if tty=False?
-                        # Actually standard logs() returns raw bytes if tty=False (default).
-                        # Ideally we use attach or get_archive? get_archive works on files inside container.
-                        # Using logs with stdout is simplest for binary stream if no TTY.
-
                         with open(vol_path, 'wb') as f:
                             for chunk in stream_container.logs(stream=True, stdout=True, stderr=False):
                                 f.write(chunk)
@@ -187,10 +189,7 @@ class BackupService:
 
                 except Exception as ve:
                     logger.error(f"Failed to backup volume {vol.name}: {ve}")
-                    # Continue with other volumes? Or fail?
-                    # Let's log and continue, but mark partial?
-                    # Strict: Fail.
-                    raise ve
+                    # Continue with other volumes (partial backup is better than none)
 
             # 3. Create Final Archive
             safe_name = slugify(service.name) or f"service-{str(service.id)[:8]}"
