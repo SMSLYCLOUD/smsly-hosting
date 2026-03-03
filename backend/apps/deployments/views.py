@@ -2356,7 +2356,12 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
-        return Response({'error': 'Server restore via API not implemented. Use CLI.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
+        backup = self.get_object()
+        if backup.status != 'COMPLETED':
+            return Response({'error': 'Only COMPLETED backups can be restored.'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.tasks import restore_server_backup_task
+        restore_server_backup_task.delay(backup_id=str(backup.id))
+        return Response({'status': 'Restore started. Services will be recreated from backup.'})
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
