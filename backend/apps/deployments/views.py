@@ -2388,6 +2388,49 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
             filename=os.path.basename(backup.file_path),
         )
 
+    @action(detail=False, methods=['post'], url_path='upload-restore',
+            parser_classes=[parsers.MultiPartParser])
+    def upload_restore(self, request):
+        """Accept a backup .tar.gz file upload and restore from it."""
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return Response({'error': 'No file uploaded. Send a .tar.gz file as "file".'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not uploaded.name.endswith(('.tar.gz', '.tgz')):
+            return Response({'error': 'File must be a .tar.gz or .tgz archive.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        import uuid as _uuid
+        from apps.deployments.services.backup_service import BackupService
+
+        # Save uploaded file to shared backup volume
+        backups_dir = BackupService._get_backups_dir('server')
+        dest_filename = f"uploaded_restore_{_uuid.uuid4().hex[:8]}.tar.gz"
+        dest_path = os.path.join(backups_dir, dest_filename)
+
+        with open(dest_path, 'wb') as f:
+            for chunk in uploaded.chunks():
+                f.write(chunk)
+
+        file_size = os.path.getsize(dest_path)
+
+        # Create a ServerBackup record pointing to the uploaded file
+        backup = ServerBackup.objects.create(
+            status='COMPLETED',
+            file_path=dest_path,
+            size_bytes=file_size,
+            error_message=f'Uploaded restore from: {uploaded.name}',
+        )
+
+        # Trigger async restore
+        from apps.deployments.tasks import restore_server_backup_task
+        restore_server_backup_task.delay(backup_id=str(backup.id))
+
+        return Response({
+            'status': 'Restore started from uploaded backup.',
+            'backup_id': str(backup.id),
+            'file_size': file_size,
+        })
+
 class BackupScheduleViewSet(viewsets.ModelViewSet):
     queryset = BackupSchedule.objects.all()
     serializer_class = BackupScheduleSerializer
