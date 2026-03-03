@@ -112,7 +112,7 @@ export default function ServerBackupsPage() {
                                                     : <RotateCcw className="w-4 h-4" />}
                                             </Button>
                                             <Button variant="ghost" size="sm" asChild>
-                                                <a href={`/api/v1/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
+                                                <a href={`/api/v1/server/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
                                                     <Download className="w-4 h-4" />
                                                 </a>
                                             </Button>

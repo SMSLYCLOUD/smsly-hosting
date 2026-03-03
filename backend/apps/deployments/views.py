@@ -2358,6 +2358,18 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     def restore(self, request, pk=None):
         return Response({'error': 'Server restore via API not implemented. Use CLI.'}, status=status.HTTP_501_NOT_IMPLEMENTED)
 
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        backup = self.get_object()
+        if not backup.file_path or not os.path.exists(backup.file_path):
+            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
+        from django.http import FileResponse
+        return FileResponse(
+            open(backup.file_path, 'rb'),
+            as_attachment=True,
+            filename=os.path.basename(backup.file_path),
+        )
+
 class BackupScheduleViewSet(viewsets.ModelViewSet):
     queryset = BackupSchedule.objects.all()
     serializer_class = BackupScheduleSerializer
