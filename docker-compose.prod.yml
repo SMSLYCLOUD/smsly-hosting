@@ -367,6 +367,7 @@ services:
       - "127.0.0.1:7080:7080"  # vhost HTTP (Caddy → here)
       - "127.0.0.1:7500:7500"  # Admin dashboard (internal)
     command: ["-c", "/etc/frp/frps.toml"]
+    entrypoint: ["frps"]
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 7000 || exit 1"]
       interval: 30s
