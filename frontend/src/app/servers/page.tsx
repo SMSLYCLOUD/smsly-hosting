@@ -79,7 +79,7 @@ export default function ServersPage() {
 
     // Connect form
     const [connectForm, setConnectForm] = useState({
-        name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_port: 22, is_primary: false,
+        name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_password: '', ssh_port: 22, is_primary: false,
     });
 
     // Provision form
@@ -136,7 +136,7 @@ export default function ServersPage() {
         try {
             await apiFetch('/api/v1/servers/', 'POST', connectForm);
             setShowAdd(false);
-            setConnectForm({ name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_port: 22, is_primary: false });
+            setConnectForm({ name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_password: '', ssh_port: 22, is_primary: false });
             fetchServers();
         } catch (err: any) {
             toast({ title: 'Failed to connect server', description: err.message, variant: 'destructive' });
@@ -430,6 +430,16 @@ export default function ServersPage() {
                                                     value={connectForm.gateway_secret}
                                                     onChange={e => setConnectForm({ ...connectForm, gateway_secret: e.target.value })}
                                                     placeholder="GATEWAY_SECRET from remote .env"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">SSH Password <span className="text-muted-foreground/60">(optional, for remote management)</span></label>
+                                                <input
+                                                    type="password"
+                                                    value={connectForm.ssh_password}
+                                                    onChange={e => setConnectForm({ ...connectForm, ssh_password: e.target.value })}
+                                                    placeholder="Root SSH password"
                                                     className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                                                 />
                                             </div>
