@@ -451,22 +451,22 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
                   )}
                 </div>
 
-                {/* Actions */}
+                {/* Lock Toggle — always visible */}
+                {editingId !== v.id && v.source !== 'ADDON' && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 ${v.is_locked ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-amber-500"}`}
+                    onClick={() => handleToggleLock(v)}
+                    title={v.is_locked ? "Unlock (allow auto-injection override)" : "Lock (prevent auto-injection override)"}
+                  >
+                    {v.is_locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
+                  </Button>
+                )}
+
+                {/* Other Actions — hover only */}
                 {editingId !== v.id && (
                   <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    {/* Lock/Unlock Toggle */}
-                    {v.source !== 'ADDON' && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={`h-8 w-8 ${v.is_locked ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground hover:text-amber-500"}`}
-                        onClick={() => handleToggleLock(v)}
-                        title={v.is_locked ? "Unlock (allow auto-injection override)" : "Lock (prevent auto-injection override)"}
-                      >
-                        {v.is_locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
-                      </Button>
-                    )}
-
                     {/* Edit Button */}
                     {v.source !== 'ADDON' && (
                         <Button

@@ -78,6 +78,7 @@ services:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
+      - backups_data:/app/backups
     ports:
       - "8000:8000"
     env_file:
@@ -120,6 +121,7 @@ services:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
+      - backups_data:/app/backups
     env_file:
       - .env
     environment:
@@ -254,3 +256,4 @@ networks:
 volumes:
   postgres_data:
   registry_data:
+  backups_data:
