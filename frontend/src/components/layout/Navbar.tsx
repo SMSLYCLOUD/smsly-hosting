@@ -107,6 +107,7 @@ export function Navbar() {
     { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
     { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
     { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
+    { href: '/replication', label: 'Replication', icon: GitCompare, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
     { href: '/templates', label: 'Templates', icon: FileCode, tier: 'secondary' },
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'secondary' },
