@@ -219,12 +219,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
 
   const handleToggleLock = async (v: EnvVar) => {
     try {
-      // Delete and recreate with toggled lock state
-      await servicesApi.deleteEnvVar(serviceId, v.id);
-      await servicesApi.createEnvVar(serviceId, {
-        key: v.key,
-        value: v.is_secret ? '' : v.value, // Secrets can't be read back
-        is_secret: v.is_secret,
+      await servicesApi.patchEnvVar(serviceId, v.id, {
         is_locked: !v.is_locked,
       });
       await loadVars();

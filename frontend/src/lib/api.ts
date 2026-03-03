@@ -288,6 +288,10 @@ export const servicesApi = {
   deleteEnvVar: async (serviceId: string, envVarId: number): Promise<void> => {
     await api.delete(`/services/${serviceId}/env_vars/${envVarId}/`);
   },
+  patchEnvVar: async (serviceId: string, envVarId: number, data: Partial<EnvVar>): Promise<EnvVar> => {
+    const response = await api.patch(`/services/${serviceId}/env_vars/${envVarId}/`, data);
+    return response.data;
+  },
 
   // Metrics
   getMetrics: async (serviceId: string, duration: string = '1h'): Promise<any> => {
