@@ -74,6 +74,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_metrics.cleanup_build_cache_task',
         'schedule': 86400.0,  # 24 hours
     },
+    # WireGuard mesh health check every 60 seconds
+    'mesh-health-check-every-60s': {
+        'task': 'apps.deployments.tasks_mesh.check_mesh_health_task',
+        'schedule': 60.0,
+    },
 }
 
 
