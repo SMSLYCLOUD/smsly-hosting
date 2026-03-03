@@ -27,6 +27,7 @@ from .views_github import github_repos
 from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
 from .views_mesh import MeshNetworkViewSet
+from .views_election import ClusterViewSet, heartbeat_receive, vote_request
 from .views_project import ProjectViewSet
 from .views_updates import PlatformUpdateViewSet
 
@@ -50,6 +51,7 @@ router.register(r'backup-schedules', BackupScheduleViewSet, basename='backup-sch
 router.register(r'transfers', ServerTransferViewSet, basename='transfer')
 router.register(r'projects', ProjectViewSet, basename='project')
 router.register(r'mesh', MeshNetworkViewSet, basename='mesh')
+router.register(r'clusters', ClusterViewSet, basename='cluster')
 router.register(r'platform-updates', PlatformUpdateViewSet, basename='platform-update')
 
 # Nested Router
@@ -98,4 +100,7 @@ urlpatterns = router.urls + [
     # Subdomain reservation
     path('subdomains/', subdomains_list_create, name='subdomains-list-create'),
     path('subdomains/<str:subdomain>/', subdomains_release, name='subdomains-release'),
+    # Internal endpoints (WireGuard mesh, no auth)
+    path('internal/heartbeat/', heartbeat_receive, name='internal-heartbeat'),
+    path('internal/vote/', vote_request, name='internal-vote'),
 ]

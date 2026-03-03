@@ -61,11 +61,12 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "id", "name", "host", "api_url", "ssh_port",
             "is_primary", "status", "last_health_check",
             "server_version", "services_count", "created_at",
-            "provision_status",
+            "provision_status", "role", "wg_address",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
+            "role", "wg_address",
         ]
 
 

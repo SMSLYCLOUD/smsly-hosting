@@ -96,6 +96,23 @@ class ManagedServer(models.Model):
     server_version = models.CharField(max_length=50, blank=True, default="")
     services_count = models.IntegerField(default=0)
 
+    # ── Cluster Role (for leader election) ──
+    class ClusterRole(models.TextChoices):
+        LEADER = "LEADER", "Leader"
+        FOLLOWER = "FOLLOWER", "Follower"
+        CANDIDATE = "CANDIDATE", "Candidate"
+
+    role = models.CharField(
+        max_length=20,
+        choices=ClusterRole.choices,
+        default=ClusterRole.FOLLOWER,
+        help_text="Current role in the cluster (leader/follower/candidate)",
+    )
+    wg_address = models.GenericIPAddressField(
+        protocol="IPv4", null=True, blank=True,
+        help_text="WireGuard mesh IP address (e.g. 10.100.0.2)",
+    )
+
     # ── Provisioning ──
     provision_status = models.CharField(
         max_length=20,
