@@ -121,7 +121,7 @@ services:
       - ./backend:/app
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
-      - backups_data:/app/backups
+      - backups_data:/data/backups
     env_file:
       - .env
     environment:
