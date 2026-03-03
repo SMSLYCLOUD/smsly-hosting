@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Upload } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 
@@ -15,6 +15,8 @@ export default function ServerBackupsPage() {
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
     const [restoringId, setRestoringId] = useState<string | null>(null);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         loadBackups();
@@ -58,6 +60,36 @@ export default function ServerBackupsPage() {
         }
     };
 
+    const handleUploadRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+            toast({ title: "Invalid File", description: "Please select a .tar.gz or .tgz backup file.", variant: "destructive" });
+            return;
+        }
+        if (!confirm(`Restore from "${file.name}"? This will overwrite current server state.`)) {
+            e.target.value = '';
+            return;
+        }
+        setUploading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            await api.post('/server/backups/upload-restore/', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 600000, // 10 minute timeout for large files
+            });
+            toast({ title: "Restore Started", description: `Restoring from uploaded file "${file.name}". This may take several minutes.` });
+            loadBackups();
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || "Failed to upload and restore backup.";
+            toast({ title: "Upload Failed", description: msg, variant: "destructive" });
+        } finally {
+            setUploading(false);
+            e.target.value = '';
+        }
+    };
+
     return (
         <DashboardShell>
             <div className="container p-6 space-y-6">
@@ -66,10 +98,27 @@ export default function ServerBackupsPage() {
                         <h1 className="text-3xl font-bold">Server Backups</h1>
                         <p className="text-muted-foreground">Full platform snapshots for disaster recovery or migration.</p>
                     </div>
-                    <Button onClick={handleCreateBackup} disabled={creating}>
-                        {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
-                        Create Full Backup
-                    </Button>
+                    <div className="flex gap-2">
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            accept=".tar.gz,.tgz"
+                            className="hidden"
+                            onChange={handleUploadRestore}
+                        />
+                        <Button
+                            variant="outline"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={uploading}
+                        >
+                            {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                            Restore from File
+                        </Button>
+                        <Button onClick={handleCreateBackup} disabled={creating}>
+                            {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}
+                            Create Full Backup
+                        </Button>
+                    </div>
                 </div>
 
                 <Card>
