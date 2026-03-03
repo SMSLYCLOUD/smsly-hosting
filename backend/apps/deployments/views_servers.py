@@ -73,7 +73,10 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
     """For 'Connect Existing' mode — user provides api_url + api_token."""
     class Meta:
         model = ManagedServer
-        fields = ["name", "host", "api_url", "api_token", "gateway_secret", "ssh_port", "is_primary"]
+        fields = ["name", "host", "api_url", "api_token", "gateway_secret", "ssh_password", "ssh_port", "is_primary"]
+        extra_kwargs = {
+            "ssh_password": {"write_only": True, "required": False},
+        }
 
 
 class ManagedServerProvisionSerializer(serializers.ModelSerializer):
