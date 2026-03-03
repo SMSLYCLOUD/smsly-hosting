@@ -576,6 +576,21 @@ export default function ServersPage() {
                                                                 Primary
                                                             </span>
                                                         )}
+                                                        {server.role === 'LEADER' && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-bold uppercase">
+                                                                Leader
+                                                            </span>
+                                                        )}
+                                                        {server.role === 'FOLLOWER' && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-bold uppercase">
+                                                                Follower
+                                                            </span>
+                                                        )}
+                                                        {server.role === 'CANDIDATE' && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-bold uppercase animate-pulse">
+                                                                Election...
+                                                            </span>
+                                                        )}
                                                     </h3>
                                                     <p className="text-xs text-muted-foreground">{server.host}</p>
                                                 </div>

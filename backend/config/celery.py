@@ -79,6 +79,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_mesh.check_mesh_health_task',
         'schedule': 60.0,
     },
+    # Leader election heartbeat every 5 seconds
+    'cluster-heartbeat-every-5s': {
+        'task': 'apps.deployments.tasks_election.heartbeat_task',
+        'schedule': 5.0,
+    },
 }
 
 
