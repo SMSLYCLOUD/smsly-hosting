@@ -84,6 +84,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks_election.heartbeat_task',
         'schedule': 5.0,
     },
+    # Replication health check every 30 seconds
+    'replication-health-every-30s': {
+        'task': 'apps.deployments.tasks_replication.check_replication_health_task',
+        'schedule': 30.0,
+    },
 }
 
 

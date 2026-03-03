@@ -28,6 +28,7 @@ from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
 from .views_mesh import MeshNetworkViewSet
 from .views_election import ClusterViewSet, heartbeat_receive, vote_request
+from .views_replication import ReplicationViewSet
 from .views_project import ProjectViewSet
 from .views_updates import PlatformUpdateViewSet
 
@@ -52,6 +53,7 @@ router.register(r'transfers', ServerTransferViewSet, basename='transfer')
 router.register(r'projects', ProjectViewSet, basename='project')
 router.register(r'mesh', MeshNetworkViewSet, basename='mesh')
 router.register(r'clusters', ClusterViewSet, basename='cluster')
+router.register(r'replication', ReplicationViewSet, basename='replication')
 router.register(r'platform-updates', PlatformUpdateViewSet, basename='platform-update')
 
 # Nested Router
