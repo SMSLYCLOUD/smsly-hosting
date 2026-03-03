@@ -1189,11 +1189,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         else:
             is_secret = bool(existing.is_secret) if existing else False
 
+        is_locked = _parse_bool(request.data.get('is_locked', False))
+
         try:
             env_var, created = EnvironmentVariable.objects.update_or_create(
                 service=service,
                 key=key,
-                defaults={'value': value, 'is_secret': is_secret, 'source': 'USER'},
+                defaults={'value': value, 'is_secret': is_secret, 'is_locked': is_locked, 'source': 'USER'},
             )
         except (ValidationError, DataError, IntegrityError) as exc:
             logger.warning("Invalid env var payload for service %s key=%s: %s", service.id, key, exc)
@@ -1213,16 +1215,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
         )
 
-    @action(detail=True, methods=['delete'],
+    @action(detail=True, methods=['delete', 'patch'],
             url_path='env_vars/(?P<var_id>\\d+)')
     def delete_env_var(self, request, pk=None, var_id=None):
         service = self.get_object()
         try:
             var = EnvironmentVariable.objects.get(id=var_id, service=service)
-            var.delete()
-            return Response(status=status.HTTP_204_NO_CONTENT)
         except EnvironmentVariable.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
+
+        if request.method.upper() == 'DELETE':
+            var.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # PATCH — toggle is_locked (or update any field)
+        if 'is_locked' in request.data:
+            var.is_locked = _parse_bool(request.data['is_locked'])
+        if 'is_secret' in request.data:
+            var.is_secret = _parse_bool(request.data['is_secret'])
+        var.save()
+        return Response(EnvVarSerializer(var).data)
 
     @action(detail=True, methods=['post'], url_path='verify-domain')
     @require_tier('pro', 'enterprise')
