@@ -30,11 +30,10 @@ class BackupService:
     def _get_backups_dir(subdir: str) -> str:
         """Get or create a writable backups directory.
 
-        Tries /app/backups/{subdir} first, then falls back to /tmp/backups/{subdir}
-        if /app/backups is not writable (container image may not have it created
-        with the correct ownership for the non-root user).
+        Tries /data/backups/{subdir} first (shared Docker volume),
+        then falls back to /tmp/backups/{subdir} if not available.
         """
-        primary = os.path.join(settings.BASE_DIR, 'backups', subdir)
+        primary = os.path.join('/data', 'backups', subdir)
         try:
             os.makedirs(primary, exist_ok=True)
             # Test write access by creating a temp file
