@@ -165,14 +165,21 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                     <TableCell><span className="text-xs font-mono bg-muted px-2 py-1 rounded">{backup.backup_type}</span></TableCell>
                                     <TableCell>{formatBytes(backup.size_bytes)}</TableCell>
                                     <TableCell>
-                                        <span className={`text-xs font-semibold px-2 py-1 rounded ${
-                                            backup.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
-                                            backup.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
-                                            backup.status === 'IN_PROGRESS' ? 'bg-blue-500/10 text-blue-500' :
-                                            'bg-yellow-500/10 text-yellow-500'
-                                        }`}>
-                                            {backup.status}
-                                        </span>
+                                        <div className="space-y-1">
+                                            <span className={`text-xs font-semibold px-2 py-1 rounded ${
+                                                backup.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                backup.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
+                                                backup.status === 'IN_PROGRESS' ? 'bg-blue-500/10 text-blue-500' :
+                                                'bg-yellow-500/10 text-yellow-500'
+                                            }`}>
+                                                {backup.status}
+                                            </span>
+                                            {backup.status === 'FAILED' && backup.error_message && (
+                                                <p className="text-[11px] text-red-400 max-w-[260px] truncate" title={backup.error_message}>
+                                                    {backup.error_message}
+                                                </p>
+                                            )}
+                                        </div>
                                     </TableCell>
                                     <TableCell className="text-right space-x-1">
                                         {backup.status === 'COMPLETED' && (
@@ -189,6 +196,11 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                     <Trash2 className="w-4 h-4" />
                                                 </Button>
                                             </>
+                                        )}
+                                        {backup.status === 'FAILED' && (
+                                            <Button variant="ghost" size="sm" onClick={() => handleDeleteBackup(backup.id)} title="Delete" className="text-red-400 hover:text-red-500">
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
                                         )}
                                     </TableCell>
                                 </TableRow>

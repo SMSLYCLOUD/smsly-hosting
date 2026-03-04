@@ -52,6 +52,11 @@ class BackupService:
             return fallback
 
     def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
+        if not self.docker_client:
+            raise RuntimeError(
+                "Docker is not available. Backups require a running Docker daemon. "
+                "Please ensure Docker is installed and accessible."
+            )
         service = Service.objects.get(id=service_id)
         backup = ServiceBackup.objects.create(
             service=service,
@@ -352,6 +357,10 @@ class BackupService:
         2. Backup of all services (recursive).
         3. Backup of PlatformConfig/Secrets.
         """
+        if not self.docker_client:
+            raise RuntimeError(
+                "Docker is not available. Server backups require a running Docker daemon."
+            )
         if backup_id:
             try:
                 backup = ServerBackup.objects.get(id=backup_id)

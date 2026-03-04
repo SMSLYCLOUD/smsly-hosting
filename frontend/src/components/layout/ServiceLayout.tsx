@@ -33,6 +33,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'health', label: 'Health', icon: HeartPulse },
         { id: 'topology', label: 'Topology', icon: Network, href: '/topology' },
         { id: 'cron', label: 'Cron Jobs', icon: Timer },
+        { id: 'backups', label: 'Backups', icon: HardDrive },
         { id: 'settings', label: 'Settings', icon: Settings },
         { id: 'advanced', label: 'Advanced', icon: Shield },
     ];

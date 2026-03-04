@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Service, servicesApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { BuildpackSelector, BuildpackType } from '@/components/deployments/BuildpackSelector';
-import { FolderRoot, Container, Layers, AlertTriangle } from 'lucide-react';
+import { FolderRoot, Container, Layers, AlertTriangle, GitBranch, Github } from 'lucide-react';
 
 interface BuildTabProps {
   service: Service;
@@ -16,6 +16,8 @@ interface BuildTabProps {
 
 export function BuildTab({ service }: BuildTabProps) {
   const { toast } = useToast();
+  const [repositoryUrl, setRepositoryUrl] = useState(service.repository_url || '');
+  const [branch, setBranch] = useState(service.branch || 'main');
   const [buildpack, setBuildpack] = useState<BuildpackType>(service.buildpack || 'DOCKER');
   const [rootDirectory, setRootDirectory] = useState(service.root_directory || '/');
   const [buildCommand, setBuildCommand] = useState(service.build_command || '');
@@ -26,6 +28,8 @@ export function BuildTab({ service }: BuildTabProps) {
     setSaving(true);
     try {
       await servicesApi.update(service.id, {
+        repository_url: repositoryUrl || undefined,
+        branch: branch || 'main',
         buildpack: buildpack,
         root_directory: rootDirectory,
         build_command: buildCommand,
@@ -57,6 +61,47 @@ export function BuildTab({ service }: BuildTabProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+
+          {/* Source Repository */}
+          <div className="space-y-4 p-4 rounded-lg border border-border bg-muted/30">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Github className="h-4 w-4" />
+              Source Repository
+            </h4>
+            <div className="space-y-2">
+              <Label htmlFor="repository-url">Repository URL</Label>
+              <Input
+                id="repository-url"
+                value={repositoryUrl}
+                onChange={(e) => setRepositoryUrl(e.target.value)}
+                placeholder="https://github.com/username/repo"
+              />
+              {repositoryUrl !== (service.repository_url || '') && (
+                <div className="flex items-center gap-2 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span>Repository URL changed. Save and redeploy to deploy from the new repo.</span>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                The Git repository to clone and build from. Change this to deploy from a different repo.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="branch" className="flex items-center gap-1.5">
+                <GitBranch className="h-3.5 w-3.5" />
+                Branch
+              </Label>
+              <Input
+                id="branch"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="main"
+              />
+              <p className="text-xs text-muted-foreground">
+                Branch, tag, or commit to deploy from. Defaults to <code>main</code>.
+              </p>
+            </div>
+          </div>
 
           {/* Deploy Mode Selector */}
           <div className="space-y-3">
