@@ -7,6 +7,7 @@ export type PlatformTier = 'community' | 'pro' | 'enterprise';
 export interface LicenseStatus {
   tier: PlatformTier;
   is_valid: boolean;
+  licensed_to?: string;
   expires_at: string | null;
   features: {
     ai_features: boolean;
@@ -44,6 +45,7 @@ const TierContext = createContext<TierContextType | undefined>(undefined);
 const OWNER_LICENSE: LicenseStatus = {
   tier: 'enterprise',
   is_valid: true,
+  licensed_to: 'Creator Edition',
   expires_at: null,
   features: {
     ai_features: true,

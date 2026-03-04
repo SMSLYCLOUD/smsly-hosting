@@ -859,17 +859,28 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     PASS_COUNT=0
     FAIL_COUNT=0
 
-    # Backend health
+    # Backend health (internal)
     EP1_URL="http://127.0.0.1:8090/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
     if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
-        echo -e "${GREEN}  ✓ Backend: HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+        echo -e "${GREEN}  ✓ Backend (local): HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
     else
-        echo -e "${RED}  ✗ Backend: HTTP $EP1_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+        echo -e "${RED}  ✗ Backend (local): HTTP $EP1_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
-    # HTTPS domain
+    # Platform domain (public-facing — tests Caddy → nginx → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+        EP_PUB_URL="http://${DOMAIN}/health"
+        EP_PUB_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP_PUB_URL" 2>/dev/null) || EP_PUB_CODE="000"
+        if [ "$EP_PUB_CODE" = "200" ] || [ "$EP_PUB_CODE" = "301" ] || [ "$EP_PUB_CODE" = "308" ]; then
+            echo -e "${GREEN}  ✓ Platform (${DOMAIN}): HTTP $EP_PUB_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            echo -e "${RED}  ✗ Platform (${DOMAIN}): HTTP $EP_PUB_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    fi
+
+    # HTTPS domain (skip for raw IP addresses — certs can't be issued for IPs)
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${DOMAIN}/health"
         EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
         if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
@@ -877,6 +888,8 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
         else
             echo -e "${RED}  ✗ HTTPS: HTTP $EP2_CODE ($EP2_URL)${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
+    elif echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' 2>/dev/null; then
+        echo -e "${YELLOW}  ⊘ HTTPS: Skipped (IP Mode — SSL requires a domain name)${NC}"
     fi
 
     # Traefik

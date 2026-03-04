@@ -2,15 +2,17 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Archive, Upload } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Archive, Trash2, Upload } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import api from '@/lib/api';
 
 export default function ServerBackupsPage() {
     const { toast } = useToast();
+    const confirm = useConfirm();
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -39,15 +41,16 @@ export default function ServerBackupsPage() {
             await api.post('/server/backups/');
             toast({ title: "Server Backup Started", description: "This captures all services and configuration." });
             loadBackups();
-        } catch (err) {
-            toast({ title: "Error", description: "Failed to start server backup.", variant: "destructive" });
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || err?.response?.data?.detail || "Failed to start server backup.";
+            toast({ title: "Backup Failed", description: msg, variant: "destructive" });
         } finally {
             setCreating(false);
         }
     };
 
     const handleRestore = async (backupId: string) => {
-        if (!confirm('Are you sure you want to restore this server backup? This will overwrite current state.')) return;
+        if (!await confirm({ title: 'Restore server backup?', message: 'This will overwrite current state. Are you sure?', variant: 'destructive', confirmText: 'Restore' })) return;
         setRestoringId(backupId);
         try {
             await api.post(`/server/backups/${backupId}/restore/`);
@@ -60,6 +63,17 @@ export default function ServerBackupsPage() {
         }
     };
 
+    const handleDeleteBackup = async (id: string) => {
+        if (!await confirm({ title: 'Delete server backup?', message: 'This backup will be permanently deleted.', variant: 'destructive', confirmText: 'Delete' })) return;
+        try {
+            await api.delete(`/server/backups/${id}/`);
+            toast({ title: "Backup deleted" });
+            loadBackups();
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to delete backup.", variant: "destructive" });
+        }
+    };
+
     const handleUploadRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -67,7 +81,7 @@ export default function ServerBackupsPage() {
             toast({ title: "Invalid File", description: "Please select a .tar.gz or .tgz backup file.", variant: "destructive" });
             return;
         }
-        if (!confirm(`Restore from "${file.name}"? This will overwrite current server state.`)) {
+        if (!await confirm({ title: 'Restore from file?', message: `Restore from "${file.name}"? This will overwrite current server state.`, variant: 'destructive', confirmText: 'Restore' })) {
             e.target.value = '';
             return;
         }
@@ -88,6 +102,16 @@ export default function ServerBackupsPage() {
             setUploading(false);
             e.target.value = '';
         }
+    };
+
+    const getStatusBadge = (status: string) => {
+        const styles: Record<string, string> = {
+            COMPLETED: 'bg-emerald-500/10 text-emerald-500',
+            FAILED: 'bg-red-500/10 text-red-500',
+            IN_PROGRESS: 'bg-blue-500/10 text-blue-500',
+            PENDING: 'bg-yellow-500/10 text-yellow-500',
+        };
+        return styles[status] || 'bg-muted text-muted-foreground';
     };
 
     return (
@@ -140,31 +164,43 @@ export default function ServerBackupsPage() {
                                         <TableCell>{backup.services_included?.length || 0}</TableCell>
                                         <TableCell>{(backup.size_bytes / 1024 / 1024).toFixed(2)} MB</TableCell>
                                         <TableCell>
-                                            <span className={`text-xs font-semibold px-2 py-1 rounded ${
-                                                backup.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                backup.status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
-                                                'bg-yellow-500/10 text-yellow-500'
-                                            }`}>
-                                                {backup.status}
-                                            </span>
+                                            <div className="space-y-1">
+                                                <span className={`text-xs font-semibold px-2 py-1 rounded ${getStatusBadge(backup.status)}`}>
+                                                    {backup.status}
+                                                </span>
+                                                {backup.status === 'FAILED' && backup.error_message && (
+                                                    <p className="text-[11px] text-red-400 max-w-[260px] truncate" title={backup.error_message}>
+                                                        {backup.error_message}
+                                                    </p>
+                                                )}
+                                            </div>
                                         </TableCell>
                                         <TableCell className="text-right space-x-2">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => handleRestore(backup.id)}
-                                                disabled={backup.status !== 'COMPLETED' || restoringId === backup.id}
-                                                title="Restore this backup"
-                                            >
-                                                {restoringId === backup.id
-                                                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                                                    : <RotateCcw className="w-4 h-4" />}
-                                            </Button>
-                                            <Button variant="ghost" size="sm" asChild>
-                                                <a href={`/api/v1/server/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
-                                                    <Download className="w-4 h-4" />
-                                                </a>
-                                            </Button>
+                                            {backup.status === 'COMPLETED' && (
+                                                <>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => handleRestore(backup.id)}
+                                                        disabled={restoringId === backup.id}
+                                                        title="Restore this backup"
+                                                    >
+                                                        {restoringId === backup.id
+                                                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                                                            : <RotateCcw className="w-4 h-4" />}
+                                                    </Button>
+                                                    <Button variant="ghost" size="sm" asChild>
+                                                        <a href={`/api/v1/server/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
+                                                            <Download className="w-4 h-4" />
+                                                        </a>
+                                                    </Button>
+                                                </>
+                                            )}
+                                            {backup.status === 'FAILED' && (
+                                                <Button variant="ghost" size="sm" onClick={() => handleDeleteBackup(backup.id)} title="Delete" className="text-red-400 hover:text-red-500">
+                                                    <Trash2 className="w-4 h-4" />
+                                                </Button>
+                                            )}
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -183,4 +219,3 @@ export default function ServerBackupsPage() {
         </DashboardShell>
     );
 }
-

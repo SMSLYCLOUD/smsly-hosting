@@ -20,6 +20,7 @@ import { AddonsTab } from '@/components/addons/AddonsTab';
 import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
 import { BuildTab } from '@/components/settings/BuildTab';
+import BackupsTab from '@/components/settings/BackupsTab';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 
@@ -660,6 +661,9 @@ export default function ServiceDetailPage() {
                     </div>
                 </div>
             )}
+
+
+            {activeTab === 'backups' && <BackupsTab serviceId={service.id} />}
 
             {activeTab === 'advanced' && <AdvancedTab service={service} />}
 

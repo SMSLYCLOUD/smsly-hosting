@@ -1245,6 +1245,7 @@ export const autoscalerApi = {
 export interface LicenseStatus {
   tier: 'community' | 'pro' | 'enterprise';
   is_valid: boolean;
+  licensed_to?: string;
   expires_at: string | null;
   features: Record<string, boolean>;
   max_services: number;
