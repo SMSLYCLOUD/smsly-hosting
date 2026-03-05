@@ -244,6 +244,7 @@ class RepoScanner:
         """
         Detect all environment variables the app expects.
         Scans .env files, code files, and config files for patterns.
+        Covers 50+ frameworks and languages.
         """
         env_vars = set()
 
@@ -265,22 +266,159 @@ class RepoScanner:
                                 if line and not line.startswith('#') and '=' in line:
                                     # pylint: disable=superfluous-parens
                                     key = line.split('=', 1)[0].strip()
+                                    # Strip export prefix
+                                    key = re.sub(r'^export\s+', '', key)
                                     if key and re.match(r'^[A-Z_][A-Z0-9_]*$', key):
                                         env_vars.add(key)
                     except Exception: # pylint: disable=broad-exception-caught
                         pass
 
-        # 2. Scan code files for os.environ / process.env patterns
+        # 2. Scan code files for env var patterns across 50+ frameworks
         code_patterns = [
+            # ── Python (Django, Flask, FastAPI, Celery, etc.) ──
             re.compile(r'os\.environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'os\.environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            # Pydantic Settings / FastAPI config
+            re.compile(r'Field\(\s*(?:.*?\s*,\s*)?env\s*=\s*["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'class\s+\w*[Ss]ettings.*?\n(?:.*\n)*?.*?(\b[A-Z_][A-Z0-9_]+)\s*:\s*'),
+            # decouple (python-decouple)
+            re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── JavaScript / TypeScript (Node, Next.js, Nuxt, React, Vue, etc.) ──
             re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
+            re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),  # Vite
+            # NestJS ConfigService
+            re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'this\.configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            # Joi / env validation schemas
+            re.compile(r'\.(?:required|optional)\(\).*?([A-Z_][A-Z0-9_]+)'),
+
+            # ── Go (Gin, Echo, Fiber, Chi, etc.) ──
+            re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'os\.LookupEnv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'viper\.(?:Get|GetString|GetInt|GetBool)\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'viper\.BindEnv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'godotenv\.Load'),  # flags that .env is expected
+
+            # ── Ruby (Rails, Sinatra, Hanami) ──
+            re.compile(r'ENV\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'ENV\.fetch\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'ENV\.dig\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── PHP (Laravel, Symfony, WordPress, CodeIgniter, CakePHP) ──
             re.compile(r'env\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'\$_ENV\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'\$_SERVER\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Java / Kotlin (Spring Boot, Quarkus, Micronaut, Ktor) ──
+            re.compile(r'System\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'@Value\(\s*["\']\$\{([A-Z_][A-Z0-9_.]*)'),
+            re.compile(r'@ConfigurationProperties.*prefix\s*=\s*["\']([a-z._]+)["\']'),
+            re.compile(r'environment\.getProperty\(["\']([A-Z_a-z][A-Z0-9_.]*)["\']'),
+            # Quarkus
+            re.compile(r'@ConfigProperty.*name\s*=\s*["\']([A-Z_a-z][A-Z0-9_.]*)["\']'),
+            # Micronaut
+            re.compile(r'@Property.*name\s*=\s*["\']([A-Z_a-z][A-Z0-9_.]*)["\']'),
+
+            # ── C# / .NET (ASP.NET, Blazor, MAUI) ──
+            re.compile(r'Environment\.GetEnvironmentVariable\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'Configuration\[["\']([A-Z_a-z][A-Za-z0-9_:]*)["\']'),
+            re.compile(r'configuration\.GetValue[<\(].*?["\']([A-Z_a-z][A-Za-z0-9_:]*)["\']'),
+            re.compile(r'GetConnectionString\(["\']([A-Za-z_][A-Za-z0-9_]*)["\']'),
+            re.compile(r'builder\.Configuration\[["\']([A-Z_a-z][A-Za-z0-9_:]*)["\']'),
+
+            # ── Rust (Actix, Axum, Rocket, Warp) ──
             re.compile(r'std::env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'dotenvy::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Elixir (Phoenix, LiveView) ──
+            re.compile(r'System\.get_env\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'System\.fetch_env!\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Dart / Flutter ──
+            re.compile(r'Platform\.environment\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'String\.fromEnvironment\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'dotenv\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'DotEnv\(\).*?get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Swift (Vapor) ──
+            re.compile(r'Environment\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'ProcessInfo\.processInfo\.environment\[["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Scala (Play, Akka, ZIO) ──
+            re.compile(r'sys\.env\.get(?:OrElse)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'sys\.env\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Clojure (Ring, Compojure) ──
+            re.compile(r'System/getenv\s+["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'\(env\s+:([A-Z_a-z][A-Z0-9_a-z-]*)'),
+
+            # ── Lua (OpenResty, Lapis) ──
+            re.compile(r'os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Perl ──
+            re.compile(r'\$ENV\{["\']?([A-Z_][A-Z0-9_]*)["\']?\}'),
+
+            # ── Haskell ──
+            re.compile(r'lookupEnv\s+["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'getEnv\s+["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Zig ──
+            re.compile(r'std\.os\.getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── Generic patterns (catch-all for custom config loaders) ──
+            re.compile(r'getEnvVar\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'requireEnv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'envOrDefault\(["\']([A-Z_][A-Z0-9_]*)["\']'),
         ]
 
-        code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.rs', '.go', '.rb'}
+        code_extensions = {
+            '.py',      # Python (Django, Flask, FastAPI, Celery)
+            '.js',      # JavaScript (Express, Koa, Fastify, Hapi)
+            '.ts',      # TypeScript (NestJS, Deno)
+            '.jsx',     # React
+            '.tsx',     # React + TypeScript
+            '.mjs',     # ES Modules
+            '.cjs',     # CommonJS
+            '.rs',      # Rust (Actix, Axum)
+            '.go',      # Go (Gin, Echo, Fiber)
+            '.rb',      # Ruby (Rails, Sinatra)
+            '.php',     # PHP (Laravel, Symfony)
+            '.java',    # Java (Spring Boot, Quarkus)
+            '.kt',      # Kotlin (Ktor, Spring)
+            '.kts',     # Kotlin Script (Gradle)
+            '.cs',      # C# (ASP.NET, Blazor)
+            '.ex',      # Elixir (Phoenix)
+            '.exs',     # Elixir scripts
+            '.dart',    # Dart / Flutter
+            '.swift',   # Swift (Vapor)
+            '.scala',   # Scala (Play, Akka)
+            '.clj',     # Clojure
+            '.lua',     # Lua (OpenResty, Lapis)
+            '.pl',      # Perl
+            '.pm',      # Perl module
+            '.hs',      # Haskell
+            '.zig',     # Zig
+        }
+
+        # Framework-specific config files to scan
+        config_file_patterns = [
+            # Spring Boot
+            (re.compile(r'\$\{([A-Z_][A-Z0-9_.]*?)(?::[^}]*)?\}'),
+             {'application.properties', 'application.yml', 'application.yaml',
+              'application-prod.properties', 'application-prod.yml',
+              'bootstrap.properties', 'bootstrap.yml'}),
+            # .NET appsettings
+            (re.compile(r'"([A-Z_][A-Za-z0-9_:]+)"\s*:'),
+             {'appsettings.json', 'appsettings.Production.json',
+              'appsettings.Development.json'}),
+        ]
 
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -292,6 +430,18 @@ class RepoScanner:
             for f in files:
                 _, ext = os.path.splitext(f)
                 if ext not in code_extensions:
+                    # Check framework-specific config files
+                    for cfg_pattern, cfg_names in config_file_patterns:
+                        if f in cfg_names:
+                            filepath = os.path.join(root, f)
+                            try:
+                                with open(filepath, 'r', errors='ignore',
+                                          encoding='utf-8') as fh:
+                                    content = fh.read(50000)
+                                    for match in cfg_pattern.finditer(content):
+                                        env_vars.add(match.group(1))
+                            except Exception:
+                                pass
                     continue
 
                 filepath = os.path.join(root, f)
