@@ -17,6 +17,12 @@ export function Sidebar() {
   const [servers, setServers] = React.useState<ManagedServer[]>([]);
   const [activeServer, setActiveServer] = React.useState<string | null>(null);
   const [showSelector, setShowSelector] = React.useState(false);
+  const [infraOpen, setInfraOpen] = React.useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("smsly_infra_open") !== "false";
+    }
+    return true;
+  });
 
   React.useEffect(() => {
     serversApi.list().then(setServers).catch(() => {});
@@ -24,6 +30,22 @@ export function Sidebar() {
       setActiveServer(localStorage.getItem("smsly_active_server"));
     }
   }, []);
+
+  // Auto-expand infra section if user is on an infra page
+  React.useEffect(() => {
+    const infraPaths = ["/servers", "/autoscaler", "/tunnels", "/ecosystem", "/intelligence"];
+    if (infraPaths.some(p => pathname?.startsWith(p))) {
+      setInfraOpen(true);
+    }
+  }, [pathname]);
+
+  const toggleInfra = () => {
+    const next = !infraOpen;
+    setInfraOpen(next);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("smsly_infra_open", String(next));
+    }
+  };
 
   const handleSelectServer = (serverId: string | null) => {
     setActiveServer(serverId);
@@ -40,21 +62,21 @@ export function Sidebar() {
 
   const activeServerObj = servers.find(s => s.id === activeServer);
 
-  // ── Grouped navigation ────────────────────────────────────
+  // ── Grouped navigation (3 sections) ──────────────────────
 
   const mainRoutes = [
-    { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
-    { label: "Services",  icon: Box,             href: "/services" },
-    { label: "Deployments", icon: Rocket,        href: "/deployments" },
-    { label: "Transfers",   icon: ArrowLeftRight, href: "/transfers" },
+    { label: "Dashboard",   icon: LayoutDashboard, href: "/dashboard" },
+    { label: "Services",    icon: Box,             href: "/services" },
+    { label: "Deployments", icon: Rocket,          href: "/deployments" },
+    { label: "Transfers",   icon: ArrowLeftRight,  href: "/transfers" },
   ];
 
   const infraRoutes = [
-    { label: "Servers",      icon: Server, href: "/servers" },
+    { label: "Servers",      icon: Server,  href: "/servers" },
     { label: "Autoscaler",   icon: Scaling, href: "/autoscaler" },
-    { label: "Tunnels",      icon: Radio,  href: "/tunnels" },
-    { label: "Ecosystem",    icon: Globe,  href: "/ecosystem" },
-    { label: "Intelligence", icon: Brain,  href: "/intelligence" },
+    { label: "Tunnels",      icon: Radio,   href: "/tunnels" },
+    { label: "Ecosystem",    icon: Globe,   href: "/ecosystem" },
+    { label: "Intelligence", icon: Brain,   href: "/intelligence" },
   ];
 
   const utilRoutes = [
@@ -71,22 +93,24 @@ export function Sidebar() {
         key={route.href}
         href={route.href}
         className={cn(
-          "text-[13px] group flex py-1.5 px-2.5 w-full justify-start font-medium cursor-pointer hover:text-white hover:bg-white/10 rounded-md transition",
+          "text-[12px] group flex py-1 px-2.5 w-full justify-start font-medium cursor-pointer hover:text-white hover:bg-white/10 rounded-md transition",
           isActive(route.href) ? "text-white bg-white/10" : "text-zinc-400"
         )}
       >
-        <route.icon className={cn("h-4 w-4 mr-2.5 shrink-0", isActive(route.href) ? "text-emerald-400" : "text-zinc-500")} />
+        <route.icon className={cn("h-3.5 w-3.5 mr-2 shrink-0", isActive(route.href) ? "text-emerald-400" : "text-zinc-500")} />
         {route.label}
       </Link>
     ));
 
+  const infraActive = infraRoutes.some(r => isActive(r.href));
+
   return (
     <div className="flex flex-col h-full bg-slate-900 text-white overflow-y-auto">
       {/* Logo */}
-      <div className="px-3 pt-4 pb-4 space-y-4">
+      <div className="px-3 pt-3 pb-3 space-y-3">
         <Link href="/dashboard" className="flex items-center gap-2.5 px-2">
-          <div className="w-7 h-7 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-sm shrink-0">S</div>
-          <h1 className="text-lg font-bold tracking-tight">CloudNeuron</h1>
+          <div className="w-6 h-6 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-xs shrink-0">S</div>
+          <h1 className="text-base font-bold tracking-tight">CloudNeuron</h1>
         </Link>
         <div className="px-1">
           <TeamSwitcher className="w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white" />
@@ -94,23 +118,37 @@ export function Sidebar() {
       </div>
 
       {/* Main nav */}
-      <nav className="flex-1 px-2 space-y-4 overflow-y-auto">
+      <nav className="flex-1 px-2 space-y-3 overflow-y-auto">
         {/* Main */}
         <div className="space-y-0.5">
           {renderLinks(mainRoutes)}
         </div>
 
-        {/* Infrastructure */}
+        {/* Infrastructure — collapsible */}
         <div>
-          <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold px-2.5 mb-1">Infrastructure</p>
-          <div className="space-y-0.5">
-            {renderLinks(infraRoutes)}
-          </div>
+          <button
+            onClick={toggleInfra}
+            className="flex items-center justify-between w-full px-2.5 py-0.5 group"
+          >
+            <p className={cn(
+              "text-[10px] uppercase tracking-widest font-semibold",
+              infraActive ? "text-emerald-500/70" : "text-zinc-600"
+            )}>Infrastructure</p>
+            <ChevronDown className={cn(
+              "h-3 w-3 text-zinc-600 transition-transform",
+              !infraOpen && "-rotate-90"
+            )} />
+          </button>
+          {infraOpen && (
+            <div className="space-y-0.5 mt-0.5">
+              {renderLinks(infraRoutes)}
+            </div>
+          )}
         </div>
 
-        {/* Utilities */}
+        {/* Manage */}
         <div>
-          <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold px-2.5 mb-1">Manage</p>
+          <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold px-2.5 mb-0.5">Manage</p>
           <div className="space-y-0.5">
             {renderLinks(utilRoutes)}
           </div>
@@ -119,14 +157,14 @@ export function Sidebar() {
 
       {/* Server Selector — pinned to bottom */}
       {servers.length > 0 && (
-        <div className="px-2 pb-3 pt-2 border-t border-white/5 mt-auto shrink-0">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-600 font-semibold mb-1.5 px-1">
+        <div className="px-2 pb-2 pt-1.5 border-t border-white/5 mt-auto shrink-0">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-600 font-semibold mb-1 px-1">
             Active Server
           </p>
           <div className="relative">
             <button
               onClick={() => setShowSelector(!showSelector)}
-              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 transition text-xs text-left"
+              className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition text-xs text-left"
             >
               {activeServerObj ? (
                 <>

@@ -79,6 +79,20 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
             "ssh_password": {"write_only": True, "required": False},
         }
 
+    def validate_host(self, value):
+        """Strip protocol and port from host — should be bare IP or domain."""
+        import re
+        value = re.sub(r'^https?://', '', value).strip().rstrip('/')
+        value = re.sub(r':\d+$', '', value)
+        return value
+
+    def validate_api_url(self, value):
+        """Ensure api_url has a protocol prefix."""
+        value = value.strip().rstrip('/')
+        if value and not value.startswith(('http://', 'https://')):
+            value = f'https://{value}'
+        return value
+
 
 class ManagedServerProvisionSerializer(serializers.ModelSerializer):
     """For 'Provision New' mode — user provides SSH credentials."""
