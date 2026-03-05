@@ -31,6 +31,12 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+function isServerProxyUrl(url?: string): boolean {
+  if (!url) return false;
+  const cleanUrl = url.split('?')[0];
+  return /\/servers\/[^/]+\/proxy\/?$/.test(cleanUrl);
+}
+
 // ─── Remote Server Proxy Interceptor ────────────────────────────────────────
 // When a remote server is selected (smsly_active_server in localStorage),
 // automatically rewrite API calls to go through /servers/{id}/proxy/.
@@ -46,6 +52,7 @@ const PROXY_BYPASS_PREFIXES = [
 
 api.interceptors.request.use((config) => {
   if (typeof window === 'undefined') return config;
+  if ((config as any)?._skipRemoteProxy) return config;
 
   const activeServer = localStorage.getItem('smsly_active_server');
   if (!activeServer) return config;
@@ -85,7 +92,12 @@ api.interceptors.request.use((config) => {
 // Response interceptor: unwrap proxy responses {status_code, data} → normal response
 api.interceptors.response.use(
   (response) => {
-    if ((response.config as any)?._isProxied && response.data?.status_code !== undefined) {
+    const shouldUnwrapProxyResponse = (
+      (response.config as any)?._isProxied ||
+      isServerProxyUrl(response.config?.url)
+    ) && response.data?.status_code !== undefined;
+
+    if (shouldUnwrapProxyResponse) {
       const proxyStatusCode = response.data.status_code;
       const proxyData = response.data.data;
 
@@ -105,7 +117,8 @@ api.interceptors.response.use(
   },
   (error) => {
     // If the proxy call itself failed (502, network error), provide a clear message
-    if ((error?.config as any)?._isProxied && error?.response?.status === 502) {
+    const isProxyRequest = (error?.config as any)?._isProxied || isServerProxyUrl(error?.config?.url);
+    if (isProxyRequest && error?.response?.status === 502) {
       const msg = error.response?.data?.error || 'Remote server is unreachable';
       error.message = msg;
     }
@@ -276,15 +289,16 @@ export const servicesApi = {
     // Handle paginated (object with results) or direct array responses
     return Array.isArray(response.data) ? response.data : (response.data?.results || []);
   },
-  create: async (data: any): Promise<Service> => {
+  create: async (data: any, requestConfig?: any): Promise<Service> => {
     // If it's a file upload, use FormData
     if (data instanceof FormData) {
       const response = await api.post('/services/', data, {
+        ...(requestConfig || {}),
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       return response.data;
     }
-    const response = await api.post('/services/', data);
+    const response = await api.post('/services/', data, requestConfig);
     return response.data;
   },
   get: async (id: string): Promise<Service> => {
@@ -687,6 +701,8 @@ export interface ManagedServer {
   created_at: string;
 }
 
+const proxiedRequestConfig = (): any => ({ _isProxied: true });
+
 export const serversApi = {
   list: async (): Promise<ManagedServer[]> => {
     const res = await api.get('/servers/');
@@ -716,7 +732,7 @@ export const serversApi = {
     return res.data;
   },
   proxy: async (id: string, method: string, path: string, body?: any): Promise<any> => {
-    const res = await api.post(`/servers/${id}/proxy/`, { method, path, body });
+    const res = await api.post(`/servers/${id}/proxy/`, { method, path, body }, proxiedRequestConfig());
     return res.data;
   },
   remoteServices: async (id: string): Promise<any> => {
@@ -735,38 +751,38 @@ export const serversApi = {
   remoteDeployService: async (id: string, serviceId: string, ref: string = 'HEAD'): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/deploy/`, body: { ref },
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   remoteStopService: async (id: string, serviceId: string): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/stop/`,
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   remoteRestartService: async (id: string, serviceId: string): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/restart/`,
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   // Remote domain management via proxy
   remoteAddDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/add-domain/`, body: { domain },
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   remoteDeleteDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/delete-domain/`, body: { domain },
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   remoteVerifyDomain: async (id: string, serviceId: string, domain: string): Promise<any> => {
     const res = await api.post(`/servers/${id}/proxy/`, {
       method: 'POST', path: `/api/v1/services/${serviceId}/verify-domain/`, body: { domain },
-    });
+    }, proxiedRequestConfig());
     return res.data;
   },
   provision: async (data: any): Promise<any> => {
@@ -787,11 +803,12 @@ export const deployApi = {
     serviceId: string,
     ref: string = 'HEAD',
     serverIds: string[] = [],
+    requestConfig?: any,
   ): Promise<any> => {
     const res = await api.post(`/services/${serviceId}/multi-deploy/`, {
       ref,
       server_ids: serverIds,
-    });
+    }, requestConfig);
     return res.data;
   },
 };

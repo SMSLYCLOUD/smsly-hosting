@@ -248,6 +248,7 @@ export default function NewServicePage() {
     try {
       const token = localStorage.getItem("auth_token")
       if (!token) throw new Error("Not authenticated")
+      const localOnlyRequest = { _skipRemoteProxy: true } as any
 
       // Auto-derive name from repo URL if still empty
       let finalName = name.trim()
@@ -274,12 +275,16 @@ export default function NewServicePage() {
           memory_mb: 512,
           regions: [],
           ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {})
-      })
+      }, localOnlyRequest)
 
       // Set Env Vars
       if (envVars.length > 0) {
         for (const v of envVars) {
-          await api.post(`/services/${service.id}/env_vars/`, { key: v.key, value: v.value, is_secret: v.isSecret })
+          await api.post(
+            `/services/${service.id}/env_vars/`,
+            { key: v.key, value: v.value, is_secret: v.isSecret },
+            localOnlyRequest,
+          )
         }
       }
 
@@ -288,6 +293,7 @@ export default function NewServicePage() {
         service.id,
         branch || 'main',
         selectedServers,
+        localOnlyRequest,
       )
       setDeployResults(results)
 

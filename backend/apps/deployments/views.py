@@ -841,11 +841,22 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     pass  # Hostname (not raw IP) — allow
 
                 base_url = server.api_url.rstrip('/')
+                token = str(server.api_token or '').strip()
+                auth_header = ''
+                if token:
+                    if token.lower().startswith('token ') or token.lower().startswith('bearer '):
+                        auth_header = token
+                    elif token.startswith('smsly_'):
+                        auth_header = f'Bearer {token}'
+                    else:
+                        auth_header = f'Token {token}'
+
                 headers = {
-                    'Authorization': f'Bearer {server.api_token}',
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
                 }
+                if auth_header:
+                    headers['Authorization'] = auth_header
 
                 try:
                     # Step A: Check if service exists on remote
@@ -1321,10 +1332,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 logger.info("Caddy synced after domain change")
             else:
                 logger.error("Caddy sync failed: %s", result['message'])
-            return result['ok']
+            return {
+                "ok": bool(result.get("ok")),
+                "message": str(result.get("message", "")).strip(),
+            }
         except Exception as e:
             logger.error("Caddy sync error: %s", e)
-            return False
+            return {
+                "ok": False,
+                "message": str(e),
+            }
 
     def _find_domain_conflict(self, service: Service, domain: str):
         """Return conflicting service if domain is already assigned globally."""
@@ -1426,25 +1443,34 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if quota_response is not None:
             return quota_response
 
-        previous_domains = list(service.custom_domains or [])
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
         # Auto-sync Caddyfile so SSL + routing are provisioned immediately.
         # No service redeploy is required.
-        caddy_ok = self._sync_caddy()
+        caddy_result = self._sync_caddy()
+        caddy_ok = bool(caddy_result.get("ok"))
+        caddy_message = caddy_result.get("message") or "Routing sync failed."
         if not caddy_ok:
-            service.custom_domains = previous_domains
-            service.save(update_fields=['custom_domains'])
+            logger.warning(
+                "add_domain: domain saved but routing sync failed for %s (%s): %s",
+                service.id,
+                domain,
+                caddy_message,
+            )
             return Response(
                 {
-                    'error': (
-                        'Domain saved failed to apply routing configuration. '
-                        'Change has been rolled back. Please retry.'
+                    'domain': domain,
+                    'domains': domains,
+                    'message': (
+                        f'{domain} was saved, but automatic routing sync failed. '
+                        'Routing may not activate until Caddy reload succeeds.'
                     ),
+                    'warning': caddy_message,
                     'caddy_synced': False,
+                    'requires_redeploy': False,
                 },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status=status.HTTP_202_ACCEPTED,
             )
 
         return Response({
@@ -1482,25 +1508,34 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Domain not found'},
                             status=status.HTTP_404_NOT_FOUND)
 
-        previous_domains = list(service.custom_domains or [])
         domains = [d for d in domains if d != domain]
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
 
         # Auto-sync Caddyfile so stale domain entry is removed immediately.
-        caddy_ok = self._sync_caddy()
+        caddy_result = self._sync_caddy()
+        caddy_ok = bool(caddy_result.get("ok"))
+        caddy_message = caddy_result.get("message") or "Routing sync failed."
         if not caddy_ok:
-            service.custom_domains = previous_domains
-            service.save(update_fields=['custom_domains'])
+            logger.warning(
+                "delete_domain: domain removed but routing sync failed for %s (%s): %s",
+                service.id,
+                domain,
+                caddy_message,
+            )
             return Response(
                 {
-                    'error': (
-                        'Domain removal failed to apply routing configuration. '
-                        'Change has been rolled back. Please retry.'
+                    'domain': domain,
+                    'domains': domains,
+                    'message': (
+                        f'{domain} was removed, but automatic routing sync failed. '
+                        'Old routing entries may persist until Caddy reload succeeds.'
                     ),
+                    'warning': caddy_message,
                     'caddy_synced': False,
+                    'requires_redeploy': False,
                 },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                status=status.HTTP_202_ACCEPTED,
             )
 
         return Response({
