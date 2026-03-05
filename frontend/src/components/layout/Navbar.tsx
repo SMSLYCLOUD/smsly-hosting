@@ -132,17 +132,17 @@ export function Navbar() {
             : 'bg-transparent border-b border-transparent'
         }`}
     >
-      <div className="container mx-auto grid h-16 max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6">
+      <div className="container mx-auto grid h-14 max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6">
 
         {/* Logo - Left */}
-        <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
-            <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={32} height={32} className="h-8 w-8 shadow-sm rounded-lg" priority />
-            {!user && <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
+        <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
+            <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={28} height={28} className="h-7 w-7 shadow-sm rounded-lg" priority />
+            {!user && <span className="font-bold text-lg tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
         <nav className="hidden min-w-0 items-center justify-center md:flex">
-            <div className="flex max-w-full items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex max-w-full items-center justify-center gap-0.5 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
@@ -151,7 +151,7 @@ export function Navbar() {
                          href={link.href}
                          prefetch={false}
                          className={`
-                             shrink-0 px-3 py-2 rounded-md text-sm font-medium transition-colors
+                             shrink-0 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors
                              ${isActive
                                 ? 'text-emerald-600 dark:text-emerald-400'
                                 : 'text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400'}
@@ -170,13 +170,13 @@ export function Navbar() {
                          href={link.href}
                          prefetch={false}
                          className={`
-                             relative shrink-0 px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2
+                             relative shrink-0 px-2.5 py-1.5 rounded-md text-[13px] font-medium transition-colors flex items-center gap-1.5
                              ${isActive
                                 ? 'text-primary bg-primary/5'
                                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
                         `}
                     >
-                        <Icon size={16} />
+                        <Icon size={15} />
                         {link.label}
                         {isActive && (
                             <motion.div
@@ -274,11 +274,13 @@ export function Navbar() {
         </div>
       </div>
 
-      {/* Row 2: Infrastructure links */}
-      {user && secondaryAuthLinks.length > 0 && (
-        <div className="hidden md:block border-t border-border/60 bg-card/70">
-          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1">
-            <div className="flex items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* Row 2+3: Infrastructure & Tools — single container, divided */}
+      {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
+        <div className="hidden md:block border-t border-border/50 bg-card/60 backdrop-blur-sm">
+          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-0.5">
+            {/* Infrastructure row */}
+            <div className="flex items-center justify-center gap-0.5 py-0.5">
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40 font-semibold mr-2 shrink-0">Infra</span>
               {secondaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -287,27 +289,23 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                    className={`shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
                       isActive
                         ? 'bg-primary/10 text-primary'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                     }`}
                   >
-                    <Icon size={13} />
+                    <Icon size={12} />
                     {link.label}
                   </Link>
                 );
               })}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Row 3: Management & tools links */}
-      {user && tertiaryAuthLinks.length > 0 && (
-        <div className="hidden md:block border-t border-border/40 bg-card/50">
-          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1">
-            <div className="flex items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {/* Subtle divider */}
+            <div className="border-t border-border/30 mx-8" />
+            {/* Tools row */}
+            <div className="flex items-center justify-center gap-0.5 py-0.5">
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40 font-semibold mr-2 shrink-0">Tools</span>
               {tertiaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -316,13 +314,13 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                    className={`shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
                       isActive
                         ? 'bg-primary/10 text-primary'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                     }`}
                   >
-                    <Icon size={13} />
+                    <Icon size={12} />
                     {link.label}
                   </Link>
                 );

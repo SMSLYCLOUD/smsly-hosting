@@ -226,7 +226,7 @@ class LocalAdapter(BaseCloudAdapter):
         )
         start_period_seconds = _env_int(
             "DOCKER_HEALTHCHECK_START_PERIOD_SECONDS",
-            120 if low_resource_profile else 60,
+            180 if low_resource_profile else 120,
             minimum=1,
         )
 
@@ -349,14 +349,38 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         if not new_healthy:
-            logger.error("Container %s failed health check", name)
+            # Capture container logs BEFORE removing — critical for debugging
+            container_logs = ""
+            try:
+                new_container.reload()
+                state = new_container.attrs.get("State", {})
+                exit_code = state.get("ExitCode", "unknown")
+                oom_killed = state.get("OOMKilled", False)
+                status = state.get("Status", "unknown")
+                health_state = (state.get("Health") or {}).get("Status", "n/a")
+                log_bytes = new_container.logs(tail=30)
+                container_logs = log_bytes.decode("utf-8", errors="replace")
+                logger.error(
+                    "Container %s failed health check. status=%s health=%s "
+                    "exit_code=%s oom_killed=%s\nLogs:\n%s",
+                    name, status, health_state, exit_code, oom_killed,
+                    container_logs,
+                )
+            except Exception as log_exc:
+                logger.error(
+                    "Container %s failed health check (could not capture logs: %s)",
+                    name, log_exc,
+                )
             try:
                 new_container.remove(force=True)
             except Exception:
                 pass
-            raise RuntimeError(
-                f"Container {name} failed health check after deploy."
-            )
+            detail = f"Container {name} failed health check after deploy."
+            if container_logs:
+                # Include last 5 lines in the error for the UI
+                snippet = "\n".join(container_logs.strip().splitlines()[-5:])
+                detail += f"\n--- Last logs ---\n{snippet}"
+            raise RuntimeError(detail)
 
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
@@ -535,6 +559,7 @@ class LocalAdapter(BaseCloudAdapter):
         """Wait for a container to reach 'healthy' or 'running' (no healthcheck) state."""
         import time as _time
         deadline = _time.monotonic() + timeout_seconds
+        poll_count = 0
         while _time.monotonic() < deadline:
             try:
                 container = self.docker_client.containers.get(container_id)
@@ -542,21 +567,48 @@ class LocalAdapter(BaseCloudAdapter):
                 state = container.attrs.get("State") or {}
                 status = (state.get("Status") or "").lower()
                 health = ((state.get("Health") or {}).get("Status") or "").lower()
-            except Exception:
+                oom = state.get("OOMKilled", False)
+            except Exception as exc:
+                logger.debug("Health poll %d: lookup error: %s", poll_count, exc)
                 _time.sleep(poll_seconds)
+                poll_count += 1
                 continue
 
+            # Log every 6th poll (~30s) to avoid spam
+            if poll_count % 6 == 0:
+                logger.info(
+                    "Health poll %d: status=%s health=%s oom=%s (id=%s)",
+                    poll_count, status, health, oom, container_id[:12],
+                )
+
             if status in {"exited", "dead"}:
+                exit_code = state.get("ExitCode", "?")
+                logger.warning(
+                    "Container %s terminated: status=%s exit_code=%s oom=%s",
+                    container_id[:12], status, exit_code, oom,
+                )
                 return False
             if health == "healthy":
                 return True
             if health == "unhealthy":
+                logger.warning(
+                    "Container %s unhealthy after %d polls",
+                    container_id[:12], poll_count,
+                )
                 return False
             # No healthcheck configured — running means ready
             if status == "running" and not health:
                 return True
 
             _time.sleep(poll_seconds)
+            poll_count += 1
+        logger.warning(
+            "Container %s health check timed out after %ds (%d polls). "
+            "Last state: status=%s health=%s",
+            container_id[:12], timeout_seconds, poll_count,
+            status if 'status' in dir() else '?',
+            health if 'health' in dir() else '?',
+        )
         return False
 
     def _deploy_k8s(self, name: str, image: str,
