@@ -57,7 +57,8 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         transfer = ServerTransfer.objects.create(
             source_server_ip=source_server_ip,
             target_server_ip=payload['target_server_ip'],
-            target_ssh_key=payload['target_ssh_key'],
+            target_ssh_key=payload.get('target_ssh_key', ''),
+            target_ssh_password=payload.get('target_ssh_password', ''),
             transfer_type=transfer_type,
             service=service,
         )

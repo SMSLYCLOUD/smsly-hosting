@@ -26,6 +26,7 @@ class ServerTransfer(models.Model):
     # Target
     target_server_ip = models.GenericIPAddressField()
     target_ssh_key = models.TextField(blank=True)  # encrypted SSH key for target
+    target_ssh_password = models.CharField(max_length=255, blank=True, default='')  # SSH password for target
 
     # Scope
     transfer_type = models.CharField(choices=[

@@ -13,10 +13,11 @@ class SSHConnectionError(Exception):
 
 
 class SSHClient:
-    def __init__(self, ip, key_content, user='root'):
+    def __init__(self, ip, key_content='', user='root', password=''):
         self.ip = ip
         self.user = user
         self.key_content = key_content
+        self.password = password
         self.client = None
         self.sftp = None
         self._key = None
@@ -58,21 +59,30 @@ class SSHClient:
         if self.client:
             return
 
-        key = self._load_key()
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # Determine auth method: key or password
+        connect_kwargs = {
+            'hostname': self.ip,
+            'username': self.user,
+            'timeout': 10,
+            'banner_timeout': 30,
+        }
+
+        if self.key_content:
+            key = self._load_key()
+            connect_kwargs['pkey'] = key
+        elif self.password:
+            connect_kwargs['password'] = self.password
+        else:
+            raise ValueError("No SSH key or password provided.")
 
         retries = 3
         last_exc = None
         for i in range(retries):
             try:
-                self.client.connect(
-                    hostname=self.ip,
-                    username=self.user,
-                    pkey=key,
-                    timeout=10,
-                    banner_timeout=30
-                )
+                self.client.connect(**connect_kwargs)
                 return
             except (socket.error, paramiko.SSHException) as e:
                 last_exc = e
