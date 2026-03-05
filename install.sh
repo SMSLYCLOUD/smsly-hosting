@@ -1457,11 +1457,15 @@ if d and d != 'localhost':
     # ── Check 3+: ALL deployed services (auto-discovered from DB) ──
     echo -e "${BLUE}  [3/N] Deployed services routing...${NC}"
 
-    # Query ALL active service domains from the DB
+    # Query ALL active service domains from the DB (public + custom)
     ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain='').order_by('name'):
     print(f'{svc.name}|{svc.public_domain.strip()}')
+    for cd in (svc.custom_domains or []):
+        cd = cd.strip()
+        if cd:
+            print(f'{svc.name} (custom)|{cd}')
 " 2>/dev/null | tr -d '\r' || true)"
 
     # Also check Traefik port directly
