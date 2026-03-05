@@ -1168,14 +1168,7 @@ if not created and not cp.is_active:
     if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
 
-        # Always regenerate directly to /etc/caddy/Caddyfile with service blocks.
-        # This is more reliable than the Django caddy_manager → container volume → watcher chain.
-        generate_safe_caddyfile "update flow caddy regen"
-
-        # ── Sync Cloudflare token to Caddy systemd override ──
-        # The Caddyfile uses {env.CLOUDFLARE_API_TOKEN} — Caddy reads this from
-        # its systemd environment. If the override is missing or token is empty,
-        # Caddy will crash. This ensures the token is always synced.
+        # ── Step 1: Find the Cloudflare token FIRST (before generating Caddyfile) ──
         CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
         CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
         CF_TOKEN=""
@@ -1209,8 +1202,11 @@ if token and token.lower() not in ('fake', 'changeme', 'test', ''):
             fi
         fi
 
+        # ── Step 2: Generate Caddyfile WITH dns cloudflare if token exists ──
         if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "fake" ]; then
-            # Token available — ensure systemd override is set
+            echo -e "${GREEN}  ✓ Cloudflare token available — generating Caddyfile with wildcard SSL${NC}"
+
+            # Ensure systemd override is set
             mkdir -p "$CADDY_OVERRIDE_DIR"
             cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
 [Service]
@@ -1220,9 +1216,77 @@ Environment="CLOUDFLARE_API_TOKEN=$CF_TOKEN"
 ENVEOF
             chmod 600 "$CADDY_OVERRIDE_FILE"
             systemctl daemon-reload
-            echo -e "${GREEN}  ✓ Cloudflare token synced to Caddy${NC}"
+
+            # Discover domain
+            local cf_domain=""
+            cf_domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+c = PlatformConfig.load()
+d = (c.domain or '').strip()
+if d and d != 'localhost':
+    print(d)
+" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [ -z "$cf_domain" ]; then
+                cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+            fi
+
+            # Discover service domains
+            local cf_svc_blocks=""
+            cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import Service
+for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
+    d = svc.public_domain.strip()
+    if d:
+        print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+" 2>/dev/null | tr -d '\r' || true)"
+
+            # Only generate wildcard Caddyfile for real domains
+            local cf_is_real_domain=false
+            if [ -n "$cf_domain" ] && [ "$cf_domain" != "localhost" ]; then
+                if ! echo "$cf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                    cf_is_real_domain=true
+                fi
+            fi
+
+            if [ "$cf_is_real_domain" = "true" ]; then
+                cat > /etc/caddy/Caddyfile <<CFCADDY
+# Auto-generated with Cloudflare DNS challenge (wildcard SSL)
+${cf_domain} {
+    reverse_proxy localhost:8090
+    encode gzip
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+*.${cf_domain} {
+    reverse_proxy localhost:8081
+    encode gzip
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+}
+
+:80 {
+    reverse_proxy localhost:8090
+}
+
+${cf_svc_blocks}
+CFCADDY
+                caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+                echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
+            else
+                # IP mode or no domain — fall back to safe Caddyfile
+                generate_safe_caddyfile "update flow (IP mode)"
+            fi
         else
-            # No valid token — strip dns cloudflare blocks to prevent crash
+            # No valid token — generate safe Caddyfile (no dns cloudflare)
+            generate_safe_caddyfile "update flow caddy regen"
+
+            # Strip any leftover dns cloudflare blocks to prevent crash
             if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
                 python3 -c "
@@ -1238,9 +1302,9 @@ print('Stripped tls blocks')
             fi
         fi
 
-        # Final validation — if still broken, regenerate one more time
+        # Final validation — if still broken, regenerate safe fallback
         if caddy_needs_fix; then
-            generate_safe_caddyfile "post-token-strip validation"
+            generate_safe_caddyfile "post-update validation"
         fi
 
         systemctl restart caddy 2>/dev/null || true
