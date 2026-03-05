@@ -257,6 +257,11 @@ def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
 
     except OSError as exc:
         result["message"] = f"Failed to write Caddyfile: {exc}"
+        if isinstance(exc, PermissionError):
+            result["message"] += (
+                " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "
+                "&& sudo chmod 775 /opt/smsly-hosting/caddy-config"
+            )
         logger.error("Failed to write Caddyfile: %s", exc)
 
     return result

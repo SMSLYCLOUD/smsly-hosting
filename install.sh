@@ -2319,7 +2319,14 @@ fi
 
 # ─── Create caddy-config volume directory for Settings UI writes ──────────────
 mkdir -p /opt/smsly-hosting/caddy-config
-chmod 750 /opt/smsly-hosting/caddy-config
+# Backend container runs as uid/gid 1000 ("smsly"), so this directory
+# must be writable by that uid for Settings -> Infra "Save & Apply".
+if id smsly >/dev/null 2>&1; then
+    chown smsly:smsly /opt/smsly-hosting/caddy-config
+else
+    chown 1000:1000 /opt/smsly-hosting/caddy-config
+fi
+chmod 775 /opt/smsly-hosting/caddy-config
 
 # ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
 if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
