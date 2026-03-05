@@ -184,21 +184,30 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        api_path = "/api/v1/services/"
-        url = f"{server.api_url.rstrip('/')}{api_path}"
-        headers = _build_remote_headers(server, method="GET", path=api_path)
+        base = server.api_url.rstrip('/')
 
+        # Step 1: unauthenticated /health check — determines online/offline
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                services = data.get("results", data) if isinstance(data, dict) else data
+            resp = requests.get(f"{base}/health", timeout=10)
+            if resp.status_code < 500:
                 server.status = ManagedServer.Status.ONLINE
-                server.services_count = len(services) if isinstance(services, list) else 0
             else:
                 server.status = ManagedServer.Status.OFFLINE
         except requests.RequestException:
             server.status = ManagedServer.Status.OFFLINE
+
+        # Step 2: if online, try authenticated call for service count
+        if server.status == ManagedServer.Status.ONLINE:
+            api_path = "/api/v1/services/"
+            headers = _build_remote_headers(server, method="GET", path=api_path)
+            try:
+                resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    services = data.get("results", data) if isinstance(data, dict) else data
+                    server.services_count = len(services) if isinstance(services, list) else 0
+            except requests.RequestException:
+                pass  # Online but can't fetch services — token might be wrong
 
         server.last_health_check = timezone.now()
         server.save(update_fields=["status", "last_health_check", "services_count"])
@@ -211,20 +220,30 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         servers = self.get_queryset().exclude(api_url="")
         results = []
         for server in servers:
-            api_path = "/api/v1/services/"
-            url = f"{server.api_url.rstrip('/')}{api_path}"
-            headers = _build_remote_headers(server, method="GET", path=api_path)
+            base = server.api_url.rstrip('/')
+
+            # Step 1: unauthenticated /health check
             try:
-                resp = requests.get(url, headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    services = data.get("results", data) if isinstance(data, dict) else data
+                resp = requests.get(f"{base}/health", timeout=10)
+                if resp.status_code < 500:
                     server.status = ManagedServer.Status.ONLINE
-                    server.services_count = len(services) if isinstance(services, list) else 0
                 else:
                     server.status = ManagedServer.Status.OFFLINE
             except requests.RequestException:
                 server.status = ManagedServer.Status.OFFLINE
+
+            # Step 2: if online, try authenticated call for service count
+            if server.status == ManagedServer.Status.ONLINE:
+                api_path = "/api/v1/services/"
+                headers = _build_remote_headers(server, method="GET", path=api_path)
+                try:
+                    resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        services = data.get("results", data) if isinstance(data, dict) else data
+                        server.services_count = len(services) if isinstance(services, list) else 0
+                except requests.RequestException:
+                    pass
 
             server.last_health_check = timezone.now()
             server.save(update_fields=["status", "last_health_check", "services_count"])
