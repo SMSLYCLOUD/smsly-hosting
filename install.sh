@@ -656,6 +656,15 @@ SAFECADDY
 
 # Returns 0 if Caddy config needs fixing, 1 if it's fine.
 caddy_needs_fix() {
+    # Export CF token from systemd override so caddy validate can resolve {env.CLOUDFLARE_API_TOKEN}
+    if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
+        local cf_val
+        cf_val="$(grep 'CLOUDFLARE_API_TOKEN=' /etc/systemd/system/caddy.service.d/override.conf 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"//g' || true)"
+        if [ -n "$cf_val" ]; then
+            export CLOUDFLARE_API_TOKEN="$cf_val"
+        fi
+    fi
+
     if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
