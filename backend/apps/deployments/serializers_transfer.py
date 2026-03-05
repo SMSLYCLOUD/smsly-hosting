@@ -41,16 +41,20 @@ class ServerTransferSerializer(serializers.ModelSerializer):
 class ServerTransferCreateSerializer(serializers.Serializer):
     source_server_ip = serializers.IPAddressField(required=False)
     target_server_ip = serializers.IPAddressField()
-    target_ssh_key = serializers.CharField(write_only=True, trim_whitespace=False)
+    target_ssh_key = serializers.CharField(
+        write_only=True, trim_whitespace=False, required=False, default='',
+    )
+    target_ssh_password = serializers.CharField(
+        write_only=True, required=False, default='',
+    )
     transfer_type = serializers.ChoiceField(choices=['SERVICE', 'FULL'])
     service_id = serializers.UUIDField(required=False)
 
     def validate_target_ssh_key(self, value):
-        if not value.strip():
-            raise serializers.ValidationError("SSH private key is required.")
-        # Basic sanity check for common PEM/OpenSSH key formats.
-        if "BEGIN" not in value:
-            raise serializers.ValidationError("Invalid SSH private key format.")
+        if value and value.strip():
+            # Basic sanity check for common PEM/OpenSSH key formats.
+            if "BEGIN" not in value:
+                raise serializers.ValidationError("Invalid SSH private key format.")
         return value
 
     def validate(self, attrs):
@@ -65,4 +69,13 @@ class ServerTransferCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {'service_id': "service_id must not be provided when transfer_type=FULL."}
             )
+
+        # Require at least one SSH auth method
+        has_key = bool(attrs.get('target_ssh_key', '').strip())
+        has_password = bool(attrs.get('target_ssh_password', '').strip())
+        if not has_key and not has_password:
+            raise serializers.ValidationError(
+                "Either target_ssh_key or target_ssh_password is required."
+            )
+
         return attrs

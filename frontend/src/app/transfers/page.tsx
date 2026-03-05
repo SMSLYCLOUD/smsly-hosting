@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowRight, Loader2, Server, CheckCircle2, RotateCcw } from 'lucide-react';
+import { ArrowRight, Loader2, Server, CheckCircle2, RotateCcw, Lock, Key } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api, { servicesApi, Service } from '@/lib/api';
 import { Progress } from '@/components/ui/progress';
@@ -17,11 +17,13 @@ export default function TransfersPage() {
     const { toast } = useToast();
     const [services, setServices] = useState<Service[]>([]);
     const [step, setStep] = useState(1);
+    const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'key'>('password');
     const [formData, setFormData] = useState({
         transfer_type: 'SERVICE',
         service_id: '',
         target_server_ip: '',
-        target_ssh_key: ''
+        target_ssh_key: '',
+        target_ssh_password: '',
     });
     const [transfers, setTransfers] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
@@ -44,7 +46,7 @@ export default function TransfersPage() {
             await api.post('/transfers/', formData);
             toast({ title: "Transfer Initiated", description: "Migration process started." });
             setStep(1);
-            setFormData({ transfer_type: 'SERVICE', service_id: '', target_server_ip: '', target_ssh_key: '' });
+            setFormData({ transfer_type: 'SERVICE', service_id: '', target_server_ip: '', target_ssh_key: '', target_ssh_password: '' });
             loadTransfers();
         } catch (err: any) {
             toast({ title: "Transfer Failed", description: err.response?.data?.error || "Error starting transfer", variant: "destructive" });
@@ -120,14 +122,51 @@ export default function TransfersPage() {
                                         />
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Target SSH Key (Private)</Label>
-                                        <Input
-                                            type="password"
-                                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                                            value={formData.target_ssh_key}
-                                            onChange={e => setFormData({...formData, target_ssh_key: e.target.value})}
-                                        />
-                                        <p className="text-xs text-muted-foreground">Key is only used once for rsync and never stored.</p>
+                                        <Label>Authentication</Label>
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <button
+                                                onClick={() => setSshAuthMethod('password')}
+                                                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
+                                                    sshAuthMethod === 'password'
+                                                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/30'
+                                                        : 'border border-border text-muted-foreground hover:text-foreground'
+                                                }`}
+                                            >
+                                                <Lock className="w-3 h-3" /> Password
+                                            </button>
+                                            <button
+                                                onClick={() => setSshAuthMethod('key')}
+                                                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
+                                                    sshAuthMethod === 'key'
+                                                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/30'
+                                                        : 'border border-border text-muted-foreground hover:text-foreground'
+                                                }`}
+                                            >
+                                                <Key className="w-3 h-3" /> SSH Key
+                                            </button>
+                                        </div>
+
+                                        {sshAuthMethod === 'password' ? (
+                                            <>
+                                                <Input
+                                                    type="password"
+                                                    placeholder="Root SSH password"
+                                                    value={formData.target_ssh_password}
+                                                    onChange={e => setFormData({...formData, target_ssh_password: e.target.value})}
+                                                />
+                                                <p className="text-xs text-muted-foreground">Password is used once for rsync and never stored.</p>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Input
+                                                    type="password"
+                                                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                                                    value={formData.target_ssh_key}
+                                                    onChange={e => setFormData({...formData, target_ssh_key: e.target.value})}
+                                                />
+                                                <p className="text-xs text-muted-foreground">Key is only used once for rsync and never stored.</p>
+                                            </>
+                                        )}
                                     </div>
                                     <div className="flex gap-2">
                                         <Button variant="outline" onClick={() => setStep(1)} className="flex-1">Back</Button>

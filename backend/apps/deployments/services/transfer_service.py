@@ -64,13 +64,19 @@ class ServerTransferService:
                 self.ssh.close()
 
     def _init_ssh(self):
-        if not self.transfer.target_ssh_key:
-            raise ValueError("Target SSH key is missing.")
+        has_key = bool(self.transfer.target_ssh_key)
+        has_password = bool(self.transfer.target_ssh_password)
 
-        self.ssh = SSHClient(
-            ip=self.transfer.target_server_ip,
-            key_content=self.transfer.target_ssh_key
-        )
+        if not has_key and not has_password:
+            raise ValueError("Target SSH key or password is missing.")
+
+        ssh_kwargs = {'ip': self.transfer.target_server_ip}
+        if has_key:
+            ssh_kwargs['key_content'] = self.transfer.target_ssh_key
+        if has_password:
+            ssh_kwargs['password'] = self.transfer.target_ssh_password
+
+        self.ssh = SSHClient(**ssh_kwargs)
         try:
             self.ssh.connect()
         except Exception as e:
@@ -327,6 +333,7 @@ if os.path.exists(services_dir):
         self.transfer.completed_at = timezone.now()
         self.transfer.rollback_deadline = timezone.now() + timedelta(hours=48)
         self.transfer.target_ssh_key = ''
+        self.transfer.target_ssh_password = ''
         self.transfer.save()
         self._update(100, 'Transfer complete!')
 
@@ -356,7 +363,8 @@ if os.path.exists(services_dir):
         self.transfer.status = 'FAILED'
         self.transfer.error_message = str(error)
         self.transfer.target_ssh_key = ''
-        self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key'])
+        self.transfer.target_ssh_password = ''
+        self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password'])
 
     def _generate_docker_run_command(self, service, metadata):
         name = service.name

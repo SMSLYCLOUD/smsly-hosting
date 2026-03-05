@@ -25,6 +25,7 @@ interface ManagedServer {
     services_count: number;
     created_at: string;
     provision_status: 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
+    role?: 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
 }
 
 function getToken() {
@@ -399,17 +400,26 @@ export default function ServersPage() {
                                                 <label className="text-xs font-medium text-muted-foreground">Host (IP or domain)</label>
                                                 <input
                                                     value={connectForm.host}
-                                                    onChange={e => setConnectForm({ ...connectForm, host: e.target.value })}
+                                                    onChange={e => {
+                                                        const host = e.target.value;
+                                                        const autoUrl = host ? `http://${host.replace(/^https?:\/\//, '')}:8090` : '';
+                                                        setConnectForm(prev => ({
+                                                            ...prev,
+                                                            host,
+                                                            // Auto-fill api_url only if it's empty or matches the previous auto-generated pattern
+                                                            api_url: (!prev.api_url || prev.api_url === `http://${prev.host.replace(/^https?:\/\//, '')}:8090`) ? autoUrl : prev.api_url,
+                                                        }));
+                                                    }}
                                                     placeholder="198.51.100.5"
                                                     className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                                                 />
                                             </div>
                                             <div>
-                                                <label className="text-xs font-medium text-muted-foreground">API URL</label>
+                                                <label className="text-xs font-medium text-muted-foreground">API URL <span className="text-muted-foreground/60">(auto-filled from host)</span></label>
                                                 <input
                                                     value={connectForm.api_url}
                                                     onChange={e => setConnectForm({ ...connectForm, api_url: e.target.value })}
-                                                    placeholder="https://hosting.example.com"
+                                                    placeholder="http://198.51.100.5:8090"
                                                     className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                                                 />
                                             </div>
