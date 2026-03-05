@@ -57,6 +57,7 @@ function SolarSystemContent() {
     const containerEl = containerRef.current;
     if (!containerEl) return;
     let renderer: THREE.WebGLRenderer | null = null;
+    let sizeObserver: ResizeObserver | null = null;
     let handleContextLost: ((event: Event) => void) | null = null;
 
     try {
@@ -74,11 +75,23 @@ function SolarSystemContent() {
 
       // Renderer
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
+      renderer.setClearColor(0x04070f, 1);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.domElement.style.display = 'block';
       containerEl.appendChild(renderer.domElement);
       rendererRef.current = renderer;
+
+      const syncRendererSize = () => {
+        if (!renderer || !camera) return;
+        const width = Math.max(containerEl.clientWidth, 1);
+        const height = Math.max(containerEl.clientHeight, 1);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height, false);
+      };
+      syncRendererSize();
+      sizeObserver = new ResizeObserver(syncRendererSize);
+      sizeObserver.observe(containerEl);
 
       handleContextLost = (event: Event) => {
         event.preventDefault();
@@ -130,6 +143,7 @@ function SolarSystemContent() {
       if (domEl && handleContextLost) {
         domEl.removeEventListener('webglcontextlost', handleContextLost as EventListener);
       }
+      sizeObserver?.disconnect();
       if (domEl && containerEl.contains(domEl)) {
         containerEl.removeChild(domEl);
       }
@@ -163,11 +177,8 @@ function SolarSystemContent() {
                       serviceStatus === 'FAILED' ? 0xef4444 : 0x3b82f6;
 
     const starGeometry = new THREE.SphereGeometry(4, 32, 32);
-    const starMaterial = new THREE.MeshPhongMaterial({
+    const starMaterial = new THREE.MeshBasicMaterial({
         color: starColor,
-        emissive: starColor,
-        emissiveIntensity: 1.6,
-        shininess: 80
     });
     const starMesh = new THREE.Mesh(starGeometry, starMaterial);
     starMesh.userData = { isSystemObj: true, type: 'SERVICE', node: service };
@@ -211,7 +222,7 @@ function SolarSystemContent() {
 
         const size = Math.random() * 1 + 0.8; // Random size 0.8 - 1.8
         const geometry = new THREE.SphereGeometry(size, 16, 16);
-        const material = new THREE.MeshPhongMaterial({ color: planetColor, shininess: 50 });
+        const material = new THREE.MeshBasicMaterial({ color: planetColor });
         const planet = new THREE.Mesh(geometry, material);
 
         // Orbit parameters
