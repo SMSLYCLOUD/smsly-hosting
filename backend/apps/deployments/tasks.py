@@ -44,6 +44,11 @@ from services.addon_provisioner import addon_provisioner
 logger = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, str(default))).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _regenerate_caddyfile():
     """Regenerate and apply the Caddyfile with current service domains.
 
@@ -112,6 +117,61 @@ def _detect_exposed_port(service) -> int | None:
     return None
 
 
+def _coerce_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_legacy_default_healthcheck(service: Service) -> bool:
+    """
+    Detect untouched platform defaults that historically forced /health checks.
+
+    When these defaults are untouched, we now prefer image-native health checks
+    (or running-state readiness) to avoid false negatives for frameworks that
+    don't expose /health by default.
+    """
+    return (
+        (service.health_check_path or "").strip() == "/health"
+        and service.health_check_port in (None, 0)
+        and _coerce_int(service.health_check_interval, 60) == 60
+        and _coerce_int(service.health_check_timeout, 15) == 15
+        and _coerce_int(service.health_check_retries, 8) == 8
+    )
+
+
+def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None:
+    """
+    Build platform healthcheck config for container deployment.
+
+    Returns None when no explicit healthcheck is configured, so the adapter can
+    keep Dockerfile HEALTHCHECK behavior (or no healthcheck) intact.
+    """
+    path = (service.health_check_path or "").strip()
+    if not path:
+        return None
+
+    # Backward-compatible escape hatch if operators want strict legacy behavior.
+    force_legacy_default = _env_bool("FORCE_PLATFORM_DEFAULT_HEALTHCHECK", default=False)
+    if _is_legacy_default_healthcheck(service) and not force_legacy_default:
+        return None
+
+    health_port = service.health_check_port
+    if health_port in (None, 0):
+        raw_port = str((env_vars or {}).get("PORT", "")).strip()
+        if raw_port.isdigit():
+            health_port = int(raw_port)
+
+    return {
+        "path": path,
+        "port": health_port,
+        "interval": service.health_check_interval,
+        "timeout": service.health_check_timeout,
+        "retries": service.health_check_retries,
+    }
+
+
 def _build_runtime_env(service: Service) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
@@ -129,18 +189,26 @@ def _build_runtime_env(service: Service) -> dict:
     except Exception as e:
         logger.warning(f"Failed to resolve shortcodes for service {service.name}: {e}")
 
-    # internal_port is the canonical port — override any stale PORT env var.
-    # UNLESS the user has locked PORT, in which case we respect their value.
+    # Resolve runtime PORT with safe precedence:
+    # 1) Explicit PORT env var (user/app intent)
+    # 2) Explicit non-default internal_port
+    # 3) Docker image EXPOSE auto-detection
+    # 4) Fallback 8000
+    #
+    # This prevents forcing default internal_port=8000 onto apps that
+    # naturally bind 3000/8080 and would otherwise fail health checks.
     if 'PORT' not in locked_keys:
-        if service.internal_port:
+        explicit_env_port = str(env_vars.get('PORT', '')).strip()
+        if explicit_env_port:
+            env_vars['PORT'] = explicit_env_port
+        elif service.internal_port and int(service.internal_port) != 8000:
             env_vars['PORT'] = str(service.internal_port)
         else:
-            # Auto-detect from Docker image EXPOSE if available
             detected_port = _detect_exposed_port(service)
             if detected_port:
-                env_vars.setdefault('PORT', str(detected_port))
+                env_vars['PORT'] = str(detected_port)
             else:
-                env_vars.setdefault('PORT', '8000')
+                env_vars['PORT'] = '8000'
 
     # Ensure the app binds to all interfaces so Docker health checks
     # (which probe 127.0.0.1) can reach it. Next.js standalone, for
@@ -1092,15 +1160,12 @@ def _deploy_container(deployment, provider, image_name):
         volumes = [{'name': v.name, 'mount_path': v.mount_path}
                    for v in Volume.objects.filter(service=service)]
 
-        healthcheck = None
-        if service.health_check_path:
-            healthcheck = {
-                'path': service.health_check_path,
-                'port': service.health_check_port,
-                'interval': service.health_check_interval,
-                'timeout': service.health_check_timeout,
-                'retries': service.health_check_retries
-            }
+        healthcheck = _build_platform_healthcheck(service, env_vars)
+        if not healthcheck:
+            append_log(
+                deployment,
+                "[HEALTH-CHECK] Using image/native health checks (or running-state readiness).\n",
+            )
 
         resource = compute.deploy_container(
             name=service.name,
