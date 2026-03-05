@@ -1218,7 +1218,7 @@ ENVEOF
             systemctl daemon-reload
 
             # Discover domain
-            local cf_domain=""
+            cf_domain=""
             cf_domain="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import PlatformConfig
 c = PlatformConfig.load()
@@ -1231,7 +1231,7 @@ if d and d != 'localhost':
             fi
 
             # Discover service domains
-            local cf_svc_blocks=""
+            cf_svc_blocks=""
             cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
 for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
@@ -1241,7 +1241,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 " 2>/dev/null | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
-            local cf_is_real_domain=false
+            cf_is_real_domain=false
             if [ -n "$cf_domain" ] && [ "$cf_domain" != "localhost" ]; then
                 if ! echo "$cf_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
                     cf_is_real_domain=true
