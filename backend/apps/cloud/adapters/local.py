@@ -19,6 +19,11 @@ def _env_int(name: str, default: int, minimum: int = 0) -> int:
     return max(minimum, value)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, str(default))).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _is_low_resource_profile(cpu_millicores: int | None, memory_mb: int | None) -> bool:
     cpu_threshold = _env_int("LOW_RESOURCE_CPU_MILLICORES_THRESHOLD", 600, minimum=1)
     memory_threshold = _env_int("LOW_RESOURCE_MEMORY_MB_THRESHOLD", 768, minimum=64)
@@ -41,7 +46,27 @@ def _normalize_health_path(path: str) -> str:
     return value
 
 
-def _build_docker_healthcheck_cmd(url: str, timeout_seconds: int) -> str:
+def _health_paths(primary_path: str | None) -> list[str]:
+    values = []
+    if primary_path:
+        values.append(_normalize_health_path(primary_path))
+
+    # Ordered fallback candidates for common frameworks.
+    raw = os.environ.get(
+        "DOCKER_HEALTHCHECK_FALLBACK_PATHS",
+        "/,/health,/healthz,/ready,/live,/status",
+    )
+    for chunk in str(raw).split(","):
+        path = _normalize_health_path(chunk.strip())
+        if path and path not in values:
+            values.append(path)
+
+    if not values:
+        values = ["/"]
+    return values
+
+
+def _build_docker_healthcheck_cmd(url_or_urls: str | list[str], timeout_seconds: int) -> str:
     """
     Build a portable in-container probe command.
 
@@ -54,23 +79,40 @@ def _build_docker_healthcheck_cmd(url: str, timeout_seconds: int) -> str:
     container is not marked unhealthy purely due missing probe tooling.
     """
     timeout = max(1, int(timeout_seconds or 3))
-    py_probe = (
-        "import urllib.request;"
-        f"urllib.request.urlopen('{url}', timeout={timeout})"
-    )
+    if isinstance(url_or_urls, str):
+        urls = [url_or_urls]
+    else:
+        urls = [str(value).strip() for value in url_or_urls if str(value).strip()]
+    if not urls:
+        urls = ["http://127.0.0.1/"]
+    quoted_urls = " ".join(f"\"{url}\"" for url in urls)
 
     return (
         "if command -v wget >/dev/null 2>&1; then "
-        f"wget -q -O /dev/null \"{url}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        f"for u in {quoted_urls}; do "
+        "wget -q -O /dev/null \"$u\" >/dev/null 2>&1 && exit 0; "
+        "done; exit 1; "
         "fi; "
         "if command -v curl >/dev/null 2>&1; then "
-        f"curl -fsS \"{url}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        f"for u in {quoted_urls}; do "
+        "curl -fsS \"$u\" >/dev/null 2>&1 && exit 0; "
+        "done; exit 1; "
         "fi; "
         "if command -v python3 >/dev/null 2>&1; then "
-        f"python3 -c \"{py_probe}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        f"for u in {quoted_urls}; do "
+        "U=\"$u\" python3 -c "
+        "\"import os,urllib.request;urllib.request.urlopen(os.environ['U'], timeout="
+        f"{timeout}"
+        ")\" >/dev/null 2>&1 && exit 0; "
+        "done; exit 1; "
         "fi; "
         "if command -v python >/dev/null 2>&1; then "
-        f"python -c \"{py_probe}\" >/dev/null 2>&1 && exit 0 || exit 1; "
+        f"for u in {quoted_urls}; do "
+        "U=\"$u\" python -c "
+        "\"import os,urllib.request;urllib.request.urlopen(os.environ['U'], timeout="
+        f"{timeout}"
+        ")\" >/dev/null 2>&1 && exit 0; "
+        "done; exit 1; "
         "fi; "
         "exit 0"
     )
@@ -230,12 +272,19 @@ class LocalAdapter(BaseCloudAdapter):
             minimum=1,
         )
 
+        platform_hc_enabled = bool(healthcheck and healthcheck.get('path'))
         hc_port = (
             (healthcheck or {}).get('port')
-            or port  # Use the same port as Traefik routing (env.PORT or 8000)
+            or port  # Use same port as routing (env.PORT or 8000)
         )
-        if healthcheck and healthcheck.get('path'):
-            hc_path = _normalize_health_path(healthcheck['path'])
+        hc_interval = min_interval
+        hc_timeout = min_timeout
+        hc_retries = min_retries
+        hc_primary_path = "/"
+        docker_healthcheck = None
+
+        if platform_hc_enabled:
+            hc_primary_path = _normalize_health_path(healthcheck['path'])
             hc_interval = max(
                 min_interval,
                 _coerce_int(healthcheck.get('interval', min_interval), min_interval),
@@ -248,21 +297,21 @@ class LocalAdapter(BaseCloudAdapter):
                 min_retries,
                 _coerce_int(healthcheck.get('retries', min_retries), min_retries),
             )
-            hc_url = f"http://127.0.0.1:{hc_port}{hc_path}"
-            hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
+            hc_paths = _health_paths(hc_primary_path)
+            hc_urls = [f"http://127.0.0.1:{hc_port}{path}" for path in hc_paths]
+            hc_cmd = _build_docker_healthcheck_cmd(hc_urls, hc_timeout)
+            docker_healthcheck = docker.types.Healthcheck(
+                test=["CMD-SHELL", hc_cmd],
+                interval=hc_interval * 1_000_000_000,
+                timeout=hc_timeout * 1_000_000_000,
+                retries=hc_retries,
+                start_period=start_period_seconds * 1_000_000_000,
+            )
         else:
-            hc_interval = min_interval
-            hc_timeout = min_timeout
-            hc_retries = min_retries
-            hc_url = f"http://127.0.0.1:{hc_port}/"
-            hc_cmd = _build_docker_healthcheck_cmd(hc_url, hc_timeout)
-        docker_healthcheck = docker.types.Healthcheck(
-            test=["CMD-SHELL", hc_cmd],
-            interval=hc_interval * 1_000_000_000,
-            timeout=hc_timeout * 1_000_000_000,
-            retries=hc_retries,
-            start_period=start_period_seconds * 1_000_000_000,
-        )
+            logger.info(
+                "No explicit platform healthcheck for %s. Keeping image-native Docker HEALTHCHECK.",
+                name,
+            )
 
         # ── Traefik Labels — ALWAYS ENABLED ──
         # Every container gets Traefik routing labels at creation.
@@ -280,7 +329,7 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.host_rule': host_rule,
             'smsly.blue_green.use_ssl': str(use_ssl),
             'smsly.blue_green.enable_tls': str(enable_traefik_tls),
-            'smsly.blue_green.hc_path': hc_path if healthcheck and healthcheck.get('path') else '/',
+            'smsly.blue_green.hc_path': hc_primary_path,
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
         }
@@ -322,18 +371,21 @@ class LocalAdapter(BaseCloudAdapter):
             )
         })
 
-        new_container = self.docker_client.containers.create(
-            image,
-            name=name,
-            environment=env,
-            network=network_name,
-            networking_config=networking_config,
-            labels=labels,
-            volumes=docker_volumes if docker_volumes else None,
-            healthcheck=docker_healthcheck,
-            restart_policy=rp,
-            **run_kwargs
-        )
+        create_kwargs = {
+            "image": image,
+            "name": name,
+            "environment": env,
+            "network": network_name,
+            "networking_config": networking_config,
+            "labels": labels,
+            "volumes": docker_volumes if docker_volumes else None,
+            "restart_policy": rp,
+            **run_kwargs,
+        }
+        if docker_healthcheck is not None:
+            create_kwargs["healthcheck"] = docker_healthcheck
+
+        new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
         logger.info("Started container %s with Traefik labels enabled", name)
 
@@ -349,16 +401,21 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         if not new_healthy:
-            # Capture container logs BEFORE removing — critical for debugging
+            # Capture container logs before removing - critical for debugging
             container_logs = ""
+            status = "unknown"
+            health_state = "n/a"
+            exit_code = "unknown"
+            oom_killed = False
+            log_tail_lines = _env_int("FAILED_CONTAINER_LOG_TAIL_LINES", 200, minimum=20)
             try:
                 new_container.reload()
                 state = new_container.attrs.get("State", {})
+                status = state.get("Status", "unknown")
                 exit_code = state.get("ExitCode", "unknown")
                 oom_killed = state.get("OOMKilled", False)
-                status = state.get("Status", "unknown")
                 health_state = (state.get("Health") or {}).get("Status", "n/a")
-                log_bytes = new_container.logs(tail=30)
+                log_bytes = new_container.logs(tail=log_tail_lines)
                 container_logs = log_bytes.decode("utf-8", errors="replace")
                 logger.error(
                     "Container %s failed health check. status=%s health=%s "
@@ -371,15 +428,42 @@ class LocalAdapter(BaseCloudAdapter):
                     "Container %s failed health check (could not capture logs: %s)",
                     name, log_exc,
                 )
-            try:
-                new_container.remove(force=True)
-            except Exception:
-                pass
-            detail = f"Container {name} failed health check after deploy."
+
+            keep_failed_container = _env_bool(
+                "KEEP_FAILED_CONTAINER_ON_HEALTHCHECK_ERROR",
+                default=True,
+            )
+            if not keep_failed_container:
+                try:
+                    new_container.remove(force=True)
+                except Exception:
+                    pass
+            else:
+                logger.warning(
+                    "Preserving failed container %s for debugging (status=%s health=%s).",
+                    name,
+                    status,
+                    health_state,
+                )
+
+            detail = (
+                f"Container {name} failed health check after deploy "
+                f"(status={status}, health={health_state}, "
+                f"exit_code={exit_code}, oom_killed={oom_killed})."
+            )
             if container_logs:
-                # Include last 5 lines in the error for the UI
-                snippet = "\n".join(container_logs.strip().splitlines()[-5:])
+                snippet_lines = _env_int(
+                    "FAILED_CONTAINER_ERROR_SNIPPET_LINES",
+                    40,
+                    minimum=5,
+                )
+                snippet = "\n".join(container_logs.strip().splitlines()[-snippet_lines:])
                 detail += f"\n--- Last logs ---\n{snippet}"
+            if keep_failed_container:
+                detail += (
+                    "\nContainer was preserved for debugging. "
+                    "Run docker logs/inspect on this container."
+                )
             raise RuntimeError(detail)
 
         logger.info("Container %s is healthy and serving traffic", name)

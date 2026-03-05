@@ -92,12 +92,67 @@ def _clear_state(service_id: str, clear_restart: bool = False):
 
 
 def _normalize_path(path: str) -> str:
-    path = (path or "/health").strip()
+    path = (path or "/").strip()
     if not path:
-        path = "/health"
+        path = "/"
     if not path.startswith("/"):
         path = f"/{path}"
     return path
+
+
+def _candidate_health_paths(service) -> list[str]:
+    paths = []
+    seen = set()
+
+    def _add(path_value: str):
+        path = _normalize_path(path_value)
+        if path in seen:
+            return
+        seen.add(path)
+        paths.append(path)
+
+    _add(service.health_check_path or "/")
+    raw = os.environ.get(
+        "HEALTH_CHECK_FALLBACK_PATHS",
+        "/,/health,/healthz,/ready,/live,/status",
+    )
+    for chunk in str(raw).split(","):
+        chunk = chunk.strip()
+        if chunk:
+            _add(chunk)
+
+    return paths or ["/"]
+
+
+def _candidate_ports(service) -> list[int]:
+    ports = []
+    seen = set()
+
+    def _add(value):
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            return
+        if port <= 0 or port in seen:
+            return
+        seen.add(port)
+        ports.append(port)
+
+    _add(getattr(service, "health_check_port", None))
+    _add(getattr(service, "internal_port", None))
+
+    try:
+        port_var = service.env_vars.filter(key="PORT").order_by("-updated_at").first()
+        if port_var is not None:
+            _add(port_var.value)
+    except Exception:
+        pass
+
+    raw = os.environ.get("HEALTH_CHECK_FALLBACK_PORTS", "8000,3000,8080,5000")
+    for chunk in str(raw).split(","):
+        _add(chunk.strip())
+
+    return ports or [8000]
 
 
 def _should_verify_tls() -> bool:
@@ -132,7 +187,8 @@ def _check_due(service) -> bool:
 
 
 def _build_targets(service, active_deployment):
-    path = _normalize_path(service.health_check_path)
+    paths = _candidate_health_paths(service)
+    ports = _candidate_ports(service)
     targets = []
     seen = set()
 
@@ -148,7 +204,8 @@ def _build_targets(service, active_deployment):
     if public_domain:
         scheme = "https" if _platform_ssl_enabled() else "http"
         verify = _should_verify_tls() if scheme == "https" else True
-        _add(f"{scheme}://{public_domain}{path}", verify=verify)
+        for path in paths:
+            _add(f"{scheme}://{public_domain}{path}", verify=verify)
 
         # Internal fallback path avoids DNS/TLS propagation noise.
         internal_urls = []
@@ -163,37 +220,41 @@ def _build_targets(service, active_deployment):
             ]
         )
         for base_url in internal_urls:
-            _add(
-                f"{base_url}{path}",
-                headers={"Host": public_domain},
-                verify=False,
-            )
+            for path in paths:
+                _add(
+                    f"{base_url}{path}",
+                    headers={"Host": public_domain},
+                    verify=False,
+                )
 
     # Last-resort direct container target.
     # Use the service name as Docker DNS hostname (container IDs don't
     # resolve via Docker DNS; only names and network aliases do).
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
-        port = service.internal_port or 8000
         direct_headers = {"Host": public_domain} if public_domain else {}
 
         # Primary: service name is the most reliable Docker DNS target
         service_name = (service.name or "").strip()
         if service_name:
-            _add(
-                f"http://{service_name}:{port}{path}",
-                headers=direct_headers,
-                verify=False,
-            )
+            for port in ports:
+                for path in paths:
+                    _add(
+                        f"http://{service_name}:{port}{path}",
+                        headers=direct_headers,
+                        verify=False,
+                    )
 
         # Compose deployments store container names like "app-web-1".
         # Keep full names intact; truncation breaks Docker DNS resolution.
         if "-" in container_id:
-            _add(
-                f"http://{container_id}:{port}{path}",
-                headers=direct_headers,
-                verify=False,
-            )
+            for port in ports:
+                for path in paths:
+                    _add(
+                        f"http://{container_id}:{port}{path}",
+                        headers=direct_headers,
+                        verify=False,
+                    )
 
     return targets
 
