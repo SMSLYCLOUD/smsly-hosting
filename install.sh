@@ -598,7 +598,7 @@ if d and d != 'localhost':
         domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
     fi
 
-    # 2. Discover ALL deployed service domains from DB
+    # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
     svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
@@ -606,6 +606,10 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     d = svc.public_domain.strip()
     if d:
         print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+    for cd in (svc.custom_domains or []):
+        cd = cd.strip()
+        if cd:
+            print(f'{cd} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
     # 3. Check if domain is a real hostname (not an IP address)
@@ -1239,7 +1243,7 @@ if d and d != 'localhost':
                 cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
             fi
 
-            # Discover service domains
+            # Discover service domains (public + custom)
             cf_svc_blocks=""
             cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
@@ -1247,6 +1251,10 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     d = svc.public_domain.strip()
     if d:
         print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+    for cd in (svc.custom_domains or []):
+        cd = cd.strip()
+        if cd:
+            print(f'{cd} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
