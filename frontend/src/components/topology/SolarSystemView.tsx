@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { useGraphData } from '@/hooks/useGraphData';
-import { TopologyNode, TopologyEdge } from '@/types/topology';
+import { TopologyNode } from '@/types/topology';
 import { Loader2, ArrowLeft, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ServiceSidePanel } from './ServiceSidePanel';
@@ -19,6 +19,8 @@ function SolarSystemContent() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const systemsRef = useRef<any[]>([]); // Store system data for animation
   const frameIdRef = useRef<number>(0);
+  const [renderMode, setRenderMode] = useState<'webgl' | 'safe'>('webgl');
+  const [renderIssue, setRenderIssue] = useState<string | null>(null);
 
   // Group services with their addons
   const systems = useMemo(() => {
@@ -54,70 +56,90 @@ function SolarSystemContent() {
   useEffect(() => {
     const containerEl = containerRef.current;
     if (!containerEl) return;
+    let renderer: THREE.WebGLRenderer | null = null;
+    let handleContextLost: ((event: Event) => void) | null = null;
 
-    // Scene
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#04070f');
-    scene.fog = new THREE.FogExp2('#04070f', 0.002);
-    sceneRef.current = scene;
+    try {
+      // Scene
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#04070f');
+      scene.fog = new THREE.FogExp2('#04070f', 0.002);
+      sceneRef.current = scene;
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(60, containerEl.clientWidth / containerEl.clientHeight, 0.1, 1000);
-    camera.position.set(0, 20, 40);
-    camera.lookAt(0, 0, 0);
-    cameraRef.current = camera;
+      // Camera
+      const camera = new THREE.PerspectiveCamera(60, containerEl.clientWidth / containerEl.clientHeight, 0.1, 1000);
+      camera.position.set(0, 20, 40);
+      camera.lookAt(0, 0, 0);
+      cameraRef.current = camera;
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    containerEl.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(containerEl.clientWidth, containerEl.clientHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.domElement.style.display = 'block';
+      containerEl.appendChild(renderer.domElement);
+      rendererRef.current = renderer;
 
-    // Controls
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.target.set(0, 0, 0);
-    controls.update();
-    controlsRef.current = controls;
+      handleContextLost = (event: Event) => {
+        event.preventDefault();
+        setRenderIssue('WebGL context lost');
+        setRenderMode('safe');
+      };
+      renderer.domElement.addEventListener('webglcontextlost', handleContextLost as EventListener, false);
 
-    // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
-    scene.add(ambientLight);
+      // Controls
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.target.set(0, 0, 0);
+      controls.update();
+      controlsRef.current = controls;
 
-    const pointLight = new THREE.PointLight(0xffffff, 2, 100);
-    pointLight.position.set(0, 0, 0); // Sun is the light source
-    scene.add(pointLight);
+      // Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
+      scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(20, 30, 15);
-    scene.add(directionalLight);
+      const pointLight = new THREE.PointLight(0xffffff, 2, 100);
+      pointLight.position.set(0, 0, 0); // Sun is the light source
+      scene.add(pointLight);
 
-    // Stars particles background
-    const starsGeometry = new THREE.BufferGeometry();
-    const starsCount = 2000;
-    const posArray = new Float32Array(starsCount * 3);
-    for(let i = 0; i < starsCount * 3; i++) {
-        posArray[i] = (Math.random() - 0.5) * 400;
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(20, 30, 15);
+      scene.add(directionalLight);
+
+      // Stars particles background
+      const starsGeometry = new THREE.BufferGeometry();
+      const starsCount = 2000;
+      const posArray = new Float32Array(starsCount * 3);
+      for(let i = 0; i < starsCount * 3; i++) {
+          posArray[i] = (Math.random() - 0.5) * 400;
+      }
+      starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+      const starsMaterial = new THREE.PointsMaterial({ size: 0.2, color: 0xffffff, transparent: true, opacity: 0.8 });
+      const starField = new THREE.Points(starsGeometry, starsMaterial);
+      scene.add(starField);
+    } catch (initError: any) {
+      setRenderIssue(initError?.message || 'WebGL initialization failed');
+      setRenderMode('safe');
     }
-    starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-    const starsMaterial = new THREE.PointsMaterial({ size: 0.2, color: 0xffffff, transparent: true, opacity: 0.8 });
-    const starField = new THREE.Points(starsGeometry, starsMaterial);
-    scene.add(starField);
 
     // Cleanup
     return () => {
       cancelAnimationFrame(frameIdRef.current);
-      if (rendererRef.current && containerEl.contains(rendererRef.current.domElement)) {
-        containerEl.removeChild(rendererRef.current.domElement);
+      const domEl = rendererRef.current?.domElement;
+      if (domEl && handleContextLost) {
+        domEl.removeEventListener('webglcontextlost', handleContextLost as EventListener);
       }
-      renderer.dispose();
+      if (domEl && containerEl.contains(domEl)) {
+        containerEl.removeChild(domEl);
+      }
+      renderer?.dispose();
     };
   }, []);
 
   // Update scene when current system changes
   useEffect(() => {
+    if (renderMode !== 'webgl') return;
     if (!sceneRef.current || systems.length === 0) return;
 
     const scene = sceneRef.current;
@@ -227,10 +249,11 @@ function SolarSystemContent() {
       renderer.render(scene, camera);
     }
 
-  }, [systems, currentSystemIndex]);
+  }, [systems, currentSystemIndex, renderMode]);
 
   // Click Handler (Raycasting)
   useEffect(() => {
+     if (renderMode !== 'webgl') return;
      const container = containerRef.current;
      if (!container) return;
 
@@ -258,10 +281,11 @@ function SolarSystemContent() {
      container.addEventListener('click', onClick);
      return () => container.removeEventListener('click', onClick);
 
-  }, []);
+  }, [renderMode]);
 
   // Animation Loop
   useEffect(() => {
+    if (renderMode !== 'webgl') return;
     if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return;
 
     const animate = () => {
@@ -296,7 +320,7 @@ function SolarSystemContent() {
     window.addEventListener('resize', handleResize);
 
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [renderMode]);
 
   const handleNext = () => {
       setCurrentSystemIndex((prev) => (prev + 1) % systems.length);
@@ -317,11 +341,49 @@ function SolarSystemContent() {
 
   return (
     <div className="relative h-full w-full bg-[#04070f] overflow-hidden">
-      <div ref={containerRef} className="h-full w-full cursor-move" />
+      <div
+        ref={containerRef}
+        className={`h-full w-full cursor-move ${renderMode === 'safe' ? 'opacity-0 pointer-events-none' : ''}`}
+      />
+
+      {renderMode === 'safe' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
+          <div className="text-xs text-amber-300/80 text-center">
+            3D mode unavailable on this browser session.
+            {renderIssue ? ` (${renderIssue})` : ''}
+          </div>
+
+          <div className="relative h-72 w-72 rounded-full border border-zinc-800 bg-zinc-950/40">
+            <button
+              onClick={() => setSelectedNode(currentSystem.service)}
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-500/20 border border-emerald-500/40 px-4 py-2 text-xs text-emerald-300"
+            >
+              {currentSystem.service.data.name}
+            </button>
+
+            {currentSystem.addons.map((addon, idx) => {
+              const angle = (idx / Math.max(currentSystem.addons.length, 1)) * Math.PI * 2;
+              const radius = 108;
+              const x = Math.cos(angle) * radius;
+              const y = Math.sin(angle) * radius;
+              return (
+                <button
+                  key={addon.id}
+                  onClick={() => setSelectedNode(addon)}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300"
+                  style={{ left: `calc(50% + ${x}px)`, top: `calc(50% + ${y}px)` }}
+                >
+                  {addon.data.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* HUD Overlay */}
       <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start pointer-events-none">
-          <div className="space-y-1">
+          <div className="space-y-1 pointer-events-auto">
               <h2 className="text-2xl font-bold text-white tracking-tight font-display">{currentSystem.service.data.name}</h2>
               <div className="flex items-center gap-2">
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
@@ -330,6 +392,14 @@ function SolarSystemContent() {
                       {currentSystem.service.data.status}
                   </span>
                   <span className="text-zinc-500 text-sm">System {currentSystemIndex + 1} of {systems.length}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRenderMode((prev) => (prev === 'webgl' ? 'safe' : 'webgl'))}
+                    className="h-6 px-2 text-[10px] border-zinc-700 bg-black/40 hover:bg-zinc-800"
+                  >
+                    {renderMode === 'webgl' ? 'Safe Mode' : '3D Mode'}
+                  </Button>
               </div>
           </div>
       </div>
