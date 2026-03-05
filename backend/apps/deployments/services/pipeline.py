@@ -381,6 +381,105 @@ class PipelineManager:
             update_stage(self.deployment, 'Clone', 'failed')
             raise BuildError(f"Clone failed: {str(e)}") from e
 
+        # Auto-inject .env file from repo (if present)
+        self._inject_dotenv_from_repo()
+
+    def _inject_dotenv_from_repo(self):
+        """Auto-inject env vars from .env files found in the cloned repo.
+
+        Scans root + common framework subdirs for .env files.
+        Priority: .env.production > .env.local > .env
+        Only injects keys not already set. Never injects empty values.
+        """
+        if not self.source_dir:
+            return
+
+        # Common framework subdirectories to scan
+        SCAN_DIRS = [
+            '',  # repo root
+            'frontend', 'backend', 'server', 'app', 'src',
+            'api', 'web', 'client', 'services',
+        ]
+        # .env file names in priority order (later overrides earlier)
+        ENV_FILES = ['.env', '.env.local', '.env.production']
+
+        # Keys we should NEVER inject from .env files (security)
+        SKIP_PATTERNS = re.compile(
+            r'^(SECRET_KEY|JWT_SECRET|DATABASE_URL|REDIS_URL|'
+            r'AWS_SECRET|PRIVATE_KEY|.*PASSWORD.*|.*_DSN)$',
+            re.IGNORECASE,
+        )
+
+        collected = {}  # key -> value (later files override)
+
+        for subdir in SCAN_DIRS:
+            scan_path = os.path.join(self.source_dir, subdir) if subdir else self.source_dir
+            if not os.path.isdir(scan_path):
+                continue
+
+            for env_file in ENV_FILES:
+                env_path = os.path.join(scan_path, env_file)
+                if not os.path.isfile(env_path):
+                    continue
+
+                try:
+                    with open(env_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        for line in f:
+                            line = line.strip()
+                            # Skip empty lines, comments, exports
+                            if not line or line.startswith('#'):
+                                continue
+                            line = re.sub(r'^export\s+', '', line)
+
+                            if '=' not in line:
+                                continue
+
+                            key, _, value = line.partition('=')
+                            key = key.strip().upper()
+                            value = value.strip()
+
+                            # Strip surrounding quotes
+                            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                                value = value[1:-1]
+
+                            if not key or not value:
+                                continue
+                            if SKIP_PATTERNS.match(key):
+                                continue
+
+                            collected[key] = value
+                except Exception:
+                    continue
+
+        if not collected:
+            return
+
+        # Inject into DB (only keys not already set)
+        injected = 0
+        for key, value in collected.items():
+            is_secret = bool(re.search(
+                r'(TOKEN|API_KEY|SECRET|PRIVATE)',
+                key, re.IGNORECASE,
+            ))
+            _, created = EnvironmentVariable.objects.get_or_create(
+                service=self.service,
+                key=key,
+                defaults={'value': value, 'is_secret': is_secret},
+            )
+            if created:
+                display_val = '********' if is_secret else value[:50]
+                append_log(
+                    self.deployment,
+                    f"  📄 .env: {key}={display_val}\n"
+                )
+                injected += 1
+
+        if injected:
+            append_log(
+                self.deployment,
+                f"\n✅ Auto-injected {injected} env var(s) from repo .env files.\n"
+            )
+
     def _run_ai_analysis(self):
         """Step 1.5: AI Analysis → structured resource + env var recommendations."""
         try:

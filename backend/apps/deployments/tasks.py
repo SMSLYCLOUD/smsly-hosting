@@ -72,6 +72,46 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     return slug[:63]
 
 
+def _detect_exposed_port(service) -> int | None:
+    """Auto-detect port from Docker image EXPOSE directive.
+
+    Inspects the last deployed image for this service. If the image has
+    EXPOSE ports, returns the first one. This prevents the common mismatch
+    where Dockerfile EXPOSE says 3000 but we default PORT to 8000.
+    """
+    try:
+        last_dep = service.deployments.filter(
+            container_id__isnull=False
+        ).order_by('-created_at').first()
+        if not last_dep or not last_dep.container_id:
+            return None
+
+        client = docker.from_env()
+        try:
+            container = client.containers.get(last_dep.container_id)
+            exposed = container.image.attrs.get('Config', {}).get('ExposedPorts', {})
+        except docker.errors.NotFound:
+            # Container gone, try looking up image directly
+            image_tag = last_dep.image_name or ''
+            if not image_tag:
+                return None
+            try:
+                img = client.images.get(image_tag)
+                exposed = img.attrs.get('Config', {}).get('ExposedPorts', {})
+            except docker.errors.ImageNotFound:
+                return None
+
+        if exposed:
+            # ExposedPorts looks like {"3000/tcp": {}, "8080/tcp": {}}
+            for port_spec in exposed:
+                port_num = port_spec.split('/')[0]
+                if port_num.isdigit():
+                    return int(port_num)
+    except Exception as exc:
+        logger.debug("Port auto-detect failed: %s", exc)
+    return None
+
+
 def _build_runtime_env(service: Service) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
@@ -95,7 +135,12 @@ def _build_runtime_env(service: Service) -> dict:
         if service.internal_port:
             env_vars['PORT'] = str(service.internal_port)
         else:
-            env_vars.setdefault('PORT', '8000')
+            # Auto-detect from Docker image EXPOSE if available
+            detected_port = _detect_exposed_port(service)
+            if detected_port:
+                env_vars.setdefault('PORT', str(detected_port))
+            else:
+                env_vars.setdefault('PORT', '8000')
 
     # Ensure the app binds to all interfaces so Docker health checks
     # (which probe 127.0.0.1) can reach it. Next.js standalone, for
