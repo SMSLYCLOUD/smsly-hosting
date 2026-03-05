@@ -25,13 +25,19 @@ logger = logging.getLogger(__name__)
 def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b""):
     """
     Build auth headers for a remote server.
-    Strategy: Bearer token if available, otherwise HMAC V2 signing.
+    Strategy: token auth when available, otherwise HMAC V2 signing.
     """
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # Prefer Bearer token (DRF auth — skips HMAC on the remote end)
+    # Prefer token auth when available (Bearer for smsly_ tokens, Token for DRF keys).
     if server.api_token:
-        headers["Authorization"] = f"Bearer {server.api_token}"
+        token = str(server.api_token).strip()
+        if token.lower().startswith("token ") or token.lower().startswith("bearer "):
+            headers["Authorization"] = token
+        elif token.startswith("smsly_"):
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers["Authorization"] = f"Token {token}"
         return headers
 
     # Fallback: HMAC V2 signing (inter-service auth)
@@ -76,8 +82,14 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         model = ManagedServer
         fields = ["name", "host", "api_url", "api_token", "gateway_secret", "ssh_password", "ssh_port", "is_primary"]
         extra_kwargs = {
+            "api_token": {"write_only": True, "required": False},
+            "gateway_secret": {"write_only": True, "required": False},
             "ssh_password": {"write_only": True, "required": False},
         }
+
+    def to_representation(self, instance):
+        # Return the stable read serializer shape after create/update operations.
+        return ManagedServerSerializer(instance).data
 
     def validate_host(self, value):
         """Strip protocol and port from host — should be bare IP or domain."""

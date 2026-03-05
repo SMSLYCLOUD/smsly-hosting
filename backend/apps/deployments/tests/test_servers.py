@@ -8,6 +8,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from ..models_servers import ManagedServer
+from ..views_servers import _build_remote_headers
 
 User = get_user_model()
 
@@ -43,6 +44,42 @@ class ManagedServerModelTests(TestCase):
         )
         self.assertTrue(server.is_primary)
 
+    def test_build_remote_headers_uses_correct_token_scheme(self):
+        bearer_server = ManagedServer.objects.create(
+            owner=self.user,
+            name="BearerSrv",
+            host="10.0.0.10",
+            api_url="https://bearer.example.com",
+            api_token="smsly_token_123",
+        )
+        token_server = ManagedServer.objects.create(
+            owner=self.user,
+            name="TokenSrv",
+            host="10.0.0.11",
+            api_url="https://token.example.com",
+            api_token="drf_token_abc",
+        )
+        prefixed_server = ManagedServer.objects.create(
+            owner=self.user,
+            name="PrefixedSrv",
+            host="10.0.0.12",
+            api_url="https://prefixed.example.com",
+            api_token="Token already_prefixed",
+        )
+
+        self.assertEqual(
+            _build_remote_headers(bearer_server)["Authorization"],
+            "Bearer smsly_token_123",
+        )
+        self.assertEqual(
+            _build_remote_headers(token_server)["Authorization"],
+            "Token drf_token_abc",
+        )
+        self.assertEqual(
+            _build_remote_headers(prefixed_server)["Authorization"],
+            "Token already_prefixed",
+        )
+
 
 class ManagedServerViewTests(TestCase):
     """Test the ManagedServer API endpoints."""
@@ -67,6 +104,10 @@ class ManagedServerViewTests(TestCase):
             "ssh_port": 22,
         })
         self.assertEqual(resp.status_code, 201)
+        self.assertIn("id", resp.data)
+        self.assertIn("status", resp.data)
+        self.assertNotIn("api_token", resp.data)
+        self.assertNotIn("gateway_secret", resp.data)
 
     def test_delete_server(self):
         server = ManagedServer.objects.create(
@@ -194,6 +235,9 @@ class ManagedServerViewTests(TestCase):
             {"name": "NewName"},
         )
         self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["id"], str(server.id))
+        self.assertIn("status", resp.data)
+        self.assertNotIn("api_token", resp.data)
+        self.assertNotIn("gateway_secret", resp.data)
         server.refresh_from_db()
         self.assertEqual(server.name, "NewName")
-

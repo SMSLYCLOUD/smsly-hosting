@@ -111,7 +111,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
     @patch('apps.deployments.views.smart_deploy_task.delay')
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=True)
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     def test_add_domain_does_not_queue_redeploy(self, _sync_mock, delay_mock):
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
@@ -130,7 +130,7 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(self.service.deployments.count(), 1)
 
     @patch('apps.deployments.views.smart_deploy_task.delay')
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=True)
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     def test_delete_domain_does_not_queue_redeploy(self, _sync_mock, delay_mock):
         self.service.custom_domains = ['instant.example.com']
         self.service.save(update_fields=['custom_domains'])
@@ -151,20 +151,21 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertNotIn('instant.example.com', self.service.custom_domains)
         self.assertEqual(self.service.deployments.count(), 1)
 
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=False)
-    def test_add_domain_rolls_back_when_caddy_sync_fails(self, _sync_mock):
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
+    def test_add_domain_keeps_domain_when_caddy_sync_fails(self, _sync_mock):
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
             {'domain': 'rollback.example.com'},
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertFalse(response.data.get('caddy_synced'))
         self.service.refresh_from_db()
-        self.assertEqual(self.service.custom_domains or [], [])
+        self.assertIn('rollback.example.com', self.service.custom_domains)
 
-    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value=False)
-    def test_delete_domain_rolls_back_when_caddy_sync_fails(self, _sync_mock):
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
+    def test_delete_domain_keeps_change_when_caddy_sync_fails(self, _sync_mock):
         self.service.custom_domains = ['rollback.example.com']
         self.service.save(update_fields=['custom_domains'])
 
@@ -174,9 +175,10 @@ class InstantCustomDomainApiTests(APITestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertFalse(response.data.get('caddy_synced'))
         self.service.refresh_from_db()
-        self.assertIn('rollback.example.com', self.service.custom_domains)
+        self.assertNotIn('rollback.example.com', self.service.custom_domains)
 
     def test_add_domain_rejects_global_conflict(self):
         Service.objects.create(

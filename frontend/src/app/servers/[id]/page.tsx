@@ -231,14 +231,18 @@ export default function ServerDetailPage() {
         setDomainSubmitting(true);
         try {
             const result = await serversApi.remoteAddDomain(serverId, newDomainService, newDomainName.trim());
-            if (result.status_code && result.status_code >= 400) {
-                toast({ title: 'Failed to add domain', description: JSON.stringify(result.data), variant: 'destructive' });
+            if (result?.caddy_synced === false) {
+                toast({
+                    title: `Domain ${newDomainName} saved with warning`,
+                    description: result?.warning || result?.message || 'Automatic routing sync failed.',
+                    variant: 'destructive',
+                });
             } else {
                 toast({ title: `Domain ${newDomainName} added` });
-                setNewDomainName('');
-                setAddingDomain(false);
-                fetchDomains();
             }
+            setNewDomainName('');
+            setAddingDomain(false);
+            fetchDomains();
         } catch {
             toast({ title: 'Failed to add domain', variant: 'destructive' });
         }
@@ -248,8 +252,16 @@ export default function ServerDetailPage() {
     const handleDeleteDomain = async (serviceId: string, domain: string) => {
         if (!await confirm({ title: 'Remove domain?', message: `Remove domain ${domain}?`, variant: 'destructive', confirmText: 'Remove' })) return;
         try {
-            await serversApi.remoteDeleteDomain(serverId, serviceId, domain);
-            toast({ title: `Domain ${domain} removed` });
+            const result = await serversApi.remoteDeleteDomain(serverId, serviceId, domain);
+            if (result?.caddy_synced === false) {
+                toast({
+                    title: `Domain ${domain} removed with warning`,
+                    description: result?.warning || result?.message || 'Automatic routing sync failed.',
+                    variant: 'destructive',
+                });
+            } else {
+                toast({ title: `Domain ${domain} removed` });
+            }
             fetchDomains();
         } catch {
             toast({ title: 'Failed to remove domain', variant: 'destructive' });
@@ -260,7 +272,7 @@ export default function ServerDetailPage() {
         setVerifyingDomain(domain);
         try {
             const result = await serversApi.remoteVerifyDomain(serverId, serviceId, domain);
-            if (result.data?.verified) {
+            if (result?.verified) {
                 toast({ title: `Domain ${domain} verified!` });
             } else {
                 toast({ title: 'Domain not yet verified', description: 'Check your DNS records', variant: 'destructive' });
