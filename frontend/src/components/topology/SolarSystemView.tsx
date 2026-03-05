@@ -64,6 +64,7 @@ function SolarSystemContent() {
     // Camera
     const camera = new THREE.PerspectiveCamera(60, containerEl.clientWidth / containerEl.clientHeight, 0.1, 1000);
     camera.position.set(0, 20, 40);
+    camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
     // Renderer
@@ -77,6 +78,8 @@ function SolarSystemContent() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+    controls.target.set(0, 0, 0);
+    controls.update();
     controlsRef.current = controls;
 
     // Lights
@@ -86,6 +89,10 @@ function SolarSystemContent() {
     const pointLight = new THREE.PointLight(0xffffff, 2, 100);
     pointLight.position.set(0, 0, 0); // Sun is the light source
     scene.add(pointLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(20, 30, 15);
+    scene.add(directionalLight);
 
     // Stars particles background
     const starsGeometry = new THREE.BufferGeometry();
@@ -134,12 +141,11 @@ function SolarSystemContent() {
                       serviceStatus === 'FAILED' ? 0xef4444 : 0x3b82f6;
 
     const starGeometry = new THREE.SphereGeometry(4, 32, 32);
-    const starMaterial = new THREE.MeshStandardMaterial({
+    const starMaterial = new THREE.MeshPhongMaterial({
         color: starColor,
         emissive: starColor,
-        emissiveIntensity: 2,
-        roughness: 0.4,
-        metalness: 0.8
+        emissiveIntensity: 1.6,
+        shininess: 80
     });
     const starMesh = new THREE.Mesh(starGeometry, starMaterial);
     starMesh.userData = { isSystemObj: true, type: 'SERVICE', node: service };
@@ -183,7 +189,7 @@ function SolarSystemContent() {
 
         const size = Math.random() * 1 + 0.8; // Random size 0.8 - 1.8
         const geometry = new THREE.SphereGeometry(size, 16, 16);
-        const material = new THREE.MeshStandardMaterial({ color: planetColor, roughness: 0.7 });
+        const material = new THREE.MeshPhongMaterial({ color: planetColor, shininess: 50 });
         const planet = new THREE.Mesh(geometry, material);
 
         // Orbit parameters
@@ -199,6 +205,8 @@ function SolarSystemContent() {
             angle,
             speed
         };
+        planet.position.x = Math.cos(angle) * distance;
+        planet.position.z = Math.sin(angle) * distance;
 
         // Orbit path (visual ring)
         const pathGeo = new THREE.RingGeometry(distance - 0.05, distance + 0.05, 64);
@@ -213,6 +221,11 @@ function SolarSystemContent() {
     });
 
     systemsRef.current = systemObjects;
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    if (renderer && camera) {
+      renderer.render(scene, camera);
+    }
 
   }, [systems, currentSystemIndex]);
 
