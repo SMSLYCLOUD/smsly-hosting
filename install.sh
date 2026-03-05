@@ -817,7 +817,6 @@ debug_platform_status() {
     echo ""
 
     echo "---- Local Health ----"
-    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
     curl -iSsf http://127.0.0.1/health 2>/dev/null | head -20 || echo "http://127.0.0.1/health failed"
     echo ""
 
@@ -873,7 +872,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal)
-    EP1_URL="http://127.0.0.1:8090/health"
+    EP1_URL="http://127.0.0.1/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
     if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
         echo -e "${GREEN}  ✓ Backend (local): HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -1383,8 +1382,8 @@ except Exception as e:
     PASS_COUNT=0
     FAIL_COUNT=0
 
-    # ── Check 1: Backend API health (internal — bypasses Caddy/Nginx) ──
-    EP1_URL="http://127.0.0.1:8090/health"
+    # ── Check 1: Backend API health (through Nginx on port 80) ──
+    EP1_URL="http://127.0.0.1/health"
     echo -e "${BLUE}  [1/3] Backend API health...${NC}"
     echo -e "${BLUE}        Endpoint: $EP1_URL${NC}"
     BACKEND_OK=false
@@ -2476,7 +2475,7 @@ for attempt in 1 2 3 4 5; do
     if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
+    elif curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
