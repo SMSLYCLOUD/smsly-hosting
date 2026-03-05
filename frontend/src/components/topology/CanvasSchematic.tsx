@@ -174,7 +174,7 @@ export function CanvasSchematic() {
       // Reconstruct TopologyNode for SidePanel
       const topoNode: TopologyNode = {
           id: node.data.originalId || node.id,
-          type: node.data.originalType || 'SERVICE',
+          type: node.data.originalType || 'service',
           data: node.data
       };
       setSelectedNode(topoNode);

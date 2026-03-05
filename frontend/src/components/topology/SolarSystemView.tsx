@@ -24,16 +24,21 @@ function SolarSystemContent() {
   const systems = useMemo(() => {
     if (!data) return [];
 
-    const serviceNodes = data.nodes.filter(n => n.type === 'SERVICE');
-    const addonNodes = data.nodes.filter(n => n.type === 'ADDON');
-    const edges = data.edges;
+    const normalizeNodeType = (value: unknown) => String(value || '').toLowerCase();
+    const serviceNodes = data.nodes.filter(n => normalizeNodeType(n.type) === 'service');
+    const addonNodes = data.nodes.filter(n => normalizeNodeType(n.type) === 'addon');
+    const addonById = new Map(addonNodes.map(node => [node.id, node]));
 
     return serviceNodes.map(service => {
-      // Find owned addons
-      const ownedAddons = edges
-        .filter(e => e.source === service.id && e.target.startsWith('addon-') && e.type === 'OWNS')
-        .map(e => addonNodes.find(n => n.id === e.target))
-        .filter(Boolean) as TopologyNode[];
+      // Addons are connected by service -> addon edges (DATABASE/CACHE/QUEUE/SEARCH/ADDON/etc.).
+      // We match by actual target node type instead of hardcoded prefixes/edge names.
+      const ownedAddons: TopologyNode[] = [];
+      for (const edge of data.edges) {
+        if (edge.source !== service.id) continue;
+        const addon = addonById.get(edge.target);
+        if (!addon) continue;
+        ownedAddons.push(addon);
+      }
 
       return {
         service,
@@ -124,8 +129,9 @@ function SolarSystemContent() {
     const systemObjects: any[] = [];
 
     // --- Star (Service) ---
-    const starColor = service.data.status === 'ACTIVE' ? 0x10b981 :
-                      service.data.status === 'FAILED' ? 0xef4444 : 0x3b82f6;
+    const serviceStatus = String(service.data.status || '').toUpperCase();
+    const starColor = serviceStatus === 'ACTIVE' ? 0x10b981 :
+                      serviceStatus === 'FAILED' ? 0xef4444 : 0x3b82f6;
 
     const starGeometry = new THREE.SphereGeometry(4, 32, 32);
     const starMaterial = new THREE.MeshStandardMaterial({
@@ -168,10 +174,11 @@ function SolarSystemContent() {
 
     // --- Planets (Addons) ---
     addons.forEach((addon, index) => {
+        const addonKind = String(addon.data.kind || '').toUpperCase();
         const planetColor =
-            addon.data.kind === 'DATABASE' ? 0xa78bfa : // Purple
-            addon.data.kind === 'CACHE' ? 0xf472b6 :    // Pink
-            addon.data.kind === 'QUEUE' ? 0xfbbf24 :    // Amber
+            addonKind === 'DATABASE' ? 0xa78bfa : // Purple
+            addonKind === 'CACHE' ? 0xf472b6 :    // Pink
+            addonKind === 'QUEUE' ? 0xfbbf24 :    // Amber
             0x9ca3af; // Gray
 
         const size = Math.random() * 1 + 0.8; // Random size 0.8 - 1.8
