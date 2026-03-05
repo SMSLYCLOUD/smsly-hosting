@@ -31,6 +31,88 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// ─── Remote Server Proxy Interceptor ────────────────────────────────────────
+// When a remote server is selected (smsly_active_server in localStorage),
+// automatically rewrite API calls to go through /servers/{id}/proxy/.
+// Paths that should NEVER be proxied (they're always local):
+const PROXY_BYPASS_PREFIXES = [
+  '/auth/',
+  '/servers/',
+  '/transfers/',
+  '/system/',
+  '/teams/',
+  '/licensing/',
+];
+
+api.interceptors.request.use((config) => {
+  if (typeof window === 'undefined') return config;
+
+  const activeServer = localStorage.getItem('smsly_active_server');
+  if (!activeServer) return config;
+
+  // Extract path from the URL relative to baseURL
+  const url = config.url || '';
+  // Only proxy /api/v1/ calls (relative paths like /services/ or absolute)
+  const relPath = url.startsWith('/api/v1/') ? url.slice(7) : url; // strip /api/v1 prefix if absolute
+
+  // Skip if it's a bypass path
+  if (PROXY_BYPASS_PREFIXES.some(prefix => relPath.startsWith(prefix))) {
+    return config;
+  }
+
+  // Skip if already going through proxy (prevent infinite loop)
+  if (relPath.includes('/proxy/')) return config;
+
+  // Rewrite: original method + path → POST to /servers/{id}/proxy/
+  const originalMethod = (config.method || 'GET').toUpperCase();
+  const originalPath = `/api/v1${relPath.startsWith('/') ? relPath : '/' + relPath}`;
+  const originalBody = config.data;
+
+  config.method = 'post';
+  config.url = `/servers/${activeServer}/proxy/`;
+  config.data = {
+    method: originalMethod,
+    path: originalPath,
+    body: originalBody || null,
+  };
+
+  // Mark this config so the response interceptor knows to unwrap it
+  (config as any)._isProxied = true;
+
+  return config;
+});
+
+// Response interceptor: unwrap proxy responses {status_code, data} → normal response
+api.interceptors.response.use(
+  (response) => {
+    if ((response.config as any)?._isProxied && response.data?.status_code !== undefined) {
+      const proxyStatusCode = response.data.status_code;
+      const proxyData = response.data.data;
+
+      // Rewrite the response to look like a direct API call
+      response.data = proxyData;
+      response.status = proxyStatusCode;
+
+      // If remote returned an error status, reject as an Axios error
+      if (proxyStatusCode >= 400) {
+        const error: any = new Error(`Remote server returned ${proxyStatusCode}`);
+        error.response = { ...response, status: proxyStatusCode, data: proxyData };
+        error.config = response.config;
+        return Promise.reject(error);
+      }
+    }
+    return response;
+  },
+  (error) => {
+    // If the proxy call itself failed (502, network error), provide a clear message
+    if ((error?.config as any)?._isProxied && error?.response?.status === 502) {
+      const msg = error.response?.data?.error || 'Remote server is unreachable';
+      error.message = msg;
+    }
+    return Promise.reject(error);
+  }
+);
+
 function isProtectedPath(path: string): boolean {
   const protectedPrefixes = [
     '/dashboard',
