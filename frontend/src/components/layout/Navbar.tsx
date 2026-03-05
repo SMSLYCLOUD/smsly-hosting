@@ -93,7 +93,7 @@ export function Navbar() {
     href: string;
     label: string;
     icon: any;
-    tier: 'primary' | 'secondary';
+    tier: 'primary' | 'secondary' | 'tertiary';
   }> = [
     { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
     { href: '/projects', label: 'Projects', icon: FolderKanban, tier: 'primary' },
@@ -101,27 +101,28 @@ export function Navbar() {
     { href: '/deployments', label: 'Deployments', icon: Rocket, tier: 'primary' },
     { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
     { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
-    { href: '/activity', label: 'Activity', icon: Activity, tier: 'secondary' },
-    { href: '/functions', label: 'Functions', icon: Zap, tier: 'secondary' },
+    { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
     { href: '/autoscaler', label: 'Autoscaler', icon: Gauge, tier: 'secondary' },
     { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
-    { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
-    { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
     { href: '/replication', label: 'Replication', icon: GitCompare, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
-    { href: '/templates', label: 'Templates', icon: FileCode, tier: 'secondary' },
-    { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'secondary' },
-    { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'secondary' },
-    { href: '/settings', label: 'Settings', icon: Settings, tier: 'secondary' },
+    { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
+    { href: '/activity', label: 'Activity', icon: Activity, tier: 'tertiary' },
+    { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
+    { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
+    { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
+    { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
+    { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
   ];
 
   if (user?.is_staff) {
-    authLinks.push({ href: '/backups', label: 'Backups', icon: Archive, tier: 'secondary' });
-    authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield, tier: 'secondary' });
+    authLinks.push({ href: '/backups', label: 'Backups', icon: Archive, tier: 'tertiary' });
+    authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield, tier: 'tertiary' });
   }
 
   const primaryAuthLinks = authLinks.filter((link) => link.tier === 'primary');
   const secondaryAuthLinks = authLinks.filter((link) => link.tier === 'secondary');
+  const tertiaryAuthLinks = authLinks.filter((link) => link.tier === 'tertiary');
 
   return (
     <nav
@@ -273,9 +274,10 @@ export function Navbar() {
         </div>
       </div>
 
+      {/* Row 2: Infrastructure links */}
       {user && secondaryAuthLinks.length > 0 && (
         <div className="hidden md:block border-t border-border/60 bg-card/70">
-          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1.5">
+          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1">
             <div className="flex items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {secondaryAuthLinks.map((link) => {
                 const Icon = link.icon;
@@ -285,7 +287,36 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      isActive
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Row 3: Management & tools links */}
+      {user && tertiaryAuthLinks.length > 0 && (
+        <div className="hidden md:block border-t border-border/40 bg-card/50">
+          <div className="container max-w-7xl mx-auto px-4 sm:px-6 py-1">
+            <div className="flex items-center justify-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {tertiaryAuthLinks.map((link) => {
+                const Icon = link.icon;
+                const isActive = pathname === link.href;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    prefetch={false}
+                    className={`shrink-0 px-3 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
                       isActive
                         ? 'bg-primary/10 text-primary'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
