@@ -2212,6 +2212,14 @@ class DomainConfigView(GenericAPIView):
             result = apply_caddyfile(caddyfile_content, cloudflare_token=cf_token)
             config.caddy_status = 'applied' if result['ok'] else 'error'
             config.save(update_fields=['caddy_status'])
+            if not result.get('ok'):
+                return Response(
+                    {
+                        'error': f"Config saved but Caddyfile apply failed: {result.get('message', 'unknown error')}",
+                        'caddy_status': config.caddy_status,
+                    },
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
         except Exception as e:
             config.caddy_status = 'error'
             config.save(update_fields=['caddy_status'])
