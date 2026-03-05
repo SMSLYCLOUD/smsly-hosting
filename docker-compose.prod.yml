@@ -124,6 +124,7 @@ services:
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
       - /opt/smsly-cache:/opt/smsly-cache
+      - backups_data:/app/backups
       # SECURITY: Use socket-proxy instead of direct socket mount
       # - /var/run/docker.sock:/var/run/docker.sock  # REMOVED - security risk
     healthcheck:
@@ -167,6 +168,7 @@ services:
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
       - /opt/smsly-cache:/opt/smsly-cache
+      - backups_data:/app/backups
     healthcheck:
       test:
         [
@@ -291,6 +293,7 @@ services:
       NODES: 0
       CONFIGS: 0
       SECRETS: 0
+      COMMIT: 1  # Required for backup service to snapshot container state
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro # Read-only mount
     healthcheck:
@@ -401,3 +404,4 @@ volumes:
       type: none
       o: bind
       device: /opt/smsly-hosting/caddy-config
+  backups_data:
