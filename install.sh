@@ -562,6 +562,21 @@ ensure_update_networks() {
     docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
 }
 
+ensure_caddy_config_permissions() {
+    local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+
+    mkdir -p "$caddy_config_dir"
+
+    # Backend container writes /caddy-config as uid/gid 1000 ("smsly").
+    # Keep this idempotent and non-fatal for heterogeneous hosts.
+    if id smsly >/dev/null 2>&1; then
+        chown -R smsly:smsly "$caddy_config_dir" 2>/dev/null || true
+    else
+        chown -R 1000:1000 "$caddy_config_dir" 2>/dev/null || true
+    fi
+    chmod -R 775 "$caddy_config_dir" 2>/dev/null || true
+}
+
 ensure_container_on_network() {
     local network_name="$1"
     local container_name="$2"
@@ -753,6 +768,7 @@ recover_runtime_stack() {
     echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
 
     ensure_update_networks
+    ensure_caddy_config_permissions
 
     if systemctl list-unit-files docker.service >/dev/null 2>&1; then
         echo -e "${BLUE}    -> Restarting Docker daemon...${NC}"
@@ -962,6 +978,8 @@ if [ -n "$UPDATE_MODE" ]; then
         echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"
         exit 1
     fi
+
+    ensure_caddy_config_permissions
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         echo -e "${RED}✗ No git repository found at $INSTALL_DIR. Run a fresh install first.${NC}"
@@ -2318,15 +2336,7 @@ CADDYEOF
 fi
 
 # ─── Create caddy-config volume directory for Settings UI writes ──────────────
-mkdir -p /opt/smsly-hosting/caddy-config
-# Backend container runs as uid/gid 1000 ("smsly"), so this directory
-# must be writable by that uid for Settings -> Infra "Save & Apply".
-if id smsly >/dev/null 2>&1; then
-    chown smsly:smsly /opt/smsly-hosting/caddy-config
-else
-    chown 1000:1000 /opt/smsly-hosting/caddy-config
-fi
-chmod 775 /opt/smsly-hosting/caddy-config
+ensure_caddy_config_permissions
 
 # ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
 if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
