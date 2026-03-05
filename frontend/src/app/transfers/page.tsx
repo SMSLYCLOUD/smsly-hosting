@@ -49,7 +49,19 @@ export default function TransfersPage() {
             setFormData({ transfer_type: 'SERVICE', service_id: '', target_server_ip: '', target_ssh_key: '', target_ssh_password: '' });
             loadTransfers();
         } catch (err: any) {
-            toast({ title: "Transfer Failed", description: err.response?.data?.error || "Error starting transfer", variant: "destructive" });
+            const data = err.response?.data;
+            let msg = 'Error starting transfer';
+            if (data) {
+                if (typeof data === 'string') msg = data;
+                else if (data.error) msg = data.error;
+                else if (data.non_field_errors) msg = data.non_field_errors.join(', ');
+                else {
+                    // DRF field-level validation errors: {field: ["msg"]}
+                    const parts = Object.entries(data).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+                    if (parts.length) msg = parts.join(' | ');
+                }
+            }
+            toast({ title: "Transfer Failed", description: msg, variant: "destructive" });
         } finally {
             setLoading(false);
         }

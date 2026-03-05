@@ -401,13 +401,13 @@ export default function ServersPage() {
                                                 <input
                                                     value={connectForm.host}
                                                     onChange={e => {
-                                                        const host = e.target.value;
-                                                        const autoUrl = host ? `http://${host.replace(/^https?:\/\//, '')}:8090` : '';
+                                                        const rawHost = e.target.value.replace(/^https?:\/\//, '').replace(/:\d+$/, '').trim();
+                                                        const autoUrl = rawHost ? `https://${rawHost}` : '';
                                                         setConnectForm(prev => ({
                                                             ...prev,
-                                                            host,
-                                                            // Auto-fill api_url only if it's empty or matches the previous auto-generated pattern
-                                                            api_url: (!prev.api_url || prev.api_url === `http://${prev.host.replace(/^https?:\/\//, '')}:8090`) ? autoUrl : prev.api_url,
+                                                            host: rawHost,
+                                                            // Auto-fill api_url only if it's empty or matches a previous auto-generated pattern
+                                                            api_url: (!prev.api_url || prev.api_url === `https://${prev.host}` || prev.api_url === `http://${prev.host}:8090` || prev.api_url === `http://${prev.host}`) ? autoUrl : prev.api_url,
                                                         }));
                                                     }}
                                                     placeholder="198.51.100.5"
@@ -419,7 +419,7 @@ export default function ServersPage() {
                                                 <input
                                                     value={connectForm.api_url}
                                                     onChange={e => setConnectForm({ ...connectForm, api_url: e.target.value })}
-                                                    placeholder="http://198.51.100.5:8090"
+                                                    placeholder="https://198.51.100.5"
                                                     className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                                                 />
                                             </div>
