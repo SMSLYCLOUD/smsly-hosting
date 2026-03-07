@@ -56,6 +56,7 @@ class TransferEngine:
             self.transfer.status = 'FAILED'
             self.transfer.error_message = str(e)
             self.transfer.target_ssh_key = ''  # Scrub private key on failure too
+            self.transfer.target_ssh_password = ''  # Scrub password on failure too
             self._log(f"Transfer failed: {e}")
             self.transfer.save()
 
@@ -93,35 +94,58 @@ class TransferEngine:
         self.transfer.save()
         self._log(f"Backup created: {self.source_backup.id}")
 
+    def _connect_ssh(self) -> paramiko.SSHClient:
+        """Open SSH using key auth (preferred) or password auth fallback."""
+        key_material = (self.transfer.target_ssh_key or '').strip()
+        password = (self.transfer.target_ssh_password or '').strip()
+        if not key_material and not password:
+            raise TransferError("Target SSH key or password is required.")
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        temp_key_path = None
+        try:
+            if key_material:
+                key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+                key_file.write(key_material)
+                key_file.close()
+                temp_key_path = key_file.name
+                os.chmod(temp_key_path, 0o600)
+                ssh.connect(
+                    self.transfer.target_server_ip,
+                    username='root',
+                    key_filename=temp_key_path,
+                    look_for_keys=False,
+                    allow_agent=False,
+                )
+            else:
+                ssh.connect(
+                    self.transfer.target_server_ip,
+                    username='root',
+                    password=password,
+                    look_for_keys=False,
+                    allow_agent=False,
+                )
+            return ssh
+        finally:
+            if temp_key_path and os.path.exists(temp_key_path):
+                os.unlink(temp_key_path)
+
     def _upload_to_target(self):
         self.transfer.status = 'UPLOADING'
         self.transfer.progress_percent = 30
         self._log(f"Uploading backup to {self.transfer.target_server_ip}...")
         self.transfer.save()
 
-        key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
-        key_file.write(self.transfer.target_ssh_key)
-        key_file.close()
-        os.chmod(key_file.name, 0o600)
-
+        ssh = self._connect_ssh()
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                self.transfer.target_server_ip,
-                username='root',
-                key_filename=key_file.name
-            )
-
             sftp = ssh.open_sftp()
             remote_path = f"/tmp/{os.path.basename(self.source_backup.file_path)}"
             sftp.put(self.source_backup.file_path, remote_path)
             sftp.close()
-            ssh.close()
-
             self._log("Upload complete")
         finally:
-            os.unlink(key_file.name)
+            ssh.close()
 
     def _restore_on_target(self):
         self.transfer.status = 'RESTORING'
@@ -131,20 +155,8 @@ class TransferEngine:
 
         # Call target API to restore
 
-        key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
-        key_file.write(self.transfer.target_ssh_key)
-        key_file.close()
-        os.chmod(key_file.name, 0o600)
-
+        ssh = self._connect_ssh()
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                self.transfer.target_server_ip,
-                username='root',
-                key_filename=key_file.name
-            )
-
             remote_path = f"/tmp/{os.path.basename(self.source_backup.file_path)}"
             safe_path = shlex.quote(remote_path)
             safe_sid = shlex.quote(str(self.service.id))
@@ -155,10 +167,9 @@ class TransferEngine:
             if exit_status != 0:
                 raise TransferError(f"Remote restore failed: {stderr.read().decode()}")
 
-            ssh.close()
             self._log("Remote restore complete")
         finally:
-            os.unlink(key_file.name)
+            ssh.close()
 
     def _dns_cutover(self):
         self.transfer.status = 'DNS_CUTOVER'
@@ -184,5 +195,6 @@ class TransferEngine:
         self.transfer.completed_at = timezone.now()
         self.transfer.rollback_deadline = timezone.now() + timedelta(hours=48)
         self.transfer.target_ssh_key = ''  # Scrub private key after completion
+        self.transfer.target_ssh_password = ''  # Scrub password after completion
         self._log("Transfer completed successfully")
         self.transfer.save()

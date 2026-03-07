@@ -48,6 +48,8 @@ const PROXY_BYPASS_PREFIXES = [
   '/system/',
   '/teams/',
   '/licensing/',
+  '/ai/',
+  '/cloud/',
 ];
 
 api.interceptors.request.use((config) => {
@@ -503,13 +505,16 @@ export const aiApi = {
   getProviders: async (includeBalance: boolean = false): Promise<AIProvidersResponse> => {
     const response = await api.get('/ai/providers/', {
       params: includeBalance ? { include_balance: 'true' } : {},
-    });
+      _skipRemoteProxy: true,
+    } as any);
     return response.data;
   },
 
   /** Update AI provider settings (admin only). */
   updateProviders: async (data: Record<string, string>): Promise<any> => {
-    const response = await api.post('/ai/providers/update/', data);
+    const response = await api.post('/ai/providers/update/', data, {
+      _skipRemoteProxy: true,
+    });
     return response.data;
   },
 
@@ -518,6 +523,8 @@ export const aiApi = {
     const response = await api.post('/ai/test/', {
       prompt,
       system_prompt: systemPrompt,
+    }, {
+      _skipRemoteProxy: true,
     });
     return response.data;
   },
@@ -529,7 +536,9 @@ export const aiApi = {
     recommendations: string[];
     provider: string;
   }> => {
-    const res = await api.post('/ai/analyze/', { logs, context });
+    const res = await api.post('/ai/analyze/', { logs, context }, {
+      _skipRemoteProxy: true,
+    });
     return res.data;
   },
 
@@ -543,13 +552,17 @@ export const aiApi = {
     estimates: Record<string, number>;
     ai_recommendations: string;
   }> => {
-    const res = await api.post('/ai/cost-estimate/', config);
+    const res = await api.post('/ai/cost-estimate/', config, {
+      _skipRemoteProxy: true,
+    });
     return res.data;
   },
 
   /** Get latest intelligence report */
   getReport: async (): Promise<any> => {
-    const res = await api.get('/ai/report/');
+    const res = await api.get('/ai/report/', {
+      _skipRemoteProxy: true,
+    } as any);
     return res.data;
   },
 
@@ -565,7 +578,9 @@ export const aiApi = {
       fix_result: string;
     }[];
   }> => {
-    const res = await api.get('/ai/anomalies/');
+    const res = await api.get('/ai/anomalies/', {
+      _skipRemoteProxy: true,
+    } as any);
     return res.data;
   },
 };
@@ -575,7 +590,9 @@ export const aiApi = {
 export const codeAnalysisApi = {
   /** Trigger async codebase analysis for a service */
   analyze: async (serviceId: string): Promise<{ task_id: string; status: string; service: string }> => {
-    const res = await api.post('/cloud/code-analysis/analyze/', { service_id: serviceId });
+    const res = await api.post('/cloud/code-analysis/analyze/', { service_id: serviceId }, {
+      _skipRemoteProxy: true,
+    });
     return res.data;
   },
 
@@ -591,7 +608,9 @@ export const codeAnalysisApi = {
     };
     error?: string;
   }> => {
-    const res = await api.get(`/cloud/code-analysis/result/${taskId}/`);
+    const res = await api.get(`/cloud/code-analysis/result/${taskId}/`, {
+      _skipRemoteProxy: true,
+    } as any);
     return res.data;
   },
 };

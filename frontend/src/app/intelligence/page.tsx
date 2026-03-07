@@ -77,7 +77,10 @@ export default function IntelligencePage() {
     try {
       const [prov, deps, anoms, rep] = await Promise.all([
         aiApi.getProviders(true),
-        api.get('/deployments/', { params: { page_size: 20 } }).then(r => r.data?.results || r.data || []).catch(() => []),
+        api.get('/deployments/', {
+          params: { page_size: 20 },
+          _skipRemoteProxy: true,
+        } as any).then(r => r.data?.results || r.data || []).catch(() => []),
         aiApi.getAnomalies().then(r => r.anomalies).catch(() => []),
         aiApi.getReport().catch(() => null)
       ]);
