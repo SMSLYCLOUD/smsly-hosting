@@ -27,6 +27,10 @@ export default function TransfersPage() {
     });
     const [transfers, setTransfers] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const hasTargetIp = formData.target_server_ip.trim().length > 0;
+    const hasAuth = sshAuthMethod === 'password'
+        ? formData.target_ssh_password.trim().length > 0
+        : formData.target_ssh_key.trim().length > 0;
 
     useEffect(() => {
         servicesApi.list().then(setServices);
@@ -97,7 +101,7 @@ export default function TransfersPage() {
                                             <SelectTrigger><SelectValue /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="SERVICE">Single Service</SelectItem>
-                                                <SelectItem value="FULL">Full Server (All Services)</SelectItem>
+                                                <SelectItem value="FULL" disabled>Full Server (Coming Soon)</SelectItem>
                                             </SelectContent>
                                         </Select>
                                     </div>
@@ -117,7 +121,11 @@ export default function TransfersPage() {
                                             </Select>
                                         </div>
                                     )}
-                                    <Button onClick={() => setStep(2)} className="w-full">
+                                    <Button
+                                        onClick={() => setStep(2)}
+                                        disabled={formData.transfer_type === 'SERVICE' && !formData.service_id}
+                                        className="w-full"
+                                    >
                                         Next <ArrowRight className="ml-2 w-4 h-4" />
                                     </Button>
                                 </>
@@ -182,7 +190,13 @@ export default function TransfersPage() {
                                     </div>
                                     <div className="flex gap-2">
                                         <Button variant="outline" onClick={() => setStep(1)} className="flex-1">Back</Button>
-                                        <Button onClick={() => setStep(3)} className="flex-1">Next</Button>
+                                        <Button
+                                            onClick={() => setStep(3)}
+                                            disabled={!hasTargetIp || !hasAuth}
+                                            className="flex-1"
+                                        >
+                                            Next
+                                        </Button>
                                     </div>
                                 </>
                             )}
