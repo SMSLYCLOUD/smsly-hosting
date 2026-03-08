@@ -76,7 +76,15 @@ export default function IntelligencePage() {
   const fetchData = useCallback(async () => {
     try {
       const [prov, deps, anoms, rep] = await Promise.all([
-        aiApi.getProviders(true),
+        aiApi.getProviders(false).catch(() => ({
+          providers: [],
+          mode: 'mock',
+          mode_label: 'Mock AI (provider status unavailable)',
+          active_count: 0,
+          total_available: 0,
+          degraded: true,
+          degraded_reason: 'providers_request_failed',
+        }) as any),
         api.get('/deployments/', {
           params: { page_size: 20 },
           _skipRemoteProxy: true,

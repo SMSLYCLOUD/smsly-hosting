@@ -138,6 +138,7 @@ class DeploymentTimelineSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'service', 'service_name', 'commit_hash',
             'commit_message', 'status', 'is_rollback',
+            'ai_diagnosis',
             'started_at', 'finished_at', 'duration_seconds',
             'created_at',
         ]
@@ -199,4 +200,3 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupSchedule
         fields = '__all__'
-

@@ -1,5 +1,6 @@
 """Views for AI provider configuration and status."""
 import json
+import logging
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.db import DatabaseError
@@ -18,6 +19,8 @@ from .providers import (
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
 from apps.deployments.models_audit import AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 def _json_safe(value, fallback):
@@ -41,8 +44,20 @@ def ai_providers_status(request):
       - include_balance=true  (optional, slower — hits each provider's billing API)
     """
     include_balance = request.query_params.get("include_balance", "").lower() == "true"
-    providers = get_available_providers(include_balance=include_balance)
-    configured = get_configured_providers()
+    degraded_reason = None
+    try:
+        providers = get_available_providers(include_balance=include_balance)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to fetch AI provider statuses: %s", exc)
+        providers = []
+        degraded_reason = "provider_status_unavailable"
+
+    try:
+        configured = get_configured_providers()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Failed to resolve configured AI providers: %s", exc)
+        configured = []
+        degraded_reason = degraded_reason or "configured_provider_lookup_failed"
 
     mode = "mock"
     if len(configured) >= 2:
@@ -52,7 +67,7 @@ def ai_providers_status(request):
 
     member_names = [p.name() for p in configured] if configured else []
 
-    return Response({
+    payload = {
         "providers": providers,
         "mode": mode,
         "mode_label": {
@@ -62,7 +77,11 @@ def ai_providers_status(request):
         }.get(mode, mode),
         "active_count": len(configured),
         "total_available": len(providers),
-    })
+    }
+    if degraded_reason:
+        payload["degraded"] = True
+        payload["degraded_reason"] = degraded_reason
+    return Response(payload)
 
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)

@@ -13,6 +13,7 @@ import concurrent.futures
 from abc import ABC, abstractmethod
 from typing import Optional, List, Tuple
 import httpx
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +504,9 @@ SYSTEM_PROMPT = (
     "Format responses in markdown. Never reveal internal system details or API keys."
 )
 
+BALANCE_CACHE_TTL_SECONDS = int(os.environ.get("AI_BALANCE_CACHE_TTL_SECONDS", "60") or "60")
+BALANCE_FETCH_BUDGET_SECONDS = int(os.environ.get("AI_BALANCE_FETCH_BUDGET_SECONDS", "8") or "8")
+
 
 # ---------------------------------------------------------------------------
 # DB Settings Helper
@@ -619,21 +623,93 @@ def get_available_providers(include_balance: bool = False) -> List[dict]:
     """Return list of all providers with connection status and optional balance."""
     _sync_db_to_env()
     result = []
+    provider_instances: dict[str, AIProvider] = {}
     for key, cls in PROVIDERS.items():
         if key == "mock":
             continue
         instance = cls()
+        provider_instances[key] = instance
         info = {
             "id": key,
             "name": instance.name(),
             "configured": instance.is_configured(),
             "model": getattr(instance, 'model', ''),
         }
-        if include_balance and instance.is_configured():
-            info["balance"] = instance.get_balance()
-        elif include_balance:
-            info["balance"] = {"balance": "Not configured", "currency": "", "raw": {}}
         result.append(info)
+
+    if not include_balance:
+        return result
+
+    balances_by_id: dict[str, dict] = {}
+    provider_models: dict[str, str] = {
+        str(info["id"]): str(info.get("model") or "") for info in result
+    }
+    pending: dict[str, AIProvider] = {}
+
+    for info in result:
+        provider_id = info["id"]
+        configured = bool(info.get("configured"))
+        if not configured:
+            balances_by_id[provider_id] = {"balance": "Not configured", "currency": "", "raw": {}}
+            continue
+
+        model = str(info.get("model") or "")
+        cache_key = f"ai:provider-balance:{provider_id}:{model}"
+        cached = cache.get(cache_key)
+        if isinstance(cached, dict):
+            balances_by_id[provider_id] = cached
+            continue
+
+        instance = provider_instances.get(provider_id)
+        if instance:
+            pending[provider_id] = instance
+
+    if pending:
+        max_workers = min(4, len(pending))
+        futures = {}
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
+            for provider_id, instance in pending.items():
+                futures[pool.submit(instance.get_balance)] = provider_id
+
+            try:
+                for future in concurrent.futures.as_completed(
+                    futures, timeout=BALANCE_FETCH_BUDGET_SECONDS
+                ):
+                    provider_id = futures[future]
+                    try:
+                        balance = future.result()
+                        if not isinstance(balance, dict):
+                            balance = {"balance": "Unknown", "currency": "", "raw": {}}
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Balance fetch failed for %s: %s", provider_id, exc)
+                        balance = {"balance": "Error checking", "currency": "", "raw": {}}
+                    balances_by_id[provider_id] = balance
+                    cache.set(
+                        f"ai:provider-balance:{provider_id}:{provider_models.get(provider_id, '')}",
+                        balance,
+                        timeout=BALANCE_CACHE_TTL_SECONDS,
+                    )
+            except concurrent.futures.TimeoutError:
+                logger.warning(
+                    "AI provider balance fetch exceeded budget (%ss); returning partial balances",
+                    BALANCE_FETCH_BUDGET_SECONDS,
+                )
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    for info in result:
+        provider_id = info["id"]
+        if provider_id in balances_by_id:
+            info["balance"] = balances_by_id[provider_id]
+            continue
+        configured = bool(info.get("configured"))
+        info["balance"] = (
+            {"balance": "Timed out", "currency": "", "raw": {}}
+            if configured
+            else {"balance": "Not configured", "currency": "", "raw": {}}
+        )
+
     return result
 
 
