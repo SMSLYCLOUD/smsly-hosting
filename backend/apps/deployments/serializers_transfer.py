@@ -40,7 +40,8 @@ class ServerTransferSerializer(serializers.ModelSerializer):
 
 class ServerTransferCreateSerializer(serializers.Serializer):
     source_server_ip = serializers.IPAddressField(required=False)
-    target_server_ip = serializers.IPAddressField()
+    target_server_ip = serializers.IPAddressField(required=False)
+    target_server_id = serializers.UUIDField(required=False)
     target_ssh_key = serializers.CharField(
         write_only=True, trim_whitespace=False, required=False, default='', allow_blank=True,
     )
@@ -60,6 +61,8 @@ class ServerTransferCreateSerializer(serializers.Serializer):
     def validate(self, attrs):
         transfer_type = attrs.get('transfer_type')
         service_id = attrs.get('service_id')
+        target_server_ip = attrs.get('target_server_ip')
+        target_server_id = attrs.get('target_server_id')
 
         if transfer_type == 'SERVICE' and not service_id:
             raise serializers.ValidationError(
@@ -70,12 +73,18 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                 {'service_id': "service_id must not be provided when transfer_type=FULL."}
             )
 
+        if not target_server_ip and not target_server_id:
+            raise serializers.ValidationError(
+                {'target_server_ip': "target_server_ip or target_server_id is required."}
+            )
+
         # Require at least one SSH auth method
         has_key = bool(attrs.get('target_ssh_key', '').strip())
         has_password = bool(attrs.get('target_ssh_password', '').strip())
-        if not has_key and not has_password:
+        has_managed_target = bool(target_server_id)
+        if not has_key and not has_password and not has_managed_target:
             raise serializers.ValidationError(
-                "Either target_ssh_key or target_ssh_password is required."
+                "Provide target_ssh_key, target_ssh_password, or target_server_id with saved SSH credentials."
             )
 
         return attrs

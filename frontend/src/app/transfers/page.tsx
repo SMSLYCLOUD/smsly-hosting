@@ -24,6 +24,7 @@ export default function TransfersPage() {
         transfer_type: 'SERVICE',
         service_id: '',
         target_server_ip: '',
+        target_server_id: '',
         target_ssh_key: '',
         target_ssh_password: '',
     });
@@ -33,6 +34,7 @@ export default function TransfersPage() {
     const hasAuth = sshAuthMethod === 'password'
         ? formData.target_ssh_password.trim().length > 0
         : formData.target_ssh_key.trim().length > 0;
+    const usingConnectedTarget = formData.target_server_id.trim().length > 0;
 
     const isValidIp = (value: string) => {
         const v4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
@@ -88,7 +90,14 @@ export default function TransfersPage() {
             await api.post('/transfers/', formData);
             toast({ title: "Transfer Initiated", description: "Migration process started." });
             setStep(1);
-            setFormData({ transfer_type: 'SERVICE', service_id: '', target_server_ip: '', target_ssh_key: '', target_ssh_password: '' });
+            setFormData({
+                transfer_type: 'SERVICE',
+                service_id: '',
+                target_server_ip: '',
+                target_server_id: '',
+                target_ssh_key: '',
+                target_ssh_password: '',
+            });
             loadTransfers();
         } catch (err: any) {
             const data = err.response?.data;
@@ -169,11 +178,20 @@ export default function TransfersPage() {
                                         <Input
                                             placeholder="1.2.3.4"
                                             value={formData.target_server_ip}
-                                            onChange={e => setFormData({...formData, target_server_ip: e.target.value})}
+                                            onChange={e => setFormData({
+                                                ...formData,
+                                                target_server_ip: e.target.value,
+                                                target_server_id: '',
+                                            })}
                                         />
                                     </div>
                                     <div className="space-y-2">
                                         <Label>Authentication</Label>
+                                        {usingConnectedTarget && (
+                                            <p className="text-xs text-emerald-600">
+                                                Using saved SSH credentials from selected connected server.
+                                            </p>
+                                        )}
                                         <div className="flex items-center gap-2 mb-3">
                                             <button
                                                 onClick={() => setSshAuthMethod('password')}
@@ -221,13 +239,13 @@ export default function TransfersPage() {
                                     </div>
                                     <div className="flex gap-2">
                                         <Button variant="outline" onClick={() => setStep(1)} className="flex-1">Back</Button>
-                                        <Button
-                                            onClick={() => setStep(3)}
-                                            disabled={!hasTargetIp || !hasAuth}
-                                            className="flex-1"
-                                        >
-                                            Next
-                                        </Button>
+                                            <Button
+                                                onClick={() => setStep(3)}
+                                                disabled={!hasTargetIp || !(hasAuth || usingConnectedTarget)}
+                                                className="flex-1"
+                                            >
+                                                Next
+                                            </Button>
                                     </div>
                                 </>
                             )}
@@ -306,7 +324,11 @@ export default function TransfersPage() {
                                                         variant="outline"
                                                         disabled={!canUseAsTarget}
                                                         onClick={() => {
-                                                            setFormData((prev) => ({ ...prev, target_server_ip: hostValue }));
+                                                            setFormData((prev) => ({
+                                                                ...prev,
+                                                                target_server_ip: hostValue,
+                                                                target_server_id: server.id,
+                                                            }));
                                                             setStep(2);
                                                         }}
                                                     >

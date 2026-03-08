@@ -778,6 +778,7 @@ export interface ManagedServer {
   api_url: string;
   api_token?: string;
   ssh_port: number;
+  has_ssh_credentials?: boolean;
   is_primary: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
   last_health_check: string | null;

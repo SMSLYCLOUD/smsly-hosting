@@ -204,18 +204,23 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
 
 # --- Serializers -------------------------------------------------------------
 class ManagedServerSerializer(serializers.ModelSerializer):
+    has_ssh_credentials = serializers.SerializerMethodField()
+
+    def get_has_ssh_credentials(self, obj):
+        return bool(str(obj.ssh_password or '').strip() or str(obj.ssh_key or '').strip())
+
     class Meta:
         model = ManagedServer
         fields = [
             "id", "name", "host", "api_url", "ssh_port",
             "is_primary", "status", "last_health_check",
             "server_version", "services_count", "created_at",
-            "provision_status", "role", "wg_address",
+            "provision_status", "role", "wg_address", "has_ssh_credentials",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
-            "role", "wg_address",
+            "role", "wg_address", "has_ssh_credentials",
         ]
 
 

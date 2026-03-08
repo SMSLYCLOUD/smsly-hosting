@@ -1,6 +1,7 @@
 """Metrics adapter — connects to real Prometheus with fail-closed fallbacks."""
 import time
 import logging
+import re
 from typing import List, Dict, Any
 from datetime import datetime, timezone
 
@@ -27,51 +28,95 @@ class MetricsAdapter:
     # Public API
     # ------------------------------------------------------------------
 
-    def get_cpu_history(self, service_id: str,
+    def get_cpu_history(self, service_ref,
                         duration: str = '1h') -> List[Dict[str, Any]]:
-        data = self._query_prometheus(
-            f'rate(container_cpu_usage_seconds_total'
-            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m]) * 100',
-            duration,
-        )
-        return data if data else []
+        pattern = self._service_pattern(service_ref)
+        queries = [
+            (
+                'rate(container_cpu_usage_seconds_total'
+                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}}[5m]) * 100'
+            ),
+            (
+                'rate(container_cpu_usage_seconds_total'
+                f'{{container_label_com_docker_compose_service=~"{pattern}"}}[5m]) * 100'
+            ),
+            (
+                'rate(container_cpu_usage_seconds_total'
+                f'{{container_label_service_id=~"{pattern}"}}[5m]) * 100'
+            ),
+        ]
+        return self._query_first_non_empty(queries, duration)
 
-    def get_memory_history(self, service_id: str,
+    def get_memory_history(self, service_ref,
                            duration: str = '1h') -> List[Dict[str, Any]]:
-        data = self._query_prometheus(
-            f'container_memory_usage_bytes'
-            f'{{container_label_com_docker_compose_service="{service_id}"}} / 1024 / 1024',
-            duration,
-        )
-        return data if data else []
+        pattern = self._service_pattern(service_ref)
+        queries = [
+            (
+                'container_memory_usage_bytes'
+                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}} / 1024 / 1024'
+            ),
+            (
+                'container_memory_usage_bytes'
+                f'{{container_label_com_docker_compose_service=~"{pattern}"}} / 1024 / 1024'
+            ),
+            (
+                'container_memory_usage_bytes'
+                f'{{container_label_service_id=~"{pattern}"}} / 1024 / 1024'
+            ),
+        ]
+        return self._query_first_non_empty(queries, duration)
 
-    def get_network_history(self, service_id: str,
+    def get_network_history(self, service_ref,
                             duration: str = '1h') -> List[Dict[str, Any]]:
-        data = self._query_prometheus(
-            f'rate(container_network_receive_bytes_total'
-            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])',
-            duration,
-        )
-        return data if data else []
+        pattern = self._service_pattern(service_ref)
+        queries = [
+            (
+                'rate(container_network_receive_bytes_total'
+                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}}[5m])'
+            ),
+            (
+                'rate(container_network_receive_bytes_total'
+                f'{{container_label_com_docker_compose_service=~"{pattern}"}}[5m])'
+            ),
+            (
+                'rate(container_network_receive_bytes_total'
+                f'{{container_label_service_id=~"{pattern}"}}[5m])'
+            ),
+        ]
+        return self._query_first_non_empty(queries, duration)
 
-    def get_disk_history(self, service_id: str,
+    def get_disk_history(self, service_ref,
                          duration: str = '1h') -> List[Dict[str, Any]]:
-        data = self._query_prometheus(
-            f'(rate(container_fs_reads_bytes_total'
-            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])'
-            f' + rate(container_fs_writes_bytes_total'
-            f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])) / 1024',
-            duration,
-        )
-        return data if data else []
+        pattern = self._service_pattern(service_ref)
+        queries = [
+            (
+                '(rate(container_fs_reads_bytes_total'
+                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}}[5m])'
+                ' + rate(container_fs_writes_bytes_total'
+                f'{{container_label_smsly_blue_green_canonical_name=~"{pattern}"}}[5m])) / 1024'
+            ),
+            (
+                '(rate(container_fs_reads_bytes_total'
+                f'{{container_label_com_docker_compose_service=~"{pattern}"}}[5m])'
+                ' + rate(container_fs_writes_bytes_total'
+                f'{{container_label_com_docker_compose_service=~"{pattern}"}}[5m])) / 1024'
+            ),
+            (
+                '(rate(container_fs_reads_bytes_total'
+                f'{{container_label_service_id=~"{pattern}"}}[5m])'
+                ' + rate(container_fs_writes_bytes_total'
+                f'{{container_label_service_id=~"{pattern}"}}[5m])) / 1024'
+            ),
+        ]
+        return self._query_first_non_empty(queries, duration)
 
-    def get_current(self, service_id: str) -> Dict[str, Any]:
+    def get_current(self, service_ref) -> Dict[str, Any]:
         """
         Return a current snapshot used by the dashboard cards.
         """
-        cpu = self.get_cpu_history(service_id, '1h')
-        memory = self.get_memory_history(service_id, '1h')
-        network = self.get_network_history(service_id, '1h')
+        cpu = self.get_cpu_history(service_ref, '1h')
+        memory = self.get_memory_history(service_ref, '1h')
+        network = self.get_network_history(service_ref, '1h')
 
         if not cpu and not memory and not network:
             return {
@@ -157,6 +202,32 @@ class MetricsAdapter:
                             PROMETHEUS_URL, e)
             self._prometheus_ok = False
             return None
+
+    def _service_pattern(self, service_ref) -> str:
+        identifiers = self._service_identifiers(service_ref)
+        escaped = [re.escape(item) for item in identifiers if item]
+        if not escaped:
+            return re.escape(str(service_ref))
+        return "|".join(escaped)
+
+    @staticmethod
+    def _service_identifiers(service_ref) -> List[str]:
+        if isinstance(service_ref, str):
+            return [service_ref]
+
+        values: List[str] = []
+        for attr in ("id", "name", "compose_main_service", "public_domain"):
+            raw = getattr(service_ref, attr, None)
+            if raw is not None:
+                values.append(str(raw))
+        return [value for value in values if value]
+
+    def _query_first_non_empty(self, queries: List[str], duration: str) -> List[Dict[str, Any]]:
+        for query in queries:
+            data = self._query_prometheus(query, duration)
+            if data:
+                return data
+        return []
 
     @staticmethod
     def _latest_value(series: List[Dict[str, Any]]) -> float:
