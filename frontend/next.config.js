@@ -38,10 +38,10 @@ const nextConfig = {
           : 'http://localhost:8000/api/:path*',
       },
       {
-        source: '/accounts/:path*',
+        source: '/accounts/:provider(github|google)/:path*',
         destination: process.env.INTERNAL_API_URL
-            ? `${process.env.INTERNAL_API_URL}/accounts/:path*`
-            : 'http://localhost:8000/accounts/:path*',
+            ? `${process.env.INTERNAL_API_URL}/accounts/:provider/:path*`
+            : 'http://localhost:8000/accounts/:provider/:path*',
       },
     ]
   },
