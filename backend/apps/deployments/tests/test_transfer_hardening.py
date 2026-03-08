@@ -9,6 +9,7 @@ from rest_framework.test import APITestCase
 
 from apps.deployments.models import PlatformConfig, Service
 from apps.deployments.models_backup import ServiceBackup
+from apps.deployments.models_servers import ManagedServer
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.licensing.models import PlatformLicense, PlatformTier
@@ -118,6 +119,56 @@ class ServerTransferHardeningTests(APITestCase):
         self.assertEqual(transfer.target_ssh_key, '')
         self.assertEqual(transfer.target_ssh_password, 'root-password-here')
         delay_mock.assert_called_once_with(str(transfer.id))
+
+    @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
+    def test_create_transfer_uses_connected_server_password_when_auth_not_sent(self, delay_mock):
+        cfg = PlatformConfig.load()
+        cfg.server_ip = '10.0.0.10'
+        cfg.save(update_fields=['server_ip'])
+
+        target = ManagedServer.objects.create(
+            owner=self.user,
+            name='Target VPS',
+            host='203.0.113.60',
+            ssh_password='target-root-password',
+        )
+
+        payload = {
+            'transfer_type': 'SERVICE',
+            'service_id': str(self.service.id),
+            'target_server_id': str(target.id),
+        }
+        response = self.client.post(self.url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        transfer = ServerTransfer.objects.get(id=response.data['id'])
+        self.assertEqual(transfer.target_server_ip, '203.0.113.60')
+        self.assertEqual(transfer.target_ssh_key, '')
+        self.assertEqual(transfer.target_ssh_password, 'target-root-password')
+        delay_mock.assert_called_once_with(str(transfer.id))
+
+    @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
+    def test_create_transfer_rejects_connected_server_without_saved_ssh_credentials(self, delay_mock):
+        cfg = PlatformConfig.load()
+        cfg.server_ip = '10.0.0.10'
+        cfg.save(update_fields=['server_ip'])
+
+        target = ManagedServer.objects.create(
+            owner=self.user,
+            name='Target VPS',
+            host='203.0.113.61',
+        )
+
+        payload = {
+            'transfer_type': 'SERVICE',
+            'service_id': str(self.service.id),
+            'target_server_id': str(target.id),
+        }
+        response = self.client.post(self.url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('No SSH credentials', str(response.data.get('error', '')))
+        delay_mock.assert_not_called()
 
     @override_settings(ALLOW_STUB_TRANSFER_PIPELINE=False)
     @patch('apps.deployments.services.transfer_service.BackupService.backup_service')

@@ -160,7 +160,14 @@ class TransferEngine:
             remote_path = f"/tmp/{os.path.basename(self.source_backup.file_path)}"
             safe_path = shlex.quote(remote_path)
             safe_sid = shlex.quote(str(self.service.id))
-            cmd = f"cd /opt/smsly-hosting/backend && python manage.py restore_service_backup --file {safe_path} --service-id {safe_sid}"
+            safe_service_name = shlex.quote(str(self.service.name))
+            cmd = (
+                "cd /opt/smsly-hosting/backend && "
+                "python manage.py restore_service_backup "
+                f"--file {safe_path} "
+                f"--service-id {safe_sid} "
+                f"--service-name {safe_service_name}"
+            )
             stdin, stdout, stderr = ssh.exec_command(cmd)
             exit_status = stdout.channel.recv_exit_status()
 
