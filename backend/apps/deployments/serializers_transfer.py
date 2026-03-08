@@ -42,10 +42,10 @@ class ServerTransferCreateSerializer(serializers.Serializer):
     source_server_ip = serializers.IPAddressField(required=False)
     target_server_ip = serializers.IPAddressField()
     target_ssh_key = serializers.CharField(
-        write_only=True, trim_whitespace=False, required=False, default='',
+        write_only=True, trim_whitespace=False, required=False, default='', allow_blank=True,
     )
     target_ssh_password = serializers.CharField(
-        write_only=True, required=False, default='',
+        write_only=True, required=False, default='', allow_blank=True,
     )
     transfer_type = serializers.ChoiceField(choices=['SERVICE', 'FULL'])
     service_id = serializers.UUIDField(required=False)
