@@ -75,6 +75,84 @@ def _db_metrics_fallback(service: Service, duration: str):
     }
 
 
+def _series_has_activity(series):
+    for point in series or []:
+        try:
+            if float((point or {}).get('value', 0) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _current_has_activity(current):
+    if not isinstance(current, dict):
+        return False
+    keys = (
+        'cpu_percent',
+        'memory_usage',
+        'memory_limit',
+        'memory_percent',
+        'network_rx_kb',
+        'network_tx_kb',
+    )
+    for key in keys:
+        try:
+            if float(current.get(key, 0) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _live_metrics_fallback(service: Service):
+    latest = (
+        service.deployments.filter(status='ACTIVE')
+        .order_by('-created_at')
+        .first()
+    )
+    if not latest or not latest.container_id:
+        return None
+
+    from .tasks_metrics import _collect_container_stats  # local import to avoid eager deps
+
+    stats = _collect_container_stats(str(latest.container_id))
+    if not stats:
+        return None
+
+    cpu_limit = float(stats.get('cpu_limit') or 0.0)
+    cpu_usage = float(stats.get('cpu_usage') or 0.0)
+    cpu_percent = (cpu_usage / cpu_limit * 100.0) if cpu_limit > 0 else 0.0
+
+    mem_usage = float(stats.get('memory_usage') or 0.0)
+    mem_limit = float(stats.get('memory_limit') or 0.0)
+    mem_percent = (mem_usage / mem_limit * 100.0) if mem_limit > 0 else 0.0
+
+    rx_kb = float(stats.get('network_rx_bytes') or 0.0) / 1024
+    tx_kb = float(stats.get('network_tx_bytes') or 0.0) / 1024
+    disk_kb = (
+        float(stats.get('disk_read_bytes') or 0.0)
+        + float(stats.get('disk_write_bytes') or 0.0)
+    ) / 1024
+
+    now = timezone.now().isoformat()
+    return {
+        'cpu': [{'timestamp': now, 'value': round(cpu_percent, 2)}],
+        'memory': [{'timestamp': now, 'value': round(mem_usage, 2)}],
+        'network': [{'timestamp': now, 'value': round(rx_kb + tx_kb, 2)}],
+        'disk': [{'timestamp': now, 'value': round(disk_kb, 2)}],
+        'current': {
+            'cpu_percent': round(cpu_percent, 2),
+            'memory_usage': round(mem_usage, 2),
+            'memory_limit': round(mem_limit, 2),
+            'memory_percent': round(mem_percent, 2),
+            'network_rx_kb': round(rx_kb, 2),
+            'network_tx_kb': round(tx_kb, 2),
+        },
+        'source': 'docker_live',
+    }
+
+
 class MetricsResponseSerializer(serializers.Serializer):
     cpu = serializers.JSONField()
     memory = serializers.JSONField()
@@ -120,10 +198,18 @@ class MetricsViewSet(viewsets.GenericViewSet):
             disk = metrics_adapter.get_disk_history(service, duration)
             current = metrics_adapter.get_current(service)
 
-            if not cpu and not memory and not network and not disk:
+            has_activity = any(
+                _series_has_activity(series)
+                for series in (cpu, memory, network, disk)
+            ) or _current_has_activity(current)
+
+            if not has_activity:
                 fallback = _db_metrics_fallback(service, duration)
                 if fallback:
                     return Response(fallback)
+                live = _live_metrics_fallback(service)
+                if live:
+                    return Response(live)
 
             return Response({
                 'cpu': cpu,
