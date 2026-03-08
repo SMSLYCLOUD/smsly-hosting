@@ -9,6 +9,7 @@ from apps.deployments.tasks_ecosystem import (
     _normalize_env_vars,
     _resolve_env_placeholders,
     _runtime_watch_defaults,
+    _select_shared_addon_anchor,
 )
 
 
@@ -73,3 +74,26 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
         self.assertEqual(service.repository_url, "https://github.com/owner/repo")
         self.assertEqual(service.branch, "master")
         self.assertEqual(service.internal_port, 8080)
+
+    def test_select_shared_addon_anchor_prefers_smsly_core(self):
+        services = [
+            SimpleNamespace(name="smsly-voice", repository_url="https://github.com/acme/smsly-voice"),
+            SimpleNamespace(name="smsly-core", repository_url="https://github.com/acme/smsly-core"),
+            SimpleNamespace(name="smsly-marketing", repository_url="https://github.com/acme/smsly-marketing"),
+        ]
+
+        anchor = _select_shared_addon_anchor(services)
+
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.name, "smsly-core")
+
+    def test_select_shared_addon_anchor_falls_back_to_first(self):
+        services = [
+            SimpleNamespace(name="payments-api", repository_url="https://github.com/acme/payments-api"),
+            SimpleNamespace(name="web-frontend", repository_url="https://github.com/acme/web-frontend"),
+        ]
+
+        anchor = _select_shared_addon_anchor(services)
+
+        self.assertIsNotNone(anchor)
+        self.assertEqual(anchor.name, "payments-api")

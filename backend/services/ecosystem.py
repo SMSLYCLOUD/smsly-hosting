@@ -500,6 +500,9 @@ def analyze_ecosystem(repos_data: List[dict]) -> dict:
                 if isinstance(svc, dict):
                     svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
             _apply_plan_repo_defaults(plan["services"], repos_data)
+            _apply_smsly_core_intelligence(plan["services"])
+            plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
+            plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
         plan["ai_provider"] = provider
         return plan
     except (json.JSONDecodeError, IndexError) as e:
@@ -549,6 +552,209 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
     return env_map
 
 
+_SMSLY_CORE_ALIASES = {
+    "smsly-core",
+    "smsly-platform-api",
+    "platform-api",
+    "smsly-core-api",
+}
+
+
+def _normalize_token(value: Any) -> str:
+    """Normalize names/repo refs for fuzzy matching."""
+    token = str(value or "").strip().lower()
+    token = token.replace("_", "-").replace(" ", "-")
+    return token.strip("-")
+
+
+def _repo_short_name(service: dict) -> str:
+    """Extract short repo name from owner/repo ref."""
+    repo_ref = str(service.get("repo") or "").strip().lower()
+    if not repo_ref:
+        return ""
+    return repo_ref.split("/")[-1]
+
+
+def _is_smsly_service(service: dict) -> bool:
+    """Return True when service looks like part of the SMSLY family."""
+    repo_name = _repo_short_name(service)
+    svc_name = _normalize_token(service.get("name"))
+    return "smsly" in repo_name or "smsly" in svc_name
+
+
+def _is_smsly_core_service(service: dict) -> bool:
+    """Return True when service is the ecosystem core/platform API."""
+    repo_name = _normalize_token(_repo_short_name(service))
+    svc_name = _normalize_token(service.get("name"))
+    candidates = {repo_name, svc_name}
+    if any(item in _SMSLY_CORE_ALIASES for item in candidates):
+        return True
+    return any(
+        item.startswith("smsly") and ("core" in item or "platform-api" in item)
+        for item in candidates
+        if item
+    )
+
+
+def _coerce_depends_on(raw_depends: Any) -> List[str]:
+    """Normalize depends_on payload to a flat list."""
+    if isinstance(raw_depends, list):
+        return [str(item).strip() for item in raw_depends if str(item).strip()]
+    if isinstance(raw_depends, str):
+        text = raw_depends.strip()
+        if not text:
+            return []
+        if "," in text:
+            return [token.strip() for token in text.split(",") if token.strip()]
+        return [text]
+    return []
+
+
+def _safe_order(value: Any, default: int = 99) -> int:
+    """Best-effort int parser for deploy_order values."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_deploy_sequence(services: List[dict]) -> List[str]:
+    """Build deploy sequence names from ordered, non-skipped services."""
+    ordered = sorted(
+        [svc for svc in services if isinstance(svc, dict) and not svc.get("skip")],
+        key=lambda svc: (_safe_order(svc.get("deploy_order"), 99), str(svc.get("name") or _repo_short_name(svc))),
+    )
+    return ["addons"] + [str(svc.get("name") or _repo_short_name(svc)) for svc in ordered]
+
+
+def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List[dict]:
+    """Rebuild addon shared_by map from service-level addon declarations."""
+    addon_map: Dict[str, set] = {}
+
+    if isinstance(existing_addons, list):
+        for addon in existing_addons:
+            if not isinstance(addon, dict):
+                continue
+            addon_type = str(addon.get("type") or "").strip().upper()
+            if not addon_type:
+                continue
+            addon_map.setdefault(addon_type, set())
+            for svc_name in addon.get("shared_by", []) or []:
+                svc_text = str(svc_name or "").strip()
+                if svc_text:
+                    addon_map[addon_type].add(svc_text)
+
+    for service in services:
+        if not isinstance(service, dict) or service.get("skip"):
+            continue
+        service_name = str(service.get("name") or _repo_short_name(service)).strip()
+        if not service_name:
+            continue
+        for addon in service.get("addons", []) or []:
+            addon_type = str(addon or "").strip().upper()
+            if not addon_type:
+                continue
+            addon_map.setdefault(addon_type, set()).add(service_name)
+
+    return [
+        {"type": addon_type, "shared_by": sorted(shared_by)}
+        for addon_type, shared_by in sorted(addon_map.items())
+    ]
+
+
+def _apply_smsly_core_intelligence(services: List[dict]):
+    """
+    Apply deterministic SMSLY ecosystem rules.
+
+    When a SMSLY core service is present, enforce:
+    - core deploys first
+    - core gets baseline infra env/addons
+    - SMSLY sibling services depend on core and receive core URL envs
+    """
+    deployable = [
+        svc for svc in services
+        if isinstance(svc, dict) and not svc.get("skip")
+    ]
+    if not deployable:
+        return
+
+    core = next((svc for svc in deployable if _is_smsly_core_service(svc)), None)
+    if not core:
+        return
+
+    core_name = str(core.get("name") or _repo_short_name(core) or "smsly-core").strip()
+    core_repo_short = _repo_short_name(core)
+    core_refs = {_normalize_token(core_name), _normalize_token(core_repo_short)}
+
+    core["name"] = core_name
+    if not str(core.get("stack") or "").strip():
+        core["stack"] = "django"
+    if not str(core.get("build") or "").strip():
+        core["build"] = "nixpacks"
+
+    core_env = _env_plan_map(core.get("env_vars", {}))
+    core_env.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
+    core_env.setdefault("REDIS_URL", "{{REDIS_URL}}")
+    core_env.setdefault("SECRET_KEY", "{{GENERATE}}")
+    core_env.setdefault("GATEWAY_SECRET", "{{GENERATE}}")
+    core["env_vars"] = core_env
+
+    core_addons = {
+        str(addon or "").strip().upper()
+        for addon in (core.get("addons") or [])
+        if str(addon or "").strip()
+    }
+    core_addons.update({"POSTGRES", "REDIS"})
+    core["addons"] = sorted(core_addons)
+
+    core_depends = [
+        dep for dep in _coerce_depends_on(core.get("depends_on", []))
+        if _normalize_token(dep) not in core_refs
+    ]
+    core["depends_on"] = core_depends
+
+    for service in deployable:
+        if service is core or not _is_smsly_service(service):
+            continue
+
+        depends = _coerce_depends_on(service.get("depends_on", []))
+        depends_norm = {_normalize_token(dep) for dep in depends}
+        if not depends_norm.intersection(core_refs):
+            depends.append(core_name)
+        service["depends_on"] = depends
+
+        env_map = _env_plan_map(service.get("env_vars", {}))
+        core_placeholder = f"{{{{SERVICE:{core_name}}}}}"
+        env_map.setdefault("SMSLY_PLATFORM_API_URL", core_placeholder)
+        env_map.setdefault("SMSLY_CORE_URL", core_placeholder)
+        service["env_vars"] = env_map
+
+        addon_set = {
+            str(addon or "").strip().upper()
+            for addon in (service.get("addons") or [])
+            if str(addon or "").strip()
+        }
+        service_key = _normalize_token(service.get("name") or _repo_short_name(service))
+        if "sms" in service_key:
+            addon_set.update({"POSTGRES", "REDIS"})
+        elif "marketing" in service_key:
+            addon_set.add("POSTGRES")
+        elif "voice" in service_key:
+            addon_set.add("REDIS")
+        service["addons"] = sorted(addon_set)
+
+    ordered = sorted(
+        deployable,
+        key=lambda svc: (
+            0 if svc is core else 1,
+            _safe_order(svc.get("deploy_order"), 99),
+            str(svc.get("name") or _repo_short_name(svc)),
+        ),
+    )
+    for index, service in enumerate(ordered, 1):
+        service["deploy_order"] = index
+
+
 def _apply_plan_repo_defaults(services: List[dict], repos_data: List[dict]):
     """Fill missing service branch values from GitHub repo metadata."""
     by_full_repo: Dict[str, str] = {}
@@ -591,7 +797,6 @@ def _apply_plan_repo_defaults(services: List[dict], repos_data: List[dict]):
 def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
     """Build a basic deploy plan from heuristics when AI fails."""
     services = []
-    all_addons = {}
     order = 1
 
     for rd in repos_data:
@@ -613,12 +818,6 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
             "deploy_order": order,
         }
 
-        # Track shared addons
-        for addon in svc["addons"]:
-            if addon not in all_addons:
-                all_addons[addon] = []
-            all_addons[addon].append(name)
-
         services.append(svc)
         order += 1
 
@@ -632,9 +831,9 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
         s["deploy_order"] = i
         sorted_services.append(s)
 
-    addons_list = [{"type": k, "shared_by": v} for k, v in all_addons.items()]
-
-    deploy_sequence = ["addons"] + [s["name"] for s in sorted_services]
+    _apply_smsly_core_intelligence(sorted_services)
+    addons_list = _rebuild_addons_manifest(sorted_services, [])
+    deploy_sequence = _build_deploy_sequence(sorted_services)
 
     return {
         "services": sorted_services,
