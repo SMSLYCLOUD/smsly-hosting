@@ -3,19 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CloudNeuron | Service Rechecking</title>
+  <title>CloudNeuron | Service Waking Up</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg-1: #040814;
-      --bg-2: #0b1c3a;
-      --panel: rgba(8, 20, 44, 0.86);
-      --line: rgba(84, 160, 255, 0.28);
-      --text: #e8f3ff;
-      --muted: #9eb6d5;
-      --accent: #12d6a0;
-      --accent-2: #3da7ff;
-      --danger: #ff8a8a;
+      --bg-1: #030713;
+      --bg-2: #0a1a38;
+      --panel: rgba(8, 18, 40, 0.9);
+      --line: rgba(76, 148, 255, 0.3);
+      --text: #ebf4ff;
+      --muted: #9db2cc;
+      --ok: #20d59c;
+      --warn: #ffd27d;
+      --err: #ff8f8f;
+      --btn: #19c78f;
+      --btn-text: #032218;
     }
     * { box-sizing: border-box; }
     body {
@@ -24,62 +26,76 @@
       font-family: "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
       color: var(--text);
       background:
-        radial-gradient(1200px 500px at 10% -10%, #12366e66, transparent 60%),
-        radial-gradient(900px 420px at 90% 0%, #0d8f8a55, transparent 60%),
-        linear-gradient(145deg, var(--bg-1), var(--bg-2));
+        radial-gradient(1200px 500px at 5% -10%, #184c9955, transparent 60%),
+        radial-gradient(900px 420px at 95% 0%, #0d968155, transparent 60%),
+        linear-gradient(150deg, var(--bg-1), var(--bg-2));
       display: grid;
       place-items: center;
-      padding: 24px;
+      padding: 22px;
     }
-    .card {
-      width: min(720px, 100%);
+    .panel {
+      width: min(760px, 100%);
       border: 1px solid var(--line);
-      background: var(--panel);
       border-radius: 18px;
-      padding: 26px;
-      box-shadow: 0 24px 60px rgba(2, 10, 24, 0.55);
+      background: var(--panel);
+      box-shadow: 0 24px 60px rgba(2, 10, 24, 0.56);
       backdrop-filter: blur(8px);
+      overflow: hidden;
+    }
+    .bar {
+      height: 3px;
+      width: 100%;
+      background: linear-gradient(90deg, #21d6a0, #48a7ff, #21d6a0);
+      background-size: 200% 100%;
+      animation: flow 2.8s linear infinite;
+    }
+    @keyframes flow {
+      0% { background-position: 0 0; }
+      100% { background-position: 200% 0; }
+    }
+    .content {
+      padding: 26px;
     }
     .badge {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 10px;
       font-size: 12px;
-      letter-spacing: .05em;
       text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
       border: 1px solid var(--line);
       border-radius: 999px;
-      color: var(--muted);
-      margin-bottom: 12px;
+      padding: 6px 10px;
+      margin-bottom: 10px;
     }
     h1 {
       margin: 0 0 10px;
-      font-size: clamp(24px, 4vw, 36px);
+      font-size: clamp(24px, 4vw, 35px);
       line-height: 1.2;
       letter-spacing: -0.02em;
     }
     p {
       margin: 0 0 12px;
       color: var(--muted);
-      font-size: 15px;
       line-height: 1.5;
+      font-size: 15px;
     }
     .host {
-      margin: 14px 0 20px;
-      padding: 10px 12px;
-      border-radius: 10px;
+      margin-top: 14px;
       border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #5eb3ff;
+      background: rgba(5, 14, 31, 0.65);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      color: var(--accent-2);
-      background: rgba(6, 16, 36, 0.6);
       word-break: break-all;
     }
     .actions {
-      margin-top: 14px;
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
+      margin-top: 16px;
     }
     button, a.btn {
       appearance: none;
@@ -92,70 +108,92 @@
       text-decoration: none;
       transition: transform .12s ease, filter .2s ease, background .2s ease;
     }
-    button:hover, a.btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
-    .primary { background: linear-gradient(135deg, var(--accent), #0fb1d0); color: #03211e; }
+    button:hover, a.btn:hover { transform: translateY(-1px); filter: brightness(1.05); }
+    .primary {
+      background: linear-gradient(135deg, var(--btn), #11b8d8);
+      color: var(--btn-text);
+    }
     .ghost {
-      background: rgba(16, 36, 76, 0.55);
+      background: rgba(13, 30, 63, 0.58);
       border: 1px solid var(--line);
       color: var(--text);
     }
-    .foot {
-      margin-top: 16px;
-      color: var(--danger);
-      font-size: 12px;
-    }
     .status {
-      margin-top: 12px;
+      margin-top: 14px;
       min-height: 20px;
       font-size: 13px;
       color: var(--muted);
     }
-    .status[data-tone="ok"] { color: var(--accent); }
-    .status[data-tone="warn"] { color: #ffd27a; }
-    .status[data-tone="err"] { color: var(--danger); }
+    .status[data-tone="ok"] { color: var(--ok); }
+    .status[data-tone="warn"] { color: var(--warn); }
+    .status[data-tone="err"] { color: var(--err); }
+    .hint {
+      margin-top: 14px;
+      font-size: 12px;
+      color: #9ab0c9;
+    }
   </style>
 </head>
 <body>
-  <main class="card">
-    <div class="badge">CloudNeuron Routing</div>
-    <h1>Service is waking up</h1>
-    <p>
-      This domain currently has no active route or is being revalidated after a health check failure.
-      The platform will keep checking and recover automatically when the service is healthy.
-    </p>
-    <div class="host" id="host"></div>
-    <div class="actions">
-      <button class="primary" id="recheck-btn" type="button">Recheck Now</button>
-      <a class="btn ghost" href="https://cloud.smsly.cloud/services">Open Services Dashboard</a>
-    </div>
-    <div class="status" id="status"></div>
-    <div class="foot">If this persists, trigger "Recheck Now" in the service Health tab.</div>
+  <main class="panel">
+    <div class="bar"></div>
+    <section class="content">
+      <div class="badge">CloudNeuron Routing</div>
+      <h1>Service is waking up</h1>
+      <p>
+        This route is currently unavailable while health checks are retried.
+        CloudNeuron will automatically reconnect traffic when the service returns healthy.
+      </p>
+      <div class="host" id="host">loading...</div>
+
+      <div class="actions">
+        <button class="primary" id="recheck-btn" type="button">Recheck Now</button>
+        <a class="btn ghost" id="dashboard-link" href="#" rel="noopener noreferrer">Open Dashboard</a>
+      </div>
+
+      <div class="status" id="status"></div>
+      <div class="hint">
+        If this page persists, inspect the service Health tab and latest deployment runtime logs.
+      </div>
+    </section>
   </main>
 
   <script>
     const host = window.location.host || "unknown-host";
-    document.getElementById("host").textContent = host;
+    const hostEl = document.getElementById("host");
     const statusEl = document.getElementById("status");
-    const recheckBtn = document.getElementById("recheck-btn");
-    const controlPlane = "https://cloud.smsly.cloud";
+    const btnEl = document.getElementById("recheck-btn");
+    const dashboardLink = document.getElementById("dashboard-link");
 
-    function setStatus(message, tone = "") {
+    hostEl.textContent = host;
+
+    function setStatus(message, tone) {
       statusEl.textContent = message;
-      statusEl.dataset.tone = tone;
+      statusEl.dataset.tone = tone || "";
     }
 
+    function guessControlPlaneUrl() {
+      const labels = (window.location.hostname || "").split(".").filter(Boolean);
+      if (labels.length >= 3) {
+        return "https://" + labels.slice(-3).join(".");
+      }
+      return "https://" + (window.location.hostname || "");
+    }
+
+    const guessedControlPlane = guessControlPlaneUrl();
+    dashboardLink.href = guessedControlPlane + "/services";
+
     async function triggerRecheck() {
-      recheckBtn.disabled = true;
-      setStatus("Requesting route recheck...", "");
+      btnEl.disabled = true;
+      setStatus("Requesting health recheck...", "");
       try {
-        const url = `${controlPlane}/api/v1/system/route-recheck/?host=${encodeURIComponent(host)}`;
-        const response = await fetch(url, { method: "GET", mode: "cors", cache: "no-store" });
+        const response = await fetch(
+          "/api/v1/system/route-recheck/?host=" + encodeURIComponent(host),
+          { method: "GET", cache: "no-store" }
+        );
+
         let payload = {};
-        try {
-          payload = await response.json();
-        } catch (err) {
-          payload = {};
-        }
+        try { payload = await response.json(); } catch (_) { payload = {}; }
 
         if (response.ok) {
           setStatus("Recheck queued. Retrying this page in 5 seconds...", "ok");
@@ -164,22 +202,24 @@
         }
 
         if (response.status === 429) {
-          setStatus(payload.error || "Recheck already requested. Retrying in 10 seconds...", "warn");
+          setStatus(
+            payload.error || "Recheck already requested. Retrying in 10 seconds...",
+            "warn"
+          );
           window.setTimeout(() => window.location.reload(), 10000);
           return;
         }
 
-        setStatus(payload.error || "Recheck failed. Open Services Dashboard to inspect health.", "err");
-      } catch (err) {
-        setStatus("Unable to contact control plane. Check DNS/SSL and retry.", "err");
+        setStatus(payload.error || "Recheck failed. Open dashboard for diagnostics.", "err");
+      } catch (_) {
+        setStatus("Unable to contact control plane API from fallback route.", "err");
       } finally {
-        window.setTimeout(() => {
-          recheckBtn.disabled = false;
-        }, 2000);
+        window.setTimeout(() => { btnEl.disabled = false; }, 2000);
       }
     }
 
-    recheckBtn.addEventListener("click", triggerRecheck);
+    btnEl.addEventListener("click", triggerRecheck);
   </script>
 </body>
 </html>
+
