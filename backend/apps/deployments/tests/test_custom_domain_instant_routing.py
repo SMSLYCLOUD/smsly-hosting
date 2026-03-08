@@ -73,6 +73,28 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
             2,
         )
+        self.assertIn('rewrite * /notice', caddyfile)
+        self.assertIn('reverse_proxy localhost:8090', caddyfile)
+
+    def test_wildcard_routes_known_hosts_and_sends_unknown_to_notice(self):
+        Service.objects.create(
+            name='known-wildcard-service',
+            owner=self.user,
+            provider=self.provider,
+            public_domain='known.cloud.smsly.cloud',
+        )
+        config = SimpleNamespace(
+            domain='cloud.smsly.cloud',
+            use_ssl=True,
+            wildcard_subdomains=True,
+            cloudflare_api_token='token-123',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
+        self.assertIn('handle @known_hosts {\n        reverse_proxy localhost:8081', caddyfile)
+        self.assertIn('handle {\n        rewrite * /notice\n        reverse_proxy localhost:8090', caddyfile)
 
 
 class InstantCustomDomainApiTests(APITestCase):

@@ -128,6 +128,57 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     return blocks
 
 
+def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
+    """
+    Return service domains that should be routed through Traefik under wildcard TLS.
+
+    Unknown wildcard subdomains are intentionally excluded so they can be
+    redirected to the public notice page instead of exposing generic proxy 404s.
+    """
+    hosts: set[str] = set()
+    if not wildcard_domain:
+        return []
+
+    try:
+        from apps.deployments.models import Service
+
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.all().only("id", "public_domain", "custom_domains"):
+            public_domain = ""
+            if isinstance(service.public_domain, str) and service.public_domain.strip():
+                try:
+                    public_domain = normalize_domain(service.public_domain)
+                except ValueError:
+                    logger.warning(
+                        "Skipping invalid public domain %r for service %s",
+                        service.public_domain,
+                        service.id,
+                    )
+            if public_domain.endswith(suffix):
+                hosts.add(public_domain)
+
+            for item in (service.custom_domains or []):
+                value = item.strip() if isinstance(item, str) else ""
+                if not value:
+                    continue
+                try:
+                    value = normalize_domain(value)
+                except ValueError:
+                    logger.warning(
+                        "Skipping invalid custom domain %r for service %s",
+                        item,
+                        service.id,
+                    )
+                    continue
+                if value.endswith(suffix):
+                    hosts.add(value)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not load wildcard known hosts: %s", exc)
+        return []
+
+    return sorted(hosts)
+
+
 def generate_caddyfile(config) -> str:
     """
     Generate Caddyfile content from a PlatformConfig instance.
@@ -181,14 +232,34 @@ def generate_caddyfile(config) -> str:
         # Use {env.CLOUDFLARE_API_TOKEN} (Caddy env syntax) instead of the
         # raw token to match install.sh and avoid embedding secrets in files.
         if config.wildcard_subdomains and cloudflare_token:
-            sections.append(
-                f"""*.{domain} {{
-    tls {{
-        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}
-    }}
-    reverse_proxy localhost:8081
-}}"""
+            wildcard_known_hosts = _get_wildcard_known_hosts(domain)
+            wildcard_lines = [
+                f"*.{domain} {{",
+                "    tls {",
+                "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
+                "    }",
+            ]
+
+            if wildcard_known_hosts:
+                wildcard_lines.extend(
+                    [
+                        f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
+                        "    handle @known_hosts {",
+                        "        reverse_proxy localhost:8081",
+                        "    }",
+                    ]
+                )
+
+            wildcard_lines.extend(
+                [
+                    "    handle {",
+                    "        rewrite * /notice",
+                    "        reverse_proxy localhost:8090",
+                    "    }",
+                    "}",
+                ]
             )
+            sections.append("\n".join(wildcard_lines))
 
     # Always include :80 catch-all so the IP always works.
     # In SSL mode this is a fallback; in IP/HTTP mode this is the only block.
