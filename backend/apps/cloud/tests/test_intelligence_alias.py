@@ -49,3 +49,21 @@ class CloudIntelligenceAliasTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["response"], "Hello no slash")
+
+    @patch("apps.cloud.views.ask_with_fallback", side_effect=RuntimeError("provider down"))
+    def test_ask_alias_fails_open_when_provider_errors(self, _mock_ask):
+        response = self.client.post(
+            "/api/v1/cloud/intelligence/ask/",
+            {"message": "hello"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data.get("degraded"))
+        self.assertEqual(response.data.get("provider"), "Mock AI (degraded)")
+
+    @patch("apps.cloud.views.get_available_providers", side_effect=RuntimeError("provider status failed"))
+    def test_providers_endpoint_fails_open(self, _mock_providers):
+        response = self.client.get("/api/v1/cloud/intelligence/providers/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
