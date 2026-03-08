@@ -55,7 +55,7 @@ export function UserNav() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-            <a href="/accounts/logout/">
+            <a href="/logout">
                 Log out
                 <DropdownMenuShortcut>⇧⌘Q</DropdownMenuShortcut>
             </a>
