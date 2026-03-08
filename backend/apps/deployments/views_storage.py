@@ -1,8 +1,11 @@
 """Views Storage module."""
 import posixpath
+import uuid
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets, permissions, serializers, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from .models_storage import Volume
 from .models import Service
@@ -13,25 +16,41 @@ class VolumeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Volume
         fields = '__all__'
+        read_only_fields = ('service',)
 
 
 class VolumeViewSet(viewsets.ModelViewSet):
     serializer_class = VolumeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def _validated_service_uuid(self):
+        service_pk = self.kwargs.get('service_pk')
+        if not service_pk:
+            return None
+        try:
+            return uuid.UUID(str(service_pk))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
     def get_queryset(self):
-        if 'service_pk' in self.kwargs:
+        service_uuid = self._validated_service_uuid()
+        if service_uuid:
             return Volume.objects.filter(
-                service_id=self.kwargs['service_pk'],
+                service_id=service_uuid,
                 service__owner=self.request.user,
             )
         return Volume.objects.none()
 
     def perform_create(self, serializer):
-        service = Service.objects.get(pk=self.kwargs['service_pk'])
+        service_uuid = self._validated_service_uuid()
+        if not service_uuid:
+            raise NotFound("Service not found.")
+        try:
+            service = Service.objects.get(pk=service_uuid)
+        except (Service.DoesNotExist, DjangoValidationError):
+            raise NotFound("Service not found.")
         # M-1 fix: verify the requesting user owns this service
         if service.owner != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("You do not own this service.")
         serializer.save(service=service)
 

@@ -434,15 +434,20 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Body: { "method": "GET", "path": "/api/v1/services/", "body": null }
         """
         import posixpath
+        import json as json_mod
         from urllib.parse import urlparse
 
         server = self.get_object()
         method = request.data.get("method", "GET").upper()
-        path = request.data.get("path", "")
+        raw_path = str(request.data.get("path", "") or "")
         body = request.data.get("body")
 
-        # C-2 fix: normalize path to collapse ".." traversal sequences
-        path = posixpath.normpath(path)
+        # Preserve query params while normalizing just the path segment.
+        path_part, _, query_part = raw_path.partition("?")
+        normalized_path = posixpath.normpath(path_part or "/")
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        path = f"{normalized_path}?{query_part}" if query_part else normalized_path
 
         # Reject any path containing ".." even after normalization
         if ".." in path:
@@ -475,8 +480,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             )
 
         url = f"{server.api_url.rstrip('/')}{path}"
-        import json as json_mod
-        body_bytes = json_mod.dumps(body).encode() if body else b""
+        body_bytes = json_mod.dumps(body, sort_keys=True).encode() if body is not None else b""
         headers = _build_remote_headers(server, method=method, path=path, body=body_bytes)
 
         try:

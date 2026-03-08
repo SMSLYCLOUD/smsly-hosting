@@ -37,6 +37,26 @@ function isServerProxyUrl(url?: string): boolean {
   return /\/servers\/[^/]+\/proxy\/?$/.test(cleanUrl);
 }
 
+function appendQuery(path: string, params: Record<string, any> | undefined): string {
+  if (!params || typeof params !== 'object') return path;
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null) {
+          searchParams.append(key, String(item));
+        }
+      });
+      return;
+    }
+    searchParams.append(key, String(value));
+  });
+  const qs = searchParams.toString();
+  if (!qs) return path;
+  return path.includes('?') ? `${path}&${qs}` : `${path}?${qs}`;
+}
+
 const REMOTE_PROXY_FAIL_KEY = 'smsly_remote_proxy_failures';
 
 function readRemoteProxyFailures(): Record<string, number> {
@@ -118,11 +138,15 @@ api.interceptors.request.use((config) => {
 
   // Rewrite: original method + path → POST to /servers/{id}/proxy/
   const originalMethod = (config.method || 'GET').toUpperCase();
-  const originalPath = `/api/v1${relPath.startsWith('/') ? relPath : '/' + relPath}`;
+  let originalPath = `/api/v1${relPath.startsWith('/') ? relPath : '/' + relPath}`;
+  originalPath = appendQuery(originalPath, (config as any).params);
   const originalBody = config.data;
 
   config.method = 'post';
   config.url = `/servers/${activeServer}/proxy/`;
+  // Query params are now embedded in originalPath; prevent axios from adding
+  // them to the proxy endpoint itself.
+  delete (config as any).params;
   config.data = {
     method: originalMethod,
     path: originalPath,
@@ -345,7 +369,7 @@ export interface CronJob {
 }
 
 export interface Volume {
-    id: number;
+    id: string;
     name: string;
     mount_path: string;
     size_gb: number;
@@ -489,10 +513,10 @@ export const servicesApi = {
       const response = await api.post(`/services/${serviceId}/volumes/`, data);
       return response.data;
   },
-  deleteVolume: async (serviceId: string, volId: number): Promise<void> => {
+  deleteVolume: async (serviceId: string, volId: string): Promise<void> => {
       await api.delete(`/services/${serviceId}/volumes/${volId}/`);
   },
-  browseVolume: async (serviceId: string, volId: number, path: string): Promise<any> => {
+  browseVolume: async (serviceId: string, volId: string, path: string): Promise<any> => {
       const response = await api.get(`/services/${serviceId}/volumes/${volId}/browse/`, { params: { path } });
       return response.data;
   },

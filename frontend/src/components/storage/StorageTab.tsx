@@ -62,7 +62,7 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
         }
     };
 
-    const handleDelete = async (id: number) => {
+    const handleDelete = async (id: string) => {
         if (!await confirm({ title: 'Delete volume?', message: 'Delete this volume? Data will be lost.', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await servicesApi.deleteVolume(serviceId, id);
