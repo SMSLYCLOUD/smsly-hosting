@@ -661,7 +661,10 @@ ${domain} {
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
 }
 
 ${svc_blocks}
@@ -1271,18 +1274,51 @@ if d and d != 'localhost':
                 cf_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
             fi
 
-            # Discover service domains (public + custom)
+            # Discover wildcard-covered hosts and non-wildcard service blocks.
+            # - Wildcard-covered hosts route through Traefik via matcher.
+            # - Unknown wildcard hosts route to /notice on frontend.
+            # - External custom domains keep explicit TLS blocks with Host rewrite.
+            cf_wildcard_known_hosts=""
+            cf_wildcard_known_hosts="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import Service
+suffix = '.${cf_domain}'.lower().strip()
+hosts = set()
+for svc in Service.objects.all():
+    d = (svc.public_domain or '').strip().lower()
+    if d and suffix and d.endswith(suffix):
+        hosts.add(d)
+    for cd in (svc.custom_domains or []):
+        cd = (cd or '').strip().lower()
+        if cd and suffix and cd.endswith(suffix):
+            hosts.add(cd)
+print(' '.join(sorted(hosts)))
+" 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
+
             cf_svc_blocks=""
             cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
-for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
-    d = svc.public_domain.strip()
-    if d:
-        print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
-    for cd in (svc.custom_domains or []):
-        cd = cd.strip()
-        if cd:
-            print(f'{cd} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+suffix = '.${cf_domain}'.lower().strip()
+seen = set()
+for svc in Service.objects.all():
+    public_domain = (svc.public_domain or '').strip().lower()
+    if public_domain and (not suffix or not public_domain.endswith(suffix)) and public_domain not in seen:
+        seen.add(public_domain)
+        print(f'{public_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+
+    for item in (svc.custom_domains or []):
+        custom_domain = (item or '').strip().lower()
+        if not custom_domain:
+            continue
+        if suffix and custom_domain.endswith(suffix):
+            continue
+        if custom_domain in seen:
+            continue
+        seen.add(custom_domain)
+
+        if public_domain and public_domain != custom_domain:
+            print(f'{custom_domain} {{\n    reverse_proxy localhost:8081 {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+        else:
+            print(f'{custom_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
@@ -1294,6 +1330,14 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
             fi
 
             if [ "$cf_is_real_domain" = "true" ]; then
+                cf_known_stanza=""
+                if [ -n "$cf_wildcard_known_hosts" ]; then
+                    cf_known_stanza="    @known_hosts host ${cf_wildcard_known_hosts}
+    handle @known_hosts {
+        reverse_proxy localhost:8081
+    }"
+                fi
+
                 cat > /etc/caddy/Caddyfile <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 ${cf_domain} {
@@ -1308,15 +1352,21 @@ ${cf_domain} {
 }
 
 *.${cf_domain} {
-    reverse_proxy localhost:8081
-    encode gzip
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    }
+${cf_known_stanza}
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
     }
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
 }
 
 ${cf_svc_blocks}
@@ -2286,11 +2336,17 @@ $DOMAIN {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
-    reverse_proxy localhost:8081
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
 }
 CADDYEOF
 
@@ -2321,7 +2377,10 @@ $DOMAIN {
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
 }
 CADDYEOF
         if [ -f "$CADDY_OVERRIDE_FILE" ]; then
