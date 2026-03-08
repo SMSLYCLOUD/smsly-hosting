@@ -61,3 +61,18 @@ class AIProviderSettingsTests(APITestCase):
         settings = AIProviderSettings.get_solo()
         self.assertTrue(settings.jules_api_key)
         self.assertEqual(settings.jules_model, "jules-pro")
+
+    def test_placeholder_key_value_does_not_overwrite_existing_key(self):
+        settings = AIProviderSettings.get_solo()
+        settings.openai_api_key = "sk-real-key"
+        settings.save(update_fields=["openai_api_key"])
+
+        response = self.client.post(
+            self.url,
+            {"openai_api_key": "Configured key (hidden)"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        settings.refresh_from_db()
+        self.assertEqual(settings.openai_api_key, "sk-real-key")

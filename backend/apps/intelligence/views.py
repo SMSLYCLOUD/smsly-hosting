@@ -15,6 +15,7 @@ from .providers import (
     get_configured_providers,
     ask_with_fallback,
     _sync_db_to_env,
+    _sanitize_api_key,
 )
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
@@ -110,9 +111,19 @@ def ai_providers_update(request):
     updated = []
     for field in updatable_fields:
         if field in request.data:
-            value = request.data[field]
+            raw_value = request.data[field]
+            value = raw_value
             if value is None:
                 value = ""
+            if field.endswith("_api_key"):
+                sanitized = _sanitize_api_key(value)
+                # Ignore UI placeholders like "Configured key (hidden)" so they
+                # do not wipe working keys.
+                if str(value).strip() and not sanitized:
+                    continue
+                value = sanitized
+            elif field.endswith("_model"):
+                value = str(value).strip()
             setattr(settings, field, value)
             # Mask key for response
             if field.endswith("_api_key"):
