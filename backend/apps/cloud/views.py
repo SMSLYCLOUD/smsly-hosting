@@ -1,6 +1,7 @@
 """Views module."""
 import re
 from decimal import Decimal
+import logging
 
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
@@ -11,6 +12,8 @@ from apps.intelligence.cost import CostAdvisor
 from apps.intelligence.providers import get_available_providers, ask_with_fallback, SYSTEM_PROMPT
 from .models import CloudProvider, CloudResource
 from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer, CloudResourceSerializer
+
+logger = logging.getLogger(__name__)
 
 
 class CloudProviderViewSet(viewsets.ModelViewSet):
@@ -298,17 +301,33 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         # Add system context
         context = "User is asking about cloud infrastructure."
 
-        response, provider_name = ask_with_fallback(
-            prompt=f"{context}\nUser: {message}",
-            system_prompt=SYSTEM_PROMPT
-        )
-
-        return Response({'response': response, 'provider': provider_name})
+        try:
+            response, provider_name = ask_with_fallback(
+                prompt=f"{context}\nUser: {message}",
+                system_prompt=SYSTEM_PROMPT
+            )
+            return Response({'response': response, 'provider': provider_name})
+        except Exception as exc:  # noqa: BLE001
+            # Fail-open: keep assistant UI functional even if provider
+            # discovery or upstream AI APIs are temporarily unavailable.
+            logger.exception("Cloud intelligence chat degraded: %s", exc)
+            return Response({
+                'response': (
+                    "Intelligence is temporarily degraded after deploy. "
+                    "Retry in a few seconds or check AI provider settings."
+                ),
+                'provider': 'Mock AI (degraded)',
+                'degraded': True,
+            })
 
     @action(detail=False, methods=['get'])
     def providers(self, request):
         """List available AI providers and their status."""
-        return Response(get_available_providers())
+        try:
+            return Response(get_available_providers())
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Cloud intelligence providers degraded: %s", exc)
+            return Response([])
 
     @action(detail=False, methods=['post'])
     def troubleshoot(self, request):
