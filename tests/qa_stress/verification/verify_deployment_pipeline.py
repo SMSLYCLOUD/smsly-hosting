@@ -25,10 +25,21 @@ from apps.cloud.services.builder import NixpacksBuilder
 class TestDeploymentPipeline(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.docker_client = docker.from_env()
+        self.docker_client = None
+        self.docker_available = False
+        self.docker_error = ""
+        try:
+            self.docker_client = docker.from_env()
+            self.docker_available = True
+        except Exception as exc:
+            self.docker_error = str(exc)
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
+
+    def require_docker(self):
+        if not self.docker_available:
+            self.skipTest(f"Docker unavailable: {self.docker_error}")
 
     def test_git_clone_public(self):
         """Verify Git cloning of a public repo works."""
@@ -76,6 +87,7 @@ class TestDeploymentPipeline(unittest.TestCase):
 
     def test_local_adapter_connectivity(self):
         """Verify LocalAdapter can talk to Docker."""
+        self.require_docker()
         print("\n[Test] LocalAdapter connectivity...")
         try:
             adapter = LocalAdapter()

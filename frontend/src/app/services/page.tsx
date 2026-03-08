@@ -40,7 +40,11 @@ export default function ServicesPage() {
   const router = useRouter();
   const [viewMode, setViewMode] = useState<'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [pollIntervalMs, setPollIntervalMs] = useState(5000);
   const fingerprintRef = useRef('');
+  const consecutiveFailuresRef = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewTabs: Array<{ id: 'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
     { id: 'GALAXY', label: 'Galaxy', icon: Orbit },
@@ -56,16 +60,60 @@ export default function ServicesPage() {
         fingerprintRef.current = nextFingerprint;
         setServices(nextServices);
       }
+      consecutiveFailuresRef.current = 0;
+      setFetchError(null);
     } catch (error) {
-      console.error('Failed to fetch services:', error);
+      const nextFailures = consecutiveFailuresRef.current + 1;
+      consecutiveFailuresRef.current = nextFailures;
+      const statusCode = (error as any)?.response?.status;
+      const rawMessage = String((error as any)?.message || '');
+      if (rawMessage.includes('Switched to Local')) {
+        setFetchError('Remote server unreachable. Switched to Local mode.');
+      } else if (statusCode === 502) {
+        setFetchError('Upstream unavailable (502). Retrying with backoff.');
+      } else {
+        setFetchError('Failed to load services. Retrying automatically.');
+      }
+      if (nextFailures === 1 || nextFailures % 6 === 0) {
+        console.error('Failed to fetch services:', error);
+      }
     }
   }, []);
 
   useEffect(() => {
-    fetchData();
-    const intervalMs = viewMode === 'GRID' || viewMode === 'ADDONS' ? 5000 : 15000;
-    const interval = setInterval(fetchData, intervalMs);
-    return () => clearInterval(interval);
+    let cancelled = false;
+
+    const getBaseInterval = () => (
+      viewMode === 'GRID' || viewMode === 'ADDONS' ? 5000 : 15000
+    );
+
+    const getNextInterval = () => {
+      const baseInterval = getBaseInterval();
+      const failures = consecutiveFailuresRef.current;
+      if (failures <= 0) return baseInterval;
+      const multiplier = 2 ** Math.min(failures - 1, 4); // 1x, 2x, 4x, 8x, 16x
+      return Math.min(baseInterval * multiplier, 60000);
+    };
+
+    const tick = async () => {
+      await fetchData();
+      if (cancelled) return;
+
+      const nextInterval = getNextInterval();
+      setPollIntervalMs(nextInterval);
+      pollTimerRef.current = setTimeout(tick, nextInterval);
+    };
+
+    setPollIntervalMs(getBaseInterval());
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
   }, [fetchData, viewMode]);
 
   return (
@@ -78,7 +126,14 @@ export default function ServicesPage() {
             <span className="rounded-full border border-zinc-700/70 bg-zinc-900/70 px-3 py-1 text-[11px] font-medium text-zinc-300">
               {services.length} service{services.length === 1 ? '' : 's'}
             </span>
-            <span className="hidden text-[11px] text-zinc-500 lg:inline">Auto-refresh every 5s</span>
+            <span className="hidden text-[11px] text-zinc-500 lg:inline">
+              Auto-refresh every {Math.max(1, Math.round(pollIntervalMs / 1000))}s
+            </span>
+            {fetchError && (
+              <span className="hidden rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[11px] font-medium text-amber-200 xl:inline">
+                {fetchError}
+              </span>
+            )}
           </div>
 
           <div className="flex justify-center">

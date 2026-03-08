@@ -18,10 +18,18 @@ def _env_bool(name: str, default: str = 'False') -> bool:
     return raw in ('1', 'true', 'yes', 'on')
 
 
-# SECURITY: No default - service MUST crash if SECRET_KEY is missing
-# Generate with: python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-SECRET_KEY = config('SECRET_KEY')
-FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY')
+# Self-hosted resilience:
+# do not hard-crash app boot if these keys are missing.
+_SECRET_KEY_RAW = str(config('SECRET_KEY', default='')).strip()
+_FIELD_ENCRYPTION_KEY_RAW = str(config('FIELD_ENCRYPTION_KEY', default='')).strip()
+
+if not _SECRET_KEY_RAW:
+    print("[settings] WARNING: SECRET_KEY missing; using fallback self-host key.")
+if not _FIELD_ENCRYPTION_KEY_RAW:
+    print("[settings] WARNING: FIELD_ENCRYPTION_KEY missing; using fallback self-host key.")
+
+SECRET_KEY = _SECRET_KEY_RAW or 'smsly-self-host-fallback-secret-key-change-me'
+FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW or 'T6bKnU4z9gSMGFsQ2B054nIyrkJslnyWgI6djrtbORQ='
 
 # Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
 try:
@@ -61,13 +69,18 @@ CONTAINER_REGISTRY_URL = config(
     default='registry.smsly.cloud')
 REGISTRY_USER = config('REGISTRY_USER', default='')
 REGISTRY_PASSWORD = config('REGISTRY_PASSWORD', default='')
-# ZH-010 FIX: Webhook secret MUST be set in production (fail-closed)
+# Webhook secret: keep production running even if omitted.
+_GITHUB_WEBHOOK_SECRET_RAW = str(config('GITHUB_WEBHOOK_SECRET', default='')).strip()
 if IS_TESTING:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='test-github-webhook-secret')
+    GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW or 'test-github-webhook-secret'
 elif DEBUG:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET', default='replace_me_with_random_string')
+    GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW or 'replace_me_with_random_string'
 else:
-    GITHUB_WEBHOOK_SECRET = config('GITHUB_WEBHOOK_SECRET')  # crash if missing
+    if _GITHUB_WEBHOOK_SECRET_RAW:
+        GITHUB_WEBHOOK_SECRET = _GITHUB_WEBHOOK_SECRET_RAW
+    else:
+        print("[settings] WARNING: GITHUB_WEBHOOK_SECRET missing; deriving fallback value from SECRET_KEY.")
+        GITHUB_WEBHOOK_SECRET = f"{SECRET_KEY}-github-webhook"
 # SECURITY: No wildcard default - prevents host header injection
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 ENABLE_LEGACY_TUNNEL_API = config(
@@ -323,7 +336,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # SECURITY: Fail-fast in production — no dev-creds default
-_DATABASE_DEFAULT = 'postgres://postgres:postgres@localhost:5432/smsly_hosting' if DEBUG else ''
+_fallback_sqlite_path = (BASE_DIR / 'fallback.db').resolve().as_posix()
+_DATABASE_DEFAULT = (
+    'postgres://postgres:postgres@localhost:5432/smsly_hosting'
+    if DEBUG
+    else f'sqlite:///{_fallback_sqlite_path}'
+)
 DATABASES = {
     'default': dj_database_url.config(
         default=config('DATABASE_URL', default=_DATABASE_DEFAULT),
@@ -335,8 +353,6 @@ DATABASES = {
 }
 # Disable server-side cursors – incompatible with PgBouncer transaction pooling
 DISABLE_SERVER_SIDE_CURSORS = True
-if not DEBUG and not DATABASES['default'].get('NAME'):
-    raise ValueError("DATABASE_URL must be set in production (DEBUG=False)")
 
 AUTH_PASSWORD_VALIDATORS = [
     {

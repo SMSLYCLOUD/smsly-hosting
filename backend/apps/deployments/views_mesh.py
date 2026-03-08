@@ -7,6 +7,7 @@ deploying WireGuard configurations across the server fleet.
 
 import logging
 
+from django.db import DatabaseError
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
@@ -79,7 +80,7 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
     - status        — get local WireGuard interface status
     """
 
-    queryset = MeshNetwork.objects.all()
+    queryset = MeshNetwork.objects.all().prefetch_related("peers")
     permission_classes = [IsAdminUser]
 
     def get_serializer_class(self):
@@ -94,6 +95,23 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
             WireGuardService.add_peer_to_mesh(mesh, server=None, is_local=True)
         except Exception as e:
             logger.error(f"Failed to add local peer: {e}")
+
+    def list(self, request, *args, **kwargs):
+        """
+        Return mesh list and fail gracefully when mesh tables are unavailable.
+        """
+        try:
+            return super().list(request, *args, **kwargs)
+        except (DatabaseError, Exception) as exc:  # noqa: BLE001
+            logger.error("Mesh list unavailable: %s", exc)
+            return Response(
+                {
+                    "results": [],
+                    "count": 0,
+                    "mesh_available": False,
+                    "warning": "Mesh datastore unavailable.",
+                }
+            )
 
     # ── Add Peer ─────────────────────────────────────────────────────
 

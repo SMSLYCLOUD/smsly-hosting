@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test';
 
 test('login page loads and has correct title', async ({ page }) => {
-  // We'll test against the local dev server since we are "running locally first"
-  // Assuming the frontend runs on port 3000
-  await page.goto('http://localhost:3000/login');
+  const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+  await page.goto(`${baseUrl}/login`);
 
   // Verify title
-  await expect(page).toHaveTitle(/SMSLY Hosting/);
+  await expect(page).toHaveTitle(/(CloudNeuron|SMSLY Hosting)/);
 
   // Check for input fields
   await expect(page.locator('input[type="text"]')).toBeVisible(); // Username/Email

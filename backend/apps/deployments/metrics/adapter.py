@@ -1,6 +1,5 @@
-"""Metrics adapter — connects to real Prometheus, falls back to mock data."""
+"""Metrics adapter — connects to real Prometheus with fail-closed fallbacks."""
 import time
-import random
 import logging
 from typing import List, Dict, Any
 from datetime import datetime, timezone
@@ -16,8 +15,9 @@ PROMETHEUS_TIMEOUT = 5  # seconds
 
 class MetricsAdapter:
     """
-    Fetches metrics from Prometheus. Falls back to mock data when
-    Prometheus is unreachable (e.g. local dev, no Prometheus deployed).
+    Fetches metrics from Prometheus.
+    Returns empty series when Prometheus is unreachable so dashboards
+    do not render synthetic values as real telemetry.
     """
 
     def __init__(self):
@@ -34,7 +34,7 @@ class MetricsAdapter:
             f'{{container_label_com_docker_compose_service="{service_id}"}}[5m]) * 100',
             duration,
         )
-        return data if data else self._generate_mock_data('cpu', duration)
+        return data if data else []
 
     def get_memory_history(self, service_id: str,
                            duration: str = '1h') -> List[Dict[str, Any]]:
@@ -43,7 +43,7 @@ class MetricsAdapter:
             f'{{container_label_com_docker_compose_service="{service_id}"}} / 1024 / 1024',
             duration,
         )
-        return data if data else self._generate_mock_data('memory', duration)
+        return data if data else []
 
     def get_network_history(self, service_id: str,
                             duration: str = '1h') -> List[Dict[str, Any]]:
@@ -52,7 +52,7 @@ class MetricsAdapter:
             f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])',
             duration,
         )
-        return data if data else self._generate_mock_data('network', duration)
+        return data if data else []
 
     def get_disk_history(self, service_id: str,
                          duration: str = '1h') -> List[Dict[str, Any]]:
@@ -63,20 +63,29 @@ class MetricsAdapter:
             f'{{container_label_com_docker_compose_service="{service_id}"}}[5m])) / 1024',
             duration,
         )
-        return data if data else self._generate_mock_data('disk', duration)
+        return data if data else []
 
     def get_current(self, service_id: str) -> Dict[str, Any]:
         """
         Return a current snapshot used by the dashboard cards.
-        Falls back to derived values from mock time-series data.
         """
         cpu = self.get_cpu_history(service_id, '1h')
         memory = self.get_memory_history(service_id, '1h')
         network = self.get_network_history(service_id, '1h')
 
+        if not cpu and not memory and not network:
+            return {
+                'cpu_percent': 0.0,
+                'memory_usage': 0.0,
+                'memory_limit': 0.0,
+                'memory_percent': 0.0,
+                'network_rx_kb': 0.0,
+                'network_tx_kb': 0.0,
+            }
+
         cpu_percent = self._latest_value(cpu)
         memory_usage = self._latest_value(memory)
-        memory_limit = max(512.0, memory_usage * 1.6)
+        memory_limit = max(0.0, memory_usage * 1.6)
         memory_percent = round(
             (memory_usage / memory_limit) * 100 if memory_limit > 0 else 0.0, 2
         )
@@ -144,36 +153,10 @@ class MetricsAdapter:
 
         except requests.RequestException as e:
             if self._prometheus_ok is None:
-                logger.info("Prometheus not available at %s, using mock data: %s",
+                logger.info("Prometheus not available at %s, returning empty metrics: %s",
                             PROMETHEUS_URL, e)
             self._prometheus_ok = False
             return None
-
-    # ------------------------------------------------------------------
-    # Mock Data Fallback
-    # ------------------------------------------------------------------
-
-    def _generate_mock_data(self, metric_type: str,
-                            duration: str) -> List[Dict]:
-        """Generate realistic looking time-series data for the UI."""
-        data = []
-        now = int(time.time())
-        points = 60
-
-        base = {'cpu': 20, 'memory': 256, 'network': 1024, 'disk': 80}.get(metric_type, 20)
-
-        for i in range(points):
-            timestamp = now - ((points - i) * 60)
-            jitter = random.uniform(-0.2, 0.2) * base
-            value = base + jitter
-            if random.random() > 0.95:
-                value *= 1.5
-            data.append({
-                'timestamp': datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(),
-                'value': max(0, round(value, 2)),
-            })
-
-        return data
 
     @staticmethod
     def _latest_value(series: List[Dict[str, Any]]) -> float:

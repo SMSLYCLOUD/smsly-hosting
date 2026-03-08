@@ -37,6 +37,46 @@ function isServerProxyUrl(url?: string): boolean {
   return /\/servers\/[^/]+\/proxy\/?$/.test(cleanUrl);
 }
 
+const REMOTE_PROXY_FAIL_KEY = 'smsly_remote_proxy_failures';
+
+function readRemoteProxyFailures(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(REMOTE_PROXY_FAIL_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRemoteProxyFailures(value: Record<string, number>) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(REMOTE_PROXY_FAIL_KEY, JSON.stringify(value));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function bumpRemoteProxyFailure(serverId: string): number {
+  const current = readRemoteProxyFailures();
+  const next = Number(current[serverId] || 0) + 1;
+  current[serverId] = next;
+  writeRemoteProxyFailures(current);
+  return next;
+}
+
+function resetRemoteProxyFailure(serverId: string | null) {
+  if (!serverId) return;
+  const current = readRemoteProxyFailures();
+  if (serverId in current) {
+    delete current[serverId];
+    writeRemoteProxyFailures(current);
+  }
+}
+
 // ─── Remote Server Proxy Interceptor ────────────────────────────────────────
 // When a remote server is selected (smsly_active_server in localStorage),
 // automatically rewrite API calls to go through /servers/{id}/proxy/.
@@ -50,6 +90,10 @@ const PROXY_BYPASS_PREFIXES = [
   '/licensing/',
   '/ai/',
   '/cloud/',
+  '/mesh/',
+  '/clusters/',
+  '/replication/',
+  '/platform-updates/',
 ];
 
 api.interceptors.request.use((config) => {
@@ -114,15 +158,37 @@ api.interceptors.response.use(
         error.config = response.config;
         return Promise.reject(error);
       }
+
+      // Successful remote response: clear failure counter for active server.
+      if (typeof window !== 'undefined') {
+        resetRemoteProxyFailure(localStorage.getItem('smsly_active_server'));
+      }
     }
     return response;
   },
   (error) => {
     // If the proxy call itself failed (502, network error), provide a clear message
     const isProxyRequest = (error?.config as any)?._isProxied || isServerProxyUrl(error?.config?.url);
-    if (isProxyRequest && error?.response?.status === 502) {
-      const msg = error.response?.data?.error || 'Remote server is unreachable';
-      error.message = msg;
+    if (isProxyRequest) {
+      const statusCode = error?.response?.status;
+      const isGatewayFailure = statusCode === 502 || statusCode === 503 || statusCode === 504 || !statusCode;
+      if (isGatewayFailure && typeof window !== 'undefined') {
+        const activeServer = localStorage.getItem('smsly_active_server');
+        const msg = error?.response?.data?.error || 'Remote server is unreachable';
+        if (activeServer) {
+          const attempts = bumpRemoteProxyFailure(activeServer);
+          if (attempts >= 3) {
+            localStorage.removeItem('smsly_active_server');
+            resetRemoteProxyFailure(activeServer);
+            window.dispatchEvent(new CustomEvent('smsly:server-changed', { detail: null }));
+            error.message = `${msg}. Switched to Local server after repeated remote failures.`;
+          } else {
+            error.message = `${msg} (${attempts}/3)`;
+          }
+        } else {
+          error.message = msg;
+        }
+      }
     }
     return Promise.reject(error);
   }

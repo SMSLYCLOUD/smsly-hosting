@@ -2,10 +2,16 @@ from .base import PaymentProvider
 
 class PaystackProvider(PaymentProvider):
     def create_subscription(self, plan_id, customer_email, **kwargs):
-        return {"subscription_id": "sub_mock_paystack"}
+        raise NotImplementedError(
+            "Legacy PaystackProvider is not wired to a live backend integration."
+        )
 
     def cancel_subscription(self, subscription_id):
-        return True
+        raise NotImplementedError(
+            "Legacy PaystackProvider is not wired to a live backend integration."
+        )
 
     def verify_webhook(self, payload, signature):
-        return True
+        raise NotImplementedError(
+            "Legacy PaystackProvider is not wired to a live backend integration."
+        )

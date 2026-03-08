@@ -13,7 +13,17 @@ router.register(r'code-analysis', CodeAnalysisViewSet, basename='code-analysis')
 # router.register(r'ecosystem', EcosystemViewSet, basename='ecosystem')
 
 urlpatterns = [
-    *router.urls,
+    # Backward-compatible AI assistant path used by frontend widgets.
+    path(
+        'intelligence/ask/',
+        IntelligenceViewSet.as_view({'post': 'chat'}),
+        name='intelligence-ask',
+    ),
+    path(
+        'intelligence/ask',
+        IntelligenceViewSet.as_view({'post': 'chat'}),
+        name='intelligence-ask-no-slash',
+    ),
     # Backward-compatible ecosystem paths used by the frontend.
     path(
         'ecosystem/scan/',
@@ -35,4 +45,5 @@ urlpatterns = [
         IntelligenceViewSet.as_view({'post': 'ecosystem_bulk_env'}),
         name='ecosystem-bulk-env',
     ),
+    *router.urls,
 ]

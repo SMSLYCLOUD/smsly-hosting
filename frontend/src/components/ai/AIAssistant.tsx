@@ -59,21 +59,34 @@ export function AIAssistant() {
 
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
-      const res = await fetch(`/api/v1/cloud/intelligence/ask/`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Token ${token}` } : {}),
-        },
-        body: JSON.stringify({ message: trimmed }),
-      });
+      const endpoints = ['/api/v1/cloud/intelligence/ask/', '/api/v1/cloud/intelligence/chat/'];
+      let data: any = null;
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+      for (const endpoint of endpoints) {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Token ${token}` } : {}),
+          },
+          body: JSON.stringify({ message: trimmed }),
+        });
+
+        if (res.status === 404 || res.status === 405) {
+          continue;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        data = await res.json();
+        break;
       }
 
-      const data = await res.json();
+      if (!data) {
+        throw new Error('No compatible AI endpoint available.');
+      }
+
       const assistantMsg: Message = {
         id: `ai-${Date.now()}`,
         role: 'assistant',
