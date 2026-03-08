@@ -263,6 +263,36 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["upstream_status"], 502)
 
     @patch("apps.deployments.views_servers.requests.get")
+    def test_remote_services_falls_back_to_gateway_secret_when_token_fails(self, mock_get):
+        first = MagicMock()
+        first.status_code = 403
+
+        second = MagicMock()
+        second.status_code = 200
+        second.json.return_value = {"results": [{"id": "svc1"}], "count": 1}
+
+        mock_get.side_effect = [first, second]
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="SrvFallbackAuth",
+            host="10.0.0.12",
+            api_url="https://srv-fallback.example.com",
+            api_token="tok",
+            gateway_secret="gw-secret",
+        )
+
+        resp = self.client.get(f"/api/v1/servers/{server.id}/services/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 1)
+        self.assertEqual(mock_get.call_count, 2)
+
+        first_headers = mock_get.call_args_list[0].kwargs["headers"]
+        second_headers = mock_get.call_args_list[1].kwargs["headers"]
+        self.assertIn("Authorization", first_headers)
+        self.assertIn("X-Gateway-Signature-V2", second_headers)
+
+    @patch("apps.deployments.views_servers.requests.get")
     def test_domains_handles_null_custom_domains(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -288,6 +318,57 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["count"], 0)
         self.assertEqual(resp.data["domains"], [])
+
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_domains_aggregation_uses_all_paginated_service_pages(self, mock_get):
+        first = MagicMock()
+        first.status_code = 200
+        first.json.return_value = {
+            "results": [
+                {
+                    "id": "svc1",
+                    "name": "Frontend",
+                    "public_domain": "frontend.cloud.smsly.cloud",
+                    "custom_domains": ["app.example.com"],
+                    "domain_verified": True,
+                    "verification_token": "abc123",
+                }
+            ],
+            "next": "https://remote.example.com/api/v1/services/?page=2",
+        }
+
+        second = MagicMock()
+        second.status_code = 200
+        second.json.return_value = {
+            "results": [
+                {
+                    "id": "svc2",
+                    "name": "API",
+                    "public_domain": "api.cloud.smsly.cloud",
+                    "custom_domains": ["api.example.com"],
+                    "domain_verified": False,
+                    "verification_token": "def456",
+                }
+            ],
+            "next": None,
+        }
+
+        mock_get.side_effect = [first, second]
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="SrvPagedDomains",
+            host="10.0.0.13",
+            api_url="https://srv-paged.example.com",
+            api_token="tok",
+        )
+
+        resp = self.client.get(f"/api/v1/servers/{server.id}/domains/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 2)
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(resp.data["domains"][0]["domain"], "app.example.com")
+        self.assertEqual(resp.data["domains"][1]["domain"], "api.example.com")
 
     def test_update_server_name(self):
         """Test that a server name can be updated via PATCH."""
