@@ -98,6 +98,27 @@ class ServerTransferHardeningTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         delay_mock.assert_not_called()
 
+    @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
+    def test_create_transfer_accepts_password_auth_with_blank_key(self, delay_mock):
+        cfg = PlatformConfig.load()
+        cfg.server_ip = '10.0.0.10'
+        cfg.save(update_fields=['server_ip'])
+
+        payload = {
+            'transfer_type': 'SERVICE',
+            'service_id': str(self.service.id),
+            'target_server_ip': '203.0.113.41',
+            'target_ssh_key': '',
+            'target_ssh_password': 'root-password-here',
+        }
+        response = self.client.post(self.url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        transfer = ServerTransfer.objects.get(id=response.data['id'])
+        self.assertEqual(transfer.target_ssh_key, '')
+        self.assertEqual(transfer.target_ssh_password, 'root-password-here')
+        delay_mock.assert_called_once_with(str(transfer.id))
+
     @override_settings(ALLOW_STUB_TRANSFER_PIPELINE=False)
     @patch('apps.deployments.services.transfer_service.BackupService.backup_service')
     def test_transfer_service_fail_closed_and_scrubs_private_key(self, backup_mock):
