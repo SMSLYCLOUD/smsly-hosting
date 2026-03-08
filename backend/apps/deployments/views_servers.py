@@ -10,6 +10,7 @@ import hmac as hmac_mod
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from django.utils import timezone
@@ -48,44 +49,160 @@ def _safe_remote_error_payload(kind: str, reason: str, upstream_status: int | No
     return payload
 
 
-def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b""):
+def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b"", auth_mode=None):
     """
     Build auth headers for a remote server.
     Strategy: token auth when available, otherwise HMAC V2 signing.
     """
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
 
-    # Prefer token auth when available (Bearer for smsly_ tokens, Token for DRF keys).
-    if server.api_token:
-        token = str(server.api_token).strip()
+    token = str(server.api_token or "").strip()
+    gateway_secret = str(server.gateway_secret or "").strip()
+
+    def _apply_token_auth():
+        if not token:
+            return False
         if token.lower().startswith("token ") or token.lower().startswith("bearer "):
             headers["Authorization"] = token
         elif token.startswith("smsly_"):
             headers["Authorization"] = f"Bearer {token}"
         else:
             headers["Authorization"] = f"Token {token}"
-        return headers
+        return True
 
-    # Fallback: HMAC V2 signing (inter-service auth)
-    if server.gateway_secret:
+    def _apply_hmac_auth():
+        if not gateway_secret:
+            return False
         timestamp = str(int(time.time()))
         body_hash = hashlib.sha256(body if isinstance(body, bytes) else b"").hexdigest()
         payload = f"{method}|{path}|{timestamp}|{body_hash}"
         signature = hmac_mod.new(
-            server.gateway_secret.encode(),
+            gateway_secret.encode(),
             payload.encode(),
             hashlib.sha256,
         ).hexdigest()
         headers["X-Gateway-Signature-V2"] = signature
         headers["X-Request-Timestamp"] = timestamp
+        return True
+
+    # Explicit mode for fallback paths.
+    if auth_mode == "token":
+        _apply_token_auth()
+        return headers
+    if auth_mode == "hmac":
+        _apply_hmac_auth()
         return headers
 
-    # No auth available — try anyway (will likely fail)
+    # Default mode.
+    if _apply_token_auth():
+        return headers
+    if _apply_hmac_auth():
+        return headers
+
+    # No auth available: try anyway (will likely fail)
     return headers
 
 
-# ─── Serializers ─────────────────────────────────────────────────────────────
+def _iter_remote_auth_modes(server):
+    """Return auth modes in fallback order for remote requests."""
+    modes = []
+    if str(server.api_token or "").strip():
+        modes.append("token")
+    if str(server.gateway_secret or "").strip():
+        modes.append("hmac")
+    if not modes:
+        modes.append("none")
+    return modes
 
+
+def _normalize_remote_api_path(path_or_url):
+    """Convert relative or absolute next links into an API path."""
+    value = str(path_or_url or "").strip()
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        parsed = urlparse(value)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        return path
+    if not value.startswith("/"):
+        return f"/{value}"
+    return value
+
+
+def _extract_page_results_and_next(payload):
+    """Extract list results and pagination next pointer from API payload."""
+    if isinstance(payload, list):
+        return payload, None
+    if isinstance(payload, dict):
+        results = payload.get("results", [])
+        if not isinstance(results, list):
+            results = []
+        return results, payload.get("next")
+    return [], None
+
+
+def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
+    """
+    Fetch remote JSON with token -> HMAC fallback.
+
+    This handles cases where one auth method is stale but the other is valid.
+    """
+    normalized_path = _normalize_remote_api_path(api_path)
+    url = f"{server.api_url.rstrip('/')}{normalized_path}"
+    modes = _iter_remote_auth_modes(server)
+    retryable_statuses = {401, 403, 500, 502, 503}
+
+    last_error = None
+    last_status = None
+
+    for idx, mode in enumerate(modes):
+        headers = _build_remote_headers(
+            server,
+            method="GET",
+            path=normalized_path,
+            auth_mode=None if mode == "none" else mode,
+        )
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except requests.RequestException as exc:
+            last_error = str(exc)
+            continue
+
+        last_status = resp.status_code
+        if resp.status_code >= 400:
+            has_more_modes = idx < len(modes) - 1
+            if has_more_modes and resp.status_code in retryable_statuses:
+                continue
+            return None, _safe_remote_error_payload(
+                kind,
+                f"Remote server returned HTTP {resp.status_code}",
+                upstream_status=resp.status_code,
+            )
+
+        try:
+            return resp.json(), None
+        except ValueError:
+            has_more_modes = idx < len(modes) - 1
+            if has_more_modes:
+                continue
+            return None, _safe_remote_error_payload(
+                kind,
+                "Remote server returned non-JSON payload.",
+                upstream_status=resp.status_code,
+            )
+
+    if last_status is not None:
+        return None, _safe_remote_error_payload(
+            kind,
+            f"Remote server returned HTTP {last_status}",
+            upstream_status=last_status,
+        )
+    return None, _safe_remote_error_payload(kind, last_error or "Remote request failed.")
+
+
+# --- Serializers -------------------------------------------------------------
 class ManagedServerSerializer(serializers.ModelSerializer):
     class Meta:
         model = ManagedServer
@@ -389,31 +506,12 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             return Response(_safe_remote_error_payload("services", "Server has no API URL yet."))
 
         api_path = "/api/v1/services/"
-        url = f"{server.api_url.rstrip('/')}{api_path}"
-        headers = _build_remote_headers(server, method="GET", path=api_path)
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code >= 400:
-                return Response(
-                    _safe_remote_error_payload(
-                        "services",
-                        f"Remote server returned HTTP {resp.status_code}",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            try:
-                payload = resp.json()
-            except ValueError:
-                return Response(
-                    _safe_remote_error_payload(
-                        "services",
-                        "Remote server returned non-JSON payload.",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            return Response(payload)
-        except requests.RequestException as e:
-            return Response(_safe_remote_error_payload("services", str(e)))
+        payload, error_payload = _fetch_remote_json_with_fallback(
+            server, "services", api_path, timeout=15
+        )
+        if error_payload:
+            return Response(error_payload)
+        return Response(payload)
 
     @action(detail=True, methods=["get"])
     def deployments(self, request, pk=None):
@@ -423,31 +521,12 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             return Response(_safe_remote_error_payload("deployments", "Server has no API URL yet."))
 
         api_path = "/api/v1/deployments/"
-        url = f"{server.api_url.rstrip('/')}{api_path}"
-        headers = _build_remote_headers(server, method="GET", path=api_path)
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code >= 400:
-                return Response(
-                    _safe_remote_error_payload(
-                        "deployments",
-                        f"Remote server returned HTTP {resp.status_code}",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            try:
-                payload = resp.json()
-            except ValueError:
-                return Response(
-                    _safe_remote_error_payload(
-                        "deployments",
-                        "Remote server returned non-JSON payload.",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            return Response(payload)
-        except requests.RequestException as e:
-            return Response(_safe_remote_error_payload("deployments", str(e)))
+        payload, error_payload = _fetch_remote_json_with_fallback(
+            server, "deployments", api_path, timeout=15
+        )
+        if error_payload:
+            return Response(error_payload)
+        return Response(payload)
 
     @action(detail=True, methods=["get"])
     def domains(self, request, pk=None):
@@ -457,49 +536,48 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         if not server.api_url:
             return Response(_safe_remote_error_payload("domains", "Server has no API URL yet."))
 
-        api_path = "/api/v1/services/"
-        url = f"{server.api_url.rstrip('/')}{api_path}"
-        headers = _build_remote_headers(server, method="GET", path=api_path)
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code >= 400:
-                return Response(
-                    _safe_remote_error_payload(
-                        "domains",
-                        f"Remote server returned HTTP {resp.status_code}",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            try:
-                data = resp.json()
-            except ValueError:
-                return Response(
-                    _safe_remote_error_payload(
-                        "domains",
-                        "Remote server returned non-JSON payload.",
-                        upstream_status=resp.status_code,
-                    )
-                )
-            services = data.get("results", data) if isinstance(data, dict) else data
+        all_services = []
+        seen_paths = set()
+        next_path = "/api/v1/services/"
+        max_pages = 50
 
-            domains = []
-            for svc in (services if isinstance(services, list) else []):
-                svc_id = svc.get("id", "")
-                svc_name = svc.get("name", "")
-                public_domain = svc.get("public_domain", "")
-                custom_domains = svc.get("custom_domains", [])
-                if not isinstance(custom_domains, list):
-                    custom_domains = []
-                for domain in custom_domains:
-                    domains.append({
-                        "domain": domain,
-                        "service_id": svc_id,
-                        "service_name": svc_name,
-                        "public_domain": public_domain,
-                        "verified": svc.get("domain_verified", False),
-                        "verification_token": svc.get("verification_token", ""),
-                    })
+        for _ in range(max_pages):
+            normalized_path = _normalize_remote_api_path(next_path)
+            if not normalized_path or normalized_path in seen_paths:
+                break
+            seen_paths.add(normalized_path)
 
-            return Response({"domains": domains, "count": len(domains)})
-        except requests.RequestException as e:
-            return Response(_safe_remote_error_payload("domains", str(e)))
+            payload, error_payload = _fetch_remote_json_with_fallback(
+                server, "domains", normalized_path, timeout=15
+            )
+            if error_payload:
+                if not all_services:
+                    return Response(error_payload)
+                break
+
+            services_page, next_link = _extract_page_results_and_next(payload)
+            all_services.extend(services_page)
+            if not next_link:
+                break
+            next_path = _normalize_remote_api_path(next_link)
+
+        domains = []
+        for svc in all_services:
+            svc_id = svc.get("id", "")
+            svc_name = svc.get("name", "")
+            public_domain = svc.get("public_domain", "")
+            custom_domains = svc.get("custom_domains", [])
+            if not isinstance(custom_domains, list):
+                custom_domains = []
+            for domain in custom_domains:
+                domains.append({
+                    "domain": domain,
+                    "service_id": svc_id,
+                    "service_name": svc_name,
+                    "public_domain": public_domain,
+                    "verified": svc.get("domain_verified", False),
+                    "verification_token": svc.get("verification_token", ""),
+                })
+
+        return Response({"domains": domains, "count": len(domains)})
+
