@@ -17,6 +17,64 @@ from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
+# Common placeholder values copied from forms/UX that should never be treated
+# as real API keys.
+_KEY_PLACEHOLDERS = {
+    "configured key (hidden)",
+    "enter api key",
+    "not configured",
+    "your_api_key_here",
+}
+
+
+def _sanitize_api_key(raw: Optional[str]) -> str:
+    """Normalize user-entered key values and strip placeholder text."""
+    if raw is None:
+        return ""
+    value = str(raw).strip().strip('"').strip("'")
+    lower = value.lower()
+    if lower.startswith("bearer "):
+        value = value[7:].strip()
+        lower = value.lower()
+    if not value:
+        return ""
+    if lower in _KEY_PLACEHOLDERS:
+        return ""
+    if lower.startswith("configured key") and "hidden" in lower:
+        return ""
+    if set(value) == {"*"}:
+        return ""
+    return value
+
+
+def _normalize_model(raw: Optional[str], default: str) -> str:
+    value = str(raw or "").strip()
+    return value or default
+
+
+def _looks_like_model_error(exc: Exception) -> bool:
+    """Best-effort detection for provider responses caused by invalid model IDs."""
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return False
+    status = exc.response.status_code
+    if status not in (400, 404):
+        return False
+    try:
+        payload = exc.response.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+    message = str(payload).lower()
+    return any(
+        token in message
+        for token in (
+            "model",
+            "unknown model",
+            "unsupported model",
+            "model_not_found",
+            "not found",
+        )
+    )
+
 # ---------------------------------------------------------------------------
 # Base Provider
 # ---------------------------------------------------------------------------
@@ -56,8 +114,8 @@ class OpenAIProvider(AIProvider):
     BASE_URL = "https://api.openai.com/v1"
 
     def __init__(self):
-        self.api_key = os.environ.get("OPENAI_API_KEY", "")
-        self.model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self.api_key = _sanitize_api_key(os.environ.get("OPENAI_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("OPENAI_MODEL"), "gpt-4o-mini")
 
     def name(self) -> str:
         return f"OpenAI ({self.model})"
@@ -71,27 +129,42 @@ class OpenAIProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # pylint: disable=broad-exception-caught
-        try:
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    f"{self.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "max_tokens": 2048
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error("OpenAI ask failed: %s", e)
-            raise
+        candidate_models: List[str] = []
+        for candidate in [self.model, "gpt-4o-mini", "gpt-4o"]:
+            if candidate and candidate not in candidate_models:
+                candidate_models.append(candidate)
+
+        last_error: Optional[Exception] = None
+        with httpx.Client(timeout=60) as client:
+            for candidate_model in candidate_models:
+                try:
+                    resp = client.post(
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": candidate_model,
+                            "messages": messages,
+                            "max_tokens": 2048
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"]
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if _looks_like_model_error(exc):
+                        logger.warning(
+                            "OpenAI model %s failed, trying fallback model",
+                            candidate_model,
+                        )
+                        continue
+                    break
+
+        logger.error("OpenAI ask failed: %s", last_error)
+        raise last_error or RuntimeError("OpenAI request failed")
 
     def get_balance(self) -> dict:
         """Fetch OpenAI credit balance."""
@@ -149,8 +222,8 @@ class GrokProvider(AIProvider):
     BASE_URL = "https://api.x.ai/v1"
 
     def __init__(self):
-        self.api_key = os.environ.get("GROK_API_KEY", "")
-        self.model = os.environ.get("GROK_MODEL", "grok-3-mini")
+        self.api_key = _sanitize_api_key(os.environ.get("GROK_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("GROK_MODEL"), "grok-3-mini")
 
     def name(self) -> str:
         return f"Grok ({self.model})"
@@ -164,27 +237,42 @@ class GrokProvider(AIProvider):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # pylint: disable=broad-exception-caught
-        try:
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    f"{self.BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "max_tokens": 2048
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error("Grok ask failed: %s", e)
-            raise
+        candidate_models: List[str] = []
+        for candidate in [self.model, "grok-3-mini", "grok-3"]:
+            if candidate and candidate not in candidate_models:
+                candidate_models.append(candidate)
+
+        last_error: Optional[Exception] = None
+        with httpx.Client(timeout=60) as client:
+            for candidate_model in candidate_models:
+                try:
+                    resp = client.post(
+                        f"{self.BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": candidate_model,
+                            "messages": messages,
+                            "max_tokens": 2048
+                        },
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data["choices"][0]["message"]["content"]
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if _looks_like_model_error(exc):
+                        logger.warning(
+                            "Grok model %s failed, trying fallback model",
+                            candidate_model,
+                        )
+                        continue
+                    break
+
+        logger.error("Grok ask failed: %s", last_error)
+        raise last_error or RuntimeError("Grok request failed")
 
     def get_balance(self) -> dict:
         """Fetch xAI/Grok credit balance."""
@@ -226,8 +314,8 @@ class GeminiProvider(AIProvider):
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(self):
-        self.api_key = os.environ.get("GEMINI_API_KEY", "")
-        self.model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+        self.api_key = _sanitize_api_key(os.environ.get("GEMINI_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("GEMINI_MODEL"), "gemini-2.0-flash")
 
     def name(self) -> str:
         return f"Gemini ({self.model})"
@@ -242,21 +330,37 @@ class GeminiProvider(AIProvider):
             contents.append({"role": "model", "parts": [{"text": "Understood."}]})
         contents.append({"role": "user", "parts": [{"text": prompt}]})
 
-        url = f"{self.BASE_URL}/models/{self.model}:generateContent?key={self.api_key}"
-        # pylint: disable=broad-exception-caught
-        try:
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    url,
-                    headers={"Content-Type": "application/json"},
-                    json={"contents": contents},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            logger.error("Gemini ask failed: %s", e)
-            raise
+        candidate_models: List[str] = []
+        for candidate in [self.model, "gemini-2.0-flash", "gemini-1.5-flash"]:
+            normalized = str(candidate or "").strip().replace("models/", "")
+            if normalized and normalized not in candidate_models:
+                candidate_models.append(normalized)
+
+        last_error: Optional[Exception] = None
+        with httpx.Client(timeout=60) as client:
+            for candidate_model in candidate_models:
+                try:
+                    url = f"{self.BASE_URL}/models/{candidate_model}:generateContent?key={self.api_key}"
+                    resp = client.post(
+                        url,
+                        headers={"Content-Type": "application/json"},
+                        json={"contents": contents},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    if _looks_like_model_error(exc):
+                        logger.warning(
+                            "Gemini model %s failed, trying fallback model",
+                            candidate_model,
+                        )
+                        continue
+                    break
+
+        logger.error("Gemini ask failed: %s", last_error)
+        raise last_error or RuntimeError("Gemini request failed")
 
     def get_balance(self) -> dict:
         """Check Gemini API quota status. Gemini uses quota-based billing, not credits."""
@@ -298,8 +402,11 @@ class ClaudeProvider(AIProvider):
     BASE_URL = "https://api.anthropic.com/v1"
 
     def __init__(self):
-        self.api_key = os.environ.get("CLAUDE_API_KEY", "")
-        self.model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        self.api_key = _sanitize_api_key(os.environ.get("CLAUDE_API_KEY", ""))
+        self.model = _normalize_model(
+            os.environ.get("CLAUDE_MODEL"),
+            "claude-sonnet-4-20250514",
+        )
 
     def name(self) -> str:
         return f"Claude ({self.model})"
@@ -394,8 +501,8 @@ class JulesProvider(AIProvider):
     """
 
     def __init__(self):
-        self.api_key = os.environ.get("JULES_API_KEY", "")
-        self.model = os.environ.get("JULES_MODEL", "jules-latest")
+        self.api_key = _sanitize_api_key(os.environ.get("JULES_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("JULES_MODEL"), "jules-latest")
         self.base_url = os.environ.get(
             "JULES_BASE_URL",
             "https://api.jules.google.com/v1",
@@ -585,8 +692,13 @@ def _get_db_settings():
 
 def _effective_env_value(db_value: str | None, env_key: str, default: str = "") -> str:
     if db_value is not None:
-        return str(db_value)
-    return os.environ.get(env_key, default) or default
+        raw = str(db_value)
+    else:
+        raw = os.environ.get(env_key, default) or default
+
+    if env_key.endswith("_API_KEY"):
+        return _sanitize_api_key(raw)
+    return _normalize_model(raw, default) if env_key.endswith("_MODEL") else raw
 
 
 def _sync_db_to_env():
@@ -911,7 +1023,19 @@ def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None) -> Tuple
     configured = get_configured_providers()
 
     if len(configured) >= 2:
-        return ask_collaborative(prompt, system_prompt)
+        response, provider_name = ask_collaborative(prompt, system_prompt)
+        if not provider_name.startswith("Mock AI (all"):
+            return response, provider_name
+
+        # Committee phase can fail even when at least one provider is
+        # recoverable (e.g., transient endpoint/model errors). Try a direct
+        # sequential pass before returning full mock mode.
+        for provider in configured:
+            try:
+                return _ask_single(provider, prompt, system_prompt)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Committee rescue with %s failed: %s", provider.name(), exc)
+        return response, provider_name
 
     if len(configured) == 1:
         provider = configured[0]
