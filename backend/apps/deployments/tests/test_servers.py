@@ -221,6 +221,74 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(domains[2]["domain"], "api.example.com")
         self.assertEqual(domains[2]["verified"], False)
 
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_remote_services_non_json_payload_returns_safe_response(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("not json")
+        mock_get.return_value = mock_resp
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="SrvNonJson",
+            host="10.0.0.9",
+            api_url="https://srv-nonjson.example.com",
+            api_token="tok",
+        )
+
+        resp = self.client.get(f"/api/v1/servers/{server.id}/services/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["remote_unreachable"])
+        self.assertEqual(resp.data["kind"], "services")
+        self.assertEqual(resp.data["results"], [])
+
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_remote_services_upstream_error_returns_safe_response(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 502
+        mock_get.return_value = mock_resp
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Srv502",
+            host="10.0.0.11",
+            api_url="https://srv-502.example.com",
+            api_token="tok",
+        )
+
+        resp = self.client.get(f"/api/v1/servers/{server.id}/services/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["remote_unreachable"])
+        self.assertEqual(resp.data["kind"], "services")
+        self.assertEqual(resp.data["upstream_status"], 502)
+
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_domains_handles_null_custom_domains(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {
+                "id": "svc1",
+                "name": "Frontend",
+                "public_domain": "frontend.cloud.smsly.cloud",
+                "custom_domains": None,
+            }
+        ]
+        mock_get.return_value = mock_resp
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="SrvNullDomains",
+            host="10.0.0.10",
+            api_url="https://srv-nulldomains.example.com",
+            api_token="tok",
+        )
+
+        resp = self.client.get(f"/api/v1/servers/{server.id}/domains/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["count"], 0)
+        self.assertEqual(resp.data["domains"], [])
+
     def test_update_server_name(self):
         """Test that a server name can be updated via PATCH."""
         server = ManagedServer.objects.create(

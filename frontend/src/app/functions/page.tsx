@@ -47,17 +47,17 @@ export default function FunctionsPage() {
   const handleSelect = (func: Service) => {
     setSelectedFunction(func);
     setIsCreating(false);
-    // TODO: We need to fetch the code. The list API might not return full text fields.
-    // Assuming we need to fetch details.
-    servicesApi.get(func.id).then(fullFunc => {
+    servicesApi.get(func.id).then((fullFunc) => {
         setName(fullFunc.name);
-        // We assume backend returns function_code and runtime
-        // But types might need updating.
-        // For now, we rely on dynamic response or updated interface.
-        // @ts-ignore
         setCode(fullFunc.function_code || '');
-        // @ts-ignore
         setRuntime(fullFunc.function_runtime || 'nodejs18');
+    }).catch((error) => {
+        console.error(error);
+        toast({
+          title: "Failed to load function",
+          description: "Could not load the selected function details.",
+          variant: "destructive",
+        });
     });
   };
 
@@ -79,7 +79,6 @@ export default function FunctionsPage() {
       if (selectedFunction) {
         // Update existing
         await servicesApi.update(selectedFunction.id, {
-            // @ts-ignore
             function_code: code,
             function_runtime: runtime
         });
@@ -98,7 +97,6 @@ export default function FunctionsPage() {
         const newService = await servicesApi.create({
             name,
             deploy_type: 'FUNCTION',
-            // @ts-ignore
             function_code: code,
             function_runtime: runtime,
             cpu_cores: 0.25,

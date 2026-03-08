@@ -4,6 +4,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import docker
 from django.test import SimpleTestCase
 
 from apps.cloud.adapters.local import (
@@ -31,13 +32,17 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         self.assertIn("exit 0", cmd)
         self.assertIn("exit 1", cmd)
 
-    def _build_adapter_with_mock_docker(self):
+    def _build_adapter_with_mock_docker(self, has_old: bool = False):
         docker_client = MagicMock()
         docker_client.api.create_endpoint_config.return_value = {}
         docker_client.api.create_networking_config.return_value = {}
 
-        existing = MagicMock()
-        docker_client.containers.get.return_value = existing
+        existing = None
+        if has_old:
+            existing = MagicMock()
+            docker_client.containers.get.return_value = existing
+        else:
+            docker_client.containers.get.side_effect = docker.errors.NotFound("missing")
 
         created = MagicMock()
         created.id = "container-id"
@@ -48,12 +53,12 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
         adapter.docker_client = docker_client
         adapter.k8s_client = None
         adapter.batch_v1 = None
-        return adapter, docker_client
+        return adapter, docker_client, existing
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.PlatformConfig.load")
     def test_sets_forwarded_https_headers_when_caddy_terminates_tls(self, mock_load, _wait_mock):
-        adapter, docker_client = self._build_adapter_with_mock_docker()
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
         with patch.dict(os.environ, {"TRAEFIK_ENABLE_WEBSECURE": "false"}, clear=False):
@@ -66,32 +71,16 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
                 },
             )
 
-        initial_labels = docker_client.containers.create.call_args.kwargs["labels"]
-        self.assertEqual(initial_labels["traefik.enable"], "false")
-
-        labels = docker_client.api.update_container.call_args.kwargs["labels"]
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.enable"], "true")
         self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
-        self.assertEqual(
-            labels["traefik.http.routers.buyforfront.middlewares"],
-            "buyforfront-forwarded-https",
-        )
-        self.assertEqual(
-            labels[
-                "traefik.http.middlewares.buyforfront-forwarded-https.headers.customrequestheaders.X-Forwarded-Proto"
-            ],
-            "https",
-        )
-        self.assertEqual(
-            labels[
-                "traefik.http.middlewares.buyforfront-forwarded-https.headers.customrequestheaders.X-Forwarded-Port"
-            ],
-            "443",
-        )
+        self.assertNotIn("traefik.http.routers.buyforfront.tls", labels)
+        self.assertNotIn("traefik.http.routers.buyforfront.middlewares", labels)
 
     @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
     @patch("apps.deployments.models.PlatformConfig.load")
     def test_uses_websecure_router_when_direct_traefik_tls_enabled(self, mock_load, _wait_mock):
-        adapter, docker_client = self._build_adapter_with_mock_docker()
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
         mock_load.return_value = SimpleNamespace(use_ssl=True)
 
         with patch.dict(os.environ, {"TRAEFIK_ENABLE_WEBSECURE": "true"}, clear=False):
@@ -104,10 +93,66 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
                 },
             )
 
-        initial_labels = docker_client.containers.create.call_args.kwargs["labels"]
-        self.assertEqual(initial_labels["traefik.enable"], "false")
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.enable"], "true")
+        self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
+        self.assertNotIn("traefik.http.routers.buyforfront.tls", labels)
+        self.assertEqual(labels["smsly.blue_green.enable_tls"], "True")
 
-        labels = docker_client.api.update_container.call_args.kwargs["labels"]
-        self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "websecure")
-        self.assertEqual(labels["traefik.http.routers.buyforfront.tls"], "true")
-        self.assertNotIn("traefik.http.routers.buyforfront.middlewares", labels)
+    @patch.object(LocalAdapter, "promote_container", return_value="promoted-container-id")
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_existing_live_container_stages_green_before_promote(
+        self,
+        mock_load,
+        _wait_mock,
+        mock_promote,
+    ):
+        adapter, docker_client, existing = self._build_adapter_with_mock_docker(has_old=True)
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        with patch.dict(os.environ, {"TRAEFIK_ENABLE_WEBSECURE": "false"}, clear=False):
+            result = adapter._deploy_docker(
+                name="buyforfront",
+                image="registry:5000/smsly/buyforfront:test",
+                env={
+                    "PORT": "8000",
+                    "PUBLIC_DOMAIN": "buyforfront-0398be.cloud.smsly.cloud",
+                },
+            )
+
+        create_kwargs = docker_client.containers.create.call_args.kwargs
+        labels = create_kwargs["labels"]
+        self.assertTrue(create_kwargs["name"].startswith("buyforfront-green-"))
+        self.assertEqual(labels["traefik.enable"], "false")
+        self.assertNotIn("traefik.http.routers.buyforfront.rule", labels)
+        existing.stop.assert_not_called()
+        existing.remove.assert_not_called()
+        mock_promote.assert_called_once()
+        self.assertEqual(result, "promoted-container-id")
+
+    @patch.object(LocalAdapter, "promote_container", side_effect=RuntimeError("promote failed"))
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_existing_live_container_not_stopped_if_promote_fails(
+        self,
+        mock_load,
+        _wait_mock,
+        _mock_promote,
+    ):
+        adapter, _docker_client, existing = self._build_adapter_with_mock_docker(has_old=True)
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        with patch.dict(os.environ, {"TRAEFIK_ENABLE_WEBSECURE": "false"}, clear=False):
+            with self.assertRaises(RuntimeError):
+                adapter._deploy_docker(
+                    name="buyforfront",
+                    image="registry:5000/smsly/buyforfront:test",
+                    env={
+                        "PORT": "8000",
+                        "PUBLIC_DOMAIN": "buyforfront-0398be.cloud.smsly.cloud",
+                    },
+                )
+
+        existing.stop.assert_not_called()
+        existing.remove.assert_not_called()

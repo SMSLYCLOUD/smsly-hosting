@@ -141,8 +141,14 @@ export function Navbar() {
         </Link>
 
         {/* Nav Links - Center: Show public when logged out, auth when logged in */}
-        <nav className="hidden min-w-0 items-center justify-center md:flex">
-            <div className="flex max-w-full items-center justify-center gap-0.5 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
+            <div
+              className={
+                user
+                  ? "grid w-full grid-flow-col auto-cols-fr gap-1 rounded-xl border border-border/60 bg-background/40 p-1 shadow-sm backdrop-blur-md"
+                  : "flex max-w-full items-center justify-center gap-0.5 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              }
+            >
             {!user && publicLinks.map((link) => {
                 const isActive = pathname === link.href;
                 return (
@@ -169,19 +175,20 @@ export function Navbar() {
                          key={link.href}
                          href={link.href}
                          prefetch={false}
+                         title={link.label}
                          className={`
-                             relative shrink-0 px-2.5 py-1.5 rounded-md text-[13px] font-medium transition-colors flex items-center gap-1.5
+                             relative min-w-0 w-full px-2 py-1.5 rounded-lg text-[12px] lg:text-[12.5px] font-[600] tracking-[0.015em] transition-all duration-200 flex items-center justify-center gap-1.5
                              ${isActive
-                                ? 'text-primary bg-primary/5'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}
+                                ? 'text-foreground bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}
                         `}
                     >
-                        <Icon size={15} />
-                        {link.label}
+                        <Icon size={14} className="hidden xl:block shrink-0" />
+                        <span className="truncate">{link.label}</span>
                         {isActive && (
                             <motion.div
                                 layoutId="navbar-indicator"
-                                className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full"
+                                className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full"
                                 initial={false}
                                 transition={{ type: "spring", stiffness: 500, damping: 30 }}
                             />

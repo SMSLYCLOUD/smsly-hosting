@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,13 +9,15 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ArrowRight, Loader2, Server, CheckCircle2, RotateCcw, Lock, Key } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import api, { servicesApi, Service } from '@/lib/api';
+import api, { servicesApi, Service, serversApi, ManagedServer } from '@/lib/api';
 import { Progress } from '@/components/ui/progress';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 export default function TransfersPage() {
     const { toast } = useToast();
     const [services, setServices] = useState<Service[]>([]);
+    const [servers, setServers] = useState<ManagedServer[]>([]);
+    const [serversLoading, setServersLoading] = useState(false);
     const [step, setStep] = useState(1);
     const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'key'>('password');
     const [formData, setFormData] = useState({
@@ -32,17 +34,53 @@ export default function TransfersPage() {
         ? formData.target_ssh_password.trim().length > 0
         : formData.target_ssh_key.trim().length > 0;
 
-    useEffect(() => {
-        servicesApi.list().then(setServices);
-        loadTransfers();
-    }, []);
+    const isValidIp = (value: string) => {
+        const v4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+        const v6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::1)$/;
+        return v4.test(value.trim()) || v6.test(value.trim());
+    };
 
-    const loadTransfers = async () => {
+    const loadServers = useCallback(async () => {
+        setServersLoading(true);
+        try {
+            const list = await serversApi.list();
+            const normalized = (Array.isArray(list) ? list : []).sort((a, b) => {
+                if (a.status === b.status) return a.name.localeCompare(b.name);
+                if (a.status === 'ONLINE') return -1;
+                if (b.status === 'ONLINE') return 1;
+                return 0;
+            });
+
+            if (normalized.length > 0) {
+                setServers(normalized);
+            } else {
+                const refreshed = await serversApi.checkAll().catch(() => ({ servers: [] }));
+                setServers(Array.isArray(refreshed?.servers) ? refreshed.servers : []);
+            }
+        } catch (err) {
+            console.error(err);
+            toast({
+                title: "Connected servers unavailable",
+                description: "Could not load managed servers list.",
+                variant: "destructive",
+            });
+        } finally {
+            setServersLoading(false);
+        }
+    }, [toast]);
+
+    const loadTransfers = useCallback(async () => {
         try {
             const res = await api.get('/transfers/');
             setTransfers(Array.isArray(res.data) ? res.data : res.data.results || []);
         } catch (err) { console.error(err); }
-    };
+    }, []);
+
+    useEffect(() => {
+        servicesApi.list().then(setServices);
+        loadServers();
+        loadTransfers();
+    }, [loadServers, loadTransfers]);
 
     const handleStartTransfer = async () => {
         setLoading(true);
@@ -94,16 +132,9 @@ export default function TransfersPage() {
                                 <>
                                     <div className="space-y-2">
                                         <Label>Scope</Label>
-                                        <Select
-                                            value={formData.transfer_type}
-                                            onValueChange={v => setFormData({...formData, transfer_type: v})}
-                                        >
-                                            <SelectTrigger><SelectValue /></SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="SERVICE">Single Service</SelectItem>
-                                                <SelectItem value="FULL" disabled>Full Server (Coming Soon)</SelectItem>
-                                            </SelectContent>
-                                        </Select>
+                                        <div className="rounded-lg border p-3 text-sm font-medium">
+                                            Single Service
+                                        </div>
                                     </div>
                                     {formData.transfer_type === 'SERVICE' && (
                                         <div className="space-y-2">
@@ -231,6 +262,64 @@ export default function TransfersPage() {
 
                     {/* Active Transfers */}
                     <div className="space-y-4">
+                        <h2 className="text-xl font-bold">Connected Servers ({servers.length})</h2>
+                        <Card>
+                            <CardContent className="p-4 space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-sm text-muted-foreground">
+                                        Select a connected server as transfer target.
+                                    </p>
+                                    <Button size="sm" variant="outline" onClick={loadServers} disabled={serversLoading}>
+                                        {serversLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh"}
+                                    </Button>
+                                </div>
+                                {servers.length === 0 ? (
+                                    <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                                        No connected servers found.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {servers.map((server) => {
+                                            const hostValue = (server.host || '').trim();
+                                            const canUseAsTarget = isValidIp(hostValue);
+                                            const statusTone =
+                                                server.status === 'ONLINE'
+                                                    ? 'text-emerald-600 bg-emerald-500/10'
+                                                    : server.status === 'OFFLINE'
+                                                        ? 'text-red-600 bg-red-500/10'
+                                                        : 'text-amber-600 bg-amber-500/10';
+                                            return (
+                                                <div key={server.id} className="flex items-center justify-between rounded-lg border p-3">
+                                                    <div className="min-w-0">
+                                                        <div className="flex items-center gap-2">
+                                                            <p className="font-medium truncate">{server.name}</p>
+                                                            <span className={`text-[10px] px-2 py-0.5 rounded ${statusTone}`}>
+                                                                {server.status}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-xs text-muted-foreground truncate">
+                                                            {server.host} {server.api_url ? `• ${server.api_url}` : ''}
+                                                        </p>
+                                                    </div>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        disabled={!canUseAsTarget}
+                                                        onClick={() => {
+                                                            setFormData((prev) => ({ ...prev, target_server_ip: hostValue }));
+                                                            setStep(2);
+                                                        }}
+                                                    >
+                                                        Use Target
+                                                    </Button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+
                         <h2 className="text-xl font-bold">Active Transfers</h2>
                         {transfers.filter(t => ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'].includes(t.status)).length === 0 && (
                             <div className="p-8 border rounded-xl text-center text-muted-foreground bg-muted/10">

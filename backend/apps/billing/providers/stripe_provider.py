@@ -2,11 +2,16 @@ from .base import PaymentProvider
 
 class StripeProvider(PaymentProvider):
     def create_subscription(self, plan_id, customer_email, **kwargs):
-        # Placeholder
-        return {"subscription_id": "sub_mock", "client_secret": "secret_mock"}
+        raise NotImplementedError(
+            "Legacy StripeProvider is not wired. Use apps.billing.services.stripe.StripeService."
+        )
 
     def cancel_subscription(self, subscription_id):
-        return True
+        raise NotImplementedError(
+            "Legacy StripeProvider is not wired. Use apps.billing.services.stripe.StripeService."
+        )
 
     def verify_webhook(self, payload, signature):
-        return True
+        raise NotImplementedError(
+            "Legacy StripeProvider is not wired. Use apps.billing.services.stripe.StripeService."
+        )

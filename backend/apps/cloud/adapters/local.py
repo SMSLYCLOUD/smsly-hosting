@@ -177,15 +177,12 @@ class LocalAdapter(BaseCloudAdapter):
                        cpu: int = None, memory: int = None,
                        restart_policy: str = 'unless-stopped') -> str:
         """
-        Blue-green Docker deployment.
+        Blue-green Docker deployment with rollback-safe cutover.
 
-        Creates a new container with a temporary name, waits for it to pass
-        Docker health checks, then atomically swaps it into the final name.
-        The old container keeps serving traffic until the new one is verified
-        healthy — zero downtime in all cases.
+        When a live container already exists, this method creates and validates
+        a green container first, then promotes it. The old container keeps
+        serving while the green candidate is warming up.
         """
-        import time as _time
-
         # Ensure shared network exists
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
         try:
@@ -193,7 +190,7 @@ class LocalAdapter(BaseCloudAdapter):
         except docker.errors.NotFound:
             self.docker_client.networks.create(network_name, driver="bridge")
 
-        # Prepare Volumes
+        # Prepare volumes
         docker_volumes = {}
         if volumes:
             for vol in volumes:
@@ -206,18 +203,17 @@ class LocalAdapter(BaseCloudAdapter):
                 docker_volumes[vol_name] = {
                     'bind': vol['mount_path'], 'mode': 'rw'}
 
-        # ── Detect & remove old container ──
         old_container = None
         try:
             old_container = self.docker_client.containers.get(name)
         except docker.errors.NotFound:
             pass
+        stage_before_cutover = old_container is not None
 
-        # Traefik Labels — support primary domain + custom domains
+        # Traefik routing metadata
         domain = env.get('PUBLIC_DOMAIN', f"{name}.localhost")
         port = env.get('PORT', '8000')
 
-        # Check if service should be publicly accessible
         is_public = True
         try:
             from apps.deployments.models import Service
@@ -227,14 +223,12 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception:
             pass
 
-        # Build Host rule: primary domain + any custom domains
         all_domains = [domain]
         custom = env.get('CUSTOM_DOMAINS', '')
         if custom:
             all_domains.extend([d.strip() for d in custom.split(',') if d.strip()])
         host_rule = ' || '.join(f'Host(`{d}`)' for d in all_domains)
 
-        # Check Platform Config for SSL
         try:
             from apps.deployments.models import PlatformConfig
             config = PlatformConfig.load()
@@ -247,9 +241,7 @@ class LocalAdapter(BaseCloudAdapter):
             in {"1", "true", "yes", "on"}
         )
 
-        # Routing labels are configured after health check parameters are known.
-
-        # Docker-native healthcheck.
+        # Docker-native healthcheck
         low_resource_profile = _is_low_resource_profile(cpu, memory)
         min_interval = _env_int(
             "DOCKER_HEALTHCHECK_MIN_INTERVAL_SECONDS",
@@ -273,10 +265,7 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         platform_hc_enabled = bool(healthcheck and healthcheck.get('path'))
-        hc_port = (
-            (healthcheck or {}).get('port')
-            or port  # Use same port as routing (env.PORT or 8000)
-        )
+        hc_port = (healthcheck or {}).get('port') or port
         hc_interval = min_interval
         hc_timeout = min_timeout
         hc_retries = min_retries
@@ -313,16 +302,9 @@ class LocalAdapter(BaseCloudAdapter):
                 name,
             )
 
-        # ── Traefik Labels — ALWAYS ENABLED ──
-        # Every container gets Traefik routing labels at creation.
-        # No blue-green label toggling — Docker doesn't support live
-        # label updates, making the toggle approach unreliable.
         router_name = name.replace('.', '-').replace('_', '-')
         labels = {
             'managed_by': 'smsly-hosting',
-            'traefik.enable': str(is_public).lower(),
-            f'traefik.http.routers.{router_name}.rule': host_rule,
-            f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
             'smsly.blue_green.canonical_name': name,
             'smsly.blue_green.is_public': str(is_public),
             'smsly.blue_green.port': port,
@@ -333,11 +315,28 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
         }
-        # Always use 'web' entrypoint — Caddy handles TLS termination,
-        # Traefik only runs on HTTP (:80). No 'websecure' entrypoint exists.
-        labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
+        if stage_before_cutover:
+            # Green candidates should not receive traffic until promotion.
+            labels['traefik.enable'] = 'false'
+        else:
+            labels['traefik.enable'] = str(is_public).lower()
+            labels[f'traefik.http.routers.{router_name}.rule'] = host_rule
+            labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = port
+            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
 
-        # Resource limits
+        container_name = name
+        aliases = [name, f"{name}.default.internal"]
+        if stage_before_cutover:
+            suffix = secrets.token_hex(3)
+            container_name = f"{name}-green-{suffix}"
+            aliases = [container_name, f"{container_name}.default.internal"]
+
+        logger.info(
+            "Deploy strategy for %s: %s",
+            name,
+            "blue-green staged cutover" if stage_before_cutover else "direct start",
+        )
+
         run_kwargs = {}
         if memory and memory > 0:
             run_kwargs['mem_limit'] = f"{memory}m"
@@ -345,7 +344,6 @@ class LocalAdapter(BaseCloudAdapter):
             run_kwargs['cpu_period'] = 100000
             run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
 
-        # Restart policy: on-failure with max 5 retries to prevent infinite loops.
         if restart_policy == 'no':
             rp = None
         elif restart_policy == 'unless-stopped':
@@ -353,27 +351,15 @@ class LocalAdapter(BaseCloudAdapter):
         else:
             rp = {"Name": restart_policy, "MaximumRetryCount": 5}
 
-        # ── Stop old container FIRST, then start new one ──
-        # Simple replace strategy: brief downtime during redeploy is
-        # acceptable. More reliable than blue-green label toggling.
-        if old_container:
-            logger.info("Stopping old container %s before starting new one", name)
-            try:
-                old_container.stop(timeout=10)
-                old_container.remove(force=True)
-            except Exception as exc:
-                logger.warning("Failed to stop old container %s: %s", name, exc)
-
-        # ── Create & start new container with canonical name ──
         networking_config = self.docker_client.api.create_networking_config({
             network_name: self.docker_client.api.create_endpoint_config(
-                aliases=[name, f"{name}.default.internal"]
+                aliases=aliases
             )
         })
 
         create_kwargs = {
             "image": image,
-            "name": name,
+            "name": container_name,
             "environment": env,
             "network": network_name,
             "networking_config": networking_config,
@@ -387,9 +373,13 @@ class LocalAdapter(BaseCloudAdapter):
 
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()
-        logger.info("Started container %s with Traefik labels enabled", name)
+        logger.info(
+            "Started container %s (canonical=%s, staged=%s)",
+            container_name,
+            name,
+            stage_before_cutover,
+        )
 
-        # ── Wait for container to become healthy ──
         health_timeout_default = 360 if low_resource_profile else 240
         health_timeout = _env_int(
             'BLUE_GREEN_HEALTH_TIMEOUT',
@@ -401,7 +391,6 @@ class LocalAdapter(BaseCloudAdapter):
         )
 
         if not new_healthy:
-            # Capture container logs before removing - critical for debugging
             container_logs = ""
             status = "unknown"
             health_state = "n/a"
@@ -420,13 +409,13 @@ class LocalAdapter(BaseCloudAdapter):
                 logger.error(
                     "Container %s failed health check. status=%s health=%s "
                     "exit_code=%s oom_killed=%s\nLogs:\n%s",
-                    name, status, health_state, exit_code, oom_killed,
+                    container_name, status, health_state, exit_code, oom_killed,
                     container_logs,
                 )
             except Exception as log_exc:
                 logger.error(
                     "Container %s failed health check (could not capture logs: %s)",
-                    name, log_exc,
+                    container_name, log_exc,
                 )
 
             keep_failed_container = _env_bool(
@@ -441,13 +430,13 @@ class LocalAdapter(BaseCloudAdapter):
             else:
                 logger.warning(
                     "Preserving failed container %s for debugging (status=%s health=%s).",
-                    name,
+                    container_name,
                     status,
                     health_state,
                 )
 
             detail = (
-                f"Container {name} failed health check after deploy "
+                f"Container {container_name} failed health check after deploy "
                 f"(status={status}, health={health_state}, "
                 f"exit_code={exit_code}, oom_killed={oom_killed})."
             )
@@ -466,17 +455,27 @@ class LocalAdapter(BaseCloudAdapter):
                 )
             raise RuntimeError(detail)
 
+        if stage_before_cutover:
+            logger.info(
+                "Green container %s is healthy; promoting as %s",
+                container_name,
+                name,
+            )
+            return self.promote_container(name, new_container.id)
+
         logger.info("Container %s is healthy and serving traffic", name)
         return new_container.id
 
     def promote_container(self, name: str, green_container_id: str) -> str:
         """
-        Promote a staged green container to live.
+        Promote a staged green container to live with rollback safety.
 
-        1. Stop old container
-        2. Rename green → canonical name
-        3. Recreate container with Traefik labels ENABLED
-        4. Update network aliases
+        Sequence:
+        1. Preserve current live container by renaming it to a backup name.
+        2. Recreate green as canonical container with live routing labels.
+        3. Verify promoted container health.
+        4. Remove old backup only after successful cutover.
+        If any step fails, restore the previous live container name.
         """
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
 
@@ -484,158 +483,213 @@ class LocalAdapter(BaseCloudAdapter):
             green = self.docker_client.containers.get(green_container_id)
         except docker.errors.NotFound:
             raise RuntimeError(
-                f"Green container {green_container_id} not found — "
+                f"Green container {green_container_id} not found - "
                 f"may have crashed during bake period"
             )
 
-        # Verify green is still running
         green.reload()
-        state = (green.attrs.get('State', {}).get('Status') or '').lower()
-        if state not in ('running',):
-            health = (green.attrs.get('State', {}).get('Health', {}).get('Status') or '')
+        green_state = green.attrs.get('State', {}) or {}
+        state = (green_state.get('Status') or '').lower()
+        health = (green_state.get('Health', {}).get('Status') or '').lower()
+        if state != 'running':
             raise RuntimeError(
                 f"Green container not running (status={state}, health={health})"
             )
+        if health == 'unhealthy':
+            raise RuntimeError("Green container is unhealthy - aborting promotion")
 
-        # Read stored labels for Traefik config
         green_labels = green.labels or {}
+        if (
+            green.name == name
+            and str(green_labels.get('traefik.enable', '')).strip().lower() == 'true'
+        ):
+            return green.id
+
         is_public = green_labels.get('smsly.blue_green.is_public', 'True') == 'True'
         port = green_labels.get('smsly.blue_green.port', '8000')
         host_rule = green_labels.get('smsly.blue_green.host_rule', f"Host(`{name}.localhost`)")
-        use_ssl = green_labels.get('smsly.blue_green.use_ssl', 'False') == 'True'
-        enable_tls = green_labels.get('smsly.blue_green.enable_tls', 'False') == 'True'
-        hc_path = green_labels.get('smsly.blue_green.hc_path', '/')
-        hc_interval = green_labels.get('smsly.blue_green.hc_interval', '12')
-        hc_timeout = green_labels.get('smsly.blue_green.hc_timeout', '5')
 
-        # ── Step 1: Stop old container ──
-        old_container = None
-        try:
-            old_container = self.docker_client.containers.get(name)
-            old_container.stop(timeout=10)
-            old_container.remove(force=True)
-            logger.info("Blue-green promote: removed old container %s", name)
-        except docker.errors.NotFound:
-            logger.info("Blue-green promote: no old container %s to remove", name)
-        except Exception as exc:
-            logger.warning("Blue-green promote: failed to remove old %s: %s", name, exc)
-
-        # ── Step 2: Build Traefik labels for the promoted container ──
         router_name = name.replace('.', '-').replace('_', '-')
-        traefik_labels = {
+        live_labels = {
             'managed_by': 'smsly-hosting',
             'traefik.enable': str(is_public).lower(),
             f'traefik.http.routers.{router_name}.rule': host_rule,
             f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
+            f'traefik.http.routers.{router_name}.entrypoints': 'web',
         }
-        if enable_tls:
-            traefik_labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'websecure'
-            traefik_labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
-        else:
-            traefik_labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
-
-        # Keep blue-green metadata labels
         for k, v in green_labels.items():
             if k.startswith('smsly.'):
-                traefik_labels[k] = v
+                live_labels[k] = v
 
-        # ── Step 3: Commit green to temp image, recreate with Traefik labels ──
-        # Docker doesn't support live label updates, so we commit + recreate.
+        green_config = green.attrs.get('Config', {}) or {}
+        green_host_config = green.attrs.get('HostConfig', {}) or {}
+        green_env = green_config.get('Env', [])
+        green_cmd = green_config.get('Cmd')
+        green_entrypoint = green_config.get('Entrypoint')
+        green_healthcheck = green_config.get('Healthcheck')
+        green_volumes = green_host_config.get('Binds')
+
+        image_ref = ""
         try:
-            temp_image_tag = f"smsly-promote/{name}:latest"
-            green.commit(repository=f"smsly-promote/{name}", tag="latest")
+            image_ref = (green.image.tags or [])[0]
+        except Exception:
+            image_ref = ""
+        if not image_ref:
+            image_ref = green.image.id
 
-            # Gather existing config for recreation
-            green_config = green.attrs.get('Config', {})
-            green_host_config = green.attrs.get('HostConfig', {})
-            green_env = green_config.get('Env', [])
-            green_cmd = green_config.get('Cmd')
-            green_entrypoint = green_config.get('Entrypoint')
-            green_healthcheck = green_config.get('Healthcheck')
-            green_volumes = green_host_config.get('Binds')
+        run_kwargs = {}
+        mem_limit = green_host_config.get('Memory')
+        if mem_limit and mem_limit > 0:
+            run_kwargs['mem_limit'] = mem_limit
+        cpu_period = green_host_config.get('CpuPeriod')
+        cpu_quota = green_host_config.get('CpuQuota')
+        if cpu_period and cpu_quota:
+            run_kwargs['cpu_period'] = cpu_period
+            run_kwargs['cpu_quota'] = cpu_quota
 
-            # Stop and remove the green container
-            green.stop(timeout=10)
-            green.remove(force=True)
+        rp_config = green_host_config.get('RestartPolicy', {}) or {}
+        rp = None
+        if rp_config.get('Name'):
+            rp = {"Name": rp_config['Name']}
+            if rp_config.get('MaximumRetryCount') is not None:
+                rp['MaximumRetryCount'] = rp_config['MaximumRetryCount']
 
-            # Resource limits from original
-            run_kwargs = {}
-            mem_limit = green_host_config.get('Memory')
-            if mem_limit and mem_limit > 0:
-                run_kwargs['mem_limit'] = mem_limit
-            cpu_period = green_host_config.get('CpuPeriod')
-            cpu_quota = green_host_config.get('CpuQuota')
-            if cpu_period and cpu_quota:
-                run_kwargs['cpu_period'] = cpu_period
-                run_kwargs['cpu_quota'] = cpu_quota
-
-            # Restart policy
-            rp_config = green_host_config.get('RestartPolicy', {})
-            rp = None
-            if rp_config.get('Name'):
-                rp = {"Name": rp_config['Name']}
-                if rp_config.get('MaximumRetryCount'):
-                    rp['MaximumRetryCount'] = rp_config['MaximumRetryCount']
-
-            # Recreate with Traefik labels enabled
-            new_container = self.docker_client.containers.run(
-                temp_image_tag,
-                name=name,
-                environment=green_env,
-                network=network_name,
-                labels=traefik_labels,
-                volumes=green_volumes,
-                healthcheck=green_healthcheck,
-                command=green_cmd,
-                entrypoint=green_entrypoint,
-                restart_policy=rp,
-                detach=True,
-                **run_kwargs,
+        old_container = None
+        backup_name = ""
+        try:
+            old_container = self.docker_client.containers.get(name)
+            backup_name = f"{name}-rollback-{secrets.token_hex(3)}"
+            old_container.rename(backup_name)
+            logger.info(
+                "Blue-green promote: preserved live container as %s",
+                backup_name,
             )
+        except docker.errors.NotFound:
+            logger.info("Blue-green promote: no existing live container for %s", name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to preserve current live container before promote: {exc}"
+            ) from exc
 
-            # Update network aliases
+        promoted = None
+        promote_health_timeout = _env_int(
+            "BLUE_GREEN_PROMOTE_HEALTH_TIMEOUT_SECONDS",
+            90,
+            minimum=20,
+        )
+        try:
+            networking_config = self.docker_client.api.create_networking_config({
+                network_name: self.docker_client.api.create_endpoint_config(
+                    aliases=[name, f"{name}.default.internal"]
+                )
+            })
+
+            create_kwargs = {
+                "image": image_ref,
+                "name": name,
+                "environment": green_env,
+                "network": network_name,
+                "networking_config": networking_config,
+                "labels": live_labels,
+                "volumes": green_volumes,
+                "restart_policy": rp,
+                "command": green_cmd,
+                "entrypoint": green_entrypoint,
+                **run_kwargs,
+            }
+            if green_healthcheck is not None:
+                create_kwargs["healthcheck"] = green_healthcheck
+
+            promoted = self.docker_client.containers.create(**create_kwargs)
+            promoted.start()
+
+            if not self._wait_container_healthy(
+                promoted.id, timeout_seconds=promote_health_timeout
+            ):
+                raise RuntimeError(
+                    f"Promoted container failed health checks: {promoted.id[:12]}"
+                )
+
             try:
                 net = self.docker_client.networks.get(network_name)
-                net.disconnect(new_container)
-                net.connect(
-                    new_container,
-                    aliases=[name, f"{name}.default.internal"],
-                )
+                net.disconnect(promoted)
+                net.connect(promoted, aliases=[name, f"{name}.default.internal"])
             except Exception as exc:
-                logger.warning("Blue-green promote: network alias update failed: %s", exc)
+                logger.warning(
+                    "Blue-green promote: network alias update failed: %s",
+                    exc,
+                )
 
-            # Clean up temp image
             try:
-                self.docker_client.images.remove(temp_image_tag, force=True)
+                green.stop(timeout=10)
+            except Exception:
+                pass
+            try:
+                green.remove(force=True)
             except Exception:
                 pass
 
+            if old_container is not None:
+                try:
+                    old_container.stop(timeout=10)
+                except Exception:
+                    pass
+                try:
+                    old_container.remove(force=True)
+                except Exception as exc:
+                    logger.warning(
+                        "Blue-green promote: old backup cleanup failed (%s): %s",
+                        backup_name or name,
+                        exc,
+                    )
+
             logger.info(
-                "Blue-green promote: cutover complete — %s is now serving "
-                "with Traefik labels enabled (public=%s)",
-                name, is_public,
+                "Blue-green promote: cutover complete for %s (public=%s)",
+                name,
+                is_public,
             )
-            return new_container.id
+            return promoted.id
 
         except Exception as exc:
             logger.error(
-                "Blue-green promote: failed to recreate container with "
-                "Traefik labels for %s: %s. Falling back to rename-only.",
-                name, exc,
+                "Blue-green promote failed for %s: %s. Attempting rollback restore.",
+                name,
+                exc,
             )
-            # Fallback: try to just rename green if it still exists
-            try:
-                green = self.docker_client.containers.get(green_container_id)
-                green.rename(name)
+            if promoted is not None:
                 try:
-                    net = self.docker_client.networks.get(network_name)
-                    net.disconnect(green)
-                    net.connect(green, aliases=[name, f"{name}.default.internal"])
+                    promoted.stop(timeout=5)
                 except Exception:
                     pass
-                return green.id
-            except Exception:
-                raise exc
+                try:
+                    promoted.remove(force=True)
+                except Exception:
+                    pass
+
+            if old_container is not None and backup_name:
+                try:
+                    old_container.reload()
+                except Exception:
+                    pass
+                try:
+                    if getattr(old_container, "name", "") != name:
+                        old_container.rename(name)
+                except Exception as restore_exc:
+                    raise RuntimeError(
+                        "Promotion failed and previous live container could not be restored"
+                    ) from restore_exc
+
+                try:
+                    net = self.docker_client.networks.get(network_name)
+                    net.disconnect(old_container)
+                    net.connect(old_container, aliases=[name, f"{name}.default.internal"])
+                except Exception as net_exc:
+                    logger.warning(
+                        "Blue-green promote restore alias update failed: %s",
+                        net_exc,
+                    )
+
+            raise RuntimeError(f"Blue-green promote failed: {exc}") from exc
 
     def _wait_container_healthy(
         self, container_id: str, timeout_seconds: int = 240, poll_seconds: int = 5
@@ -680,7 +734,7 @@ class LocalAdapter(BaseCloudAdapter):
                     container_id[:12], poll_count,
                 )
                 return False
-            # No healthcheck configured — running means ready
+            # No healthcheck configured - running means ready
             if status == "running" and not health:
                 return True
 

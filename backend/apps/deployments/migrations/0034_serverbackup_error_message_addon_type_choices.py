@@ -1,13 +1,34 @@
 # Stable migration 0034
 #
 # Adds:
-#   1. ServerBackup.error_message (may already exist in DB on VPS)
+#   1. ServerBackup.error_message (idempotent across existing/fresh DBs)
 #   2. Expanded Addon.addon_type choices (11 -> 50)
-#
-# Uses SeparateDatabaseAndState for error_message so Django learns about the
-# field in its state without trying to create the column (which already exists).
 
 from django.db import migrations, models
+
+
+def _add_serverbackup_error_message_if_missing(apps, schema_editor):
+    """
+    Add deployments_serverbackup.error_message only when missing.
+
+    This avoids duplicate-column failures on already-patched databases and
+    avoids SQLite-incompatible SQL such as "ADD COLUMN IF NOT EXISTS".
+    """
+    ServerBackup = apps.get_model("deployments", "ServerBackup")
+    table_name = ServerBackup._meta.db_table
+
+    with schema_editor.connection.cursor() as cursor:
+        existing_columns = {
+            column.name
+            for column in schema_editor.connection.introspection.get_table_description(cursor, table_name)
+        }
+
+    if "error_message" in existing_columns:
+        return
+
+    field = models.TextField(blank=True, default="")
+    field.set_attributes_from_name("error_message")
+    schema_editor.add_field(ServerBackup, field)
 
 
 class Migration(migrations.Migration):
@@ -23,17 +44,15 @@ class Migration(migrations.Migration):
         migrations.SeparateDatabaseAndState(
             state_operations=[
                 migrations.AddField(
-                    model_name='serverbackup',
-                    name='error_message',
+                    model_name="serverbackup",
+                    name="error_message",
                     field=models.TextField(blank=True, default=''),
                 ),
             ],
             database_operations=[
-                # Column already exists; this is a no-op raw SQL that ensures
-                # it exists even on a fresh DB (belt-and-suspenders).
-                migrations.RunSQL(
-                    sql="ALTER TABLE deployments_serverbackup ADD COLUMN IF NOT EXISTS error_message text DEFAULT '' NOT NULL;",
-                    reverse_sql=migrations.RunSQL.noop,
+                migrations.RunPython(
+                    code=_add_serverbackup_error_message_if_missing,
+                    reverse_code=migrations.RunPython.noop,
                 ),
             ],
         ),

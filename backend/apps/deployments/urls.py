@@ -79,6 +79,17 @@ urlpatterns = router.urls + [
         name='template-one-click-deploy',
     ),
     path('', include(services_router.urls)),
+    # Backward-compatible aliases (hyphen style) for env vars endpoints.
+    path(
+        'services/<uuid:pk>/env-vars/',
+        ServiceViewSet.as_view({'get': 'env_vars', 'post': 'env_vars'}),
+        name='service-env-vars-hyphen',
+    ),
+    path(
+        'services/<uuid:pk>/env-vars/<int:var_id>/',
+        ServiceViewSet.as_view({'delete': 'delete_env_var', 'patch': 'delete_env_var'}),
+        name='service-env-var-detail-hyphen',
+    ),
     # Non-router views
     path('auth/session-token/', SessionTokenView.as_view(), name='session-token'),
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),

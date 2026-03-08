@@ -1,4 +1,7 @@
 """Views module."""
+import re
+from decimal import Decimal
+
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -28,9 +31,40 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def sync(self, request, pk=None):
-        # Trigger async sync task
-        # This is a placeholder for actual cloud sync logic
-        return Response({'status': 'Sync started'})
+        """
+        Validate provider connectivity and refresh provider activation state.
+        """
+        provider = self.get_object()
+
+        if not request.user.is_staff:
+            return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            from apps.cloud.services.compute import ComputeService
+            compute_service = ComputeService(provider)
+            authenticated = bool(compute_service.adapter.authenticate())
+        except NotImplementedError as exc:
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_501_NOT_IMPLEMENTED,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return Response(
+                {'error': f'Sync failed: {exc}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        provider.is_active = authenticated
+        provider.save(update_fields=['is_active', 'updated_at'])
+
+        resource_count = CloudResource.objects.filter(provider=provider).count()
+        return Response({
+            'status': 'synced' if authenticated else 'auth_failed',
+            'provider_id': str(provider.id),
+            'provider_type': provider.provider_type,
+            'is_active': provider.is_active,
+            'resource_count': resource_count,
+        })
 
     @action(detail=True, methods=['post'])
     def validate_credentials(self, request, pk=None):
@@ -64,11 +98,60 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def available_regions(self, request):
-        # Return mocked regions for now
-        return Response([
-            {'id': 'us-east-1', 'name': 'US East (N. Virginia)'},
-            {'id': 'eu-central-1', 'name': 'Europe (Frankfurt)'},
-        ])
+        """
+        Return known deployable regions by provider.
+
+        Query params:
+          - provider_type (optional): AWS|GCP|AZURE|LOCAL|RAILWAY|VERCEL
+        """
+        catalog = {
+            CloudProvider.ProviderType.AWS: [
+                {'id': 'af-south-1', 'name': 'Cape Town'},
+                {'id': 'eu-west-2', 'name': 'London'},
+                {'id': 'eu-central-1', 'name': 'Frankfurt'},
+                {'id': 'us-east-1', 'name': 'N. Virginia'},
+            ],
+            CloudProvider.ProviderType.GCP: [
+                {'id': 'europe-west1', 'name': 'Belgium'},
+                {'id': 'europe-west3', 'name': 'Frankfurt'},
+                {'id': 'us-central1', 'name': 'Iowa'},
+                {'id': 'us-east1', 'name': 'South Carolina'},
+            ],
+            CloudProvider.ProviderType.AZURE: [
+                {'id': 'westeurope', 'name': 'West Europe'},
+                {'id': 'uksouth', 'name': 'UK South'},
+                {'id': 'eastus', 'name': 'East US'},
+                {'id': 'southafricanorth', 'name': 'South Africa North'},
+            ],
+            CloudProvider.ProviderType.LOCAL: [
+                {'id': 'local', 'name': 'Local Cluster'},
+            ],
+            CloudProvider.ProviderType.RAILWAY: [
+                {'id': 'us-west', 'name': 'US West'},
+                {'id': 'eu-west', 'name': 'EU West'},
+            ],
+            CloudProvider.ProviderType.VERCEL: [
+                {'id': 'iad1', 'name': 'Washington, D.C.'},
+                {'id': 'cdg1', 'name': 'Paris'},
+                {'id': 'sin1', 'name': 'Singapore'},
+            ],
+        }
+
+        provider_type = (request.query_params.get('provider_type') or '').strip().upper()
+        if provider_type:
+            if provider_type not in catalog:
+                return Response(
+                    {'error': f'Unknown provider_type: {provider_type}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            rows = catalog[provider_type]
+            return Response([{'provider': provider_type, **row} for row in rows])
+
+        rows = []
+        for provider_key, provider_regions in catalog.items():
+            for row in provider_regions:
+                rows.append({'provider': provider_key, **row})
+        return Response(rows)
 
 
 class CloudResourceViewSet(viewsets.ModelViewSet):
@@ -119,13 +202,87 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     def optimize_cost(self, request):
         """Analyze current usage and suggest cost optimizations."""
         advisor = CostAdvisor()
-        # Check if generate_report exists before calling
-        if hasattr(advisor, 'generate_report'):
-            report = advisor.generate_report(request.user)
-        else:
-            report = {"message": "Cost optimization module not fully active."}
+        from apps.deployments.models import Service
 
-        return Response(report)
+        service_id = request.query_params.get('service_id')
+        if service_id:
+            try:
+                service = Service.objects.get(id=service_id, owner=request.user)
+            except Service.DoesNotExist:
+                return Response(
+                    {'error': 'Service not found or access denied.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            cpu = float(service.cpu_cores or 1)
+            memory_gb = float(service.memory_mb or 512) / 1024
+            estimates = advisor.estimate_monthly_cost(cpu, memory_gb)
+            normalized = {k: float(v) for k, v in estimates.items()}
+            cheapest = min(normalized, key=normalized.get) if normalized else None
+
+            recommendation = advisor.ai_cost_analysis({
+                'cpu_cores': cpu,
+                'memory_mb': float(service.memory_mb or 512),
+                'stack': str(service.deploy_type or '').lower(),
+                'provider': str(service.provider.provider_type if service.provider else 'unknown'),
+            })
+
+            return Response({
+                'scope': 'service',
+                'service_id': str(service.id),
+                'service_name': service.name,
+                'estimates': normalized,
+                'cheapest_provider': cheapest,
+                'ai_recommendations': recommendation,
+            })
+
+        services = Service.objects.filter(owner=request.user)
+        if not services.exists():
+            baseline = advisor.estimate_monthly_cost(1.0, 0.5)
+            normalized = {k: float(v) for k, v in baseline.items()}
+            cheapest = min(normalized, key=normalized.get) if normalized else None
+            return Response({
+                'scope': 'workspace',
+                'service_count': 0,
+                'estimates': normalized,
+                'cheapest_provider': cheapest,
+                'ai_recommendations': advisor.ai_cost_analysis({
+                    'cpu_cores': 1,
+                    'memory_mb': 512,
+                    'stack': 'mixed',
+                    'provider': 'unknown',
+                }),
+            })
+
+        totals: dict[str, Decimal] = {}
+        total_cpu = 0.0
+        total_memory_mb = 0.0
+
+        for svc in services:
+            svc_cpu = float(svc.cpu_cores or 1)
+            svc_memory_mb = float(svc.memory_mb or 512)
+            total_cpu += svc_cpu
+            total_memory_mb += svc_memory_mb
+            estimate = advisor.estimate_monthly_cost(svc_cpu, svc_memory_mb / 1024)
+            for provider_name, amount in estimate.items():
+                totals[provider_name] = totals.get(provider_name, Decimal("0.00")) + amount
+
+        normalized = {k: float(v.quantize(Decimal("0.01"))) for k, v in totals.items()}
+        cheapest = min(normalized, key=normalized.get) if normalized else None
+        return Response({
+            'scope': 'workspace',
+            'service_count': services.count(),
+            'total_cpu_cores': round(total_cpu, 2),
+            'total_memory_mb': round(total_memory_mb, 2),
+            'estimates': normalized,
+            'cheapest_provider': cheapest,
+            'ai_recommendations': advisor.ai_cost_analysis({
+                'cpu_cores': total_cpu,
+                'memory_mb': total_memory_mb,
+                'stack': 'mixed',
+                'provider': 'multi',
+            }),
+        })
 
     @action(detail=False, methods=['post'])
     def chat(self, request):
@@ -159,42 +316,212 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         Troubleshoot a specific deployment or service error.
         M-5: Deep diagnostic tool.
         """
-        # deployment_id = request.data.get('deployment_id')
-        error_trace = request.data.get('error_trace')
+        from apps.deployments.models import Deployment, Service
 
-        # M-5: Enhanced Troubleshooting logic
-        # 1. Fetch deployment logs if ID provided
-        # 2. Analyze error trace
-        # 3. Check resource utilization
-        # 4. Query AI for root cause analysis
+        deployment_id = request.data.get('deployment_id')
+        service_id = request.data.get('service_id')
+        error_trace = str(
+            request.data.get('error_trace')
+            or request.data.get('logs')
+            or ''
+        ).strip()
 
-        analysis_result = {
-            "root_cause": "Unknown",
-            "confidence": 0.0,
-            "suggested_actions": [],
-            "related_logs": []
-        }
+        if not error_trace and deployment_id:
+            try:
+                deploy = Deployment.objects.get(id=deployment_id, service__owner=request.user)
+                error_trace = (deploy.build_logs or '').strip()
+            except Deployment.DoesNotExist:
+                return Response(
+                    {'error': 'Deployment not found or access denied.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        # Mock logic for now
-        if error_trace:
-            analysis_result["root_cause"] = "Configuration Error detected in environment variables."
-            analysis_result["confidence"] = 0.85
-            analysis_result["suggested_actions"] = ["Verify DATABASE_URL format", "Check for missing API keys"]
+        if not error_trace and service_id:
+            try:
+                service = Service.objects.get(id=service_id, owner=request.user)
+            except Service.DoesNotExist:
+                return Response(
+                    {'error': 'Service not found or access denied.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            latest_failed = (
+                service.deployments
+                .filter(status=Deployment.Status.FAILED)
+                .order_by('-created_at')
+                .first()
+            )
+            if latest_failed:
+                error_trace = (latest_failed.build_logs or '').strip()
 
-        return Response(analysis_result)
+        if not error_trace:
+            return Response(
+                {'error': 'error_trace (or deployment_id/service_id with logs) is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        analyzer = LogAnalyzer()
+        issues = analyzer.analyze_logs(error_trace)
+        diagnosis = analyzer.generate_diagnosis(error_trace)
+
+        provider = None
+        if diagnosis.startswith('[') and '] ' in diagnosis:
+            provider = diagnosis.split(']')[0].lstrip('[')
+            diagnosis = diagnosis.split('] ', 1)[1]
+
+        remediator = RemediationEngine()
+        suggested_actions = []
+        for issue in issues:
+            recommendation = remediator.suggest_fix(issue.get('type', ''))
+            if recommendation:
+                suggested_actions.append({
+                    'issue_type': issue.get('type'),
+                    'action': recommendation.get('action'),
+                    'message': recommendation.get('message'),
+                })
+
+        confidence = max((float(i.get('confidence', 0.0)) for i in issues), default=0.35)
+        root_cause = issues[0]['type'] if issues else 'UNKNOWN'
+
+        return Response({
+            "root_cause": root_cause,
+            "confidence": confidence,
+            "diagnosis": diagnosis,
+            "provider": provider,
+            "issues": issues,
+            "suggested_actions": suggested_actions,
+        })
 
     @action(detail=False, methods=['post'])
     def generate_iac(self, request):
         """
         Generate Infrastructure as Code (Terraform/Pulumi) from natural language description.
         """
-        description = request.data.get('description')
-        target_cloud = request.data.get('cloud', 'aws')
+        description = str(request.data.get('description') or '').strip()
+        if not description:
+            return Response(
+                {'error': 'description is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # Placeholder for IaC generation
-        iac_code = f"# Terraform configuration for {description}\nprovider \"{target_cloud}\" {{}}"
+        target_cloud = str(request.data.get('cloud') or 'aws').strip().lower()
+        provider_map = {
+            'aws': 'aws',
+            'gcp': 'google',
+            'google': 'google',
+            'azure': 'azurerm',
+        }
+        provider = provider_map.get(target_cloud, 'aws')
 
-        return Response({'code': iac_code, 'language': 'hcl'})
+        slug = re.sub(r'[^a-z0-9]+', '-', description.lower()).strip('-')[:32] or 'workload'
+        resource_name = slug.replace('-', '_')
+
+        resource_block = (
+            f'resource "{provider}_instance" "{resource_name}" {{\n'
+            f'  name = "{slug}"\n'
+            '}\n'
+        )
+
+        lowered = description.lower()
+        if any(word in lowered for word in ('bucket', 'storage', 'object store', 's3')):
+            if provider == 'google':
+                resource_block = (
+                    f'resource "google_storage_bucket" "{resource_name}" {{\n'
+                    f'  name     = "{slug}"\n'
+                    '  location = var.region\n'
+                    '}\n'
+                )
+            elif provider == 'azurerm':
+                resource_block = (
+                    f'resource "azurerm_storage_account" "{resource_name}" {{\n'
+                    f'  name                     = "{resource_name[:24]}"\n'
+                    '  location                 = var.region\n'
+                    '  resource_group_name      = var.resource_group_name\n'
+                    '  account_tier             = "Standard"\n'
+                    '  account_replication_type = "LRS"\n'
+                    '}\n'
+                )
+            else:
+                resource_block = (
+                    f'resource "aws_s3_bucket" "{resource_name}" {{\n'
+                    f'  bucket = "{slug}"\n'
+                    '}\n'
+                )
+        elif any(word in lowered for word in ('postgres', 'mysql', 'database', 'db')):
+            if provider == 'google':
+                resource_block = (
+                    f'resource "google_sql_database_instance" "{resource_name}" {{\n'
+                    f'  name             = "{slug}"\n'
+                    '  database_version = "POSTGRES_15"\n'
+                    '  region           = var.region\n'
+                    '  settings { tier = "db-f1-micro" }\n'
+                    '}\n'
+                )
+            elif provider == 'azurerm':
+                resource_block = (
+                    f'resource "azurerm_postgresql_flexible_server" "{resource_name}" {{\n'
+                    f'  name                   = "{slug}"\n'
+                    '  resource_group_name    = var.resource_group_name\n'
+                    '  location               = var.region\n'
+                    '  sku_name               = "B_Standard_B1ms"\n'
+                    '  administrator_login    = var.db_admin\n'
+                    '  administrator_password = var.db_password\n'
+                    '}\n'
+                )
+            else:
+                resource_block = (
+                    f'resource "aws_db_instance" "{resource_name}" {{\n'
+                    '  allocated_storage    = 20\n'
+                    '  engine               = "postgres"\n'
+                    '  instance_class       = "db.t3.micro"\n'
+                    f'  identifier           = "{slug}"\n'
+                    '  username             = var.db_admin\n'
+                    '  password             = var.db_password\n'
+                    '  skip_final_snapshot  = true\n'
+                    '}\n'
+                )
+        elif any(word in lowered for word in ('kubernetes', 'k8s', 'cluster')):
+            if provider == 'google':
+                resource_block = (
+                    f'resource "google_container_cluster" "{resource_name}" {{\n'
+                    f'  name     = "{slug}"\n'
+                    '  location = var.region\n'
+                    '  initial_node_count = 1\n'
+                    '}\n'
+                )
+            elif provider == 'azurerm':
+                resource_block = (
+                    f'resource "azurerm_kubernetes_cluster" "{resource_name}" {{\n'
+                    f'  name                = "{slug}"\n'
+                    '  location            = var.region\n'
+                    '  resource_group_name = var.resource_group_name\n'
+                    '  dns_prefix          = "aks"\n'
+                    '  default_node_pool { name = "default" node_count = 1 vm_size = "Standard_B2s" }\n'
+                    '  identity { type = "SystemAssigned" }\n'
+                    '}\n'
+                )
+            else:
+                resource_block = (
+                    f'resource "aws_eks_cluster" "{resource_name}" {{\n'
+                    f'  name = "{slug}"\n'
+                    '  role_arn = var.eks_role_arn\n'
+                    '  vpc_config { subnet_ids = var.subnet_ids }\n'
+                    '}\n'
+                )
+
+        iac_code = (
+            'terraform {\n'
+            '  required_version = ">= 1.5.0"\n'
+            '}\n\n'
+            f'provider "{provider}" {{\n'
+            '  region = var.region\n'
+            '}\n\n'
+            'variable "region" {\n'
+            '  type = string\n'
+            '}\n\n'
+            + resource_block
+        )
+
+        return Response({'code': iac_code, 'language': 'hcl', 'provider': provider})
 
     @action(detail=False, methods=['post'])
     def ecosystem_scan(self, request):

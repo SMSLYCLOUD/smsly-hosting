@@ -482,8 +482,8 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     ).strip() or "main"
     service.branch = resolved_branch
 
-    # Only set port from plan if still at model default (8000)
-    if service.internal_port == 8000:
+    # Only set port from plan if still at model default (8000) or unset/invalid.
+    if not service.internal_port or service.internal_port == 8000:
         service.internal_port = int(port)
 
     service.buildpack = buildpack

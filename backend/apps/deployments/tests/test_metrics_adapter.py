@@ -13,11 +13,9 @@ class MetricsAdapterTests(SimpleTestCase):
         self.adapter = MetricsAdapter()
 
     @patch.object(MetricsAdapter, '_query_prometheus', return_value=None)
-    def test_disk_history_falls_back_to_mock(self, _mock_query):
+    def test_disk_history_returns_empty_when_unavailable(self, _mock_query):
         data = self.adapter.get_disk_history('svc-1', '1h')
-        self.assertTrue(data)
-        self.assertIn('timestamp', data[0])
-        self.assertIn('value', data[0])
+        self.assertEqual(data, [])
 
     @patch.object(MetricsAdapter, '_query_prometheus', return_value=None)
     def test_get_current_returns_expected_shape(self, _mock_query):
@@ -31,4 +29,6 @@ class MetricsAdapterTests(SimpleTestCase):
             'network_tx_kb',
         }
         self.assertEqual(set(snapshot.keys()), expected_keys)
-
+        self.assertEqual(snapshot['cpu_percent'], 0.0)
+        self.assertEqual(snapshot['memory_usage'], 0.0)
+        self.assertEqual(snapshot['memory_limit'], 0.0)

@@ -4,7 +4,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from services.ai_engine import DevOpsAgent
+from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,41 +31,19 @@ class AIChatView(GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        agent = DevOpsAgent()
-
-        # Simple RAG / Tool Routing
-        if "analyze" in message.lower() and "repo" in message.lower():
-            # In a real app, we'd extract URL via NLP
-            # Mocking extracting the last word as URL
-            repo_url = message.split()[-1]
-
-            # SECURITY: Log AI interactions for audit
-            logger.info(
-                f"AI repo analysis requested by user {request.user.id}: {repo_url}")
-
-            analysis = agent.analyze_repo(
-                repo_url, ["Dockerfile", "package.json"])
+        try:
+            logger.info("AI chat message from user %s", request.user.id)
+            response, provider_name = ask_with_fallback(
+                prompt=message,
+                system_prompt=SYSTEM_PROMPT,
+            )
             return Response({
-                "text": f"I've analyzed {repo_url}. It looks like a **{analysis.stack_type}** project. "
-                f"I recommend deploying on port **{analysis.recommended_port}**. "
-                f"Estimated cost: **{analysis.cost_estimate}**."
+                "text": response,
+                "provider": provider_name,
             })
-
-        # General Chat
-        # If API key is present, use LLM. Else simulate.
-        if agent.llm:
-            try:
-                # SECURITY: Log AI interactions
-                logger.info(f"AI chat message from user {request.user.id}")
-                response = agent.llm.invoke(message)
-                return Response({"text": response.content})
-            except Exception as e:
-                logger.error(f"AI chat error: {e}")
-                return Response(
-                    {"text": "I'm having trouble connecting to my brain. Let's try manual deployment."},
-                    status=500
-                )
-        else:
-            return Response({
-                "text": "I am operating in Simulation Mode. Try asking me to 'analyze github.com/user/repo'."
-            })
+        except Exception as e:  # noqa: BLE001
+            logger.error("AI chat error: %s", e)
+            return Response(
+                {"detail": "AI chat temporarily unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )

@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import * as THREE from 'three';
 import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 
 // @ts-ignore
@@ -61,7 +62,6 @@ function statusColor(status: string): string {
 
 /* ── 3D Node (lazy THREE) ── */
 function createServiceNode(node: SvcNode): any {
-  const THREE = require('three');
   const group = new THREE.Group();
   const color = statusColor(node.status);
 

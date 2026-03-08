@@ -9,6 +9,7 @@ import hashlib
 import hmac as hmac_mod
 import logging
 import time
+from typing import Any
 
 import requests
 from django.utils import timezone
@@ -20,6 +21,31 @@ from rest_framework.response import Response
 from .models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_remote_error_payload(kind: str, reason: str, upstream_status: int | None = None) -> dict[str, Any]:
+    """
+    Return a non-failing payload for remote convenience endpoints.
+
+    This keeps dashboard pages usable even when a remote server is
+    temporarily unreachable or still provisioning.
+    """
+    payload: dict[str, Any] = {
+        "remote_unreachable": True,
+        "remote_error": str(reason),
+        "kind": kind,
+    }
+    if upstream_status is not None:
+        payload["upstream_status"] = int(upstream_status)
+
+    if kind in {"services", "deployments"}:
+        payload["results"] = []
+        payload["count"] = 0
+    elif kind == "domains":
+        payload["domains"] = []
+        payload["count"] = 0
+
+    return payload
 
 
 def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b""):
@@ -359,35 +385,69 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def services(self, request, pk=None):
         """Fetch services from a remote server."""
         server = self.get_object()
+        if not server.api_url:
+            return Response(_safe_remote_error_payload("services", "Server has no API URL yet."))
+
         api_path = "/api/v1/services/"
         url = f"{server.api_url.rstrip('/')}{api_path}"
         headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            return Response(resp.json())
+            if resp.status_code >= 400:
+                return Response(
+                    _safe_remote_error_payload(
+                        "services",
+                        f"Remote server returned HTTP {resp.status_code}",
+                        upstream_status=resp.status_code,
+                    )
+                )
+            try:
+                payload = resp.json()
+            except ValueError:
+                return Response(
+                    _safe_remote_error_payload(
+                        "services",
+                        "Remote server returned non-JSON payload.",
+                        upstream_status=resp.status_code,
+                    )
+                )
+            return Response(payload)
         except requests.RequestException as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return Response(_safe_remote_error_payload("services", str(e)))
 
     @action(detail=True, methods=["get"])
     def deployments(self, request, pk=None):
         """Fetch deployments from a remote server."""
         server = self.get_object()
+        if not server.api_url:
+            return Response(_safe_remote_error_payload("deployments", "Server has no API URL yet."))
+
         api_path = "/api/v1/deployments/"
         url = f"{server.api_url.rstrip('/')}{api_path}"
         headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            return Response(resp.json())
+            if resp.status_code >= 400:
+                return Response(
+                    _safe_remote_error_payload(
+                        "deployments",
+                        f"Remote server returned HTTP {resp.status_code}",
+                        upstream_status=resp.status_code,
+                    )
+                )
+            try:
+                payload = resp.json()
+            except ValueError:
+                return Response(
+                    _safe_remote_error_payload(
+                        "deployments",
+                        "Remote server returned non-JSON payload.",
+                        upstream_status=resp.status_code,
+                    )
+                )
+            return Response(payload)
         except requests.RequestException as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return Response(_safe_remote_error_payload("deployments", str(e)))
 
     @action(detail=True, methods=["get"])
     def domains(self, request, pk=None):
@@ -395,18 +455,31 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         server = self.get_object()
 
         if not server.api_url:
-            return Response(
-                {"error": "Server has no API URL yet."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response(_safe_remote_error_payload("domains", "Server has no API URL yet."))
 
         api_path = "/api/v1/services/"
         url = f"{server.api_url.rstrip('/')}{api_path}"
         headers = _build_remote_headers(server, method="GET", path=api_path)
         try:
             resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            if resp.status_code >= 400:
+                return Response(
+                    _safe_remote_error_payload(
+                        "domains",
+                        f"Remote server returned HTTP {resp.status_code}",
+                        upstream_status=resp.status_code,
+                    )
+                )
+            try:
+                data = resp.json()
+            except ValueError:
+                return Response(
+                    _safe_remote_error_payload(
+                        "domains",
+                        "Remote server returned non-JSON payload.",
+                        upstream_status=resp.status_code,
+                    )
+                )
             services = data.get("results", data) if isinstance(data, dict) else data
 
             domains = []
@@ -414,7 +487,10 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 svc_id = svc.get("id", "")
                 svc_name = svc.get("name", "")
                 public_domain = svc.get("public_domain", "")
-                for domain in svc.get("custom_domains", []):
+                custom_domains = svc.get("custom_domains", [])
+                if not isinstance(custom_domains, list):
+                    custom_domains = []
+                for domain in custom_domains:
                     domains.append({
                         "domain": domain,
                         "service_id": svc_id,
@@ -426,7 +502,4 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
             return Response({"domains": domains, "count": len(domains)})
         except requests.RequestException as e:
-            return Response(
-                {"error": str(e)},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return Response(_safe_remote_error_payload("domains", str(e)))

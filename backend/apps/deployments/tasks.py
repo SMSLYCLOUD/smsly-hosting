@@ -1208,9 +1208,9 @@ def _deploy_container(deployment, provider, image_name):
                         "Will recheck at promotion.\n",
                     )
 
-        # ── Container is live with Traefik labels — mark ACTIVE ──
-        # _deploy_docker now creates containers with the canonical name
-        # and Traefik labels enabled. No staging/promotion needed.
+        # Container is live with Traefik labels - mark ACTIVE.
+        # Local adapter may internally perform staged blue-green promotion
+        # before returning the final live container ID.
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id
         deployment.save()  # full save() triggers model hook that cancels other ACTIVE deploys

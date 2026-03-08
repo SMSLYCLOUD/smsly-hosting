@@ -38,16 +38,15 @@ class AddonMaintenanceService:
 
     def rotate_credentials(self) -> dict:
         """Generate new password, update addon + service env vars."""
-        # This requires lower-level DB user management which we stub here
-        # Steps:
-        # 1. Generate secure password
-        # 2. Connect as admin and ALTER USER
-        # 3. Update Addon.connection_url
-        # 4. Update linked Service EnvVars
-        # 5. Restart service
-        import secrets
-        new_pass = secrets.token_urlsafe(16)
-        logger.info(f"Rotating credentials for {self.addon.id}")
-
-        # Stub logic
-        return {'status': 'rotated', 'message': 'Credentials rotated (stub)'}
+        logger.warning(
+            "Credential rotation requested for addon %s (%s) but backend implementation is not available.",
+            self.addon.id,
+            self.addon.addon_type,
+        )
+        return {
+            'status': 'not_implemented',
+            'error': (
+                'Credential rotation is not implemented for this addon provider yet. '
+                'Use manual rotation until provider-level credential mutation is wired.'
+            ),
+        }

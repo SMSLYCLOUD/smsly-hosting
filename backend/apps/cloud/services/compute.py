@@ -88,8 +88,26 @@ class ComputeService:
         """
         Submit a batch job (AWS Batch / Azure Batch).
         """
-        # Adapters don't have batch methods yet, simulating or extending
-        # For now, treat as a one-off container task
-        # implementation placeholder
-        return CloudResource(
-            name=name, resource_type='BATCH_JOB', status='SUBMITTED')
+        deploy_batch = getattr(self.adapter, "deploy_batch_job", None)
+        if not callable(deploy_batch):
+            raise NotImplementedError(
+                f"Batch job deployment is not implemented for provider "
+                f"{self.provider.provider_type}."
+            )
+
+        resource_id = deploy_batch(name=name, command=command, image=image)
+        resource, _created = CloudResource.objects.update_or_create(
+            provider=self.provider,
+            resource_id=resource_id,
+            defaults={
+                'name': name,
+                'resource_type': 'BATCH_JOB',
+                'region': self.provider.region,
+                'status': 'SUBMITTED',
+                'metadata': {
+                    'command': command,
+                    'image': image,
+                },
+            },
+        )
+        return resource

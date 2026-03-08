@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useGraphData } from '@/hooks/useGraphData';
 import { TopologyNode } from '@/types/topology';
 import { Loader2, ArrowLeft, ArrowRight } from 'lucide-react';

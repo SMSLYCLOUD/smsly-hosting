@@ -1,6 +1,8 @@
 """Views for AI provider configuration and status."""
+import json
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
+from django.db import DatabaseError
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
@@ -16,6 +18,14 @@ from .providers import (
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
 from apps.deployments.models_audit import AuditLog
+
+
+def _json_safe(value, fallback):
+    """Coerce arbitrary values to JSON-safe structures."""
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:  # noqa: BLE001
+        return fallback
 
 
 @extend_schema(responses=OpenApiTypes.OBJECT)
@@ -203,10 +213,50 @@ def ai_intelligence_report(request):
     GET /api/v1/ai/report/
     Returns the latest daily intelligence report.
     """
-    report = AuditLog.objects.filter(actor="AI_REPORTER", action="DAILY_REPORT").order_by("-created_at").first()
-    if report:
-        return Response(report.metadata)
-    return Response({"error": "No report generated yet"}, status=404)
+    try:
+        report = (
+            AuditLog.objects
+            .filter(actor="AI_REPORTER", action="DAILY_REPORT")
+            .order_by("-created_at")
+            .first()
+        )
+    except (DatabaseError, Exception):  # noqa: BLE001
+        # Keep the dashboard stable even when audit storage is unavailable.
+        return Response({
+            "available": False,
+            "message": "Intelligence report storage unavailable.",
+            "total_deployments": 0,
+            "failed_deployments": 0,
+            "anomalies_detected": 0,
+            "success_rate": 0,
+        })
+
+    if not report:
+        return Response({
+            "available": False,
+            "message": "No report generated yet.",
+            "total_deployments": 0,
+            "failed_deployments": 0,
+            "anomalies_detected": 0,
+            "success_rate": 0,
+        })
+
+    metadata = report.metadata if isinstance(report.metadata, dict) else {}
+    metadata = _json_safe(metadata, {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    payload = {
+        "available": True,
+        "message": "Report loaded.",
+        "total_deployments": 0,
+        "failed_deployments": 0,
+        "anomalies_detected": 0,
+        "success_rate": 0,
+    }
+    payload.update(metadata)
+    payload["available"] = True
+    return Response(_json_safe(payload, {"available": True}))
 
 
 @api_view(["GET"])
@@ -217,20 +267,29 @@ def ai_anomaly_history(request):
     GET /api/v1/ai/anomalies/
     Returns history of detected anomalies and remediation actions.
     """
-    anomalies = AuditLog.objects.filter(
-        actor__in=["AI_REMEDIATOR", "AI_REVIEWER"]
-    ).order_by("-created_at")[:50]
+    try:
+        anomalies = (
+            AuditLog.objects
+            .filter(actor__in=["AI_REMEDIATOR", "AI_REVIEWER"])
+            .order_by("-created_at")[:50]
+        )
+    except (DatabaseError, Exception):  # noqa: BLE001
+        return Response({"anomalies": [], "available": False})
 
     data = []
     for a in anomalies:
+        meta = a.metadata if isinstance(a.metadata, dict) else {}
+        safe_meta = _json_safe(meta, {})
+        if not isinstance(safe_meta, dict):
+            safe_meta = {}
         data.append({
             "id": str(a.id),
-            "service_name": a.target,
-            "issue_type": a.action,
-            "severity": a.metadata.get("severity", "WARNING"),
+            "service_name": str(a.target or ""),
+            "issue_type": str(a.action or "UNKNOWN"),
+            "severity": str(safe_meta.get("severity", "WARNING")),
             "detected_at": a.created_at,
             "auto_fixed": a.action in ["SCALE_UP", "ROLLBACK", "CLEANUP"],
-            "fix_result": str(a.metadata)
+            "fix_result": str(safe_meta),
         })
 
-    return Response({"anomalies": data})
+    return Response(_json_safe({"anomalies": data, "available": True}, {"anomalies": [], "available": True}))

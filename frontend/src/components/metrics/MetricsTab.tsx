@@ -218,7 +218,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <h3 className="font-bold">CPU Usage (%)</h3>
                 </div>
                 <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
                         <AreaChart data={data.cpu}>
                             <defs>
                                 <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
@@ -245,7 +245,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <h3 className="font-bold">Memory Usage (MB)</h3>
                 </div>
                 <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
                         <AreaChart data={data.memory}>
                             <defs>
                                 <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
@@ -274,7 +274,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                         <h3 className="font-bold">Network I/O (KB/s)</h3>
                     </div>
                     <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
                             <AreaChart data={data.network}>
                                 <defs>
                                     <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
@@ -301,7 +301,7 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                         <h3 className="font-bold">Disk I/O (KB/s)</h3>
                     </div>
                     <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
                             <AreaChart data={data.disk}>
                                 <defs>
                                     <linearGradient id="diskGrad" x1="0" y1="0" x2="0" y2="1">

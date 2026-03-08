@@ -574,7 +574,18 @@ ensure_caddy_config_permissions() {
     else
         chown -R 1000:1000 "$caddy_config_dir" 2>/dev/null || true
     fi
-    chmod -R 775 "$caddy_config_dir" 2>/dev/null || true
+    # Keep directory group-writable and sticky for future files.
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" 2>/dev/null || true
+    find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+
+    # Ensure key files are writable by backend uid 1000.
+    [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
+    [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
+    [ -f "$caddy_config_dir/.cloudflare_token" ] && chmod 600 "$caddy_config_dir/.cloudflare_token" 2>/dev/null || true
+    [ -f "$caddy_config_dir/.cloudflare_token_clear" ] && chmod 600 "$caddy_config_dir/.cloudflare_token_clear" 2>/dev/null || true
+
+    # Fast write probe so --update can self-heal before UI writes Caddyfile.
+    echo "perm-check $(date +%s)" > "$caddy_config_dir/.perm_probe" 2>/dev/null || true
 }
 
 ensure_container_on_network() {

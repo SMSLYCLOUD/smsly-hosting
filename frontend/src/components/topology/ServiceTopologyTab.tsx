@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2, Database } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import * as THREE from 'three';
 import api from '@/lib/api';
 import { addonsApi } from '@/lib/api';
 
@@ -67,7 +68,6 @@ function getColor(node: GraphNode): string {
 
 /* ── 3D Node (lazy THREE) ── */
 function createNode3D(node: GraphNode): any {
-  const THREE = require('three');
   const group = new THREE.Group();
   const color = getColor(node);
 

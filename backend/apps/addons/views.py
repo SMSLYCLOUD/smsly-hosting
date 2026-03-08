@@ -62,4 +62,9 @@ class AddonMaintenanceViewSet(viewsets.ReadOnlyModelViewSet):
     def rotate_credentials(self, request, pk=None):
         addon = self.get_object()
         service = AddonMaintenanceService(addon)
-        return Response(service.rotate_credentials())
+        result = service.rotate_credentials()
+        if result.get('status') == 'not_implemented':
+            return Response(result, status=status.HTTP_501_NOT_IMPLEMENTED)
+        if result.get('status') in {'failed', 'error'}:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)

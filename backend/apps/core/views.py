@@ -57,15 +57,36 @@ class DashboardOverviewView(GenericAPIView):
         start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
         # Services
-        services = Service.objects.filter(owner=user)
-        # Count running services: services that have an ACTIVE deployment
-        running_services = services.filter(deployments__status='ACTIVE').distinct().count()
+        services = Service.objects.filter(owner=user).prefetch_related('deployments')
+        running_services = 0
+        failed_services = 0
+        stopped_services = 0
+
+        for service in services:
+            latest = service.deployments.order_by('-created_at').first()
+            if latest is None:
+                stopped_services += 1
+                continue
+            if latest.status in {
+                Deployment.Status.ACTIVE,
+                Deployment.Status.STAGED,
+                Deployment.Status.HEALTH_CHECK,
+                Deployment.Status.DEPLOYING,
+                Deployment.Status.BUILDING,
+                Deployment.Status.REVIEW,
+                Deployment.Status.QUEUED,
+            }:
+                running_services += 1
+            elif latest.status == Deployment.Status.FAILED:
+                failed_services += 1
+            else:
+                stopped_services += 1
 
         service_stats = {
             "total": services.count(),
             "running": running_services,
-            "failed": 0, # Placeholder or complex query
-            "stopped": services.count() - running_services
+            "failed": failed_services,
+            "stopped": stopped_services,
         }
 
         # Deployments this month
@@ -175,4 +196,3 @@ class SubdomainStubViewSet(viewsets.ViewSet):
 
     def destroy(self, request, pk=None):
         return Response(status=status.HTTP_404_NOT_FOUND)
-
