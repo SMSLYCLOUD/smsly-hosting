@@ -1558,11 +1558,31 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         parsers.JSONParser,
         parsers.MultiPartParser]  # Enable File Uploads
 
+    def get_serializer_class(self):
+        """
+        Use lightweight serializer for list endpoints to avoid returning
+        large log payloads for every deployment row.
+        """
+        if self.action == 'list':
+            return DeploymentTimelineSerializer
+        return DeploymentSerializer
+
     def get_queryset(self):
         """ZH-002 FIX: Only return deployments for services owned by the requesting user."""
+        base_qs = self.queryset.select_related('service')
+        if self.action == 'list':
+            base_qs = base_qs.defer(
+                'build_logs',
+                'review_summary',
+                'vulnerability_report',
+                'pipeline_stages',
+                'runtime_logs_url',
+                'green_container_id',
+                'container_id',
+            )
         if self.request.user.is_superuser:
-            return self.queryset.all()
-        return self.queryset.filter(service__owner=self.request.user)
+            return base_qs.all()
+        return base_qs.filter(service__owner=self.request.user)
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
