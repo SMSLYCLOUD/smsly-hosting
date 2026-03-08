@@ -262,14 +262,25 @@ def generate_caddyfile(config) -> str:
             sections.append("\n".join(wildcard_lines))
 
     # Always include :80 catch-all so the IP always works.
-    # In SSL mode this is a fallback; in IP/HTTP mode this is the only block.
+    # In SSL+domain mode this should only handle unmatched hosts and route to
+    # a controlled notice page. In IP/HTTP mode it remains the primary route.
     # Never generate domain-specific HTTP blocks — they break IP access
     # because Caddy won't match requests by IP to a domain-named block.
-    sections.append(
-        """:80 {
+    if config.use_ssl and domain:
+        sections.append(
+            """:80 {
+    handle {
+        rewrite * /notice
+        reverse_proxy localhost:8090
+    }
+}"""
+        )
+    else:
+        sections.append(
+            """:80 {
     reverse_proxy localhost:8090
 }"""
-    )
+        )
 
     # Per-service custom domains routed to Traefik.
     # Skip subdomains already covered by the *.domain wildcard.

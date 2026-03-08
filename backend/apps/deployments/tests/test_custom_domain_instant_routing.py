@@ -76,6 +76,30 @@ class CaddyCustomDomainRoutingTests(TestCase):
         self.assertIn('rewrite * /notice', caddyfile)
         self.assertIn('reverse_proxy localhost:8090', caddyfile)
 
+    def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):
+        config = SimpleNamespace(
+            domain='cloud.smsly.cloud',
+            use_ssl=True,
+            wildcard_subdomains=False,
+            cloudflare_api_token='',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn(':80 {\n    handle {\n        rewrite * /notice\n        reverse_proxy localhost:8090\n    }\n}', caddyfile)
+
+    def test_ip_mode_keeps_http_catch_all_proxy(self):
+        config = SimpleNamespace(
+            domain='163.245.214.62',
+            use_ssl=False,
+            wildcard_subdomains=False,
+            cloudflare_api_token='',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn(':80 {\n    reverse_proxy localhost:8090\n}', caddyfile)
+
     def test_wildcard_routes_known_hosts_and_sends_unknown_to_notice(self):
         Service.objects.create(
             name='known-wildcard-service',
