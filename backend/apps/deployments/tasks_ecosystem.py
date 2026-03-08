@@ -37,6 +37,11 @@ _DEFAULT_WAVE_SIZE = 10
 _MAX_WAVE_SIZE = 50
 _WAVE_RECHECK_SECONDS = 15
 _MAX_WAVE_RECHECKS = 480  # 2h (480 * 15s)
+_SMSLY_CORE_HINTS = {
+    "smsly-core",
+    "smsly-platform-api",
+    "platform-api",
+}
 
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> int:
@@ -72,6 +77,43 @@ def _next_available_service_name(ServiceModel, base_name: str) -> str:
             return candidate
 
     return f"{base_name}-{secrets.token_hex(4)}"
+
+
+def _looks_like_smsly_core_name(raw: str) -> bool:
+    """Detect SMSLY core/platform API style service names."""
+    token = _slugify_name(raw)
+    if token in _SMSLY_CORE_HINTS:
+        return True
+    return token.startswith("smsly") and ("core" in token or "platform-api" in token)
+
+
+def _repo_slug_from_url(url: str) -> str:
+    """Extract repo slug from repository URL when available."""
+    text = str(url or "").strip().rstrip("/")
+    if not text:
+        return ""
+    tail = text.split("/")[-1]
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return _slugify_name(tail)
+
+
+def _select_shared_addon_anchor(services: List[Any]):
+    """
+    Choose the best service to host shared ecosystem addons.
+
+    Prefer SMSLY core when present; otherwise use the first created service.
+    """
+    if not services:
+        return None
+
+    for service in services:
+        name = getattr(service, "name", "")
+        repo_url = getattr(service, "repository_url", "")
+        if _looks_like_smsly_core_name(name) or _looks_like_smsly_core_name(_repo_slug_from_url(repo_url)):
+            return service
+
+    return services[0]
 
 
 def _normalize_env_vars(raw_env: Any) -> Dict[str, str]:
@@ -752,7 +794,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             for a in addons_list:
                 required_addons.add(str(a).strip().upper())
 
-    first_service = None
+    created_service_records: List[Any] = []
 
     for repo_key in ordered_keys:
         entry = entries_by_key[repo_key]
@@ -787,8 +829,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
 
             _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
 
-            if first_service is None:
-                first_service = service
+            if all(getattr(existing, "id", None) != getattr(service, "id", None) for existing in created_service_records):
+                created_service_records.append(service)
 
             # Keep multiple aliases for inter-service references.
             aliases = {
@@ -809,9 +851,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
 
             shared_addons_urls = {}
-            if first_service:
+            graph_anchor_service = _select_shared_addon_anchor(created_service_records)
+            if graph_anchor_service:
                 from services.ecosystem_graph import build_ecosystem_graph
-                graph = build_ecosystem_graph(first_service)
+                graph = build_ecosystem_graph(graph_anchor_service)
                 shared_addons_urls = graph.get("shared_addons", {})
 
             resolved_env = _resolve_env_placeholders(
@@ -878,8 +921,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
         if deployment_ids:
             waves.append(deployment_ids)
 
-    # Synchronously provision required addons onto the first service
-    if first_service and required_addons:
+    # Synchronously provision required addons onto a stable anchor service.
+    addon_anchor_service = _select_shared_addon_anchor(created_service_records)
+    if addon_anchor_service and required_addons:
         supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
         for addon_type in required_addons:
             if addon_type not in supported_addons:
@@ -887,13 +931,13 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 continue
 
             # Check if addon already exists
-            existing_addon = Addon.objects.filter(service=first_service, addon_type=addon_type).first()
+            existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if existing_addon and existing_addon.status == Addon.Status.ACTIVE:
                 continue
 
             if not existing_addon:
                 existing_addon = Addon.objects.create(
-                    service=first_service,
+                    service=addon_anchor_service,
                     name=f"{addon_type.lower()}-shared"[:255],
                     addon_type=addon_type,
                     status=Addon.Status.PROVISIONING,
@@ -913,7 +957,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 }
                 key = key_map.get(addon_type, f"{addon_type}_URL")
                 EnvironmentVariable.objects.update_or_create(
-                    service=first_service,
+                    service=addon_anchor_service,
                     key=key,
                     defaults={"value": url, "is_secret": True}
                 )
