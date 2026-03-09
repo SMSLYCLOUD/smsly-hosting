@@ -1,12 +1,26 @@
-from azure.mgmt.appcontainers import ContainerAppsAPIClient
-from azure.mgmt.appcontainers.models import (
-    ContainerApp, Template, Container, EnvironmentVar,
-    Configuration, Ingress, TrafficWeight
-)
+from typing import Dict, Any, List, Optional
+from .base import BaseCloudAdapter
+
+try:
+    from azure.mgmt.appcontainers import ContainerAppsAPIClient
+    from azure.mgmt.appcontainers.models import (
+        ContainerApp, Template, Container, EnvironmentVar,
+        Configuration, Ingress, TrafficWeight
+    )
+    from azure.identity import ClientSecretCredential
+    HAS_AZURE_SDK = True
+except ImportError:
+    HAS_AZURE_SDK = False
+    ContainerAppsAPIClient = None
+    ContainerApp = Template = Container = EnvironmentVar = None
+    Configuration = Ingress = TrafficWeight = None
+    ClientSecretCredential = None
 
 class AzureAdapter(BaseCloudAdapter):
     def __init__(self, tenant_id: str, client_id: str,
                  client_secret: str, subscription_id: str, region: str = 'eastus'):
+        if not HAS_AZURE_SDK:
+            raise RuntimeError("Azure SDK not installed. Please install 'azure-mgmt-appcontainers azure-identity'")
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
