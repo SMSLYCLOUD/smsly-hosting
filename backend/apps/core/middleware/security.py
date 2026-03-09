@@ -29,6 +29,7 @@ class SecurityMiddleware:
             '/api/v1/auth/',
             '/api/v1/webhooks/',  # Webhooks have their own signature verification
             '/api/v1/system/route-recheck/',  # Public fallback-page recheck hook
+            '/api/v1/auth/node-token-exchange',  # Node token exchange handles own auth
         ]
 
     def __call__(self, request):
