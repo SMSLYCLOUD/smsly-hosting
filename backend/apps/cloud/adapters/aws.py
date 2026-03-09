@@ -37,7 +37,7 @@ class AWSAdapter(BaseCloudAdapter):
 
         # pylint: disable=too-many-positional-arguments,arguments-differ
     def deploy_container(self, service_name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1) -> str:
+                         env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """
         Deploys a container to ECS Fargate.
         Steps:
@@ -123,9 +123,8 @@ class AWSAdapter(BaseCloudAdapter):
                 launchType='FARGATE',
                 networkConfiguration={
                     'awsvpcConfiguration': {
-                        'subnets': subnet_ids,
                         'securityGroups': sg_ids,
-                        'assignPublicIp': 'ENABLED'
+                        'assignPublicIp': 'ENABLED' if kwargs.get('is_public', True) else 'DISABLED'
                     }
                 }
             )
