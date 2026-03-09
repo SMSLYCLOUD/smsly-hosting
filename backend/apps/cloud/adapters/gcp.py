@@ -1,9 +1,22 @@
-from google.cloud import run_v2
-from google.iam.v1 import policy_pb2
+from typing import Dict, Any, List, Optional
+from .base import BaseCloudAdapter
+
+try:
+    from google.cloud import run_v2
+    from google.iam.v1 import policy_pb2
+    from google.oauth2 import service_account
+    HAS_GCP_SDK = True
+except ImportError:
+    HAS_GCP_SDK = False
+    run_v2 = None
+    policy_pb2 = None
+    service_account = None
 
 class GCPAdapter(BaseCloudAdapter):
     def __init__(self, service_account_json: Dict,
                  project_id: str, region: str = 'us-central1'):
+        if not HAS_GCP_SDK:
+            raise RuntimeError("GCP SDK not installed. Please install 'google-cloud-run google-auth'")
         self.credentials = service_account.Credentials.from_service_account_info(
             service_account_json)
         self.project_id = project_id
