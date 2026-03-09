@@ -1847,20 +1847,20 @@ def cleanup_old_backups_task():
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
-    from services.transfer_engine import TransferEngine
+    from apps.deployments.services.transfer_service import ServerTransferService
 
     transfer = TransferModel.objects.get(id=transfer_id)
-    engine = TransferEngine(transfer)
+    engine = ServerTransferService(transfer)
     engine.execute()
 
 
 @shared_task(bind=True)
 def rollback_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
-    from services.transfer_engine import TransferEngine
+    from apps.deployments.services.transfer_service import ServerTransferService
 
     transfer = TransferModel.objects.get(id=transfer_id)
-    engine = TransferEngine(transfer)
+    engine = ServerTransferService(transfer)
     engine.rollback()
 
 

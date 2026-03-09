@@ -206,9 +206,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        """ZH-001 FIX: Only return services owned by the requesting user."""
+        """ZH-001 FIX: Return services owned by user. APITokens (remote proxies) skip owner check."""
         qs = self.queryset.prefetch_related('deployments')
-        if self.request.user.is_superuser:
+        # hasattr(self.request.auth, 'prefix') means this is an APIToken from another server
+        if self.request.user.is_superuser or hasattr(self.request.auth, 'prefix'):
             return qs.all().order_by('-created_at')
         return qs.filter(owner=self.request.user).order_by('-created_at')
 

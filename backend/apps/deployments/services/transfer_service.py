@@ -143,38 +143,86 @@ class ServerTransferService:
             self._restore_full_server(remote_backup_path)
 
     def _restore_single_service(self, remote_backup_path):
-        remote_temp_dir = f"/tmp/restore_{self.transfer.id}"
-        self.ssh.exec_command(f"mkdir -p {shlex.quote(remote_temp_dir)}")
-        self.ssh.exec_command(f"tar -xzf {shlex.quote(remote_backup_path)} -C {shlex.quote(remote_temp_dir)}")
+        self._update(65, 'Uploading backup archive to remote CloudNeuron API container...')
+        
+        # 1. We must execute the restoration inside the remote server's CloudNeuron
+        # backend container so it registers the Service in the remote database!
+        # First, copy the tarball into the backend container.
+        backend_container = getattr(settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1")
+        
+        # Check if remote container exists; fallback to finding it
+        check_cmd = f"docker ps -q -f name={backend_container}"
+        b_id = self.ssh.exec_command(check_cmd).strip()
+        if not b_id:
+            # Fallback search
+            b_id = self.ssh.exec_command("docker ps -q -f name=backend").strip().split('\\n')[0]
+            if not b_id:
+                raise RuntimeError("Could not locate CloudNeuron backend container on target server.")
+            backend_container = b_id
 
-        self._update(65, 'Loading Docker image...')
-        self.ssh.exec_command(f"docker load -i {remote_temp_dir}/image.tar")
+        self.ssh.exec_command(f"docker cp {shlex.quote(remote_backup_path)} {backend_container}:/tmp/transfer_backup.tar.gz")
 
-        metadata = self.transfer.source_backup.metadata
+        self._update(75, 'Hydrating Service via remote Django ORM...')
+        
+        # 2. Generate a Python script that boots Django inside the remote container
+        # and calls BackupService to properly inflate the database models and Volumes.
+        restore_script = f"""import os
+import sys
+import django
+import logging
 
-        if 'volumes' in metadata:
-            self._update(70, 'Restoring volumes...')
-            for vol in metadata['volumes']:
-                vol_name = vol['name']
-                vol_file = vol['filename']
-                self.ssh.exec_command(f"docker volume create {shlex.quote(vol_name)} || true")
+sys.path.append('/app/backend')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
 
-                # Safely construct docker run command
-                cmd_parts = [
-                    "docker", "run", "--rm", "-i",
-                    "-v", f"{vol_name}:/dest",
-                    "-v", f"{remote_temp_dir}:/src",
-                    "alpine", "tar", "-xzf", f"/src/{vol_file}", "-C", "/dest"
-                ]
-                safe_cmd = " ".join(shlex.quote(p) for p in cmd_parts)
-                self.ssh.exec_command(safe_cmd)
+from apps.deployments.services.backup_service import BackupService
+from django.contrib.auth import get_user_model
 
-        self._update(75, 'Starting service container...')
-        service = self.transfer.service
-        run_cmd = self._generate_docker_run_command(service, metadata)
-        self.ssh.exec_command(run_cmd)
+logger = logging.getLogger(__name__)
 
-        self.ssh.exec_command(f"rm -rf {shlex.quote(remote_temp_dir)} {shlex.quote(remote_backup_path)}")
+def run_restore():
+    User = get_user_model()
+    # Assign to first superuser or first available user
+    admin_user = User.objects.filter(is_superuser=True).first() or User.objects.first()
+    if not admin_user:
+        print("ERROR: No suitable user found on target server to own the restored service.", file=sys.stderr)
+        sys.exit(1)
+        
+    try:
+        svc = BackupService()
+        svc._restore_service_from_file('/tmp/transfer_backup.tar.gz', owner=admin_user)
+        print("SUCCESS")
+    except Exception as e:
+        print(f"RESTORE_FAILED: {{str(e)}}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == '__main__':
+    run_restore()
+"""
+        script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
+        import tempfile
+        local_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+        try:
+            local_script.write(restore_script)
+            local_script.close()
+            # Upload to host
+            self.ssh.upload_file(local_script.name, script_path)
+            # Copy into container
+            self.ssh.exec_command(f"docker cp {shlex.quote(script_path)} {backend_container}:/tmp/restore_trigger.py")
+        finally:
+            os.unlink(local_script.name)
+
+        self._update(85, 'Running database and volume migrations on target...')
+        # Execute the python script inside the remote container
+        result = self.ssh.exec_command(f"docker exec {backend_container} python3 /tmp/restore_trigger.py")
+        if "RESTORE_FAILED" in result or "ERROR:" in result:
+            raise RuntimeError(f"Remote service hydration failed: {result}")
+            
+        # Cleanup
+        self.ssh.exec_command(f"docker exec {backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py")
+        self.ssh.exec_command(f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}")
 
     def _restore_full_server(self, remote_backup_path):
         self._update(60, 'Installing CloudNeuron platform on target...')
@@ -208,10 +256,10 @@ class ServerTransferService:
         # It's better, but let's assume they are safe-ish or use shlex if possible.
         # Hard to use shlex for complex piped commands.
 
-        drop_cmd = f"docker exec -i smsly-db psql -U {shlex.quote(db_user)} postgres -c 'DROP DATABASE IF EXISTS {shlex.quote(db_name)}; CREATE DATABASE {shlex.quote(db_name)};'"
+        drop_cmd = f"cd /opt/smsly && docker compose exec -T db psql -U {shlex.quote(db_user)} postgres -c 'DROP DATABASE IF EXISTS {shlex.quote(db_name)}; CREATE DATABASE {shlex.quote(db_name)};'"
         self.ssh.exec_command(drop_cmd)
 
-        restore_cmd = f"docker exec -i smsly-db sh -c 'psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql'"
+        restore_cmd = f"cd /opt/smsly && docker compose exec -T db sh -c 'psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql'"
         self.ssh.exec_command(restore_cmd)
 
         self._update(80, 'Restoring service data...')

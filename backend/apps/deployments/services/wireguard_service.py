@@ -22,24 +22,10 @@ class WireGuardService:
     @staticmethod
     def generate_keypair() -> tuple[str, str]:
         """
-        Generate a WireGuard private/public key pair.
-
+        Generate a WireGuard private/public key pair (pure Python).
         Returns (private_key, public_key).
-        Falls back to Python crypto if `wg` binary is not available.
         """
-        try:
-            # Try native wg command first (fastest, most compatible)
-            private = subprocess.run(
-                ["wg", "genkey"], capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            public = subprocess.run(
-                ["wg", "pubkey"], input=private,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
-            return private, public
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            # Fallback: pure Python using cryptography lib
-            return WireGuardService._generate_keypair_python()
+        return WireGuardService._generate_keypair_python()
 
     @staticmethod
     def _generate_keypair_python() -> tuple[str, str]:
@@ -231,24 +217,52 @@ class WireGuardService:
 
     @classmethod
     def _deploy_local(cls, config: str, iface: str):
-        """Deploy WireGuard config on the local server."""
-        import os
-        config_path = f"/etc/wireguard/{iface}.conf"
-        os.makedirs("/etc/wireguard", exist_ok=True)
+        """
+        Deploy WireGuard config on the local server.
+        Since the API runs unprivileged, we use the Docker socket to spin up
+        an ephemeral privileged container to apply the config to the host network.
+        """
+        import docker
+        client = docker.from_env()
 
-        with open(config_path, "w") as f:
-            f.write(config)
-        os.chmod(config_path, 0o600)
+        # Write config to a temporary file via a container
+        # Since /etc/wireguard might not be mounted in the backend, we run an alpine 
+        # container mounting /etc/wireguard from the host.
+        cmd = f"mkdir -p /etc/wireguard && cat > /etc/wireguard/{iface}.conf << 'EOF'\n{config}\nEOF\nchmod 600 /etc/wireguard/{iface}.conf"
+        
+        try:
+            client.containers.run(
+                "alpine",
+                command=["sh", "-c", cmd],
+                remove=True,
+                volumes={"/etc/wireguard": {"bind": "/etc/wireguard", "mode": "rw"}},
+            )
+        except Exception as e:
+            logger.error(f"Failed to write host WG config via Docker: {e}")
+            raise RuntimeError(f"Local config write failed: {e}")
 
-        # Restart interface
-        subprocess.run(
-            ["wg-quick", "down", iface],
-            capture_output=True, check=False,  # OK if not up yet
-        )
-        subprocess.run(
-            ["wg-quick", "up", iface],
-            capture_output=True, check=True,
-        )
+        # Restart WireGuard interface
+        commands = [
+            # Ensure it's installed (if Debian/Ubuntu host system underneath)
+            "apk add wireguard-tools iptables >/dev/null 2>&1 || true",
+            f"wg-quick down {iface} >/dev/null 2>&1 || true",
+            f"wg-quick up {iface}"
+        ]
+        try:
+            client.containers.run(
+                "alpine",
+                command=["sh", "-c", " && ".join(commands)],
+                remove=True,
+                privileged=True,
+                network_mode="host",
+                volumes={
+                    "/lib/modules": {"bind": "/lib/modules", "mode": "ro"},
+                    "/etc/wireguard": {"bind": "/etc/wireguard", "mode": "ro"},
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to restart host WG via Docker: {e}")
+            raise RuntimeError(f"Local wg-quick failed: {e}")
 
     @classmethod
     def _deploy_remote(cls, server, config: str, iface: str):
@@ -332,17 +346,29 @@ class WireGuardService:
 
     @classmethod
     def get_wg_status(cls, iface: str = "wg0") -> dict:
-        """Get WireGuard interface status from `wg show`."""
+        """Get WireGuard interface status from `wg show` using a docker container."""
+        import docker
         try:
-            result = subprocess.run(
-                ["wg", "show", iface],
-                capture_output=True, text=True, check=True,
+            client = docker.from_env()
+            container = client.containers.run(
+                "alpine",
+                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {iface}"],
+                privileged=True,
+                network_mode="host",
+                volumes={"/lib/modules": {"bind": "/lib/modules", "mode": "ro"}},
+                remove=True,
+                stderr=True,
+                stdout=True
             )
-            return {"status": "UP", "output": result.stdout}
-        except subprocess.CalledProcessError:
-            return {"status": "DOWN", "output": ""}
-        except FileNotFoundError:
-            return {"status": "NOT_INSTALLED", "output": ""}
+            # The docker run command returns bytes
+            output = container.decode() if isinstance(container, bytes) else str(container)
+            return {"status": "UP", "output": output}
+        except docker.errors.ContainerError as e:
+            # wg show exits with 1 if interface doesn't exist or is down
+            output = e.stderr.decode() if hasattr(e, 'stderr') and e.stderr else str(e)
+            return {"status": "DOWN", "output": output}
+        except Exception as e:
+            return {"status": "ERROR", "output": str(e)}
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
