@@ -31,6 +31,7 @@ from .views_election import ClusterViewSet, heartbeat_receive, vote_request
 from .views_replication import ReplicationViewSet
 from .views_project import ProjectViewSet
 from .views_updates import PlatformUpdateViewSet
+from .views_node_exchange import node_token_exchange, node_token_exchange_via_gateway
 
 # Create main router
 router = DefaultRouter()
@@ -116,4 +117,7 @@ urlpatterns = router.urls + [
     # Internal endpoints (WireGuard mesh, no auth)
     path('internal/heartbeat/', heartbeat_receive, name='internal-heartbeat'),
     path('internal/vote/', vote_request, name='internal-vote'),
+    # Node-to-node auto token exchange
+    path('auth/node-token-exchange/', node_token_exchange, name='node-token-exchange'),
+    path('auth/node-token-exchange-hmac/', node_token_exchange_via_gateway, name='node-token-exchange-hmac'),
 ]

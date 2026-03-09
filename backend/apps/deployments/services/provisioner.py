@@ -593,6 +593,37 @@ def provision_server(self, server_id: str):
         _append_log(server, "\n✅ CloudNeuron provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
+        # ── Step 7: Auto-exchange — get a proper smsly_ API token ──
+        # The token from provisioning may be a DRF session token.
+        # Try to exchange it for a long-lived smsly_ API token via the
+        # node-token-exchange endpoint on the new server.
+        if api_token and not api_token.startswith("smsly_"):
+            _append_log(server, "🔄 Attempting auto token exchange for long-lived API token...")
+            try:
+                # Try credential-based exchange using SSH password
+                ssh_password = str(server.ssh_password or "").strip()
+                if ssh_password:
+                    for username in ("admin", "root"):
+                        exchange_url = f"{api_url}/api/v1/auth/node-token-exchange/"
+                        resp = requests.post(
+                            exchange_url,
+                            json={
+                                "username": username,
+                                "password": ssh_password,
+                                "node_name": f"Primary-{server.owner.username}",
+                            },
+                            timeout=15,
+                        )
+                        if resp.status_code == 200:
+                            new_token = resp.json().get("token")
+                            if new_token:
+                                server.api_token = new_token
+                                server.save(update_fields=["api_token", "updated_at"])
+                                _append_log(server, f"✅ Auto-exchanged for smsly_ API token: {new_token[:12]}...")
+                                break
+            except Exception as exc:
+                _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")
+
     except SoftTimeLimitExceeded as exc:
         logger.exception("Provisioning soft-timeout for server %s", server_id)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED

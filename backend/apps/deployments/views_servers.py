@@ -7,6 +7,7 @@ remote SMSLY Hosting instances.
 
 import hashlib
 import hmac as hmac_mod
+import json as json_mod
 import logging
 import time
 from typing import Any
@@ -22,6 +23,98 @@ from rest_framework.response import Response
 from .models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+
+def _try_auto_token_exchange(server, base_url: str) -> str | None:
+    """
+    Attempt to obtain an API token from a remote server automatically.
+
+    Strategies (in order):
+    1. HMAC exchange: If gateway_secret is set, use it to request a token.
+    2. Credential exchange: If SSH password is available, try admin login.
+
+    Returns the raw token string on success, None on failure.
+    """
+    gateway_secret = str(server.gateway_secret or "").strip()
+    ssh_password = str(server.ssh_password or "").strip()
+
+    # ── Strategy 1: HMAC-based exchange ──
+    if gateway_secret:
+        try:
+            ts = str(int(time.time()))
+            body = json_mod.dumps({"node_name": f"Node-{server.host}"}, sort_keys=True).encode()
+            body_hash = hashlib.sha256(body).hexdigest()
+            path = "/api/v1/auth/node-token-exchange-hmac/"
+            payload = f"POST|{path}|{ts}|{body_hash}"
+            sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+            resp = requests.post(
+                f"{base_url}{path}",
+                json={"node_name": f"Node-{server.host}"},
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Gateway-Signature-V2": sig,
+                    "X-Request-Timestamp": ts,
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                token = resp.json().get("token")
+                if token:
+                    logger.info("Auto-exchanged HMAC for API token on %s", server.host)
+                    return token
+        except Exception as exc:
+            logger.debug("HMAC token exchange failed for %s: %s", server.host, exc)
+
+    # ── Strategy 2: Credential-based exchange ──
+    if ssh_password:
+        # Try common admin usernames
+        for username in ("admin", "root"):
+            try:
+                resp = requests.post(
+                    f"{base_url}/api/v1/auth/node-token-exchange/",
+                    json={
+                        "username": username,
+                        "password": ssh_password,
+                        "node_name": f"Node-{server.host}",
+                    },
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    token = resp.json().get("token")
+                    if token:
+                        logger.info(
+                            "Auto-exchanged credentials (%s) for API token on %s",
+                            username, server.host,
+                        )
+                        return token
+            except Exception as exc:
+                logger.debug(
+                    "Credential token exchange (%s) failed for %s: %s",
+                    username, server.host, exc,
+                )
+
+    # ── Strategy 3: Login API (dj-rest-auth) ──
+    if ssh_password:
+        for username in ("admin", "root"):
+            try:
+                resp = requests.post(
+                    f"{base_url}/api/v1/auth/login/",
+                    json={"username": username, "password": ssh_password},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    token = resp.json().get("key") or resp.json().get("token")
+                    if token:
+                        logger.info(
+                            "Auto-obtained DRF token via login for %s",
+                            server.host,
+                        )
+                        return token
+            except Exception:
+                pass
+
+    return None
 
 
 def _safe_remote_error_payload(kind: str, reason: str, upstream_status: int | None = None) -> dict[str, Any]:
@@ -385,6 +478,28 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
         server.last_health_check = timezone.now()
         server.save(update_fields=["status", "last_health_check", "services_count"])
+
+        # ── Auto-token exchange: if online but no valid token, try to get one ──
+        if server.status == ManagedServer.Status.ONLINE:
+            has_token = bool(str(server.api_token or "").strip())
+            if not has_token or server.services_count == 0:
+                # Token might be missing or invalid - try auto-exchange
+                new_token = _try_auto_token_exchange(server, base)
+                if new_token:
+                    server.api_token = new_token
+                    server.save(update_fields=["api_token", "updated_at"])
+                    # Retry service count with new token
+                    api_path = "/api/v1/services/"
+                    headers = _build_remote_headers(server, method="GET", path=api_path)
+                    try:
+                        resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            services = data.get("results", data) if isinstance(data, dict) else data
+                            server.services_count = len(services) if isinstance(services, list) else 0
+                            server.save(update_fields=["services_count"])
+                    except requests.RequestException:
+                        pass
 
         return Response(ManagedServerSerializer(server).data)
 
