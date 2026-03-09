@@ -256,18 +256,32 @@ class ReplicationService:
     def _deploy_patroni_local(cls, compose_content: str):
         """Deploy Patroni containers on the local server."""
         import os
-        import subprocess
-
+        import docker
+        
+        # Write compose file
         deploy_dir = "/opt/smsly/patroni"
         os.makedirs(deploy_dir, exist_ok=True)
-
         with open(f"{deploy_dir}/docker-compose.yml", "w") as f:
             f.write(compose_content)
 
-        subprocess.run(
-            ["docker", "compose", "-f", f"{deploy_dir}/docker-compose.yml",
-             "up", "-d", "--pull", "always"],
-            check=True, capture_output=True,
+        # Spin up a docker-cli container locally via socket-proxy to deploy the stack
+        # This keeps the backend itself stripped down while leveraging the host's 
+        # actual docker daemon. The host path for /opt/smsly needs to be mounted.
+        client = docker.from_env()
+        
+        commands = [
+            # Ensure the host directory exists
+            "mkdir -p /opt/smsly/patroni",
+            f"cat > /opt/smsly/patroni/docker-compose.yml << 'COMPEOF'\n{compose_content}\nCOMPEOF",
+            "cd /opt/smsly/patroni && docker compose up -d --pull always"
+        ]
+        
+        client.containers.run(
+            "docker:cli",
+            command=["sh", "-c", " && ".join(commands)],
+            remove=True,
+            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+            network_mode="host",
         )
 
     @classmethod
@@ -285,9 +299,9 @@ class ReplicationService:
 
     @classmethod
     def _deploy_haproxy_local(cls, compose_content: str, haproxy_cfg: str):
-        """Deploy HAProxy on the local server."""
+        """Deploy HAProxy on the local server via Docker container proxy."""
         import os
-        import subprocess
+        import docker
 
         deploy_dir = "/opt/smsly/haproxy"
         os.makedirs(deploy_dir, exist_ok=True)
@@ -298,10 +312,20 @@ class ReplicationService:
         with open(f"{deploy_dir}/docker-compose.yml", "w") as f:
             f.write(compose_content)
 
-        subprocess.run(
-            ["docker", "compose", "-f", f"{deploy_dir}/docker-compose.yml",
-             "up", "-d", "--pull", "always"],
-            check=True, capture_output=True,
+        client = docker.from_env()
+        commands = [
+            "mkdir -p /opt/smsly/haproxy",
+            f"cat > /opt/smsly/haproxy/haproxy.cfg << 'CFGEOF'\n{haproxy_cfg}\nCFGEOF",
+            f"cat > /opt/smsly/haproxy/docker-compose.yml << 'COMPEOF'\n{compose_content}\nCOMPEOF",
+            "cd /opt/smsly/haproxy && docker compose up -d --pull always"
+        ]
+        
+        client.containers.run(
+            "docker:cli",
+            command=["sh", "-c", " && ".join(commands)],
+            remove=True,
+            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+            network_mode="host",
         )
 
     # ── Health & Monitoring ──────────────────────────────────────────────

@@ -1,6 +1,7 @@
 """Celery module."""
 import os
 from celery import Celery
+from celery.schedules import crontab
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
@@ -91,6 +92,16 @@ app.conf.beat_schedule = {
     'replication-health-every-30s': {
         'task': 'apps.deployments.tasks_replication.check_replication_health_task',
         'schedule': 30.0,
+    },
+    # Daily intelligence report at 06:00 UTC
+    'daily-intelligence-report': {
+        'task': 'apps.intelligence.tasks.daily_intelligence_report_task',
+        'schedule': crontab(hour=6, minute=0),
+    },
+    # Proactive health scan every 5 minutes
+    'proactive-health-scan-every-5m': {
+        'task': 'apps.intelligence.tasks.proactive_health_scan_task',
+        'schedule': 300.0,
     },
 }
 

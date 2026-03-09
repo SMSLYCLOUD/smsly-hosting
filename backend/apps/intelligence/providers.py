@@ -12,10 +12,40 @@ import logging
 import concurrent.futures
 from abc import ABC, abstractmethod
 from typing import Optional, List, Tuple
+import time
 import httpx
 from django.core.cache import cache
+from functools import wraps
 
 logger = logging.getLogger(__name__)
+
+def retry_429(max_retries=3, base_delay=2.0):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except httpx.HTTPStatusError as exc:
+                    last_exc = exc
+                    if exc.response.status_code == 429 and attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning("429 Rate Limit in %s. Retrying in %ss...", func.__name__, delay)
+                        time.sleep(delay)
+                        continue
+                    raise
+                except Exception as exc:
+                    # Some providers raise their last exception manually at the end
+                    if hasattr(exc, 'response') and getattr(exc.response, 'status_code', None) == 429 and attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning("429 Rate Limit Exception in %s. Retrying in %ss...", func.__name__, delay)
+                        time.sleep(delay)
+                        continue
+                    raise
+            raise last_exc
+        return wrapper
+    return decorator
 
 # Common placeholder values copied from forms/UX that should never be treated
 # as real API keys.
@@ -120,6 +150,7 @@ class OpenAIProvider(AIProvider):
     def name(self) -> str:
         return f"OpenAI ({self.model})"
 
+    @retry_429()
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         if not self.api_key:
             raise ValueError("[OpenAI] API key not configured.")
@@ -228,6 +259,7 @@ class GrokProvider(AIProvider):
     def name(self) -> str:
         return f"Grok ({self.model})"
 
+    @retry_429()
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         if not self.api_key:
             raise ValueError("[Grok] API key not configured.")
@@ -320,6 +352,7 @@ class GeminiProvider(AIProvider):
     def name(self) -> str:
         return f"Gemini ({self.model})"
 
+    @retry_429()
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         if not self.api_key:
             raise ValueError("[Gemini] API key not configured.")
@@ -411,6 +444,7 @@ class ClaudeProvider(AIProvider):
     def name(self) -> str:
         return f"Claude ({self.model})"
 
+    @retry_429()
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         if not self.api_key:
             raise ValueError("[Claude] API key not configured.")
@@ -511,6 +545,7 @@ class JulesProvider(AIProvider):
     def name(self) -> str:
         return f"Jules ({self.model})"
 
+    @retry_429()
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         if not self.api_key:
             raise ValueError("[Jules] API key not configured.")

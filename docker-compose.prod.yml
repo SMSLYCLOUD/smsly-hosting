@@ -162,7 +162,6 @@ services:
       socket-proxy:
         condition: service_started
     volumes:
-      - ./backend:/app
       - media_volume:/app/media
       - caddy_config:/caddy-config
       - ./install.sh:/app/install.sh:ro
@@ -198,7 +197,6 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./backend:/app
       - media_volume:/app/media
     tmpfs:
       - /tmp
