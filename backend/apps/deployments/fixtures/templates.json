@@ -20450,17 +20450,6 @@
     "min_ram_gb": 8
   },
   {
-    "id": "gpt4all",
-    "name": "GPT4All",
-    "description": "An ecosystem of open-source chatbots that run locally on your CPU.",
-    "icon": "https://gpt4all.io/logo.png",
-    "category": "intelligence",
-    "repository_url": "https://hub.docker.com/r/nomicai/gpt4all",
-    "docker_image": "nomicai/gpt4all-web-ui:latest",
-    "default_port": 8080,
-    "min_ram_gb": 8
-  },
-  {
     "id": "tgi",
     "name": "Text Generation Inference",
     "description": "A toolkit for deploying and serving Large Language Models (LLMs).",
@@ -20501,7 +20490,7 @@
     "icon": "https://memgpt.ai/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/cpacker/memgpt",
-    "docker_image": "cpacker/memgpt:latest",
+    "docker_image": "letta/letta:latest",
     "default_port": 8080,
     "min_ram_gb": 4
   },
@@ -20512,7 +20501,7 @@
     "icon": "https://khoj.dev/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/khoj-ai/khoj",
-    "docker_image": "khoj/khoj:latest",
+    "docker_image": "ghcr.io/khoj-ai/khoj:latest",
     "default_port": 8000,
     "min_ram_gb": 4
   },
@@ -20523,7 +20512,7 @@
     "icon": "https://vladmandic.github.io/sd-next/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/vladmandic/sd-next",
-    "docker_image": "vladmandic/sdnext-cuda:latest",
+    "docker_image": "ghcr.io/vladmandic/automatic:latest",
     "default_port": 7860,
     "min_ram_gb": 8,
     "gpu_required": true
