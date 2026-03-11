@@ -257,3 +257,4 @@ volumes:
   postgres_data:
   registry_data:
   backups_data:
+  repo_cache_data:

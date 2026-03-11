@@ -33,7 +33,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.environ.get('REPO_CACHE_DIR', '/opt/smsly-cache/repos')
+CACHE_DIR = os.environ.get('REPO_CACHE_DIR', '/app/repo_cache')
 CACHE_MAX_AGE_DAYS = int(os.environ.get('REPO_CACHE_MAX_AGE_DAYS', '7'))
 
 
