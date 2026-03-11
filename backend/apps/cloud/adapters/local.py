@@ -334,7 +334,14 @@ class LocalAdapter(BaseCloudAdapter):
             labels['traefik.enable'] = str(is_public).lower()
             labels[f'traefik.http.routers.{router_name}.rule'] = host_rule
             labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = port
-            labels[f'traefik.http.routers.{router_name}.entrypoints'] = 'web'
+
+            # entrypoints: web for HTTP, websecure for HTTPS
+            entrypoints = ['web']
+            if enable_traefik_tls:
+                entrypoints.append('websecure')
+                labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
+
+            labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
