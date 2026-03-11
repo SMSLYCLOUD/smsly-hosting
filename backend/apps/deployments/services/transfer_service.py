@@ -84,6 +84,34 @@ class ServerTransferService:
 
     def _prepare(self):
         """Step 1: create source backup and provision target."""
+        self._update(5, 'Pre-flight: checking target server...')
+
+        # Pre-flight: verify Docker is available on target
+        if not self.ssh.check_docker():
+            self._update(8, 'Installing Docker on target server...')
+            self.ssh.install_docker()
+            time.sleep(5)
+            if not self.ssh.check_docker():
+                raise RuntimeError("Failed to install Docker on target server.")
+
+        # Pre-flight: for SERVICE transfers, verify CloudNeuron backend is running
+        if self.transfer.transfer_type == 'SERVICE':
+            backend_container = getattr(
+                settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1"
+            )
+            check_cmd = f"docker ps -q -f name={backend_container}"
+            b_id = self.ssh.exec_command(check_cmd).strip()
+            if not b_id:
+                # Fallback: look for any container with 'backend' in name
+                b_id = self.ssh.exec_command(
+                    "docker ps -q -f name=backend"
+                ).strip().split('\\n')[0]
+            if not b_id:
+                raise RuntimeError(
+                    "CloudNeuron backend container not found on target server. "
+                    "Please install CloudNeuron on the target before transferring services."
+                )
+
         self._update(10, 'Creating backup on source server...')
 
         backup_svc = BackupService()
@@ -97,14 +125,6 @@ class ServerTransferService:
             backup = backup_svc.backup_server()
             self.transfer.source_server_backup = backup
             self.transfer.save(update_fields=['source_server_backup'])
-
-        self._update(20, 'Checking target server requirements...')
-        if not self.ssh.check_docker():
-            self._update(25, 'Installing Docker on target server...')
-            self.ssh.install_docker()
-            time.sleep(5)
-            if not self.ssh.check_docker():
-                raise RuntimeError("Failed to install Docker on target server.")
 
     def _upload(self):
         """Step 2: upload backup to target."""
