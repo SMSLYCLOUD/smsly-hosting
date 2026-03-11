@@ -172,6 +172,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 provider=provider,
             )
 
+            base_domain = getattr(settings, 'DOMAIN', 'localhost') or 'localhost'
             service_domain = service.public_domain
 
             def render_value(raw: str) -> str:
@@ -211,6 +212,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
             )
 
             # Queue background orchestration (addons + deploy)
+            # We pass the template ID so the task can handle complex logic like addon provisioning.
             async_result = one_click_deploy_template_task.delay(str(service.id), str(template['id']))
 
             return Response({

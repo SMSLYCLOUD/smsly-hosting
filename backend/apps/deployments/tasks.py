@@ -1674,39 +1674,75 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     # Provision addons
     required_addons = (template.get('required_addons') or []) if template else []
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
+    
+    # Track addon URLs for template rendering
+    addon_urls = {}
 
     for addon_type in required_addons:
         if addon_type not in supported_addons:
             logger.warning("Template addon %s is not supported yet; skipping", addon_type)
             continue
 
-        addon = Addon.objects.create(
-            service=service,
-            name=f"{addon_type.lower()}-{service.name}"[:255],
-            addon_type=addon_type,
-            status=Addon.Status.PROVISIONING,
-        )
-        try:
-            _, url = addon_provisioner.provision(addon)
-            addon.connection_url = url
-            addon.status = Addon.Status.ACTIVE
-            addon.save()
-
-            # Inject Env
-            key_map = {
-                'POSTGRES': 'DATABASE_URL',
-                'REDIS': 'REDIS_URL',
-                'ELASTICSEARCH': 'ELASTICSEARCH_URL',
-            }
-            key = key_map.get(addon_type, f"{addon_type}_URL")
-            EnvironmentVariable.objects.create(
-                service=service, key=key, value=url, is_secret=True
+        # Check if service already has this addon type active
+        addon = Addon.objects.filter(service=service, addon_type=addon_type, status=Addon.Status.ACTIVE).first()
+        if not addon:
+            addon = Addon.objects.create(
+                service=service,
+                name=f"{addon_type.lower()}-{service.name}"[:255],
+                addon_type=addon_type,
+                status=Addon.Status.PROVISIONING,
             )
+            try:
+                _, url = addon_provisioner.provision(addon)
+                addon.connection_url = url
+                addon.status = Addon.Status.ACTIVE
+                addon.save()
+            except Exception as e:
+                logger.error(f"Failed to provision {addon_type} for template: {e}")
+                addon.status = Addon.Status.FAILED
+                addon.save()
+                return # Stop deploy
+        
+        addon_urls[addon_type] = addon.connection_url
+        
+        # Inject Env (legacy/direct injection)
+        key_map = {
+            'POSTGRES': 'DATABASE_URL',
+            'REDIS': 'REDIS_URL',
+            'MONGODB': 'MONGODB_URI',
+            'ELASTICSEARCH': 'ELASTICSEARCH_URL',
+        }
+        key = key_map.get(addon_type, f"{addon_type}_URL")
+        EnvironmentVariable.objects.update_or_create(
+            service=service, key=key,
+            defaults={'value': addon.connection_url, 'is_secret': True}
+        )
 
-        except Exception: # pylint: disable=broad-exception-caught
-            addon.status = Addon.Status.FAILED
-            addon.save()
-            return # Stop deploy
+    # Render and store template environment variables
+    def render_value(raw: str) -> str:
+        v = str(raw or '')
+        v = v.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
+        v = v.replace('${DOMAIN}', service.public_domain or '')
+        v = v.replace('${MONGODB_URL}', addon_urls.get('MONGODB', ''))
+        v = v.replace('${MONGODB_URI}', addon_urls.get('MONGODB', ''))
+        v = v.replace('${DATABASE_URL}', addon_urls.get('POSTGRES', ''))
+        return v
+
+    if template and 'env_vars' in template:
+        env_vars = template.get('env_vars') or []
+        if isinstance(env_vars, list):
+            for item in env_vars:
+                if not isinstance(item, dict): continue
+                key = str(item.get('key') or '').strip()
+                if not key: continue
+                EnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=key,
+                    defaults={
+                        'value': render_value(item.get('value', '')),
+                        'is_secret': bool(item.get('is_secret', False)),
+                    }
+                )
 
     # Trigger deploy
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
