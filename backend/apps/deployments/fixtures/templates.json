@@ -20359,7 +20359,7 @@
     "icon": "https://github.com/oobabooga/text-generation-webui/raw/main/images/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/atscale/text-generation-webui",
-    "docker_image": "atscale/text-generation-webui:latest",
+    "docker_image": "atinoda/text-generation-webui:latest",
     "default_port": 7860,
     "min_ram_gb": 8,
     "gpu_required": true
@@ -20383,7 +20383,7 @@
     "icon": "https://github.com/AUTOMATIC1111/stable-diffusion-webui/raw/master/favicon.svg",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/siutin/stable-diffusion-webui-docker",
-    "docker_image": "siutin/stable-diffusion-webui-docker:latest",
+    "docker_image": "ai-dock/stable-diffusion-webui:latest",
     "default_port": 7860,
     "min_ram_gb": 8,
     "gpu_required": true
@@ -20462,7 +20462,7 @@
     "icon": "https://litellm.ai/logo.png",
     "category": "intelligence",
     "repository_url": "https://ghcr.io/berriai/litellm",
-    "docker_image": "ghcr.io/berriai/litellm:main-latest",
+    "docker_image": "ghcr.io/berriai/litellm:main-stable",
     "default_port": 4000,
     "min_ram_gb": 1
   },
@@ -20484,7 +20484,7 @@
     "icon": "https://memgpt.ai/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/cpacker/memgpt",
-    "docker_image": "cpacker/memgpt:latest",
+    "docker_image": "memgpt/memgpt-server:latest",
     "default_port": 8080,
     "min_ram_gb": 4
   },
@@ -20506,7 +20506,7 @@
     "icon": "https://vladmandic.github.io/sd-next/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/vladmandic/sd-next",
-    "docker_image": "vladmandic/sd-next:latest",
+    "docker_image": "vladmandic/sdnext-cuda:latest",
     "default_port": 7860,
     "min_ram_gb": 8,
     "gpu_required": true
@@ -20518,7 +20518,7 @@
     "icon": "https://invoke-ai.github.io/InvokeAI/assets/logo.png",
     "category": "intelligence",
     "repository_url": "https://ghcr.io/invoke-ai/invoke-ai",
-    "docker_image": "ghcr.io/invoke-ai/invoke-ai:latest",
+    "docker_image": "ghcr.io/invoke-ai/invokeai:latest",
     "default_port": 9090,
     "min_ram_gb": 8,
     "gpu_required": true
@@ -20542,7 +20542,7 @@
     "icon": "https://litellm.ai/logo.png",
     "category": "intelligence",
     "repository_url": "https://ghcr.io/berriai/litellm",
-    "docker_image": "ghcr.io/berriai/litellm:main-latest",
+    "docker_image": "ghcr.io/berriai/litellm:main-stable",
     "default_port": 4000,
     "min_ram_gb": 1,
     "min_cpu_cores": 1,
