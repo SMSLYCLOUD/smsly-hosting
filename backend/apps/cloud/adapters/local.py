@@ -150,6 +150,18 @@ class LocalAdapter(BaseCloudAdapter):
     def authenticate(self) -> bool:
         return self.docker_client is not None or self.k8s_client is not None
 
+    def pull_image(self, image: str) -> bool:
+        """Pull image from registry."""
+        if not self.docker_client:
+            return True
+        try:
+            logger.info("Pulling image: %s", image)
+            self.docker_client.images.pull(image)
+            return True
+        except Exception as e:
+            logger.error("Failed to pull image %s: %s", image, e)
+            return False
+
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int,
