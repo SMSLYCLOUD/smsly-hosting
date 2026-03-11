@@ -13,12 +13,12 @@ class BaseCloudAdapter(ABC):
     def authenticate(self) -> bool:
         """Verify credentials are valid."""
 
-    @abstractmethod
     def pull_image(self, image: str) -> bool:
         """
         Pull a container image from a registry.
         Returns True if successful.
         """
+        return True
 
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,
