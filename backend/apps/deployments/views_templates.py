@@ -110,6 +110,31 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 return Response({'error': 'Template not found'},
                                 status=status.HTTP_404_NOT_FOUND)
 
+            # Check system requirements before proceeding
+            from apps.deployments.utils_resources import check_requirements
+            min_ram = template.get('min_ram_gb')
+            min_cpu = template.get('min_cpu_cores')
+            min_disk = template.get('min_disk_gb')
+            gpu_req = template.get('gpu_required', False)
+
+            success, error_msg = check_requirements(
+                min_ram_gb=min_ram,
+                min_cpu_cores=min_cpu,
+                min_disk_gb=min_disk,
+                gpu_required=gpu_req
+            )
+            if not success:
+                return Response({
+                    'error': 'System requirements not met',
+                    'detail': error_msg,
+                    'requirements': {
+                        'min_ram_gb': min_ram,
+                        'min_cpu_cores': min_cpu,
+                        'min_disk_gb': min_disk,
+                        'gpu_required': gpu_req
+                    }
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             docker_image = template.get('docker_image')
             if not docker_image:
                 return Response({'error': 'Template is missing docker_image'},

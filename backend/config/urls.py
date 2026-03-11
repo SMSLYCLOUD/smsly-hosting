@@ -26,6 +26,8 @@ urlpatterns = [
 
     # Auth
     path('api/v1/auth/', include('dj_rest_auth.urls')),
+    # Direct OpenAI-compatible alias
+    path('api/v1/', include('apps.intelligence.urls_openai')),
     path(
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),

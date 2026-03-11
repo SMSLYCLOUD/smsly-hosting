@@ -588,6 +588,194 @@ class JulesProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
+# DeepSeek Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class DeepSeekProvider(AIProvider):
+    """DeepSeek provider — model configurable via DEEPSEEK_MODEL env var."""
+
+    BASE_URL = "https://api.deepseek.com/v1"
+
+    def __init__(self):
+        self.api_key = _sanitize_api_key(os.environ.get("DEEPSEEK_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("DEEPSEEK_MODEL"), "deepseek-coder")
+
+    def name(self) -> str:
+        return f"DeepSeek ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[DeepSeek] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("DeepSeek ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        """Fetch DeepSeek balance from their user API."""
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.get(
+                    "https://api.deepseek.com/user/balance",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    balance_info = data.get("balance_infos", [])
+                    if balance_info:
+                        total = balance_info[0].get("total_balance", "0")
+                        currency = balance_info[0].get("currency", "CNY")
+                        return {
+                            "balance": f"{total} {currency}",
+                            "currency": currency,
+                            "raw": data,
+                        }
+                return {"balance": "Active", "currency": "", "raw": {}}
+        except Exception as e: # pylint: disable=broad-exception-caught
+            logger.debug("DeepSeek balance check failed: %s", e)
+            return {"balance": "Error checking", "currency": "", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# Local LLM Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class LocalLLMProvider(AIProvider):
+    """
+    Local LLM provider for services like Ollama, LocalAI, vLLM, etc.
+    Expects an OpenAI-compatible /v1/chat/completions endpoint.
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("LOCALLM_API_KEY", ""))
+        default_model = os.environ.get("LOCALLM_MODEL", "local-model")
+        self.model = model_override or _normalize_model(default_model, "local-model")
+        self.base_url = os.environ.get(
+            "LOCALLM_BASE_URL",
+            "http://localhost:11434/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"Local LLM ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        # API key is optional for local LLMs but we support it
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            with httpx.Client(timeout=120) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Local LLM ask failed at %s: %s", self.base_url, exc)
+            raise
+
+    def is_configured(self) -> bool:
+        # Local LLM is considered configured if base_url is set (has a default)
+        return bool(self.base_url)
+
+    def get_balance(self) -> dict:
+        return {"balance": "Local (Free)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# SMSLY Cloud AI Provider
+# ---------------------------------------------------------------------------
+
+class SMSLYCloudProvider(AIProvider):
+    """
+    SMSLY Cloud AI provider.
+    Hosted expert for the SMSLY Senate.
+    """
+
+    BASE_URL = "https://ai.smsly.cloud/v1"
+
+    def __init__(self):
+        self.api_key = _sanitize_api_key(os.environ.get("SMSLYCLOUD_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("SMSLYCLOUD_MODEL"), "smsly-latest")
+
+    def name(self) -> str:
+        return f"SMSLY Cloud AI ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[SMSLY Cloud AI] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("SMSLY Cloud AI ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        return {"balance": "SmslyCloud (Standard)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
 # Mock Provider (fallback when no API keys configured)
 # ---------------------------------------------------------------------------
 
@@ -627,7 +815,10 @@ PROVIDERS = {
     "grok": GrokProvider,
     "gemini": GeminiProvider,
     "claude": ClaudeProvider,
+    "deepseek": DeepSeekProvider,
     "jules": JulesProvider,
+    "localllm": LocalLLMProvider,
+    "smslycloud": SMSLYCloudProvider,
     "mock": MockProvider,
 }
 
@@ -636,7 +827,10 @@ ENV_KEY_MAP = {
     "grok": "GROK_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "claude": "CLAUDE_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
     "jules": "JULES_API_KEY",
+    "localllm": "LOCALLM_API_KEY",
+    "smslycloud": "SMSLYCLOUD_API_KEY",
 }
 
 SYSTEM_PROMPT = (
@@ -690,7 +884,11 @@ def _get_db_settings():
                     "grok_api_key", "grok_model",
                     "gemini_api_key", "gemini_model",
                     "claude_api_key", "claude_model",
+                    "deepseek_api_key", "deepseek_model",
                     "jules_api_key", "jules_model",
+                    "localllm_api_key", "localllm_model", "localllm_base_url",
+                    "smslycloud_api_key", "smslycloud_model",
+                    "senate_enabled", "senate_max_members",
                 ]
                 available = [f for f in known_fields if f in columns]
                 if not available:
@@ -751,8 +949,17 @@ def _sync_db_to_env():
         ("gemini_model", "GEMINI_MODEL", "gemini-2.0-flash"),
         ("claude_api_key", "CLAUDE_API_KEY", ""),
         ("claude_model", "CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        ("deepseek_api_key", "DEEPSEEK_API_KEY", ""),
+        ("deepseek_model", "DEEPSEEK_MODEL", "deepseek-coder"),
         ("jules_api_key", "JULES_API_KEY", ""),
         ("jules_model", "JULES_MODEL", "jules-latest"),
+        ("localllm_api_key", "LOCALLM_API_KEY", ""),
+        ("localllm_model", "LOCALLM_MODEL", "local-model"),
+        ("localllm_base_url", "LOCALLM_BASE_URL", "http://localhost:11434/v1"),
+        ("smslycloud_api_key", "SMSLYCLOUD_API_KEY", ""),
+        ("smslycloud_model", "SMSLYCLOUD_MODEL", "smsly-latest"),
+        ("senate_enabled", "SENATE_ENABLED", "True"),
+        ("senate_max_members", "SENATE_MAX_MEMBERS", "5"),
     ]
     for attr, env_key, default in pairs:
         val = _effective_env_value(getattr(cfg, attr, None), env_key, default)
@@ -867,9 +1074,31 @@ def get_configured_providers() -> List[AIProvider]:
     for key, cls in PROVIDERS.items():
         if key == "mock":
             continue
+
+        if key == "localllm":
+            # Support multiple local models (comma-separated)
+            raw_models = os.environ.get("LOCALLM_MODEL", "")
+            if "," in raw_models:
+                models = [m.strip() for m in raw_models.split(",") if m.strip()]
+                for model in models:
+                    instance = cls(model_override=model)
+                    if instance.is_configured():
+                        configured.append(instance)
+                continue
+
         instance = cls()
         if instance.is_configured():
             configured.append(instance)
+    
+    # Respect Senate Committee size limits if configured
+    try:
+        max_members = int(os.environ.get("SENATE_MAX_MEMBERS", "5"))
+        if len(configured) > max_members:
+            logger.info("Capping Senate Committee to %d members (found %d)", max_members, len(configured))
+            configured = configured[:max_members]
+    except (ValueError, TypeError):
+        pass
+
     return configured
 
 
@@ -1057,7 +1286,8 @@ def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None) -> Tuple
     _sync_db_to_env()
     configured = get_configured_providers()
 
-    if len(configured) >= 2:
+    senate_enabled = os.environ.get("SENATE_ENABLED", "True").lower() == "true"
+    if len(configured) >= 2 and senate_enabled:
         response, provider_name = ask_collaborative(prompt, system_prompt)
         if not provider_name.startswith("Mock AI (all"):
             return response, provider_name

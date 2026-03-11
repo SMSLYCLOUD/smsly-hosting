@@ -7,7 +7,8 @@ from .views import (
     ai_analyze_logs,
     ai_cost_estimate,
     ai_intelligence_report,
-    ai_anomaly_history
+    ai_anomaly_history,
+    ai_chat_completions,
 )
 
 urlpatterns = [
@@ -18,4 +19,5 @@ urlpatterns = [
     path('cost-estimate/', ai_cost_estimate, name='ai-cost-estimate'),
     path('report/', ai_intelligence_report, name='ai-intelligence-report'),
     path('anomalies/', ai_anomaly_history, name='ai-anomaly-history'),
+    path('chat/completions/', ai_chat_completions, name='ai-chat-completions'),
 ]
