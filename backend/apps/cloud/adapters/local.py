@@ -147,6 +147,30 @@ class LocalAdapter(BaseCloudAdapter):
         except Exception as e:
             logger.warning(f"Kubernetes client not available: {e}")
 
+    def _get_traefik_labels(self, name: str, host_rule: str, port: str,
+                            is_public: bool = True) -> Dict[str, str]:
+        """Generate consistent Traefik labels for routing."""
+        router_name = name.replace('.', '-').replace('_', '-')
+        
+        enable_tls = (
+            str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+
+        labels = {
+            'traefik.enable': str(is_public).lower(),
+            f'traefik.http.routers.{router_name}.rule': host_rule,
+            f'traefik.http.services.{router_name}.loadbalancer.server.port': str(port),
+        }
+
+        entrypoints = ['web']
+        if enable_tls:
+            entrypoints.append('websecure')
+            labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
+        
+        labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
+        return labels
+
     def authenticate(self) -> bool:
         return self.docker_client is not None or self.k8s_client is not None
 
@@ -327,21 +351,12 @@ class LocalAdapter(BaseCloudAdapter):
             'smsly.blue_green.hc_interval': str(hc_interval),
             'smsly.blue_green.hc_timeout': str(hc_timeout),
         }
+        # Traefik routing metadata
         if stage_before_cutover:
             # Green candidates should not receive traffic until promotion.
             labels['traefik.enable'] = 'false'
         else:
-            labels['traefik.enable'] = str(is_public).lower()
-            labels[f'traefik.http.routers.{router_name}.rule'] = host_rule
-            labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = port
-
-            # entrypoints: web for HTTP, websecure for HTTPS
-            entrypoints = ['web']
-            if enable_traefik_tls:
-                entrypoints.append('websecure')
-                labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
-
-            labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
+            labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
@@ -531,11 +546,11 @@ class LocalAdapter(BaseCloudAdapter):
         router_name = name.replace('.', '-').replace('_', '-')
         live_labels = {
             'managed_by': 'smsly-hosting',
-            'traefik.enable': str(is_public).lower(),
-            f'traefik.http.routers.{router_name}.rule': host_rule,
-            f'traefik.http.services.{router_name}.loadbalancer.server.port': port,
-            f'traefik.http.routers.{router_name}.entrypoints': 'web',
         }
+        # Add core routing labels
+        live_labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
+        
+        # Preserve metadata labels
         for k, v in green_labels.items():
             if k.startswith('smsly.'):
                 live_labels[k] = v
