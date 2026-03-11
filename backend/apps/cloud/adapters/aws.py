@@ -35,7 +35,11 @@ class AWSAdapter(BaseCloudAdapter):
         except (ClientError, NoCredentialsError):
             return False
 
-        # pylint: disable=too-many-positional-arguments,arguments-differ
+    def pull_image(self, image: str) -> bool:
+        """AWS ECR pulls are handled by Fargate service."""
+        return True
+
+    # pylint: disable=too-many-positional-arguments,arguments-differ
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """

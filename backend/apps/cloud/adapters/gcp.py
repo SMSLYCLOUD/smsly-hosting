@@ -31,6 +31,10 @@ class GCPAdapter(BaseCloudAdapter):
         except Exception:
             return False
 
+    def pull_image(self, image: str) -> bool:
+        """GCP handles image pulling automatically."""
+        return True
+
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int, replicas: int = 1, **kwargs) -> str:
         """

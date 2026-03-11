@@ -1143,6 +1143,12 @@ def _deploy_container(deployment, provider, image_name):
         # --- Standard single-container deploy ---
         compute = ComputeService(provider)
 
+        # Explicitly pull image before deployment to avoid 404/Not Found
+        append_log(deployment, f"Pulling image {image_name}...\n")
+        if not compute.pull_image(image_name):
+            append_log(deployment, f"⚠️ Warning: Registry pull failed for {image_name}. "
+                                   "Attempting deployment using local cache...\n")
+
         env_vars = _build_runtime_env(service)
 
         # Inject addon connection URLs into deployed container

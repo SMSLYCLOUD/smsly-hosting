@@ -41,6 +41,14 @@ class ComputeService:
             raise NotImplementedError(
                 f"Provider {self.provider.provider_type} not supported yet")
 
+    def pull_image(self, image: str) -> bool:
+        """
+        Pull a container image using the provider's adapter.
+        """
+        return self.adapter.pull_image(image)
+
+    # pylint: disable=too-many-positional-arguments
+
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, name: str, image: str,
                          env_vars: Dict[str, str], cpu: int = 256, memory: int = 512,
