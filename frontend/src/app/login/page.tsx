@@ -85,7 +85,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col relative overflow-x-hidden">
+    <div className="min-h-screen flex flex-col relative overflow-x-hidden cloud-bg">
+      {/* Decorative Orbs */}
+      <div className="floating-orb w-[400px] h-[400px] bg-primary/10 -top-20 -left-20" />
+      <div className="floating-orb w-[300px] h-[300px] bg-cyan-500/10 bottom-20 right-20" style={{ animationDelay: '-4s' }} />
 
       <div className="flex-1 flex items-center justify-center p-4 relative z-10">
 

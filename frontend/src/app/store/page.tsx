@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Database, Layout, Box, Cpu, Search, Cloud, Activity } from 'lucide-react';
+import { Database, Layout, Box, Cpu, Search, Cloud, Activity, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,7 @@ import api, { templatesApi } from '@/lib/api';
 const categories = [
     { id: 'all', label: 'All Apps' },
     { id: 'smsly-ecosystem', label: 'SMSLY Ecosystem' },
+    { id: 'intelligence', label: 'Intelligence' },
     { id: 'database', label: 'Databases' },
     { id: 'cms', label: 'CMS' },
     { id: 'analytics', label: 'Analytics' },
@@ -25,6 +26,7 @@ const getIconForCategory = (category: string) => {
         case 'cms': return Layout;
         case 'analytics': return Activity;
         case 'dev-tools': return Cpu;
+        case 'intelligence': return Brain;
         case 'smsly-ecosystem': return Cloud;
         default: return Box;
     }
@@ -35,6 +37,7 @@ const getColorForCategory = (category: string) => {
         case 'database': return 'bg-blue-600';
         case 'cms': return 'bg-purple-600';
         case 'analytics': return 'bg-green-600';
+        case 'intelligence': return 'bg-cyan-500';
         case 'dev-tools': return 'bg-orange-600';
         case 'smsly-ecosystem': return 'bg-primary';
         default: return 'bg-gray-600';
