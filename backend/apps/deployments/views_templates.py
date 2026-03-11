@@ -172,8 +172,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 provider=provider,
             )
 
-            base_domain = getattr(settings, 'DOMAIN', 'localhost') or 'localhost'
-            service_domain = f"{service.name}.{base_domain}"
+            service_domain = service.public_domain
 
             def render_value(raw: str) -> str:
                 v = str(raw or '')
