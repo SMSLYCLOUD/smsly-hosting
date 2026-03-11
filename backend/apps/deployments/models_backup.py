@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
-from .models import Service
+from .models_core import Service
 
 class ServiceBackup(models.Model):
     """Full snapshot of a service: container state + volumes + env vars + addons."""
