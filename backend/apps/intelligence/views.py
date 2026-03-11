@@ -1,10 +1,12 @@
 """Views for AI provider configuration and status."""
 import json
 import logging
+import time
+import uuid
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.db import DatabaseError
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework import status
@@ -20,6 +22,7 @@ from .providers import (
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
 from apps.deployments.models_audit import AuditLog
+from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,8 @@ def ai_providers_status(request):
         }.get(mode, mode),
         "active_count": len(configured),
         "total_available": len(providers),
+        "senate_enabled": os.environ.get("SENATE_ENABLED", "True").lower() == "true",
+        "senate_max_members": int(os.environ.get("SENATE_MAX_MEMBERS", "5")),
     }
     if degraded_reason:
         payload["degraded"] = True
@@ -106,6 +111,10 @@ def ai_providers_update(request):
         "gemini_api_key", "gemini_model",
         "claude_api_key", "claude_model",
         "jules_api_key", "jules_model",
+        "localllm_api_key", "localllm_model", "localllm_base_url",
+        "smslycloud_api_key", "smslycloud_model",
+        "deepseek_api_key", "deepseek_model",
+        "senate_enabled", "senate_max_members",
     ]
 
     updated = []
@@ -175,6 +184,69 @@ def ai_test_prompt(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
+@api_view(["POST"])
+@authentication_classes([APIKeyAuthentication, CsrfExemptSessionAuthentication])
+@permission_classes([IsAuthenticated])
+@require_tier('pro', 'enterprise')
+def ai_chat_completions(request):
+    """
+    OpenAI-compatible chat completions endpoint.
+
+    POST /api/v1/ai/chat/completions/
+    Body: { "model": "...", "messages": [{"role": "user", "content": "..."}] }
+    """
+    data = request.data
+    messages = data.get("messages", [])
+    if not messages:
+        return Response({"error": "No messages provided"}, status=400)
+
+    # Extract prompt (last user message) and system prompt
+    prompt = None
+    system_prompt = None
+    
+    for msg in reversed(messages):
+        if msg.get("role") == "user" and prompt is None:
+            prompt = msg.get("content")
+        elif msg.get("role") == "system" and system_prompt is None:
+            system_prompt = msg.get("content")
+
+    if not prompt:
+        return Response({"error": "No user message found"}, status=400)
+
+    try:
+        response_text, provider_name = ask_with_fallback(prompt, system_prompt=system_prompt)
+        
+        # Format response in OpenAI style
+        completion_id = f"chatcmpl-{uuid.uuid4()}"
+        created_time = int(time.time())
+        
+        return Response({
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created_time,
+            "model": provider_name, # Use provider name as model for attribution
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": response_text,
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": -1,
+                "completion_tokens": -1,
+                "total_tokens": -1
+            }
+        })
+    except Exception as e:
+        logger.exception("AI Chat completion failed: %s", e)
+        return Response({"error": str(e)}, status=500)
 
 
 @api_view(["POST"])
