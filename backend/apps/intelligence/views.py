@@ -35,6 +35,16 @@ def _json_safe(value, fallback):
         return fallback
 
 
+def _parse_int(value, default):
+    """Safely parse an integer, returning default on failure."""
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -82,7 +92,7 @@ def ai_providers_status(request):
         "active_count": len(configured),
         "total_available": len(providers),
         "senate_enabled": os.environ.get("SENATE_ENABLED", "True").lower() == "true",
-        "senate_max_members": int(os.environ.get("SENATE_MAX_MEMBERS", "5")),
+        "senate_max_members": _parse_int(os.environ.get("SENATE_MAX_MEMBERS"), 5),
     }
     if degraded_reason:
         payload["degraded"] = True

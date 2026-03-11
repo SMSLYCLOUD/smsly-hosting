@@ -88,7 +88,7 @@ ENABLE_LEGACY_TUNNEL_API = config(
     default=False,
     cast=bool,
 )
-_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1'
+_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,backend,smsly-hosting-backend-1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,backend,smsly-hosting-backend-1'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 APPEND_SLASH = False
 
