@@ -1,7 +1,7 @@
 """Service metrics model — tracks CPU, memory, network, and disk usage."""
 import uuid
 from django.db import models
-from .models import Service, TimeStampedModel
+from .models_core import Service, TimeStampedModel
 
 
 class ServiceMetric(TimeStampedModel):

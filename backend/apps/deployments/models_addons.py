@@ -2,7 +2,7 @@
 import uuid
 from encrypted_model_fields.fields import EncryptedCharField
 from django.db import models
-from .models import Service, TimeStampedModel
+from .models_core import Service, TimeStampedModel
 
 
 class Addon(TimeStampedModel):

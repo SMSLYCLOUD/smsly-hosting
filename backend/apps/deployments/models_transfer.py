@@ -1,7 +1,7 @@
 import uuid
 from django.db import models
 from django.utils import timezone
-from .models import Service
+from .models_core import Service
 from .models_backup import ServiceBackup, ServerBackup
 
 class ServerTransfer(models.Model):
