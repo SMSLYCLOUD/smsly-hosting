@@ -37,6 +37,7 @@ class AddonProvisioner:
         'MONGODB': 'mongo:7.0',
         'QDRANT': 'qdrant/qdrant:v1.12.1',
         'ELASTICSEARCH': 'docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
+        'RABBITMQ': 'rabbitmq:3.13-management',
     }
 
     # Default ports for each addon
@@ -47,6 +48,7 @@ class AddonProvisioner:
         'MONGODB': 27017,
         'QDRANT': 6333,
         'ELASTICSEARCH': 9200,
+        'RABBITMQ': 5672,
     }
 
     # Environment variable keys for connection URLs
@@ -57,6 +59,7 @@ class AddonProvisioner:
         'MONGODB': 'MONGODB_URI',
         'QDRANT': 'QDRANT_URL',
         'ELASTICSEARCH': 'ELASTICSEARCH_URL',
+        'RABBITMQ': 'RABBITMQ_URL',
     }
 
     def __init__(self):
@@ -141,10 +144,45 @@ class AddonProvisioner:
             container_id, connection_url = self._provision_elasticsearch(
                 container_name, port, alias_name
             )
+        elif addon_type == 'RABBITMQ':
+            container_id, connection_url = self._provision_rabbitmq(
+                container_name, password, port, alias_name
+            )
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
         logger.info(f"Addon {addon_type} provisioned: {container_name} (alias: {alias_name})")
+        return container_id, connection_url
+
+    def _provision_rabbitmq(self, container_name: str,
+                            password: str, port: int,
+                            alias_name: str = '') -> Tuple[str, str]:
+        """Provision a RabbitMQ container with management plugin enabled."""
+        user = "appuser"
+        vhost = "/"
+        cmd = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+            '-e', f'RABBITMQ_DEFAULT_USER={user}',
+            '-e', f'RABBITMQ_DEFAULT_PASS={password}',
+            '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
+            '-p', f'{port}:5672',
+            '-p', '15672:15672',  # management UI
+            '-v', f'{container_name}-data:/var/lib/rabbitmq',
+        ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.append(self.ADDON_IMAGES['RABBITMQ'])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        container_id = result.stdout.strip()[:12]
+
+        hostname = alias_name or container_name
+        connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
+
+        self._wait_for_health(container_name, port, path="/api/health/checks/alarms", use_http=True)
         return container_id, connection_url
 
     def _provision_postgres(self, container_name: str,
@@ -361,8 +399,13 @@ class AddonProvisioner:
         return container_id, connection_url
 
     def _wait_for_health(self, container_name: str,
-                         port: int, timeout: int = 30):
-        """Wait for the container to be healthy and accepting connections."""
+                         port: int, timeout: int = 30,
+                         use_http: bool = False, path: str = "/"):
+        """Wait for the container to be healthy and accepting connections.
+
+        Note: For now we only check container running state. HTTP/TCP probing
+        can be added later; parameters are accepted for forward compatibility.
+        """
         logger.info(f"Waiting for {container_name} to be ready...")
         start_time = time.time()
 
