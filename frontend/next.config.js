@@ -5,7 +5,10 @@ const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
   outputFileTracingRoot: path.join(__dirname),
+  poweredByHeader: false,
+  compress: true,
   images: {
+    formats: ['image/avif', 'image/webp'],
     remotePatterns: [
       {
         protocol: 'https',
@@ -41,9 +44,14 @@ const nextConfig = {
         source: '/accounts/:provider(github|google)/:path*',
         destination: process.env.INTERNAL_API_URL
             ? `${process.env.INTERNAL_API_URL}/accounts/:provider/:path*`
-            : 'http://localhost:8000/accounts/:provider/:path*',
+          : 'http://localhost:8000/accounts/:provider/:path*',
       },
     ]
+  },
+  modularizeImports: {
+    'lucide-react': {
+      transform: 'lucide-react/icons/{{member}}',
+    },
   },
 }
 
