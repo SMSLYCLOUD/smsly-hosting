@@ -1200,7 +1200,8 @@ def _deploy_container(deployment, provider, image_name):
             replicas=service.min_replicas,
             volumes=volumes,
             healthcheck=healthcheck,
-            restart_policy=service.restart_policy
+            restart_policy=service.restart_policy,
+            command=(service.start_command or None),
         )
 
         deployment.status = Deployment.Status.HEALTH_CHECK
@@ -1835,6 +1836,38 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                     if updated:
                         service.custom_domains = current_domains
                         service.save(update_fields=['custom_domains'])
+
+    if template and template.get('id') == 'ai-router':
+        update_fields = []
+        ollama_base_url = render_value('${OLLAMA_BASE_URL}').strip() or 'http://ollama:11434'
+        ollama_model = render_value('${OLLAMA_MODEL}').strip() or 'llama3'
+        start_command = (
+            f"--model ollama/{ollama_model} "
+            f"--api_base {ollama_base_url} "
+            "--port 4000 --host 0.0.0.0"
+        )
+
+        if service.internal_port != 4000:
+            service.internal_port = 4000
+            update_fields.append('internal_port')
+        if (service.health_check_path or '').strip() in {'', '/health'}:
+            service.health_check_path = '/'
+            update_fields.append('health_check_path')
+        if (service.start_command or '').strip() != start_command:
+            service.start_command = start_command
+            update_fields.append('start_command')
+        if int(service.memory_mb or 0) < 1024:
+            service.memory_mb = 1024
+            update_fields.append('memory_mb')
+        try:
+            cpu_cores = float(service.cpu_cores or 0)
+        except (TypeError, ValueError):
+            cpu_cores = 0.0
+        if cpu_cores < 1.0:
+            service.cpu_cores = 1.0
+            update_fields.append('cpu_cores')
+        if update_fields:
+            service.save(update_fields=update_fields)
 
     # Trigger deploy
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()

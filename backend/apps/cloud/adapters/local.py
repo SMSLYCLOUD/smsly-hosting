@@ -4,6 +4,7 @@ import logging
 import secrets
 import json
 import os
+import shlex
 from typing import Dict, Any, List
 from kubernetes import client, config
 from .base import BaseCloudAdapter
@@ -194,6 +195,7 @@ class LocalAdapter(BaseCloudAdapter):
         volumes = kwargs.get('volumes', None)
         healthcheck = kwargs.get('healthcheck', None)
         restart_policy = kwargs.get('restart_policy', 'unless-stopped')
+        command = kwargs.get('command', None)
         if self.k8s_client:
             return self._deploy_k8s(
                 service_name, image, env_vars, cpu, memory, replicas,
@@ -202,7 +204,7 @@ class LocalAdapter(BaseCloudAdapter):
             return self._deploy_docker(
                 service_name, image, env_vars, volumes=volumes,
                 healthcheck=healthcheck, cpu=cpu, memory=memory,
-                restart_policy=restart_policy)
+                restart_policy=restart_policy, command=command)
         else:
             raise RuntimeError("No local orchestrator available")
 
@@ -212,7 +214,8 @@ class LocalAdapter(BaseCloudAdapter):
                        project_id: str = 'default',
                        healthcheck: Dict = None,
                        cpu: int = None, memory: int = None,
-                       restart_policy: str = 'unless-stopped') -> str:
+                       restart_policy: str = 'unless-stopped',
+                       command=None) -> str:
         """
         Blue-green Docker deployment with rollback-safe cutover.
 
@@ -407,6 +410,11 @@ class LocalAdapter(BaseCloudAdapter):
         }
         if docker_healthcheck is not None:
             create_kwargs["healthcheck"] = docker_healthcheck
+        if command:
+            if isinstance(command, str):
+                create_kwargs["command"] = shlex.split(command)
+            else:
+                create_kwargs["command"] = list(command)
 
         new_container = self.docker_client.containers.create(**create_kwargs)
         new_container.start()

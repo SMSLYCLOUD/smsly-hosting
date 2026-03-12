@@ -95,7 +95,7 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
 
         labels = docker_client.containers.create.call_args.kwargs["labels"]
         self.assertEqual(labels["traefik.enable"], "true")
-        self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web")
+        self.assertEqual(labels["traefik.http.routers.buyforfront.entrypoints"], "web,websecure")
         self.assertNotIn("traefik.http.routers.buyforfront.tls", labels)
         self.assertEqual(labels["smsly.blue_green.enable_tls"], "True")
 
@@ -156,3 +156,25 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
 
         existing.stop.assert_not_called()
         existing.remove.assert_not_called()
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_command_override_is_passed_to_container_create(self, mock_load, _wait_mock):
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        adapter._deploy_docker(
+            name="ai-router",
+            image="ghcr.io/berriai/litellm:main-stable",
+            env={
+                "PORT": "4000",
+                "PUBLIC_DOMAIN": "ai-router.example.com",
+            },
+            command="--model ollama/phi3 --api_base http://ollama:11434 --port 4000",
+        )
+
+        create_kwargs = docker_client.containers.create.call_args.kwargs
+        self.assertEqual(
+            create_kwargs["command"],
+            ["--model", "ollama/phi3", "--api_base", "http://ollama:11434", "--port", "4000"],
+        )
