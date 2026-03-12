@@ -219,7 +219,7 @@ def _build_runtime_env(service: Service) -> dict:
     # ── Auto-generate critical Django env vars ──────────────────────
     # SECRET_KEY: generate a secure random key if not explicitly set.
     # Without this, Django apps crash on startup in production.
-    if 'SECRET_KEY' not in env_vars and 'DJANGO_SECRET_KEY' not in env_vars:
+    if not env_vars.get('SECRET_KEY') and not env_vars.get('DJANGO_SECRET_KEY'):
         env_vars['SECRET_KEY'] = secrets.token_urlsafe(50)
 
     # ── Inject addon connection URLs (DATABASE_URL, REDIS_URL, etc.) ──
