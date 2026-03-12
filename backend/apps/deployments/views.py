@@ -1474,13 +1474,30 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_202_ACCEPTED,
             )
 
+        # Auto-create DNS record if Cloudflare token + server IP available
+        dns_synced = False
+        try:
+            cfg = PlatformConfig.load()
+            if cfg.cloudflare_api_token and cfg.server_ip:
+                from apps.deployments.services.dns import ensure_dns_records
+                dns_result = ensure_dns_records([domain], cfg.server_ip, cfg.cloudflare_api_token)
+                dns_synced = dns_result.get("ok", False)
+                if not dns_synced:
+                    logger.warning("DNS sync for %s failed: %s", domain, dns_result.get("errors"))
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("DNS sync skipped for %s: %s", domain, exc)
+
         return Response({
             'domain': domain,
             'domains': domains,
             'caddy_synced': caddy_ok,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
-            'message': f'{domain} added. Configure DNS to point to your server. No redeploy required.',
+            'dns_synced': dns_synced,
+            'message': (
+                f'{domain} added. DNS {"synced to Cloudflare" if dns_synced else "needs to point to your server"}. '
+                'No redeploy required.'
+            ),
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='delete-domain')
@@ -2246,6 +2263,19 @@ class DomainConfigView(GenericAPIView):
                     },
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
+
+            # Auto-create DNS records on Cloudflare when possible.
+            if config.cloudflare_api_token and config.server_ip and config.domain:
+                try:
+                    from apps.deployments.services.dns import ensure_dns_records
+                    domains = [config.domain]
+                    if config.wildcard_subdomains:
+                        domains.append(f"*.{config.domain}")
+                    dns_result = ensure_dns_records(domains, config.server_ip, config.cloudflare_api_token)
+                    if not dns_result.get("ok"):
+                        logger.warning("DNS sync issues: %s", dns_result.get("errors"))
+                except Exception as dns_exc:  # pylint: disable=broad-exception-caught
+                    logger.warning("DNS sync skipped: %s", dns_exc)
         except Exception as e:
             config.caddy_status = 'error'
             config.save(update_fields=['caddy_status'])
