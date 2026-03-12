@@ -20445,7 +20445,7 @@
     "icon": "https://privategpt.io/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/zylon-ai/private-gpt",
-    "docker_image": "zylon-ai/private-gpt:latest",
+    "docker_image": "ghcr.io/zylon-ai/private-gpt:latest",
     "default_port": 8001,
     "min_ram_gb": 8
   },
@@ -20503,7 +20503,15 @@
     "repository_url": "https://hub.docker.com/r/khoj-ai/khoj",
     "docker_image": "ghcr.io/khoj-ai/khoj:latest",
     "default_port": 8000,
-    "min_ram_gb": 4
+    "min_ram_gb": 4,
+    "required_addons": [
+      "POSTGRES"
+    ],
+    "custom_addon_overrides": {
+      "POSTGRES": {
+        "image": "ankane/pgvector:latest"
+      }
+    }
   },
   {
     "id": "sd-next",
