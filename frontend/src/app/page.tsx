@@ -116,6 +116,27 @@ const features = [
         description: "Traefik, health checks, and per-service metrics feed deployment insights and autoscale decisions.",
         color: "text-cyan-500",
         bg: "bg-cyan-500/10"
+    },
+    {
+        icon: Shield,
+        title: "Resilience & Alerts",
+        description: "Encrypted backups with retention pruning plus Resend email fallbacks when services crash.",
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
+    },
+    {
+        icon: CheckCircle2,
+        title: "Template Preflight",
+        description: "Docker image manifest checks and secret-aware env rendering stop bad one-click deploys early.",
+        color: "text-indigo-500",
+        bg: "bg-indigo-500/10"
+    },
+    {
+        icon: Database,
+        title: "Vector-Ready Data",
+        description: "Managed Postgres ships with pgvector and Patroni replication for RAG stacks like Khoj and LibreChat.",
+        color: "text-teal-500",
+        bg: "bg-teal-500/10"
     }
 ];
 
