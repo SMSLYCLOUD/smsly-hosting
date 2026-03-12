@@ -20435,6 +20435,26 @@
         "key": "MONGO_URI",
         "value": "${MONGODB_URL}",
         "is_secret": false
+      },
+      {
+        "key": "JWT_SECRET",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "JWT_REFRESH_SECRET",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "CREDS_KEY",
+        "value": "f34be10384ca63896434479e001887e49f82662c1cf74092049c3664d62b6942",
+        "is_secret": true
+      },
+      {
+        "key": "CREDS_IV",
+        "value": "7876a917bd714f3b7facd2d48079fa1e",
+        "is_secret": true
       }
     ]
   },
@@ -20568,7 +20588,7 @@
       },
       {
         "key": "DATABASE_URL",
-        "value": "postgresql://...",
+        "value": "${DATABASE_URL}",
         "is_secret": true
       }
     ],
