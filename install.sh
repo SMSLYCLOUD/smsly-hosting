@@ -948,6 +948,12 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
         echo -e "${RED}  ✗ Traefik: HTTP $EP3_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
+    # Post-install smoke (HTTP/HTTPS/wildcard) if domain provided
+    if [ -n "${DOMAIN:-}" ] && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
+        echo -e "${YELLOW}  ⟳ Smoke-testing routes for ${DOMAIN}${NC}"
+        /opt/smsly-hosting/scripts/smoke_routes.sh "$DOMAIN" "*.$DOMAIN" || true
+    fi
+
     # Deployed service domains
     ALL_SVC_DOMAINS="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
