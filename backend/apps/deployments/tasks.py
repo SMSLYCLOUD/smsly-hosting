@@ -217,10 +217,28 @@ def _build_runtime_env(service: Service) -> dict:
         env_vars.setdefault('HOSTNAME', '0.0.0.0')
 
     # ── Auto-generate critical Django env vars ──────────────────────
-    # SECRET_KEY: generate a secure random key if not explicitly set.
+    # SECRET_KEY: generate a secure random key if not explicitly set (or set to empty).
     # Without this, Django apps crash on startup in production.
     if not env_vars.get('SECRET_KEY') and not env_vars.get('DJANGO_SECRET_KEY'):
         env_vars['SECRET_KEY'] = secrets.token_urlsafe(50)
+
+    # FERNET_KEY: many apps require a Fernet key; generate if missing/blank.
+    try:
+        if not env_vars.get('FERNET_KEY'):
+            from cryptography.fernet import Fernet
+            env_vars['FERNET_KEY'] = Fernet.generate_key().decode()
+    except Exception:
+        pass
+
+    # Generic admin placeholders to avoid boot-time crashes; users can override later.
+    fallback_if_blank = {
+        'ADMIN_EMAIL': 'admin@example.com',
+        'ADMIN_USERNAME': 'admin',
+        'OPS_HEALTH_TOKEN': secrets.token_urlsafe(16),
+    }
+    for k, v in fallback_if_blank.items():
+        if not str(env_vars.get(k, '')).strip():
+            env_vars[k] = v
 
     # ── Inject addon connection URLs (DATABASE_URL, REDIS_URL, etc.) ──
     # This ensures addon env vars are available in ALL deploy paths.
