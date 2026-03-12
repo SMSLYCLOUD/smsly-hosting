@@ -22005,7 +22005,12 @@
       },
       {
         "key": "AI_SENATE_URL",
-        "value": "https://senate.smsly.cloud",
+        "value": "${AI_SENATE_URL}",
+        "is_secret": false
+      },
+      {
+        "key": "CUSTOM_DOMAINS",
+        "value": "ai.smsly.cloud",
         "is_secret": false
       }
     ],

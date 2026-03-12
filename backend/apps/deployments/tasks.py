@@ -1725,11 +1725,16 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         v = v.replace('${DOMAIN}', service.public_domain or '')
         v = v.replace('${MONGODB_URL}', addon_urls.get('MONGODB', ''))
         v = v.replace('${MONGODB_URI}', addon_urls.get('MONGODB', ''))
-        v = v.replace('${DATABASE_URL}', addon_urls.get('POSTGRES', ''))
-        v = v.replace('${POSTGRES_URL}', addon_urls.get('POSTGRES', ''))
-        v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', ''))
-        v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', ''))
-        v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', ''))
+        v = v.replace('${DATABASE_URL}', addon_urls.get('POSTGRES', os.environ.get('DATABASE_URL', '')))
+        v = v.replace('${POSTGRES_URL}', addon_urls.get('POSTGRES', os.environ.get('DATABASE_URL', '')))
+        v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', os.environ.get('REDIS_URL', '')))
+        v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', os.environ.get('MYSQL_URL', '')))
+        v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', os.environ.get('ELASTICSEARCH_URL', '')))
+        
+        # System Environment Overrides & Defaults
+        v = v.replace('${AI_SENATE_URL}', os.environ.get('AI_SENATE_URL', 'https://senate.smsly.cloud'))
+        v = v.replace('${LITELLM_MASTER_KEY}', os.environ.get('LITELLM_MASTER_KEY', ''))
+        
         return v
 
     if template and 'env_vars' in template:
@@ -1747,6 +1752,20 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                         'is_secret': bool(item.get('is_secret', False)),
                     }
                 )
+                
+                # Generic custom domain handling from Env Vars
+                if key == 'CUSTOM_DOMAINS':
+                    rendered_val = render_value(item.get('value', ''))
+                    domains = [d.strip() for d in rendered_val.split(',') if d.strip()]
+                    current_domains = service.custom_domains or []
+                    updated = False
+                    for domain in domains:
+                        if domain not in current_domains:
+                            current_domains.append(domain)
+                            updated = True
+                    if updated:
+                        service.custom_domains = current_domains
+                        service.save(update_fields=['custom_domains'])
 
     # Trigger deploy
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
