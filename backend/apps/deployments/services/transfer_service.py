@@ -154,6 +154,10 @@ class ServerTransferService:
         if self.transfer.transfer_type == 'FULL':
             install_script = os.path.join(settings.BASE_DIR, '../install.sh')
             if os.path.exists(install_script):
+                # Enforce checksum env for supply-chain safety
+                checksum = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
+                if not checksum:
+                    raise ValueError("SMSLY_INSTALL_SCRIPT_SHA256 is required for full-server transfer.")
                 self.ssh.upload_file(install_script, "/tmp/install.sh")
                 self.ssh.exec_command("chmod +x /tmp/install.sh")
 
