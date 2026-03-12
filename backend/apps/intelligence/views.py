@@ -1,6 +1,7 @@
 """Views for AI provider configuration and status."""
 import json
 import logging
+import os
 import time
 import uuid
 from drf_spectacular.types import OpenApiTypes
