@@ -21999,6 +21999,16 @@
         "is_secret": true
       },
       {
+        "key": "DISABLE_SCHEMA_UPDATE",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "NUM_WORKERS",
+        "value": "1",
+        "is_secret": false
+      },
+      {
         "key": "AI_SENATE_ENABLED",
         "value": "true",
         "is_secret": false

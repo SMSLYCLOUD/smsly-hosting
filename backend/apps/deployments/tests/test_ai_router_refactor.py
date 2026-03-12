@@ -1,9 +1,8 @@
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from apps.deployments.tasks import one_click_deploy_template_task
 from apps.deployments.models import Service, EnvironmentVariable
-from apps.deployments.models_addons import Addon
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -21,7 +20,8 @@ def test_render_value_with_env_overrides():
             {"key": "AI_SENATE_URL", "value": "${AI_SENATE_URL}"},
             {"key": "CUSTOM_DOMAINS", "value": "custom.domain.com"},
             {"key": "DATABASE_URL", "value": "${DATABASE_URL}"}
-        ]
+        ],
+        "required_addons": []
     }
     
     # We need to mock the environment
@@ -31,10 +31,12 @@ def test_render_value_with_env_overrides():
     }):
         # We need to bypass the actual deployment trigger and addon provisioning
         with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
-             patch('apps.deployments.tasks.smart_deploy_task.delay') as mock_deploy:
+             patch('apps.deployments.tasks.smart_deploy_task.delay') as mock_deploy, \
+             patch('apps.deployments.tasks.json.load', return_value=[template]):
             
             # Mock empty addons
             mock_addon_filter.return_value.all.return_value = []
+            mock_addon_filter.return_value.first.return_value = None
             
             # Run the task
             one_click_deploy_template_task(str(service.id), "ai-router")
@@ -60,16 +62,62 @@ def test_render_value_default_fallback():
         "id": "ai-router",
         "env_vars": [
             {"key": "AI_SENATE_URL", "value": "${AI_SENATE_URL}"}
-        ]
+        ],
+        "required_addons": []
     }
     
     with patch.dict(os.environ, {}, clear=True):
         with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
-             patch('apps.deployments.tasks.smart_deploy_task.delay'):
+             patch('apps.deployments.tasks.smart_deploy_task.delay'), \
+             patch('apps.deployments.tasks.json.load', return_value=[template]):
             
             mock_addon_filter.return_value.all.return_value = []
+            mock_addon_filter.return_value.first.return_value = None
             
             one_click_deploy_template_task(str(service.id), "ai-router")
             
             ev = EnvironmentVariable.objects.get(service=service, key="AI_SENATE_URL")
             assert ev.value == "http://ollama:11434"
+
+
+@pytest.mark.django_db
+def test_ai_router_runtime_defaults_are_applied():
+    user = User.objects.create(username="testrouter")
+    service = Service.objects.create(name="ai-router-svc", owner=user)
+    template = {
+        "id": "ai-router",
+        "env_vars": [
+            {"key": "DISABLE_SCHEMA_UPDATE", "value": "true"},
+            {"key": "NUM_WORKERS", "value": "1"},
+            {"key": "OLLAMA_BASE_URL", "value": "${OLLAMA_BASE_URL}"},
+            {"key": "OLLAMA_MODEL", "value": "${OLLAMA_MODEL}"},
+        ],
+        "required_addons": [],
+    }
+
+    with patch.dict(os.environ, {
+        "OLLAMA_BASE_URL": "http://ollama.internal:11434",
+        "OLLAMA_MODEL": "phi3",
+    }, clear=True):
+        with patch('apps.deployments.tasks.Addon.objects.filter') as mock_addon_filter, \
+             patch('apps.deployments.tasks.smart_deploy_task.delay'), \
+             patch('apps.deployments.tasks.json.load', return_value=[template]):
+
+            mock_addon_filter.return_value.all.return_value = []
+            mock_addon_filter.return_value.first.return_value = None
+            one_click_deploy_template_task(str(service.id), "ai-router")
+
+    service.refresh_from_db()
+    env_vars = {ev.key: ev.value for ev in EnvironmentVariable.objects.filter(service=service)}
+
+    assert env_vars["DISABLE_SCHEMA_UPDATE"] == "true"
+    assert env_vars["NUM_WORKERS"] == "1"
+    assert service.internal_port == 4000
+    assert service.health_check_path == "/"
+    assert service.memory_mb >= 1024
+    assert float(service.cpu_cores) >= 1.0
+    assert service.start_command == (
+        "--model ollama/phi3 "
+        "--api_base http://ollama.internal:11434 "
+        "--port 4000 --host 0.0.0.0"
+    )
