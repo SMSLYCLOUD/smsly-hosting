@@ -114,14 +114,22 @@ while true; do
 
         WATCH_CADDY="$WATCH_DIR/Caddyfile"
         if [ -f "$WATCH_CADDY" ]; then
-            # Validate before applying
-            if caddy validate --config "$WATCH_CADDY" 2>&1; then
-                echo "$LOG_PREFIX Validation passed — applying"
-                cp "$WATCH_CADDY" "$CADDY_CONF"
-                systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1
-                echo "$LOG_PREFIX Caddy reloaded successfully"
-            else
-                echo "$LOG_PREFIX ERROR: Caddyfile validation failed — NOT applying"
+            # Validate before applying with simple retry to avoid transient DNS/ACME race
+            attempts=0
+            while [ $attempts -lt 3 ]; do
+                if caddy validate --config "$WATCH_CADDY" 2>&1; then
+                    echo "$LOG_PREFIX Validation passed — applying"
+                    cp "$WATCH_CADDY" "$CADDY_CONF"
+                    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1
+                    echo "$LOG_PREFIX Caddy reloaded successfully"
+                    break
+                fi
+                attempts=$((attempts+1))
+                echo "$LOG_PREFIX Validation failed (attempt $attempts), retrying in 2s"
+                sleep 2
+            done
+            if [ $attempts -ge 3 ]; then
+                echo "$LOG_PREFIX ERROR: Caddyfile validation failed after retries — NOT applying"
             fi
         else
             echo "$LOG_PREFIX WARNING: No Caddyfile found in $WATCH_DIR"

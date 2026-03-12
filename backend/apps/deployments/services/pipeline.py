@@ -881,6 +881,19 @@ class PipelineManager:
             except Exception:
                 pass
 
+            # --- Strategy 0.5: infer from internal port hints (best-effort) ---
+            port_map = {
+                5432: 'POSTGRES',
+                6379: 'REDIS',
+                5672: 'RABBITMQ',
+                27017: 'MONGODB',
+                9200: 'ELASTICSEARCH',
+                6333: 'QDRANT',
+            }
+            hinted = port_map.get(int(self.service.internal_port or 0))
+            if hinted:
+                detected_types.add(hinted)
+
             # --- Strategy A: scan requirements.txt / Pipfile ---
             req_candidates = [
                 'requirements.txt', 'requirements/base.txt',
