@@ -2213,6 +2213,7 @@ class DomainConfigView(GenericAPIView):
             config.cloudflare_api_token = str(
                 data.get('cloudflare_api_token') or ''
             ).strip()
+        clearing_token = 'cloudflare_api_token' in data and not config.cloudflare_api_token
         if 'server_ip' in data:
             config.server_ip = str(data.get('server_ip') or '').strip() or None
 
@@ -2230,7 +2231,11 @@ class DomainConfigView(GenericAPIView):
             from services.caddy_manager import generate_caddyfile, apply_caddyfile
             caddyfile_content = generate_caddyfile(config)
             cf_token = (config.cloudflare_api_token or "").strip()
-            result = apply_caddyfile(caddyfile_content, cloudflare_token=cf_token)
+            result = apply_caddyfile(
+                caddyfile_content,
+                cloudflare_token=cf_token,
+                preserve_existing_token=not clearing_token,
+            )
             config.caddy_status = 'applied' if result['ok'] else 'error'
             config.save(update_fields=['caddy_status'])
             if not result.get('ok'):
