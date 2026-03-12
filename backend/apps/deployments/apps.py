@@ -35,3 +35,10 @@ class DeploymentsConfig(AppConfig):
             _patch_allowed_hosts_from_db()
         except Exception:
             pass
+
+        # Fire a one-time startup Caddy sync so SSL/DNS "just work" after boot.
+        try:
+            from .startup import schedule_startup_caddy_sync
+            schedule_startup_caddy_sync()
+        except Exception:
+            pass
