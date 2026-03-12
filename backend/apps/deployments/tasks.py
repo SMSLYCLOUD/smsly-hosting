@@ -1689,6 +1689,13 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 "value": "${RANDOM_PASSWORD}",
                 "is_secret": True
             })
+        has_cfg = any((str(ev.get('key') or '').upper() == 'LIBRECHAT_CONFIG_PATH') for ev in env_list)
+        if not has_cfg:
+            env_list.append({
+                "key": "LIBRECHAT_CONFIG_PATH",
+                "value": "/app/librechat.yaml",
+                "is_secret": False
+            })
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
     
     # Track addon URLs for template rendering
