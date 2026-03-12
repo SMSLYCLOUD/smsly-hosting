@@ -21929,7 +21929,7 @@
     ],
     "custom_addon_overrides": {
       "POSTGRES": {
-        "image": "ankane/pgvector:latest"
+        "image": "pgvector/pgvector:pg16"
       }
     },
     "env_vars": [
