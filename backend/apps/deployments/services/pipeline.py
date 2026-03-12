@@ -1021,7 +1021,15 @@ class PipelineManager:
                 ).values_list('addon_type', flat=True)
             )
 
-            to_provision = detected_types - existing
+            # If a previous attempt failed, retry provisioning those types too.
+            failed = set(
+                Addon.objects.filter(
+                    service=self.service,
+                    status=Addon.Status.FAILED
+                ).values_list('addon_type', flat=True)
+            )
+
+            to_provision = (detected_types | failed) - existing
             if not to_provision:
                 append_log(
                     self.deployment,
