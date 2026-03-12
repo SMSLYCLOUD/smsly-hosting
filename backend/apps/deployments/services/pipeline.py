@@ -1060,6 +1060,14 @@ class PipelineManager:
                         defaults={'value': url, 'is_secret': True}
                     )
 
+                    # RabbitMQ: also fill common broker aliases for celery/worker stacks
+                    if addon_type == 'RABBITMQ':
+                        for extra_key in ("CELERY_BROKER_URL", "AMQP_URL"):
+                            EnvironmentVariable.objects.update_or_create(
+                                service=self.service, key=extra_key,
+                                defaults={'value': url, 'is_secret': True}
+                            )
+
                     # Qdrant: also set QDRANT_HOST/QDRANT_PORT
                     if addon_type == 'QDRANT':
                         from urllib.parse import urlparse as parse_url
