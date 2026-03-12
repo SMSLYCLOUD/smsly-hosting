@@ -30,7 +30,8 @@ class AddonProvisioner:
 
     # Official Docker images for each addon type
     ADDON_IMAGES = {
-        'POSTGRES': 'postgres:15-alpine',
+        # pgvector-enabled Postgres to support embeddings (Khoj, etc.)
+        'POSTGRES': 'pgvector/pgvector:pg16',
         'REDIS': 'redis:7-alpine',
         'MYSQL': 'mysql:8.0',
         'MONGODB': 'mongo:7.0',
