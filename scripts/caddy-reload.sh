@@ -113,22 +113,30 @@ while true; do
         sync_cloudflare_token
 
         WATCH_CADDY="$WATCH_DIR/Caddyfile"
-        if [ -f "$WATCH_CADDY" ]; then
-            # Validate before applying with simple retry to avoid transient DNS/ACME race
-            attempts=0
-            while [ $attempts -lt 3 ]; do
-                if caddy validate --config "$WATCH_CADDY" 2>&1; then
-                    echo "$LOG_PREFIX Validation passed — applying"
-                    cp "$WATCH_CADDY" "$CADDY_CONF"
-                    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1
-                    echo "$LOG_PREFIX Caddy reloaded successfully"
-                    break
-                fi
-                attempts=$((attempts+1))
-                echo "$LOG_PREFIX Validation failed (attempt $attempts), retrying in 2s"
-                sleep 2
+            if [ -f "$WATCH_CADDY" ]; then
+                # Validate before applying with simple retry/backoff to avoid transient DNS/ACME race
+                attempts=0
+                delay=2
+                while [ $attempts -lt 4 ]; do
+                    if caddy validate --config "$WATCH_CADDY" 2>&1; then
+                        echo "$LOG_PREFIX Validation passed — applying"
+                        cp "$WATCH_CADDY" "$CADDY_CONF"
+                        systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1
+                        echo "$LOG_PREFIX Caddy reloaded successfully"
+                        # Post-reload smoke (non-blocking)
+                        host_line=$(grep -m1 -E '^[^#].*{?$' "$WATCH_CADDY" | head -n1 | awk '{print $1}')
+                        wildcard_line=$(grep -m1 -E '^\\*\\.' "$WATCH_CADDY" | head -n1 | awk '{print $1}')
+                        if command -v bash >/dev/null 2>&1 && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
+                            /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log 2>&1 || true
+                        fi
+                        break
+                    fi
+                    attempts=$((attempts+1))
+                    echo "$LOG_PREFIX Validation failed (attempt $attempts), retrying in ${delay}s"
+                    sleep $delay
+                delay=$((delay*2))
             done
-            if [ $attempts -ge 3 ]; then
+            if [ $attempts -ge 4 ]; then
                 echo "$LOG_PREFIX ERROR: Caddyfile validation failed after retries — NOT applying"
             fi
         else

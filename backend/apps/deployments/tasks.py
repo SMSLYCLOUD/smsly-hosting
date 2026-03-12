@@ -1866,6 +1866,25 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         if cpu_cores < 1.0:
             service.cpu_cores = 1.0
             update_fields.append('cpu_cores')
+        # Prisma schema migration hook for litellm proxy (ai-router)
+        # Mark for a post-deploy migration step.
+        EnvironmentVariable.objects.update_or_create(
+            service=service,
+            key='RUN_PRISMA_MIGRATE',
+            defaults={'value': 'true', 'is_secret': False},
+        )
+        # Critical env hints
+        required = {
+            "LITELLM_MASTER_KEY": "${RANDOM_PASSWORD}",
+            "DATABASE_URL": "${DATABASE_URL}",
+        }
+        # Explicit Prisma migrate flag
+        required["RUN_PRISMA_MIGRATE"] = "true"
+        env_list = template.setdefault('env_vars', [])
+        existing_keys = {str(ev.get("key") or "").upper() for ev in env_list}
+        for key, val in required.items():
+            if key not in existing_keys:
+                env_list.append({"key": key, "value": val, "is_secret": True})
         if update_fields:
             service.save(update_fields=update_fields)
 
@@ -1879,6 +1898,10 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             commit_message=f"Template: {template_id}"
         )
         smart_deploy_task.delay(str(deployment.id), str(provider.id))
+
+        # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
+        if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):
+            append_log(deployment, "\nℹ️ Prisma migration will run post-deploy for this template.\n")
 
 
 @shared_task(bind=True, max_retries=3)

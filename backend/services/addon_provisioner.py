@@ -403,8 +403,6 @@ class AddonProvisioner:
                          use_http: bool = False, path: str = "/"):
         """Wait for the container to be healthy and accepting connections.
 
-        Note: For now we only check container running state. HTTP/TCP probing
-        can be added later; parameters are accepted for forward compatibility.
         """
         logger.info(f"Waiting for {container_name} to be ready...")
         start_time = time.time()
@@ -418,17 +416,38 @@ class AddonProvisioner:
                     capture_output=True,
                     text=True
                 )
-                if result.stdout.strip() == 'true':
-                    # Give it a moment to initialize
-                    time.sleep(2)
-                    logger.info(f"{container_name} is ready")
-                    return
+                if result.stdout.strip() != 'true':
+                    time.sleep(1)
+                    continue
             except BaseException:
-                pass
-            time.sleep(1)
+                time.sleep(1)
+                continue
 
-        logger.warning(
-            f"{container_name} health check timed out after {timeout}s")
+            if use_http:
+                import requests
+                url = f"http://{container_name}:{port}{path}"
+                try:
+                    resp = requests.get(url, timeout=2)
+                    if resp.status_code < 500:
+                        logger.info(f"{container_name} is healthy at {url}")
+                        return
+                except Exception:
+                    time.sleep(1)
+                    continue
+            else:
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1.5)
+                try:
+                    s.connect((container_name, port))
+                    s.close()
+                    logger.info(f"{container_name}:{port} is reachable")
+                    return
+                except Exception:
+                    time.sleep(1)
+                    continue
+
+        raise RuntimeError(f"{container_name} health check timed out after {timeout}s")
 
     def deprovision(self, container_id: str,
                     container_name: Optional[str] = None) -> bool:
