@@ -41,6 +41,8 @@ DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
 # Owner edition: all tier gates disabled — all features unlocked.
 SMSLY_DISABLE_TIER_GATES = True
+# Enable transfer pipeline by default; can be turned off for hardened environments
+ALLOW_STUB_TRANSFER_PIPELINE = _env_bool('ALLOW_STUB_TRANSFER_PIPELINE', default='True')
 
 # Security hardening
 # Force insecure settings when running tests to prevent 301 redirects
