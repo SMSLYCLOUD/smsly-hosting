@@ -18,6 +18,9 @@ CADDY_FILE_PATH = os.path.join(CADDY_CONFIG_DIR, "Caddyfile")
 CADDY_RELOAD_FLAG = os.path.join(CADDY_CONFIG_DIR, ".reload")
 CADDY_TOKEN_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token")
 CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear")
+# Cache the last known-good token so accidental empty writes (e.g. background
+# tasks that don't load the token) do not wipe DNS-challenge capability.
+CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 
 
 def _build_service_domain_block(domain: str, upstream_host: str) -> str:
@@ -252,9 +255,10 @@ def generate_caddyfile(config) -> str:
 
             wildcard_lines.extend(
                 [
+                    # Default: forward other *.domain traffic to Traefik so
+                    # services stay reachable while DNS sync/verification catches up.
                     "    handle {",
-                    "        rewrite * /notice",
-                    "        reverse_proxy localhost:8090",
+                    "        reverse_proxy localhost:8081",
                     "    }",
                     "}",
                 ]
@@ -294,7 +298,21 @@ def generate_caddyfile(config) -> str:
     return header + "\n\n".join(sections) + "\n"
 
 
-def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
+def _load_cached_token() -> str:
+    """Return a token from env or cache (best-effort, empty on failure)."""
+    token = (os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    if token:
+        return token
+    try:
+        if os.path.exists(CADDY_TOKEN_CACHE):
+            with open(CADDY_TOKEN_CACHE, "r", encoding="utf-8") as handle:
+                return (handle.read() or "").strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_token: bool = True) -> dict:
     """
     Write Caddyfile to the shared volume and create a reload flag.
     The host-side watcher script picks up the flag and reloads Caddy.
@@ -304,8 +322,16 @@ def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
     This enables full SSL setup from the web UI without SSH access.
 
     Returns a status dict.
+    If preserve_existing_token is True (default) and no token is provided,
+    we attempt to reuse the last cached/override token to avoid forcing
+    operators to re-enter the Cloudflare token after restarts or background
+    sync jobs that didn't pass it through.
     """
     result = {"ok": False, "message": ""}
+
+    cloudflare_token = (cloudflare_token or "").strip()
+    if not cloudflare_token and preserve_existing_token:
+        cloudflare_token = _load_cached_token()
 
     try:
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
@@ -319,11 +345,18 @@ def apply_caddyfile(content: str, cloudflare_token: str = "") -> dict:
             with open(CADDY_TOKEN_FILE, "w", encoding="utf-8") as handle:
                 handle.write(cloudflare_token)
             os.chmod(CADDY_TOKEN_FILE, 0o600)
+            # Persist a cache so future apply runs without an explicit token
+            # do not unintentionally clear wildcard TLS.
+            with open(CADDY_TOKEN_CACHE, "w", encoding="utf-8") as handle:
+                handle.write(cloudflare_token)
+            os.chmod(CADDY_TOKEN_CACHE, 0o600)
             if os.path.exists(CADDY_TOKEN_CLEAR_FILE):
                 os.remove(CADDY_TOKEN_CLEAR_FILE)
         else:
             if os.path.exists(CADDY_TOKEN_FILE):
                 os.remove(CADDY_TOKEN_FILE)
+            if os.path.exists(CADDY_TOKEN_CACHE):
+                os.remove(CADDY_TOKEN_CACHE)
             # Signal watcher to explicitly remove any stale systemd override.
             with open(CADDY_TOKEN_CLEAR_FILE, "w", encoding="utf-8") as handle:
                 handle.write("clear")
