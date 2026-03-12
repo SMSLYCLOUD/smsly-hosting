@@ -862,6 +862,25 @@ class PipelineManager:
         try:
             detected_types = set()
 
+            # --- Strategy 0: infer from existing env vars (highest confidence) ---
+            try:
+                env_map = {
+                    'REDIS': {'REDIS_URL', 'REDIS_URI', 'REDIS_HOST'},
+                    'RABBITMQ': {'CELERY_BROKER_URL', 'AMQP_URL', 'RABBITMQ_URL'},
+                    'POSTGRES': {'DATABASE_URL', 'PG_URL', 'POSTGRES_URL'},
+                    'QDRANT': {'QDRANT_URL'},
+                    'MONGODB': {'MONGODB_URI', 'MONGODB_URL'},
+                }
+                service_env = {
+                    ev.key: ev.value
+                    for ev in EnvironmentVariable.objects.filter(service=self.service)
+                }
+                for addon_type, keys in env_map.items():
+                    if any(k in service_env for k in keys):
+                        detected_types.add(addon_type)
+            except Exception:
+                pass
+
             # --- Strategy A: scan requirements.txt / Pipfile ---
             req_candidates = [
                 'requirements.txt', 'requirements/base.txt',
