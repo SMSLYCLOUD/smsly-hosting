@@ -273,8 +273,9 @@ def generate_caddyfile(config) -> str:
     if config.use_ssl and domain:
         sections.append(
             """:80 {
+    @has_host header_regexp host .+
+    redir @has_host https://{host}{uri} 308
     handle {
-        rewrite * /notice
         reverse_proxy localhost:8090
     }
 }"""
