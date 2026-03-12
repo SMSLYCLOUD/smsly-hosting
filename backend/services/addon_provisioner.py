@@ -184,6 +184,22 @@ class AddonProvisioner:
         connection_url = f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
 
         self._wait_for_health(container_name, port)
+
+        # Ensure pgvector extension exists (safe to run repeatedly)
+        try:
+            subprocess.run(
+                [
+                    'docker', 'exec', container_name, 'psql',
+                    '-U', db_user, '-d', db_name,
+                    '-c', 'CREATE EXTENSION IF NOT EXISTS vector;'
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("pgvector extension init failed for %s: %s", container_name, exc)
+
         return container_id, connection_url
 
     def _provision_redis(self, container_name: str,

@@ -1673,6 +1673,22 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
     # Provision addons
     required_addons = (template.get('required_addons') or []) if template else []
+
+    # Template-specific minimum requirements / defaults
+    if template and template.get('id') == 'khoj':
+        # Khoj requires pgvector; ensure Postgres addon is present
+        if 'POSTGRES' not in required_addons:
+            required_addons.append('POSTGRES')
+    if template and template.get('id') == 'librechat':
+        # LibreChat needs a JWT secret; inject default if missing
+        env_list = template.setdefault('env_vars', [])
+        has_jwt = any((str(ev.get('key') or '').upper() == 'JWT_SECRET') for ev in env_list)
+        if not has_jwt:
+            env_list.append({
+                "key": "JWT_SECRET",
+                "value": "${RANDOM_PASSWORD}",
+                "is_secret": True
+            })
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
     
     # Track addon URLs for template rendering
