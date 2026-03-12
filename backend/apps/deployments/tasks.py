@@ -1671,6 +1671,28 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     except Exception: # pylint: disable=broad-exception-caught
         template = None
 
+    def _verify_image_available(image: str):
+        """
+        Best-effort check: docker manifest inspect <image>.
+        Skippable via SKIP_TEMPLATE_IMAGE_VERIFY=true.
+        """
+        skip = os.environ.get("SKIP_TEMPLATE_IMAGE_VERIFY", "").lower() in {"1", "true", "yes", "on"}
+        if skip or not image:
+            return
+        try:
+            result = subprocess.run(
+                ["docker", "manifest", "inspect", image],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or f"manifest inspect failed for {image}")
+        except FileNotFoundError as exc:  # docker not installed
+            logger.warning("Docker not available to verify image %s: %s", image, exc)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Template image %s not available: %s", image, exc)
+            raise
+
     # Provision addons
     required_addons = (template.get('required_addons') or []) if template else []
 
@@ -1696,6 +1718,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 "value": "/app/librechat.yaml",
                 "is_secret": False
             })
+    if template and template.get('docker_image'):
+        _verify_image_available(template['docker_image'])
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
     
     # Track addon URLs for template rendering
