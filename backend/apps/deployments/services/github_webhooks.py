@@ -35,7 +35,10 @@ def setup_github_webhook(user, repo_url: str):
 
     webhook_secret = getattr(settings, "GITHUB_WEBHOOK_SECRET", "")
     if not webhook_secret or webhook_secret == "replace_me_with_random_string":
-        logger.warning("GITHUB_WEBHOOK_SECRET is not securely configured. Webhook may be rejected or insecure.")
+        logger.error(
+            "GITHUB_WEBHOOK_SECRET is missing/placeholder. Refusing to create webhook until a secure secret is set."
+        )
+        return
 
     base_url = getattr(settings, "SITE_URL", "http://localhost:8000").rstrip("/")
     target_webhook_url = f"{base_url}/api/v1/webhooks/github/"

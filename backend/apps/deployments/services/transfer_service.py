@@ -27,7 +27,7 @@ class ServerTransferService:
 
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
-        if not getattr(settings, "ALLOW_STUB_TRANSFER_PIPELINE", True):
+        if not getattr(settings, "ALLOW_STUB_TRANSFER_PIPELINE", False):
             self._handle_failure(
                 NotImplementedError("Transfer pipeline not implemented in strict mode.")
             )
@@ -135,9 +135,21 @@ class ServerTransferService:
             raise ValueError("Backup file not found.")
 
         local_path = backup.file_path
+        temp_decrypted = None
+
+        if local_path.endswith(".enc"):
+            key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+            if not key:
+                raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
+            temp_decrypted = BackupService.decrypt_backup(local_path, key)
+            local_path = temp_decrypted
+
         remote_path = f"/tmp/{os.path.basename(local_path)}"
 
         self.ssh.upload_file(local_path, remote_path)
+
+        if temp_decrypted and os.path.exists(temp_decrypted):
+            os.remove(temp_decrypted)
 
         if self.transfer.transfer_type == 'FULL':
             install_script = os.path.join(settings.BASE_DIR, '../install.sh')

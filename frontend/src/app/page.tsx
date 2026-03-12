@@ -49,24 +49,24 @@ const globalStats = [
 // ============================================
 const coreFeatures = [
     {
-        title: 'Zero Config Deployment',
-        subtitle: 'Framework Agnostic',
-        description: 'Connect your GitHub repository and push. We detect your framework (Next.js, Django, Go, etc.) and configure the build pipeline automatically.',
-        icon: GitBranch,
+        title: 'AI Router + Senate',
+        subtitle: 'Ollama-native',
+        description: 'Route every LLM call through LiteLLM with an AI Senate that can vote across Ollama and cloud models for safer answers.',
+        icon: Sparkles,
+        color: 'from-indigo-500 to-sky-600',
+    },
+    {
+        title: 'Secure Transfers & Backups',
+        subtitle: 'Disaster-ready',
+        description: 'One-click service transfers, encrypted backups with retention pruning, and rollback windows keep migrations safe.',
+        icon: Shield,
         color: 'from-emerald-500 to-teal-600',
     },
     {
-        title: 'Driven Auto Scaling',
-        subtitle: 'Predictive Intelligence',
-        description: 'Our proprietary engine analyzes traffic patterns to scale your infrastructure up or down before spikes occur, optimizing cost and performance.',
-        icon: Cpu,
-        color: 'from-violet-500 to-purple-600',
-    },
-    {
-        title: 'Multi Cloud Orchestration',
-        subtitle: 'Vendor Independence',
-        description: 'Deploy workloads to AWS, GCP, Azure, or bare metal from a single unified control plane. Escape vendor lock in forever.',
-        icon: Cloud,
+        title: 'Mesh + Replication',
+        subtitle: 'WireGuard + Patroni',
+        description: 'WireGuard VPN mesh with Patroni PostgreSQL replication and HAProxy keeps data highly available across servers.',
+        icon: Database,
         color: 'from-blue-500 to-cyan-600',
     }
 ];
@@ -76,44 +76,44 @@ const coreFeatures = [
 // ============================================
 const features = [
     {
-        icon: Zap,
-        title: "Instant Rollbacks",
-        description: "Something went wrong? Roll back to any previous deployment version in a single click.",
+        icon: GitBranch,
+        title: "GitOps Deploy",
+        description: "Connect GitHub, auto-provision builds, and gate releases with reviewable AI analysis.",
         color: "text-yellow-500",
         bg: "bg-yellow-500/10"
     },
     {
-        icon: Shield,
-        title: "Zero Trust Security",
-        description: "Enterprise grade security with automatic SSL, DDoS mitigation, and encrypted secrets management.",
+        icon: Server,
+        title: "Server Mesh & VPN",
+        description: "WireGuard mesh networking plus automatic host key pinning for all managed servers.",
         color: "text-emerald-500",
         bg: "bg-emerald-500/10"
     },
     {
-        icon: Terminal,
-        title: "Web Console",
-        description: "Access a live interactive terminal directly in your browser — SSH into any running container instantly.",
+        icon: Activity,
+        title: "Autoscaler",
+        description: "Node-side autoscaler tuned for container stats with authenticated control API.",
         color: "text-blue-500",
         bg: "bg-blue-500/10"
     },
     {
-        icon: Activity,
-        title: "Real Time Activity Feed",
-        description: "Track every deployment, rollback, and event across all services in a single live dashboard view.",
+        icon: Lock,
+        title: "Backups & Transfers",
+        description: "Encrypted archives, retention pruning, and guarded server-to-server transfers.",
         color: "text-purple-500",
         bg: "bg-purple-500/10"
     },
     {
-        icon: GitBranch,
-        title: "Preview Environments",
-        description: "Automatically spin up isolated preview URLs for every Pull Request. Review before you merge.",
+        icon: Workflow,
+        title: "Templates & Blueprints",
+        description: "One-click deploys for AI router, Ollama, functions, and data stacks with secret-aware env rendering.",
         color: "text-orange-500",
         bg: "bg-orange-500/10"
     },
     {
-        icon: Database,
-        title: "Managed Data Services",
-        description: "Provision production ready PostgreSQL, Redis, and MongoDB instances in seconds.",
+        icon: BarChart3,
+        title: "Observability",
+        description: "Traefik, health checks, and per-service metrics feed deployment insights and autoscale decisions.",
         color: "text-cyan-500",
         bg: "bg-cyan-500/10"
     }
@@ -674,3 +674,4 @@ export default function Home() {
         </main>
     );
 }
+

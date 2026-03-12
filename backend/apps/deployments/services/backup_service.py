@@ -11,6 +11,7 @@ from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.text import slugify
 from django.conf import settings
+from cryptography.fernet import Fernet, InvalidToken
 from apps.deployments.models import Service, EnvironmentVariable
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
 from apps.deployments.models_storage import Volume
@@ -207,12 +208,15 @@ class BackupService:
             with tarfile.open(filepath, "w:gz") as tar:
                 tar.add(temp_dir, arcname="")
 
+            filepath = self._maybe_encrypt(filepath)
+
             backup.file_path = filepath
             backup.metadata = metadata
             backup.status = 'COMPLETED'
             backup.size_bytes = os.path.getsize(filepath)
             backup.completed_at = timezone.now()
             backup.save()
+            self._prune_old_backups(ServiceBackup, service_id=service.id)
 
             # Clean up temp image if we created one
             if image_tag and image_tag.startswith("backup/"):
@@ -489,12 +493,15 @@ class BackupService:
             with tarfile.open(filepath, "w:gz") as tar:
                 tar.add(temp_dir, arcname="")
 
+            filepath = self._maybe_encrypt(filepath)
+
             backup.services_included = included
             backup.file_path = filepath
             backup.status = 'COMPLETED'
             backup.size_bytes = os.path.getsize(filepath)
             backup.completed_at = timezone.now()
             backup.save()
+            self._prune_old_backups(ServerBackup)
             return backup
 
         except Exception as e:
@@ -593,3 +600,72 @@ class BackupService:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+
+    # ------------------------------------------------------------------
+    # Hardening helpers
+    # ------------------------------------------------------------------
+    def _maybe_encrypt(self, path: str) -> str:
+        """
+        Optionally encrypt backup archive at rest when BACKUP_ENCRYPTION_KEY is set.
+        Uses Fernet (AES-CBC + HMAC). Returns path to encrypted file.
+        """
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        if not key:
+            return path
+
+        fernet = Fernet(key)
+        with open(path, "rb") as f:
+            data = f.read()
+        enc = fernet.encrypt(data)
+
+        enc_path = path + ".enc"
+        with open(enc_path, "wb") as f:
+            f.write(enc)
+
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+        return enc_path
+
+    @staticmethod
+    def decrypt_backup(path: str, key: str) -> str:
+        """
+        Decrypt an encrypted backup to a temp file and return its path.
+        Caller is responsible for deleting the temp file.
+        """
+        fernet = Fernet(key)
+        with open(path, "rb") as f:
+            enc = f.read()
+        try:
+            data = fernet.decrypt(enc)
+        except InvalidToken as e:
+            raise ValueError("Failed to decrypt backup archive: invalid token") from e
+
+        fd, tmp_path = tempfile.mkstemp(prefix="backup_dec_", suffix=".tar.gz")
+        os.close(fd)
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+        return tmp_path
+
+    @staticmethod
+    def _prune_old_backups(model_cls, service_id=None):
+        """
+        Keep only the most recent BACKUP_RETENTION_COUNT backups (default 5).
+        Applies per-service for ServiceBackup and globally for ServerBackup.
+        """
+        try:
+            retain = int(os.environ.get("BACKUP_RETENTION_COUNT", "5"))
+        except ValueError:
+            retain = 5
+        if retain < 1:
+            retain = 1
+
+        qs = model_cls.objects.order_by("-created_at")
+        if service_id and hasattr(model_cls, "service_id"):
+            qs = qs.filter(service_id=service_id)
+
+        ids_to_delete = list(qs.values_list("id", flat=True)[retain:])
+        if ids_to_delete:
+            model_cls.objects.filter(id__in=ids_to_delete).delete()

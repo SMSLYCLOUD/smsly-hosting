@@ -11,6 +11,14 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.2.1
         with:

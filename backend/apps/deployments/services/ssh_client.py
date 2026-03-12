@@ -60,7 +60,15 @@ class SSHClient:
             return
 
         self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Enforce host key verification by default.
+        # Allow opt-out only for development by setting ALLOW_SSH_AUTOADD=true.
+        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "")).lower() in {
+            "1", "true", "yes", "on"
+        }
+        if allow_autoadd:
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        else:
+            self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
         # Determine auth method: key or password
         connect_kwargs = {
