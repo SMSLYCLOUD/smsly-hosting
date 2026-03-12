@@ -76,7 +76,7 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def get_service_url(self, obj: Service) -> str:
         """Railway-style auto-generated URL."""
-        if obj.public_domain:
+        if obj.public_domain and not getattr(obj, "public_domain_hidden", False):
             return f"https://{obj.public_domain}"
         slug = obj.name.lower().replace(' ', '-')
         base_domain = Service.default_public_base_domain()

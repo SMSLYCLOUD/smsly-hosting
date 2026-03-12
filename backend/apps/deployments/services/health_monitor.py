@@ -200,7 +200,9 @@ def _build_targets(service, active_deployment):
         seen.add(key)
         targets.append({"url": url, "headers": headers or {}, "verify": verify})
 
-    public_domain = (service.public_domain or "").strip()
+    public_domain = ""
+    if not getattr(service, "public_domain_hidden", False):
+        public_domain = (service.public_domain or "").strip()
     if public_domain:
         scheme = "https" if _platform_ssl_enabled() else "http"
         verify = _should_verify_tls() if scheme == "https" else True

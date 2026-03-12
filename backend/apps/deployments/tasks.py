@@ -274,7 +274,7 @@ def _build_runtime_env(service: Service) -> dict:
     # Ensures ALLOWED_HOSTS, DJANGO_ALLOWED_HOSTS, and MARKETER_ALLOWED_HOSTS
     # all receive the same comprehensive value (no divergence).
     all_hosts = ['localhost', '127.0.0.1', '0.0.0.0']
-    if service.public_domain:
+    if service.public_domain and not service.public_domain_hidden:
         env_vars['PUBLIC_DOMAIN'] = service.public_domain
         all_hosts.append(service.public_domain)
     for d in (service.custom_domains or []):

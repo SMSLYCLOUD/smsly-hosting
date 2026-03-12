@@ -154,7 +154,7 @@ def _cname_chain_contains(domain: str, target: str, max_hops: int = 10) -> bool:
 
 def _service_for_domain(domain: str):
     """Find service routed by this public/custom domain."""
-    direct = Service.objects.filter(public_domain=domain).first()
+    direct = Service.objects.filter(public_domain=domain, public_domain_hidden=False).first()
     if direct:
         return direct
 
