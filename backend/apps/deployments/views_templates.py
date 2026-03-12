@@ -211,6 +211,20 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 defaults={'value': service_domain, 'is_secret': False}
             )
 
+            # Custom domain logic for ai.smsly.cloud
+            if pk == 'ai-router':
+                custom_domains = service.custom_domains or []
+                if "ai.smsly.cloud" not in custom_domains:
+                    custom_domains.append("ai.smsly.cloud")
+                    service.custom_domains = custom_domains
+                    service.save(update_fields=['custom_domains'])
+                    # Inject into Env for label generation
+                    EnvironmentVariable.objects.update_or_create(
+                        service=service,
+                        key='CUSTOM_DOMAINS',
+                        defaults={'value': ','.join(custom_domains), 'is_secret': False}
+                    )
+
             # Queue background orchestration (addons + deploy)
             # We pass the template ID so the task can handle complex logic like addon provisioning.
             async_result = one_click_deploy_template_task.delay(str(service.id), str(template['id']))

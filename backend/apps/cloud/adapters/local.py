@@ -161,6 +161,7 @@ class LocalAdapter(BaseCloudAdapter):
             'traefik.enable': str(is_public).lower(),
             f'traefik.http.routers.{router_name}.rule': host_rule,
             f'traefik.http.services.{router_name}.loadbalancer.server.port': str(port),
+            f'traefik.http.routers.{router_name}.priority': '100',
         }
 
         entrypoints = ['web']
@@ -357,6 +358,8 @@ class LocalAdapter(BaseCloudAdapter):
             labels['traefik.enable'] = 'false'
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
+            # Ensure the specific router has a high priority to beat the fallback notice
+            labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]

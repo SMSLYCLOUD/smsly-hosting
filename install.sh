@@ -724,7 +724,12 @@ bust_core_build_cache() {
 
     # Build cache only (no global container/image prune).
     docker builder prune -af >/dev/null 2>&1 || true
-    echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache)${NC}"
+    
+    # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
+    echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
+    docker image prune -a -f --filter "until=168h" >/dev/null 2>&1 || true
+    
+    echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
 
 restart_edge_stack() {
@@ -1652,13 +1657,13 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
+    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
         fi
     done
-    echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
+    echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
 
     trap - EXIT
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
