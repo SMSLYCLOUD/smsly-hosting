@@ -57,47 +57,62 @@ def ai_providers_status(request):
     Query params:
       - include_balance=true  (optional, slower — hits each provider's billing API)
     """
-    include_balance = request.query_params.get("include_balance", "").lower() == "true"
-    degraded_reason = None
     try:
-        providers = get_available_providers(include_balance=include_balance)
+        include_balance = request.query_params.get("include_balance", "").lower() == "true"
+        degraded_reason = None
+        try:
+            providers = get_available_providers(include_balance=include_balance)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to fetch AI provider statuses: %s", exc)
+            providers = []
+            degraded_reason = "provider_status_unavailable"
+
+        try:
+            configured = get_configured_providers()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to resolve configured AI providers: %s", exc)
+            configured = []
+            degraded_reason = degraded_reason or "configured_provider_lookup_failed"
+
+        mode = "mock"
+        if len(configured) >= 2:
+            mode = "senate_committee"
+        elif len(configured) == 1:
+            mode = "solo"
+
+        member_names = [p.name() for p in configured] if configured else []
+
+        payload = {
+            "providers": providers,
+            "mode": mode,
+            "mode_label": {
+                "mock": "Mock AI (no providers configured)",
+                "solo": f"Solo Mode ({member_names[0] if member_names else 'N/A'})",
+                "senate_committee": f"Senate Committee ({' + '.join(member_names)})",
+            }.get(mode, mode),
+            "active_count": len(configured),
+            "total_available": len(providers),
+            "senate_enabled": os.environ.get("SENATE_ENABLED", "True").lower() == "true",
+            "senate_max_members": _parse_int(os.environ.get("SENATE_MAX_MEMBERS"), 5),
+        }
+        if degraded_reason:
+            payload["degraded"] = True
+            payload["degraded_reason"] = degraded_reason
+        return Response(payload)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to fetch AI provider statuses: %s", exc)
-        providers = []
-        degraded_reason = "provider_status_unavailable"
-
-    try:
-        configured = get_configured_providers()
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Failed to resolve configured AI providers: %s", exc)
-        configured = []
-        degraded_reason = degraded_reason or "configured_provider_lookup_failed"
-
-    mode = "mock"
-    if len(configured) >= 2:
-        mode = "senate_committee"
-    elif len(configured) == 1:
-        mode = "solo"
-
-    member_names = [p.name() for p in configured] if configured else []
-
-    payload = {
-        "providers": providers,
-        "mode": mode,
-        "mode_label": {
-            "mock": "Mock AI (no providers configured)",
-            "solo": f"Solo Mode ({member_names[0] if member_names else 'N/A'})",
-            "senate_committee": f"Senate Committee ({' + '.join(member_names)})",
-        }.get(mode, mode),
-        "active_count": len(configured),
-        "total_available": len(providers),
-        "senate_enabled": os.environ.get("SENATE_ENABLED", "True").lower() == "true",
-        "senate_max_members": _parse_int(os.environ.get("SENATE_MAX_MEMBERS"), 5),
-    }
-    if degraded_reason:
-        payload["degraded"] = True
-        payload["degraded_reason"] = degraded_reason
-    return Response(payload)
+        logger.exception("ai_providers_status unhandled error: %s", exc)
+        return Response(
+            {
+                "providers": [],
+                "mode": "mock",
+                "mode_label": "Mock AI (no providers configured)",
+                "active_count": 0,
+                "total_available": 0,
+                "degraded": True,
+                "degraded_reason": "ai_providers_status_internal_error",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
