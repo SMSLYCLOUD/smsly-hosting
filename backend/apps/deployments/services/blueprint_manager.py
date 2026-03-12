@@ -36,12 +36,17 @@ class BlueprintManager:
                 addon_type=addon_def['type'],
                 status=Addon.Status.PROVISIONING
             )
-            # In a real scenario, we'd wait for this or chain it.
-            # For now, we simulate the URL immediately for env var resolution
-            if addon.addon_type == 'POSTGRES':
-                context['DATABASE_URL'] = f"postgres://user:pass@db-{addon.id}:5432/db"
-            elif addon.addon_type == 'REDIS':
-                context['REDIS_URL'] = f"redis://redis-{addon.id}:6379/0"
+            # Do not inject placeholder credentials; require real provision result
+            if os.environ.get("ALLOW_BLUEPRINT_PLACEHOLDERS", "").lower() in {"1", "true", "yes", "on"}:
+                if addon.addon_type == 'POSTGRES':
+                    context['DATABASE_URL'] = f"postgres://user:pass@db-{addon.id}:5432/db"
+                elif addon.addon_type == 'REDIS':
+                    context['REDIS_URL'] = f"redis://redis-{addon.id}:6379/0"
+            else:
+                logger.warning(
+                    "Skipping placeholder connection strings for addon %s; waiting for real provisioning result",
+                    addon.addon_type,
+                )
 
             # Trigger actual provision task
             provision_addon_task.delay(str(addon.id))

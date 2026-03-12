@@ -73,6 +73,9 @@ API_PORT = int(os.environ.get('AUTOSCALER_API_PORT', '9876'))
 
 # API auth token — POST endpoints require this. Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
 API_TOKEN = os.environ.get('AUTOSCALER_API_TOKEN', '')
+if not API_TOKEN:
+    logger.error("AUTOSCALER_API_TOKEN is required; refusing to start autoscaler without auth token")
+    sys.exit(1)
 
 # Container groups — maps container names to their roles
 SERVICE_GROUPS = {

@@ -72,4 +72,4 @@ def test_render_value_default_fallback():
             one_click_deploy_template_task(str(service.id), "ai-router")
             
             ev = EnvironmentVariable.objects.get(service=service, key="AI_SENATE_URL")
-            assert ev.value == "https://senate.smsly.cloud"
+            assert ev.value == "http://ollama:11434"

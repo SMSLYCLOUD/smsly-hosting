@@ -1730,11 +1730,15 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', os.environ.get('REDIS_URL', '')))
         v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', os.environ.get('MYSQL_URL', '')))
         v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', os.environ.get('ELASTICSEARCH_URL', '')))
-        
         # System Environment Overrides & Defaults
-        v = v.replace('${AI_SENATE_URL}', os.environ.get('AI_SENATE_URL', 'https://senate.smsly.cloud'))
+        default_ai_senate = os.environ.get('AI_SENATE_URL') or 'http://ollama:11434'
+        v = v.replace('${AI_SENATE_URL}', default_ai_senate)
         v = v.replace('${LITELLM_MASTER_KEY}', os.environ.get('LITELLM_MASTER_KEY', ''))
-        
+        v = v.replace('${OLLAMA_BASE_URL}', os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434'))
+        v = v.replace('${OLLAMA_MODEL}', os.environ.get('OLLAMA_MODEL', 'llama3'))
+        v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', '/api'))
+        v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', '/'))
+
         return v
 
     if template and 'env_vars' in template:

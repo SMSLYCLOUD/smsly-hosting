@@ -10,6 +10,7 @@ import hmac as hmac_mod
 import json as json_mod
 import logging
 import time
+import os
 from typing import Any
 from urllib.parse import urlparse
 
@@ -66,8 +67,12 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
         except Exception as exc:
             logger.debug("HMAC token exchange failed for %s: %s", server.host, exc)
 
+    allow_pw_exchange = str(os.environ.get("ALLOW_REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
+        "1", "true", "yes", "on"
+    }
+
     # ── Strategy 2: Credential-based exchange ──
-    if ssh_password:
+    if ssh_password and allow_pw_exchange:
         # Try common admin usernames
         for username in ("admin", "root"):
             try:
@@ -95,7 +100,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                 )
 
     # ── Strategy 3: Login API (dj-rest-auth) ──
-    if ssh_password:
+    if ssh_password and allow_pw_exchange:
         for username in ("admin", "root"):
             try:
                 resp = requests.post(
@@ -704,4 +709,3 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 })
 
         return Response({"domains": domains, "count": len(domains)})
-

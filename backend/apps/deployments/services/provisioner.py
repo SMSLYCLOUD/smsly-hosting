@@ -13,6 +13,7 @@ import re
 import tarfile
 import tempfile
 import time
+import hashlib
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -128,6 +129,19 @@ def _load_install_script():
     1) Local file in the backend image/workdir (for bundled installs)
     2) Fallback to GitHub raw URL (for minimal backend images)
     """
+    required_sha = os.environ.get("SMSLY_INSTALL_SCRIPT_SHA256", "").strip()
+
+    def _verify(content: str, source: str):
+        if not required_sha:
+            raise ValueError(
+                "SMSLY_INSTALL_SCRIPT_SHA256 is required for provisioning; set it to the expected sha256 of install.sh"
+            )
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if digest.lower() != required_sha.lower():
+            raise ValueError(
+                f"install.sh checksum mismatch from {source}: expected {required_sha}, got {digest}"
+            )
+
     candidates = [
         # /app/install.sh if bundled into the backend container
         os.path.abspath(
@@ -139,7 +153,9 @@ def _load_install_script():
     for path in candidates:
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as install_file:
-                return install_file.read(), f"local:{path}"
+                content = install_file.read()
+                _verify(content, f"local:{path}")
+                return content, f"local:{path}"
 
     script_url = (
         os.environ.get(
@@ -151,6 +167,7 @@ def _load_install_script():
     response = requests.get(script_url, timeout=30)
     response.raise_for_status()
     content = response.text
+    _verify(content, f"url:{script_url}")
     if not content.strip():
         raise ValueError("Downloaded installer script is empty")
     return content, f"url:{script_url}"
@@ -307,11 +324,11 @@ def provision_server(self, server_id: str):
         )
         use_local_bundle = prefer_local_bundle or (not github_token) or token_known_invalid
 
-        # ── Step 1: Connect ──
+        # -- Step 1: Connect --
         ssh = _get_ssh_client(server)
         _append_log(server, "✅ SSH connection established")
 
-        # ── Step 2: Upload install script ──
+        # -- Step 2: Upload install script --
         _append_log(server, "📦 Uploading install script...")
         sftp = ssh.open_sftp()
 
@@ -373,7 +390,7 @@ def provision_server(self, server_id: str):
         sftp.close()
         _append_log(server, "✅ Install script uploaded")
 
-        # ── Step 3: Run install script ──
+        # -- Step 3: Run install script --
         _append_log(server, "⚙️ Running CloudNeuron installer (this may take 5-15 minutes)...")
 
         # Build non-interactive environment
@@ -419,7 +436,7 @@ def provision_server(self, server_id: str):
                             "credentials saved" in line.lower()
                             or ".credentials" in line
                         ):
-                            _append_log(server, "🔑 Credentials detected — extracting...")
+                            _append_log(server, "[cred] Credentials detected — extracting...")
 
             if channel.exit_status_ready():
                 # Drain remaining output
@@ -444,13 +461,23 @@ def provision_server(self, server_id: str):
             time.sleep(0.5)
 
         exit_code = channel.recv_exit_status()
-        _append_log(server, f"\n📋 Install script exited with code: {exit_code}")
+        _append_log(server, f"\n[installer] Install script exited with code: {exit_code}")
 
         if exit_code != 0:
             raise RuntimeError(f"Install script failed with exit code {exit_code}")
 
-        # ── Step 4: Extract credentials ──
-        _append_log(server, "🔑 Reading credentials from server...")
+        # Scrub installer artifacts (may contain injected tokens)
+        try:
+            ssh.exec_command(
+                "shred -u /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz "
+                "/tmp/smsly-hosting-src 2>/dev/null || "
+                "rm -rf /tmp/smsly-install.sh /tmp/smsly-hosting-src.tar.gz /tmp/smsly-hosting-src"
+            )
+        except Exception:
+            pass
+
+        # -- Step 4: Extract credentials --
+        _append_log(server, "[cred] Reading credentials from server...")
 
         stdin, stdout, stderr = ssh.exec_command(
             "cat /root/.credentials 2>/dev/null || "
@@ -495,7 +522,7 @@ def provision_server(self, server_id: str):
                 elif line.startswith(("API_TOKEN=", "ADMIN_TOKEN=", "AUTH_TOKEN=")):
                     api_token = line.split("=", 1)[1].strip().strip("'\"")
 
-        # ── Step 5: Determine API URL ──
+        # -- Step 5: Determine API URL --
         # Check if SSL was set up (look for Caddy with domain)
         stdin, stdout, stderr = ssh.exec_command(
             "grep -E '^(DOMAIN|USE_SSL)=' /opt/smsly-hosting/.env 2>/dev/null"
@@ -578,9 +605,9 @@ def provision_server(self, server_id: str):
             )
 
         _append_log(server, f"🌐 API URL: {api_url}")
-        _append_log(server, f"🔑 Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
+        _append_log(server, f"[cred] Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
 
-        # ── Step 6: Update server record ──
+        # -- Step 6: Update server record --
         server.api_url = api_url
         server.api_token = api_token or ""
         server.provision_status = ManagedServer.ProvisionStatus.DONE
@@ -593,7 +620,7 @@ def provision_server(self, server_id: str):
         _append_log(server, "\n✅ CloudNeuron provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
-        # ── Step 7: Auto-exchange — get a proper smsly_ API token ──
+        # -- Step 7: Auto-exchange — get a proper smsly_ API token --
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the
         # node-token-exchange endpoint on the new server.

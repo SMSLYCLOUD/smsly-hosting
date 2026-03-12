@@ -25,8 +25,16 @@ class ReplicationDeploySerializer(serializers.Serializer):
     db_password = serializers.CharField(write_only=True)
     admin_password = serializers.CharField(write_only=True)
     replication_password = serializers.CharField(
-        write_only=True, required=False, default="repl_pass",
+        write_only=True, required=True, allow_blank=False,
+        help_text="Strong unique password for replication user"
     )
+
+    def validate_replication_password(self, value):
+        if not value or value.strip().lower() == "repl_pass":
+            raise serializers.ValidationError(
+                "replication_password must be provided and cannot use the default 'repl_pass'."
+            )
+        return value
 
 
 class FailoverSerializer(serializers.Serializer):

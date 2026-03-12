@@ -22009,6 +22009,26 @@
         "is_secret": false
       },
       {
+        "key": "OLLAMA_BASE_URL",
+        "value": "${OLLAMA_BASE_URL}",
+        "is_secret": false
+      },
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "${OLLAMA_MODEL}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_API_BASE",
+        "value": "${AI_ROUTER_API_BASE}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_UI_BASE",
+        "value": "${AI_ROUTER_UI_BASE}",
+        "is_secret": false
+      },
+      {
         "key": "CUSTOM_DOMAINS",
         "value": "ai.smsly.cloud",
         "is_secret": false
