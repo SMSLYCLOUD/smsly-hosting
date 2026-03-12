@@ -1468,8 +1468,34 @@ class PipelineManager:
             f"  📛 Traefik labels prepared at container creation for {main_svc}\n"
         )
 
+        # Post-deploy hooks (e.g., Prisma migrate) for ai-router / litellm templates
+        self._post_deploy_hooks(container_name)
+
         # Store container name for health checking in _deploy_container
         self.image_name = f"compose:{container_name}"
+
+    def _post_deploy_hooks(self, container_name: str):
+        """Run post-deploy hooks (Prisma migrate) when requested by env."""
+        try:
+            env_map = {ev.key: ev.value for ev in self.service.env_vars.all()}
+            if env_map.get("RUN_PRISMA_MIGRATE", "").strip().lower() not in {"1", "true", "yes"}:
+                return
+            append_log(self.deployment, "\n⏳ Running Prisma migrate deploy inside container...\n")
+            cmd = [
+                "docker", "exec", container_name,
+                "sh", "-lc", "cd /app && npx prisma migrate deploy"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if res.returncode == 0:
+                append_log(self.deployment, "✅ Prisma migrate deploy succeeded.\n")
+            else:
+                append_log(
+                    self.deployment,
+                    "⚠️ Prisma migrate deploy failed:\n"
+                    f"{res.stdout}\n{res.stderr}\n"
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            append_log(self.deployment, f"⚠️ Post-deploy hook skipped: {exc}\n")
 
     def _get_build_context(self) -> str:
         """Resolve root directory."""

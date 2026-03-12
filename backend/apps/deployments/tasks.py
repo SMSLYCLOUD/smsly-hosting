@@ -1737,6 +1737,28 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 "value": "/app/librechat.yaml",
                 "is_secret": False
             })
+
+    # Template crash-clarity: enforce required envs for intelligence templates
+    intelligence_templates = {
+        'ai-router', 'librechat', 'khoj', 'flowise', 'langflow',
+        'dify', 'memgpt', 'anythingllm'
+    }
+    if template and template.get('id') in intelligence_templates:
+        env_list = template.setdefault('env_vars', [])
+        existing = {str(ev.get('key') or '').upper() for ev in env_list}
+        required_defaults = {
+            'JWT_SECRET': '${RANDOM_PASSWORD}',
+            'SECRET_KEY': '${RANDOM_PASSWORD}',
+            'DATABASE_URL': '${DATABASE_URL}',
+            'REDIS_URL': '${REDIS_URL}',
+        }
+        for key, val in required_defaults.items():
+            if key not in existing:
+                env_list.append({
+                    "key": key,
+                    "value": val,
+                    "is_secret": 'SECRET' in key or 'PASSWORD' in key,
+                })
     if template and template.get('docker_image'):
         _verify_image_available(template['docker_image'])
     supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
