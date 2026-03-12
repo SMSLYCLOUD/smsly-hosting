@@ -259,6 +259,27 @@ class ServiceViewSet(viewsets.ModelViewSet):
             metadata={'service_id': str(instance.id), 'service_name': instance.name},
         ).save()
 
+    @action(detail=True, methods=["post"], url_path="hide-public-domain")
+    def hide_public_domain(self, request, pk=None):
+        service = self.get_object()
+        if not service.public_domain:
+            return Response({"error": "No public domain assigned."}, status=status.HTTP_400_BAD_REQUEST)
+        service.public_domain_hidden = True
+        service.save(update_fields=["public_domain_hidden"])
+        # Sync routing to remove public domain block
+        _ = self._sync_caddy()
+        return Response({"message": "Public domain hidden", "public_domain_hidden": True})
+
+    @action(detail=True, methods=["post"], url_path="unhide-public-domain")
+    def unhide_public_domain(self, request, pk=None):
+        service = self.get_object()
+        if not service.public_domain:
+            return Response({"error": "No public domain assigned."}, status=status.HTTP_400_BAD_REQUEST)
+        service.public_domain_hidden = False
+        service.save(update_fields=["public_domain_hidden"])
+        _ = self._sync_caddy()
+        return Response({"message": "Public domain unhidden", "public_domain_hidden": False})
+
         instance.delete()
 
     # --- Nested Resources: Deployments ---
