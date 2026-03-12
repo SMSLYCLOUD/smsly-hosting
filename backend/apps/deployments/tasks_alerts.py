@@ -106,6 +106,9 @@ def _send_sms_alert(owner, service, message: str, env_map: Dict[str, str]) -> Di
 
 
 def _send_email_alert(owner, subject: str, message: str, env_map: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Send email via Resend if configured, otherwise fall back to Django's send_mail.
+    """
     to_email = _first_non_empty(
         env_map.get("ALERT_EMAIL"),
         getattr(owner, "email", ""),
@@ -114,7 +117,32 @@ def _send_email_alert(owner, subject: str, message: str, env_map: Dict[str, str]
     if not to_email:
         return {"ok": False, "error": "No email target configured"}
 
-    from_email = config("DEFAULT_FROM_EMAIL", default="noreply@smsly.cloud")
+    # Preferred path: Resend
+    resend_key = config("RESEND_API_KEY", default="")
+    resend_from = config("RESEND_FROM_EMAIL", default=config("DEFAULT_FROM_EMAIL", default="noreply@smsly.cloud"))
+    if resend_key:
+        try:
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": resend_from,
+                    "to": [to_email],
+                    "subject": subject,
+                    "text": message,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            return {"ok": True, "to": to_email, "provider": "resend"}
+        except requests.RequestException as exc:
+            logger.warning("Resend email failed, falling back to SMTP: %s", exc)
+
+    # Fallback path: SMTP/Django
+    from_email = resend_from
     try:
         send_mail(
             subject=subject,
@@ -123,9 +151,9 @@ def _send_email_alert(owner, subject: str, message: str, env_map: Dict[str, str]
             recipient_list=[to_email],
             fail_silently=False,
         )
-        return {"ok": True, "to": to_email}
+        return {"ok": True, "to": to_email, "provider": "smtp"}
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Email alert failed: %s", exc)
+        logger.warning("Email alert failed (SMTP): %s", exc)
         return {"ok": False, "error": str(exc)}
 
 
