@@ -21864,8 +21864,8 @@
     "description": "Interact with your documents using the power of GPT, 100% privately.",
     "icon": "https://privategpt.io/logo.png",
     "category": "intelligence",
-    "repository_url": "https://hub.docker.com/r/zylon-ai/private-gpt",
-    "docker_image": "ghcr.io/zylon-ai/private-gpt:latest",
+    "repository_url": "https://hub.docker.com/r/zylonai/private-gpt",
+    "docker_image": "zylonai/private-gpt:latest",
     "default_port": 8001,
     "min_ram_gb": 8
   },
