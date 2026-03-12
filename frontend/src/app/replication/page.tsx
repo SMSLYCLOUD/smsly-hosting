@@ -47,6 +47,7 @@ export default function ReplicationPage() {
     const [dbPassword, setDbPassword] = useState('');
     const [adminPassword, setAdminPassword] = useState('');
     const [replPassword, setReplPassword] = useState('repl_pass');
+    const [oneClicking, setOneClicking] = useState(false);
 
     const fetchMeshes = useCallback(async () => {
         try {
@@ -99,6 +100,49 @@ export default function ReplicationPage() {
             toast({ title: 'Error', description: err?.response?.data?.error || 'Deploy failed', variant: 'destructive' });
         } finally {
             setDeploying(false);
+        }
+    };
+
+    const oneClickReplication = async () => {
+        setOneClicking(true);
+        try {
+            // Ensure a mesh exists
+            let meshId = selectedMesh;
+            if (!meshId) {
+                const res = await api.post('/mesh/', { name: 'auto-mesh', subnet: '10.10.0.0/24' }).catch(() => null);
+                meshId = res?.data?.id || meshes[0]?.id || '';
+                setSelectedMesh(meshId);
+            }
+            if (!meshId) throw new Error('No mesh available for replication');
+
+            // Lightweight randoms for passwords (browser safe)
+            const rand = (len = 24) =>
+                Array.from(crypto.getRandomValues(new Uint8Array(len)))
+                    .map((b) => ('0' + (b % 36).toString(36)).slice(-1))
+                    .join('');
+
+            const dbPass = rand(24);
+            const adminPass = rand(16);
+            const repPass = rand(20);
+
+            setDbPassword(dbPass);
+            setAdminPassword(adminPass);
+            setReplPassword(repPass);
+
+            await api.post('/replication/deploy/', {
+                mesh_id: meshId,
+                db_password: dbPass,
+                admin_password: adminPass,
+                replication_password: repPass,
+            });
+
+            toast({ title: 'Replication Started', description: 'One-click deploy kicked off for this mesh.' });
+            setShowDeployForm(false);
+            checkHealth();
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || err?.message || 'One-click replication failed', variant: 'destructive' });
+        } finally {
+            setOneClicking(false);
         }
     };
 
@@ -173,6 +217,15 @@ export default function ReplicationPage() {
                             >
                                 <Zap size={14} className="mr-2" />
                                 Deploy Cluster
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={oneClickReplication}
+                                disabled={oneClicking}
+                            >
+                                {oneClicking ? <Loader2 size={14} className="animate-spin mr-1" /> : <ArrowRightLeft size={14} className="mr-1" />}
+                                One-click Replication
                             </Button>
                         </div>
                     </div>

@@ -48,6 +48,7 @@ export default function NetworkPage() {
     const [servers, setServers] = useState<Server[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    const [oneClicking, setOneClicking] = useState(false);
     const [deploying, setDeploying] = useState<string | null>(null);
     const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
     const [addingPeer, setAddingPeer] = useState<string | null>(null);
@@ -91,6 +92,38 @@ export default function NetworkPage() {
             toast({ title: 'Error', description: err?.response?.data?.detail || 'Failed to create mesh', variant: 'destructive' });
         } finally {
             setCreating(false);
+        }
+    };
+
+    const oneClickMesh = async () => {
+        setOneClicking(true);
+        try {
+            let meshId: string | null = meshes[0]?.id || null;
+            if (!meshId) {
+                const res = await api.post('/mesh/', {
+                    name: 'auto-mesh',
+                    subnet: '10.10.0.0/24',
+                });
+                meshId = res.data?.id || res.data?.pk || null;
+            }
+            if (!meshId) throw new Error('Could not determine mesh id');
+
+            // fetch latest servers and mesh to avoid stale state
+            const serverRes = await api.get('/servers/');
+            const serversList: Server[] = Array.isArray(serverRes.data) ? serverRes.data : serverRes.data.results || [];
+            const meshRes = await api.get(`/mesh/${meshId}/`);
+            const existingPeers: string[] = (meshRes.data?.peers || []).map((p: any) => p.server).filter(Boolean);
+
+            for (const srv of serversList) {
+                if (existingPeers.includes(srv.id)) continue;
+                await api.post(`/mesh/${meshId}/add-peer/`, { server_id: srv.id });
+            }
+            toast({ title: 'Mesh Ready', description: 'Created/updated mesh and added all servers.' });
+            fetchData();
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || err?.message || 'One-click mesh failed', variant: 'destructive' });
+        } finally {
+            setOneClicking(false);
         }
     };
 
@@ -178,13 +211,23 @@ export default function NetworkPage() {
                                 Encrypted WireGuard tunnels between your servers
                             </p>
                         </div>
-                        <Button
-                            onClick={() => setShowCreateForm(!showCreateForm)}
-                            className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
-                        >
-                            <Plus size={14} className="mr-2" />
-                            Create Mesh
-                        </Button>
+                        <div className="flex gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={oneClickMesh}
+                                disabled={oneClicking || loading}
+                            >
+                                {oneClicking ? <Loader2 size={14} className="animate-spin mr-2" /> : <Zap size={14} className="mr-2" />}
+                                One-click Mesh
+                            </Button>
+                            <Button
+                                onClick={() => setShowCreateForm(!showCreateForm)}
+                                className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25"
+                            >
+                                <Plus size={14} className="mr-2" />
+                                Create Mesh
+                            </Button>
+                        </div>
                     </div>
 
                     {/* Create Form */}
