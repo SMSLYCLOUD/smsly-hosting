@@ -1726,6 +1726,10 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         v = v.replace('${MONGODB_URL}', addon_urls.get('MONGODB', ''))
         v = v.replace('${MONGODB_URI}', addon_urls.get('MONGODB', ''))
         v = v.replace('${DATABASE_URL}', addon_urls.get('POSTGRES', ''))
+        v = v.replace('${POSTGRES_URL}', addon_urls.get('POSTGRES', ''))
+        v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', ''))
+        v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', ''))
+        v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', ''))
         return v
 
     if template and 'env_vars' in template:
