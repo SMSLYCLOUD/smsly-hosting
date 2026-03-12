@@ -1,8 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { AlertCircle, ArrowLeft, Info, Home, ShieldAlert, Sparkles, Globe, Zap } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Home, ShieldAlert, Sparkles, Zap } from 'lucide-react';
 
 interface PlatformNoticeProps {
   badge?: string;
@@ -22,88 +21,210 @@ export default function PlatformNotice({
   onRetry,
 }: PlatformNoticeProps) {
   return (
-    <main className="min-h-screen bg-gradient-to-br from-[#0a0d1a] via-[#0b1225] to-[#05060d] flex items-center justify-center p-6 relative overflow-hidden font-sans selection:bg-primary/30">
-      {/* Lightweight procedural background (no images) */}
-      <div
-        className="pointer-events-none absolute inset-0 opacity-50"
-        style={{
-          backgroundImage:
-            'radial-gradient(circle at 20% 20%, rgba(59,130,246,0.14), transparent 35%), radial-gradient(circle at 80% 10%, rgba(45,212,191,0.10), transparent 30%), radial-gradient(circle at 70% 70%, rgba(168,85,247,0.08), transparent 32%), radial-gradient(circle at 15% 80%, rgba(79,70,229,0.12), transparent 28%)',
-        }}
-      />
-
-      <section className="relative w-full max-w-3xl z-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="relative overflow-hidden rounded-3xl border border-white/8 bg-white/4 backdrop-blur-xl shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
-          <div className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-
-          <div className="p-10 sm:p-12">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-6 sm:gap-10">
-              <div className="flex-1 space-y-4">
-                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1 text-[10px] font-semibold tracking-[0.22em] uppercase text-primary">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  {badge}
-                </div>
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-white leading-tight">
-                  {title}
-                </h1>
-                <p className="text-base sm:text-lg text-white/80 leading-relaxed">
-                  {message}
-                </p>
-              </div>
-
-              <div className="shrink-0">
-                <div className="relative w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-gradient-to-br from-amber-400/20 via-amber-500/15 to-orange-400/10 border border-amber-400/30 grid place-items-center shadow-[0_10px_40px_rgba(251,191,36,0.25)]">
-                  <ShieldAlert className="w-10 h-10 sm:w-12 sm:h-12 text-amber-300" />
-                  <div className="absolute inset-0 rounded-3xl border border-white/10" />
-                </div>
-              </div>
+    <main className="notice-root">
+      <section className="notice-card">
+        <div className="notice-grid">
+          <div className="notice-text">
+            <div className="notice-pill">
+              <Sparkles size={16} />
+              <span>{badge}</span>
             </div>
-
-            {secondaryMessage && (
-              <div className="mt-8 rounded-2xl border border-white/8 bg-white/3 p-5 sm:p-6 flex gap-3 sm:gap-4">
-                <Zap className="w-5 h-5 text-cyan-300 shrink-0 mt-1" />
-                <p className="text-sm sm:text-base text-white/70 leading-relaxed">
-                  {secondaryMessage}
-                </p>
-              </div>
-            )}
-
-            <div className="mt-10 grid gap-4 sm:grid-cols-2">
-              {showRetry && onRetry && (
-                <Button
-                  onClick={onRetry}
-                  className="h-12 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-[0_10px_30px_rgba(59,130,246,0.4)]"
-                >
-                  Retry Connection
-                </Button>
-              )}
-
-              <Link href="/" className="w-full">
-                <Button
-                  variant="outline"
-                  className="w-full h-12 rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10 hover:border-white/30 font-semibold"
-                >
-                  <Home className="w-5 h-5 mr-2 text-cyan-300" />
-                  Go Back Home
-                </Button>
-              </Link>
-            </div>
-
-            <div className="mt-8 pt-6 border-t border-white/5 flex flex-wrap gap-6 text-xs font-semibold tracking-[0.16em] uppercase text-white/45">
-              <Link href="/status" className="hover:text-primary transition-colors flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.7)]" />
-                Status
-              </Link>
-              <Link href="/docs" className="hover:text-cyan-300 transition-colors">
-                Documentation
-              </Link>
-              <Link href="/contact" className="hover:text-purple-300 transition-colors">
-                Support
-              </Link>
-            </div>
+            <h1>{title}</h1>
+            <p>{message}</p>
+          </div>
+          <div className="notice-icon">
+            <ShieldAlert size={44} />
           </div>
         </div>
+
+        {secondaryMessage && (
+          <div className="notice-secondary">
+            <Zap size={18} />
+            <p>{secondaryMessage}</p>
+          </div>
+        )}
+
+        <div className="notice-actions">
+          {showRetry && onRetry && (
+            <button className="notice-btn notice-primary" onClick={onRetry}>
+              Retry Connection
+            </button>
+          )}
+
+          <Link href="/" className="notice-btn notice-outline">
+            <Home size={18} style={{ marginRight: 8 }} />
+            Go Back Home
+          </Link>
+        </div>
+
+        <div className="notice-links">
+          <Link href="/status" className="notice-link">
+            Status
+          </Link>
+          <Link href="/docs" className="notice-link">
+            Documentation
+          </Link>
+          <Link href="/contact" className="notice-link">
+            Support
+          </Link>
+        </div>
       </section>
+
+      {/* Inline critical styles so the notice stays fully styled even if /_next/static is blocked */}
+      <style jsx>{`
+        :global(body) {
+          margin: 0;
+          background: #05060d;
+          color: #e5e7eb;
+          font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        .notice-root {
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 32px;
+          background: radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.12), transparent 35%),
+            radial-gradient(circle at 80% 10%, rgba(45, 212, 191, 0.1), transparent 30%),
+            radial-gradient(circle at 70% 70%, rgba(168, 85, 247, 0.08), transparent 32%),
+            radial-gradient(circle at 15% 80%, rgba(79, 70, 229, 0.12), transparent 28%),
+            #05060d;
+        }
+        .notice-card {
+          width: min(960px, 100%);
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 28px;
+          padding: 32px;
+          backdrop-filter: blur(12px);
+          box-shadow: 0 20px 70px rgba(0, 0, 0, 0.35);
+        }
+        .notice-grid {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 24px;
+          align-items: center;
+        }
+        .notice-text h1 {
+          margin: 12px 0 8px;
+          font-size: clamp(28px, 4vw, 42px);
+          font-weight: 800;
+          color: #fff;
+          line-height: 1.1;
+        }
+        .notice-text p {
+          margin: 0;
+          color: rgba(229, 231, 235, 0.82);
+          font-size: 16px;
+          line-height: 1.6;
+        }
+        .notice-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.05);
+          letter-spacing: 0.18em;
+          font-size: 10px;
+          text-transform: uppercase;
+          color: #93c5fd;
+          font-weight: 700;
+        }
+        .notice-icon {
+          width: 96px;
+          height: 96px;
+          border-radius: 24px;
+          display: grid;
+          place-items: center;
+          background: linear-gradient(135deg, rgba(251, 191, 36, 0.16), rgba(249, 115, 22, 0.12));
+          border: 1px solid rgba(251, 191, 36, 0.3);
+          color: #fcd34d;
+          box-shadow: 0 10px 40px rgba(251, 191, 36, 0.22);
+        }
+        .notice-secondary {
+          margin-top: 18px;
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+          padding: 14px 16px;
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.05);
+          color: rgba(229, 231, 235, 0.82);
+          font-size: 15px;
+          line-height: 1.5;
+        }
+        .notice-actions {
+          margin-top: 24px;
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 12px;
+        }
+        .notice-btn {
+          height: 48px;
+          border-radius: 12px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: rgba(255, 255, 255, 0.06);
+          color: #e5e7eb;
+          font-weight: 700;
+          letter-spacing: 0.01em;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          text-decoration: none;
+          cursor: pointer;
+          transition: transform 0.1s ease, border-color 0.2s ease, background 0.2s ease;
+        }
+        .notice-btn:hover {
+          transform: translateY(-1px);
+          border-color: rgba(255, 255, 255, 0.26);
+          background: rgba(255, 255, 255, 0.1);
+        }
+        .notice-primary {
+          background: linear-gradient(135deg, #2563eb, #4f46e5);
+          border: none;
+          color: #fff;
+          box-shadow: 0 12px 30px rgba(37, 99, 235, 0.35);
+        }
+        .notice-outline {
+          border-color: rgba(255, 255, 255, 0.22);
+        }
+        .notice-links {
+          margin-top: 22px;
+          padding-top: 16px;
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          display: flex;
+          flex-wrap: wrap;
+          gap: 18px;
+          font-size: 11px;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
+          color: rgba(229, 231, 235, 0.6);
+          font-weight: 700;
+        }
+        .notice-link {
+          color: inherit;
+          text-decoration: none;
+        }
+        .notice-link:hover {
+          color: #93c5fd;
+        }
+        @media (max-width: 720px) {
+          .notice-card {
+            padding: 24px;
+          }
+          .notice-grid {
+            grid-template-columns: 1fr;
+          }
+          .notice-icon {
+            margin-top: -6px;
+            justify-self: flex-start;
+          }
+        }
+      `}</style>
     </main>
   );
 }
