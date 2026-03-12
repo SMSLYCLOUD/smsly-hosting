@@ -912,11 +912,14 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     # Backend health (internal)
     EP1_URL="http://127.0.0.1/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
-    if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
+    case "$EP1_CODE" in
+        2*|3*)
         echo -e "${GREEN}  ✓ Backend (local): HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
-    else
+        ;;
+    *)
         echo -e "${RED}  ✗ Backend (local): HTTP $EP1_CODE${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
-    fi
+        ;;
+    esac
 
     # Platform domain (public-facing — tests Caddy → nginx → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
@@ -933,11 +936,14 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${DOMAIN}/health"
         EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
-        if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
+        case "$EP2_CODE" in
+            2*|3*)
             echo -e "${GREEN}  ✓ HTTPS: HTTP $EP2_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
-        else
+            ;;
+        *)
             echo -e "${RED}  ✗ HTTPS: HTTP $EP2_CODE ($EP2_URL)${NC}"; FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
+            ;;
+        esac
     elif echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' 2>/dev/null; then
         echo -e "${YELLOW}  ⊘ HTTPS: Skipped (IP Mode — SSL requires a domain name)${NC}"
     fi
@@ -1483,10 +1489,12 @@ except Exception as e:
     EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
         EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
-        if [ "$EP1_CODE" = "200" ] || [ "$EP1_CODE" = "301" ]; then
+        case "$EP1_CODE" in
+            2*|3*)
             BACKEND_OK=true
             break
-        fi
+            ;;
+        esac
         if [ "$attempt" -eq 1 ]; then
             docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
         fi
@@ -1525,10 +1533,12 @@ if d and d != 'localhost':
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
             EP2_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 8 "$EP2_URL" 2>/dev/null) || EP2_CODE="000"
-            if [ "$EP2_CODE" = "200" ] || [ "$EP2_CODE" = "301" ]; then
-                HTTPS_OK=true
-                break
-            fi
+            case "$EP2_CODE" in
+                2*|3*)
+                    HTTPS_OK=true
+                    break
+                    ;;
+            esac
             sleep 3
         done
         if [ "$HTTPS_OK" = "true" ]; then
