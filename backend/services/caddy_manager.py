@@ -73,6 +73,8 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
 
         for service in Service.objects.all().order_by("id"):
             public_domain = ""
+            if getattr(service, "public_domain_hidden", False):
+                public_domain = ""
             if isinstance(service.public_domain, str) and service.public_domain.strip():
                 try:
                     public_domain = normalize_domain(service.public_domain)
@@ -146,8 +148,10 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         from apps.deployments.models import Service
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.all().only("id", "public_domain", "custom_domains"):
+        for service in Service.objects.all().only("id", "public_domain", "custom_domains", "public_domain_hidden"):
             public_domain = ""
+            if getattr(service, "public_domain_hidden", False):
+                public_domain = ""
             if isinstance(service.public_domain, str) and service.public_domain.strip():
                 try:
                     public_domain = normalize_domain(service.public_domain)

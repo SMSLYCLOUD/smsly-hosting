@@ -242,6 +242,10 @@ class Service(TimeStampedModel):
     internal_port = models.IntegerField(default=8000)
     public_domain = models.CharField(
         max_length=255, blank=True, null=True, unique=True)
+    public_domain_hidden = models.BooleanField(
+        default=False,
+        help_text="When true, the auto-generated platform domain is not exposed; only custom domains serve traffic.",
+    )
     domain_verified = models.BooleanField(default=False)
     verification_token = models.CharField(max_length=64, blank=True)
 
