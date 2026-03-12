@@ -107,15 +107,13 @@ Admin credentials are written to: `/opt/smsly-hosting/.credentials`
 docker network create smsly-proxy
 ```
 
-### Traefik: Deploy Services
+### Production Compose: Deploy Services
 
 ```bash
-# Deploy Traefik (SSL termination)
-docker compose -f docker-compose.traefik.yml up -d
-
-# Deploy main application
-# NOTE: We use the traefik-adapter.yml to attach the nginx service to the proxy network
-docker compose -f docker-compose.prod.yml -f docker-compose.traefik-adapter.yml up -d
+# docker-compose.prod.yml already includes traefik and socket-proxy.
+# Do not stack docker-compose.traefik.yml or docker-compose.socket-proxy.yml
+# on top of it, or Compose will reject the config due to duplicate services.
+docker compose -f docker-compose.prod.yml up -d
 
 # Run database migrations
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
