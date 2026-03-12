@@ -179,6 +179,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 v = str(raw or '')
                 v = v.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
                 v = v.replace('${DOMAIN}', service_domain)
+                v = v.replace('${AI_SENATE_URL}', os.environ.get('AI_SENATE_URL', 'https://senate.smsly.cloud'))
                 return v
 
             # Seed env vars from the fixture (if any).
@@ -211,19 +212,6 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 defaults={'value': service_domain, 'is_secret': False}
             )
 
-            # Custom domain logic for ai.smsly.cloud
-            if pk == 'ai-router':
-                custom_domains = service.custom_domains or []
-                if "ai.smsly.cloud" not in custom_domains:
-                    custom_domains.append("ai.smsly.cloud")
-                    service.custom_domains = custom_domains
-                    service.save(update_fields=['custom_domains'])
-                    # Inject into Env for label generation
-                    EnvironmentVariable.objects.update_or_create(
-                        service=service,
-                        key='CUSTOM_DOMAINS',
-                        defaults={'value': ','.join(custom_domains), 'is_secret': False}
-                    )
 
             # Queue background orchestration (addons + deploy)
             # We pass the template ID so the task can handle complex logic like addon provisioning.
