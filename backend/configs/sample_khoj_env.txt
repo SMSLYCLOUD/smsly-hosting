@@ -1,0 +1,15 @@
+# Khoj sample env for CloudNeuron
+#
+# DB: provisioned Postgres addon (pgvector enabled by platform)
+DATABASE_URL=postgresql://khoj:khoj-password@khoj-db:5432/khoj
+
+# Django settings
+SECRET_KEY=${RANDOM_PASSWORD}
+DEBUG=false
+
+# OpenAI / embeddings
+OPENAI_API_KEY=
+EMBEDDING_MODEL=text-embedding-3-large
+
+# Indexing options
+FILES_ENABLED=false
