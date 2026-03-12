@@ -390,6 +390,9 @@ LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
 COMPOSE_FILE="docker-compose.prod.yml"
+# The production compose file already includes socket-proxy and traefik.
+# Do not layer docker-compose.socket-proxy.yml on top of it or Docker Compose
+# will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
 
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
@@ -803,12 +806,12 @@ recover_runtime_stack() {
     wait_for_container_ready "smsly-hosting-redis-1" 120 || true
 
     echo -e "${BLUE}    -> Starting app services...${NC}"
-    docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d backend frontend || true
+    docker compose -f "$COMPOSE_FILE" up -d backend frontend || true
     wait_for_container_ready "smsly-hosting-backend-1" 180 || true
     wait_for_container_ready "smsly-hosting-frontend-1" 120 || true
 
     echo -e "${BLUE}    -> Starting workers and edge services...${NC}"
-    docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d celery celery-beat traefik route-fallback nginx || true
+    docker compose -f "$COMPOSE_FILE" up -d celery celery-beat traefik route-fallback nginx || true
 
     # Re-attach expected networks (idempotent)
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
@@ -1098,14 +1101,14 @@ if [ -n "$UPDATE_MODE" ]; then
         frontend)
             echo -e "${BLUE}  → Rebuilding frontend container only...${NC}"
             docker compose -f "$COMPOSE_FILE" build --no-cache frontend
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --no-deps frontend
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
             ;;
         backend)
             echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
             docker compose -f "$COMPOSE_FILE" build --no-cache backend celery
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d db pgbouncer redis socket-proxy
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --no-deps backend
+            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             sleep 10  # Wait for backend to start
@@ -1125,7 +1128,7 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --no-deps celery celery-beat
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-beat
             ;;
         full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
@@ -1159,7 +1162,7 @@ if [ -n "$UPDATE_MODE" ]; then
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --force-recreate $CORE_SERVICES
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
 
             # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
             #    (recreation drops Docker DNS links — causes 502 gateway errors)
@@ -1172,7 +1175,7 @@ if [ -n "$UPDATE_MODE" ]; then
             # 8. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d db pgbouncer redis socket-proxy
+            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             sleep 10
             # Note: Do NOT run makemigrations — migrations are committed in the repo.
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
@@ -2098,7 +2101,7 @@ docker network create smsly-proxy 2>/dev/null || true
 mkdir -p "$INSTALL_DIR/caddy-config"
 chmod 777 "$INSTALL_DIR/caddy-config"
 echo -e "${BLUE}  → Starting App Stack...${NC}"
-docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --build --force-recreate --remove-orphans
+docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 
 # -----------------------------------------------------------------------------
 # 5. Database Setup
@@ -2554,7 +2557,7 @@ if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
-    docker compose -f "$COMPOSE_FILE" -f docker-compose.socket-proxy.yml up -d --force-recreate --no-deps nginx
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
     docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
     sleep 3
     NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
