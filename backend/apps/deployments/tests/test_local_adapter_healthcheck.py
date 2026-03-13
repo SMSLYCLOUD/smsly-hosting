@@ -206,3 +206,63 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
             labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.replacement"],
             "/v1/$1",
         )
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    def test_promote_container_rebuilds_ai_router_rewrite_middleware(self, _wait_mock):
+        adapter = object.__new__(LocalAdapter)
+        docker_client = MagicMock()
+        docker_client.api.create_endpoint_config.return_value = {}
+        docker_client.api.create_networking_config.return_value = {}
+        adapter.docker_client = docker_client
+        adapter.k8s_client = None
+        adapter.batch_v1 = None
+
+        green = MagicMock()
+        green.name = "ai-router-green-abc123"
+        green.id = "green-id"
+        green.labels = {
+            "smsly.blue_green.is_public": "True",
+            "smsly.blue_green.port": "4000",
+            "smsly.blue_green.host_rule": "Host(`ai-router.example.com`)",
+            "traefik.enable": "false",
+        }
+        green.attrs = {
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "Config": {
+                "Env": [
+                    "AI_ROUTER_API_BASE=/api/v1",
+                    "LITELLM_MASTER_KEY=test-key",
+                ],
+                "Cmd": None,
+                "Entrypoint": None,
+                "Healthcheck": None,
+            },
+            "HostConfig": {
+                "Binds": None,
+                "RestartPolicy": {},
+            },
+        }
+        green.image.tags = ["ghcr.io/berriai/litellm:main-stable"]
+
+        old_live = MagicMock()
+        promoted = MagicMock()
+        promoted.id = "promoted-id"
+        docker_client.containers.create.return_value = promoted
+        docker_client.containers.get.side_effect = lambda value: (
+            green if value == "green-id" else old_live
+        )
+        docker_client.networks.get.return_value = MagicMock()
+
+        result = adapter.promote_container("ai-router", "green-id")
+
+        self.assertEqual(result, "promoted-id")
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base")
+        self.assertEqual(
+            labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.regex"],
+            r"^/api/v1/?(.*)$",
+        )
+        self.assertEqual(
+            labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.replacement"],
+            "/v1/$1",
+        )
