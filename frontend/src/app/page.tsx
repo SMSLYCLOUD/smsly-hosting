@@ -260,7 +260,7 @@ const battleCards = [
         description: "The Legacy PaaS",
         price: "$25+",
         priceDetail: "per standard dyno",
-        features: ["Sleeping dynos", "Extremely expensive scaling", "Rigid buildpacks", "Slow support"],
+        features: ["Sleeping dynos", "Expensive scaling", "Rigid buildpacks", "Slow support"],
         color: "bg-slate-500",
         textColor: "text-slate-500",
         borderColor: "border-slate-200",
@@ -512,7 +512,7 @@ export default function Home() {
                         </p>
                     </div>
 
-                    <div className="grid md:grid-cols-3 gap-6 md:gap-8">
+                    <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
                         {battleCards.map((card, i) => (
                             <motion.div
                                 key={i}
