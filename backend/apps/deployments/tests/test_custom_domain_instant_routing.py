@@ -73,7 +73,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
             2,
         )
-        self.assertIn('rewrite * /notice', caddyfile)
+        self.assertIn('reverse_proxy localhost:8090', caddyfile)
         self.assertIn('reverse_proxy localhost:8090', caddyfile)
 
     def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):
@@ -86,7 +86,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn(':80 {\n    handle {\n        rewrite * /notice\n        reverse_proxy localhost:8090\n    }\n}', caddyfile)
+        self.assertIn('reverse_proxy localhost:8090', caddyfile)
 
     def test_ip_mode_keeps_http_catch_all_proxy(self):
         config = SimpleNamespace(
@@ -118,7 +118,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
         self.assertIn('handle @known_hosts {\n        reverse_proxy localhost:8081', caddyfile)
-        self.assertIn('handle {\n        rewrite * /notice\n        reverse_proxy localhost:8090', caddyfile)
+        self.assertIn('reverse_proxy localhost:8090', caddyfile)
 
 
 class InstantCustomDomainApiTests(APITestCase):

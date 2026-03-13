@@ -7,9 +7,13 @@ def test_aws_adapter_initialization():
     adapter = AWSAdapter("fake-key", "fake-secret", "us-east-1")
     assert adapter.region == "us-east-1"
 
+from unittest.mock import patch
+
+@patch('apps.cloud.adapters.azure.HAS_AZURE_SDK', True)
 def test_azure_adapter_initialization():
-    adapter = AzureAdapter("fake-tenant", "fake-client", "fake-secret", "fake-sub")
-    assert adapter.subscription_id == "fake-sub"
+    with patch('apps.cloud.adapters.azure.ClientSecretCredential', create=True), patch('apps.cloud.adapters.azure.ResourceManagementClient', create=True), patch('apps.cloud.adapters.azure.ContainerAppsAPIClient', create=True):
+        adapter = AzureAdapter("fake-tenant", "fake-client", "fake-secret", "fake-sub")
+        assert adapter.region == "eastus"
 
 def test_gcp_adapter_initialization():
     fake_info = {
