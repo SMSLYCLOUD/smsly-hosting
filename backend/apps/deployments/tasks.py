@@ -2097,7 +2097,8 @@ def deprovision_addon_task(addon_id: str):
     try:
         addon = Addon.objects.get(id=addon_id)
         if addon.coolify_uuid:
-            addon_provisioner.deprovision(addon.coolify_uuid, f"addon-{addon.id}")
+            container_name = f"smsly-addon-{addon.addon_type.lower()}-{addon.id}"
+            addon_provisioner.deprovision(addon.coolify_uuid, container_name)
         addon.status = Addon.Status.DELETED
         addon.save()
     except Exception as e: # pylint: disable=broad-exception-caught

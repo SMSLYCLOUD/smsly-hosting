@@ -1128,10 +1128,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get', 'post'], url_path='env_vars')
     def env_vars(self, request, pk=None):
         service = self.get_object()
+        reveal_secrets = not hasattr(getattr(request, 'auth', None), 'prefix')
 
         if request.method.upper() == 'GET':
             vars = service.env_vars.all().order_by('key')
-            serializer = EnvVarSerializer(vars, many=True)
+            serializer = EnvVarSerializer(
+                vars,
+                many=True,
+                context={'request': request, 'reveal_secrets': reveal_secrets},
+            )
             return Response(serializer.data)
 
         payload_vars = request.data.get('vars')
@@ -1223,7 +1228,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 )
 
             serializer = EnvVarSerializer(
-                service.env_vars.all().order_by('key'), many=True)
+                service.env_vars.all().order_by('key'),
+                many=True,
+                context={'request': request, 'reveal_secrets': reveal_secrets},
+            )
             return Response({
                 'added': added,
                 'updated': updated,
@@ -1272,7 +1280,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 {'error': 'Failed to save environment variable'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        out = EnvVarSerializer(env_var).data
+        out = EnvVarSerializer(
+            env_var,
+            context={'request': request, 'reveal_secrets': reveal_secrets},
+        ).data
         return Response(
             out,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK
@@ -1297,7 +1308,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if 'is_secret' in request.data:
             var.is_secret = _parse_bool(request.data['is_secret'])
         var.save()
-        return Response(EnvVarSerializer(var).data)
+        return Response(
+            EnvVarSerializer(
+                var,
+                context={'request': request, 'reveal_secrets': reveal_secrets},
+            ).data
+        )
 
     @action(detail=True, methods=['get', 'post'], url_path='ai-router-config')
     def ai_router_config(self, request, pk=None):

@@ -14,6 +14,7 @@ import secrets
 import subprocess
 import logging
 import time
+from urllib.parse import urlparse
 from typing import Dict, Optional, Tuple
 from decouple import config
 
@@ -68,6 +69,57 @@ class AddonProvisioner:
             default='smsly-net')
         self._network_checked = False
 
+    def _container_status(self, container_name: str) -> Tuple[Optional[str], bool]:
+        """
+        Return (container_id, is_running) for a given docker container name.
+
+        Returns (None, False) if the container does not exist or docker inspect fails.
+        """
+        try:
+            result = subprocess.run(
+                ['docker', 'inspect', '-f', '{{.Id}} {{.State.Running}}', container_name],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return None, False
+            parts = (result.stdout or '').strip().split()
+            if not parts:
+                return None, False
+            cid = parts[0].strip() or None
+            running = len(parts) > 1 and parts[1].strip().lower() == 'true'
+            if cid:
+                cid = cid[:12]
+            return cid, running
+        except Exception:
+            return None, False
+
+    def _start_container(self, container_name: str) -> bool:
+        try:
+            result = subprocess.run(
+                ['docker', 'start', container_name],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _parse_connection_url(self, url: str) -> Dict[str, object]:
+        """Parse a connection URL into components used for idempotent reprovisioning."""
+        parsed = urlparse(str(url or '').strip())
+        db_name = ''
+        if parsed.path and parsed.path != '/':
+            db_name = parsed.path.lstrip('/')
+        return {
+            'scheme': parsed.scheme or '',
+            'hostname': parsed.hostname or '',
+            'port': parsed.port,
+            'username': parsed.username or '',
+            'password': parsed.password or '',
+            'database': db_name,
+        }
+
     def _ensure_network(self):
         """Ensure the Docker network exists for service connectivity."""
         if self._network_checked:
@@ -102,13 +154,17 @@ class AddonProvisioner:
         service_name = addon.service.name
         self._ensure_network()
 
-        # Generate unique container name and credentials
+        # Stable container name; do not change across retries.
         container_name = f"smsly-addon-{addon_type.lower()}-{addon.id}"
-        password = secrets.token_urlsafe(24)
 
-        # Friendly network alias so apps can reach the addon by name
-        # e.g. "postgres-buyforfront" instead of "smsly-addon-postgres-{uuid}"
-        alias_name = addon.name or f"{addon_type.lower()}-{service_name}"
+        # Persisted URL is the source of truth for passwords. If we rotate passwords on retries
+        # but re-use a persistent volume, the container will keep the original password and
+        # apps will start failing with auth errors.
+        existing_url = str(getattr(addon, 'connection_url', '') or '').strip()
+
+        # Friendly network alias so apps can reach the addon by name, used for first provision
+        # and for reconstructing a missing URL.
+        alias_name = str(getattr(addon, 'name', '') or f"{addon_type.lower()}-{service_name}").strip()
 
         image = self.ADDON_IMAGES.get(addon_type)
         port = self.ADDON_PORTS.get(addon_type)
@@ -116,38 +172,155 @@ class AddonProvisioner:
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
 
-        logger.info(
-            f"Provisioning {addon_type} addon for service {service_name}")
+        logger.info(f"Provisioning {addon_type} addon for service {service_name}")
 
-        # Build Docker run command based on addon type
+        # If the container already exists, never "re-provision" (which would rotate passwords).
+        existing_cid, is_running = self._container_status(container_name)
+        if existing_cid:
+            if not is_running:
+                logger.info("Starting existing addon container: %s", container_name)
+                self._start_container(container_name)
+                time.sleep(1)
+                existing_cid, _ = self._container_status(container_name)
+
+            # Wait for readiness to reduce flakiness on immediate retries.
+            try:
+                if addon_type == 'RABBITMQ':
+                    self._wait_for_health(
+                        container_name,
+                        port,
+                        path="/api/health/checks/alarms",
+                        use_http=True,
+                    )
+                else:
+                    self._wait_for_health(container_name, port)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Addon health check failed for %s: %s", container_name, exc)
+
+            if existing_url:
+                return existing_cid, existing_url
+
+            # URL missing in DB but container exists (e.g. task crashed after docker run).
+            # Attempt best-effort reconstruction from container config to avoid password rotation.
+            hostname = alias_name or container_name
+            try:
+                if addon_type == 'POSTGRES':
+                    db_user = self._get_container_env(container_name, 'POSTGRES_USER')
+                    db_name = self._get_container_env(container_name, 'POSTGRES_DB')
+                    password = self._get_container_env(container_name, 'POSTGRES_PASSWORD')
+                    return existing_cid, f"postgresql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+
+                if addon_type == 'MYSQL':
+                    db_user = self._get_container_env(container_name, 'MYSQL_USER')
+                    db_name = self._get_container_env(container_name, 'MYSQL_DATABASE')
+                    password = self._get_container_env(container_name, 'MYSQL_PASSWORD')
+                    return existing_cid, f"mysql://{db_user}:{password}@{hostname}:{port}/{db_name}"
+
+                if addon_type == 'MONGODB':
+                    db_user = self._get_container_env(container_name, 'MONGO_INITDB_ROOT_USERNAME')
+                    password = self._get_container_env(container_name, 'MONGO_INITDB_ROOT_PASSWORD')
+                    return existing_cid, f"mongodb://{db_user}:{password}@{hostname}:{port}/app_db?authSource=admin"
+
+                if addon_type == 'RABBITMQ':
+                    user = self._get_container_env(container_name, 'RABBITMQ_DEFAULT_USER')
+                    password = self._get_container_env(container_name, 'RABBITMQ_DEFAULT_PASS')
+                    return existing_cid, f"amqp://{user}:{password}@{hostname}:{port}//"
+
+                if addon_type == 'REDIS':
+                    result = subprocess.run(
+                        ['docker', 'inspect', '-f', '{{json .Config.Cmd}}', container_name],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode == 0 and (result.stdout or '').strip():
+                        import json
+                        cmd = json.loads(result.stdout)
+                        if isinstance(cmd, list) and '--requirepass' in cmd:
+                            idx = cmd.index('--requirepass')
+                            if idx + 1 < len(cmd) and cmd[idx + 1]:
+                                password = cmd[idx + 1]
+                                return existing_cid, f"redis://:{password}@{hostname}:{port}/0"
+
+                if addon_type in ('QDRANT', 'ELASTICSEARCH'):
+                    return existing_cid, f"http://{hostname}:{port}"
+
+            except Exception as exc:
+                logger.warning("Failed to reconstruct addon URL for %s: %s", container_name, exc)
+
+            raise RuntimeError(f"Addon container exists but connection_url is missing: {container_name}")
+
+        # If the URL exists but container is missing, re-create the container using the same credentials.
+        # This avoids password drift when persistent volumes are re-used.
+        if existing_url:
+            parsed = self._parse_connection_url(existing_url)
+            hostname = str(parsed.get('hostname') or alias_name or container_name).strip()
+            password = str(parsed.get('password') or '').strip()
+            username = str(parsed.get('username') or '').strip()
+            db_name = str(parsed.get('database') or '').strip()
+
+            if addon_type in ('POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'RABBITMQ') and not password:
+                raise ValueError("Existing connection_url is missing a password; refusing to reprovision.")
+
+            if addon_type == 'POSTGRES':
+                container_id, _ = self._provision_postgres(
+                    container_name,
+                    password,
+                    port,
+                    hostname,
+                    db_user=username or None,
+                    db_name=db_name or None,
+                )
+                return container_id, existing_url
+
+            if addon_type == 'REDIS':
+                container_id, _ = self._provision_redis(container_name, password, port, hostname)
+                return container_id, existing_url
+
+            if addon_type == 'MYSQL':
+                container_id, _ = self._provision_mysql(container_name, password, port, hostname)
+                return container_id, existing_url
+
+            if addon_type == 'MONGODB':
+                container_id, _ = self._provision_mongodb(container_name, password, port, hostname)
+                return container_id, existing_url
+
+            if addon_type == 'QDRANT':
+                container_id, _ = self._provision_qdrant(container_name, port, hostname)
+                return container_id, existing_url
+
+            if addon_type == 'ELASTICSEARCH':
+                container_id, _ = self._provision_elasticsearch(container_name, port, hostname)
+                return container_id, existing_url
+
+            if addon_type == 'RABBITMQ':
+                container_id, _ = self._provision_rabbitmq(container_name, password, port, hostname)
+                return container_id, existing_url
+
+            raise ValueError(f"Unsupported addon type: {addon_type}")
+
+        # First-time provisioning: generate fresh credentials for passworded addons.
+        password = secrets.token_urlsafe(24) if addon_type in (
+            'POSTGRES',
+            'REDIS',
+            'MYSQL',
+            'MONGODB',
+            'RABBITMQ',
+        ) else ''
+
         if addon_type == 'POSTGRES':
-            container_id, connection_url = self._provision_postgres(
-                container_name, password, port, alias_name
-            )
+            container_id, connection_url = self._provision_postgres(container_name, password, port, alias_name)
         elif addon_type == 'REDIS':
-            container_id, connection_url = self._provision_redis(
-                container_name, password, port, alias_name
-            )
+            container_id, connection_url = self._provision_redis(container_name, password, port, alias_name)
         elif addon_type == 'MYSQL':
-            container_id, connection_url = self._provision_mysql(
-                container_name, password, port, alias_name
-            )
+            container_id, connection_url = self._provision_mysql(container_name, password, port, alias_name)
         elif addon_type == 'MONGODB':
-            container_id, connection_url = self._provision_mongodb(
-                container_name, password, port, alias_name
-            )
+            container_id, connection_url = self._provision_mongodb(container_name, password, port, alias_name)
         elif addon_type == 'QDRANT':
-            container_id, connection_url = self._provision_qdrant(
-                container_name, port, alias_name
-            )
+            container_id, connection_url = self._provision_qdrant(container_name, port, alias_name)
         elif addon_type == 'ELASTICSEARCH':
-            container_id, connection_url = self._provision_elasticsearch(
-                container_name, port, alias_name
-            )
+            container_id, connection_url = self._provision_elasticsearch(container_name, port, alias_name)
         elif addon_type == 'RABBITMQ':
-            container_id, connection_url = self._provision_rabbitmq(
-                container_name, password, port, alias_name
-            )
+            container_id, connection_url = self._provision_rabbitmq(container_name, password, port, alias_name)
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -185,15 +358,32 @@ class AddonProvisioner:
         self._wait_for_health(container_name, port, path="/api/health/checks/alarms", use_http=True)
         return container_id, connection_url
 
-    def _provision_postgres(self, container_name: str,
-                            password: str, port: int,
-                            alias_name: str = '') -> Tuple[str, str]:
+    def _provision_postgres(
+        self,
+        container_name: str,
+        password: str,
+        port: int,
+        alias_name: str = '',
+        db_user: Optional[str] = None,
+        db_name: Optional[str] = None,
+    ) -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
         # Derive service-specific user/db from alias (e.g. "postgres-myapp")
         # so each addon gets isolated credentials.
-        safe_suffix = (alias_name or container_name).replace('-', '_')
-        db_user = safe_suffix  # e.g. "postgres_myapp"
-        db_name = safe_suffix  # same — one DB per addon
+        safe_suffix = (
+            (alias_name or container_name)
+            .replace('-', '_')
+            .replace('.', '_')
+            .replace(' ', '_')
+        )
+        if not db_user:
+            db_user = safe_suffix  # e.g. "postgres_myapp"
+        if not db_name:
+            db_name = safe_suffix  # one DB per addon
+
+        # Postgres identifiers are limited to 63 bytes.
+        db_user = str(db_user)[:63]
+        db_name = str(db_name)[:63]
 
         cmd = [
             'docker', 'run', '-d',
@@ -265,7 +455,8 @@ class AddonProvisioner:
             check=True)
         container_id = result.stdout.strip()[:12]
 
-        connection_url = f"redis://:{password}@{container_name}:{port}/0"
+        hostname = alias_name or container_name
+        connection_url = f"redis://:{password}@{hostname}:{port}/0"
 
         self._wait_for_health(container_name, port)
         return container_id, connection_url
