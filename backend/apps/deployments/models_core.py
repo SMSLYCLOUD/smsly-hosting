@@ -35,6 +35,14 @@ class ManagedServer(models.Model):
         on_delete=models.CASCADE,
         related_name="managed_servers",
     )
+    project = models.ForeignKey(
+        'deployments.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='managed_servers',
+        help_text="Project this server belongs to (null = ungrouped)"
+    )
     name = models.CharField(
         max_length=100,
         help_text="Human-readable label, e.g. 'Production VPS' or 'Staging EU'",

@@ -79,6 +79,14 @@ class Addon(TimeStampedModel):
         DELETED = 'DELETED', 'Deleted'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        'deployments.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='project_addons',
+        help_text="Project this addon belongs to (null = ungrouped)"
+    )
     service = models.ForeignKey(
         Service,
         on_delete=models.CASCADE,
