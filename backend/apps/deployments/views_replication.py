@@ -34,18 +34,6 @@ class ReplicationDeploySerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "replication_password must be provided and cannot use the default 'repl_pass'."
             )
-        if "'" in value:
-            raise serializers.ValidationError("Password cannot contain single quotes.")
-        return value
-
-    def validate_db_password(self, value):
-        if "'" in value:
-            raise serializers.ValidationError("Database password cannot contain single quotes.")
-        return value
-
-    def validate_admin_password(self, value):
-        if "'" in value:
-            raise serializers.ValidationError("Admin password cannot contain single quotes.")
         return value
 
 

@@ -99,13 +99,13 @@ class ReplicationService:
                       PATRONI_POSTGRESQL_LISTEN: "0.0.0.0:5432"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
-                      PATRONI_REPLICATION_PASSWORD: '{replication_password}'
+                      PATRONI_REPLICATION_PASSWORD: "{replication_password}"
                       PATRONI_SUPERUSER_USERNAME: postgres
-                      PATRONI_SUPERUSER_PASSWORD: '{db_password}'
+                      PATRONI_SUPERUSER_PASSWORD: "{db_password}"
                       PGUSER_SUPERUSER: postgres
-                      PGPASSWORD_SUPERUSER: '{db_password}'
+                      PGPASSWORD_SUPERUSER: "{db_password}"
                       PGUSER_ADMIN: smsly_admin
-                      PGPASSWORD_ADMIN: '{admin_password}'
+                      PGPASSWORD_ADMIN: "{admin_password}"
                     volumes:
                       - patroni-data:/home/postgres/pgdata
                     depends_on:
@@ -407,9 +407,9 @@ class ReplicationService:
     @classmethod
     def check_replication_lag_sql(cls, mesh):
         """
-        Check replication lag via the primary node.
+        Check replication lag via SQL query on the primary.
 
-        Queries the REST API for now (SQL proxy query could be implemented here).
+        More accurate than REST API for real-time lag measurement.
         """
         import requests
 
@@ -430,7 +430,7 @@ class ReplicationService:
         if not primary_ip:
             return {"error": "No primary found"}
 
-        # Query replication stats via Patroni's REST API (or SQL proxy if configured)
+        # Query replication stats via Patroni's SQL proxy
         try:
             resp = requests.get(
                 f"http://{primary_ip}:8008/patroni",

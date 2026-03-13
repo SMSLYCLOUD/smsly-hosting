@@ -228,7 +228,7 @@ class WireGuardService:
         # Write config to a temporary file via a container
         # Since /etc/wireguard might not be mounted in the backend, we run an alpine 
         # container mounting /etc/wireguard from the host.
-        cmd = f"mkdir -p /etc/wireguard && cat > /etc/wireguard/{iface}.conf << 'WG_CONF_EOF'\n{config}\nWG_CONF_EOF\nchmod 600 /etc/wireguard/{iface}.conf"
+        cmd = f"mkdir -p /etc/wireguard && cat > /etc/wireguard/{iface}.conf << 'EOF'\n{config}\nEOF\nchmod 600 /etc/wireguard/{iface}.conf"
         
         try:
             client.containers.run(
@@ -272,7 +272,7 @@ class WireGuardService:
             "apt-get install -y wireguard > /dev/null 2>&1 || true",
             "mkdir -p /etc/wireguard",
             # Write config (using heredoc)
-            f"cat > /etc/wireguard/{iface}.conf << 'WG_CONF_EOF'\n{config}\nWG_CONF_EOF",
+            f"cat > /etc/wireguard/{iface}.conf << 'WGEOF'\n{config}\nWGEOF",
             f"chmod 600 /etc/wireguard/{iface}.conf",
             # Restart interface
             f"wg-quick down {iface} 2>/dev/null || true",
@@ -348,13 +348,11 @@ class WireGuardService:
     def get_wg_status(cls, iface: str = "wg0") -> dict:
         """Get WireGuard interface status from `wg show` using a docker container."""
         import docker
-        import shlex
-        safe_iface = shlex.quote(iface)
         try:
             client = docker.from_env()
             container = client.containers.run(
                 "alpine",
-                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {safe_iface}"],
+                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {iface}"],
                 privileged=True,
                 network_mode="host",
                 volumes={"/lib/modules": {"bind": "/lib/modules", "mode": "ro"}},
