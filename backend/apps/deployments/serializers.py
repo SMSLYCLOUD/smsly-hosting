@@ -43,8 +43,10 @@ class EnvVarSerializer(serializers.ModelSerializer):
                 'is_secret': bool(getattr(instance, 'is_secret', False)),
                 'source': getattr(instance, 'source', 'USER'),
             }
-        # Mask secret values
-        if instance.is_secret:
+        # Mask secret values by default. Some endpoints (e.g. service env var editor)
+        # can opt-in to revealing secrets by passing `reveal_secrets=True` in context.
+        reveal_secrets = bool(self.context.get('reveal_secrets', False))
+        if instance.is_secret and not reveal_secrets:
             ret['value'] = '********'
         return ret
 
