@@ -2,6 +2,7 @@
 """Tasks module."""
 import logging
 import re
+import shlex
 import shutil
 import tempfile
 import subprocess
@@ -30,6 +31,10 @@ from apps.deployments.ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
     DEFAULT_BRAID_ALIAS,
+    generate_ai_router_proxy_config,
+    get_ollama_model_name,
+    is_ai_router_service,
+    is_ollama_service,
 )
 from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from apps.deployments.models_addons import Addon, Backup
@@ -72,6 +77,104 @@ def _regenerate_caddyfile():
             logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not regenerate Caddyfile: %s", exc)
+
+
+def _run_managed_image_post_deploy_hooks(deployment, service: Service, container_id: str) -> None:
+    """
+    Run post-deploy hooks for Docker-image managed AI services.
+
+    GIT/compose deploys already do this inside PipelineManager. Docker-image
+    template deploys need the same behavior here after the live container is up.
+    """
+    try:
+        client = docker.from_env()
+        container = client.containers.get(container_id)
+        container_name = container.name
+    except Exception as exc:  # pragma: no cover - daemon/container lookup is runtime-specific
+        append_log(deployment, f"[hook] Skipped managed-image hooks: {exc}\n")
+        return
+
+    env_map = {ev.key: ev.value for ev in service.env_vars.all()}
+
+    if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
+        append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
+        prisma_res = subprocess.run(
+            ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if prisma_res.returncode == 0:
+            append_log(deployment, "[hook] Prisma migrate deploy succeeded.\n")
+        else:
+            append_log(
+                deployment,
+                "[hook] Prisma migrate deploy failed:\n"
+                f"{prisma_res.stdout}\n{prisma_res.stderr}\n",
+            )
+
+    if is_ollama_service(service):
+        model_name = get_ollama_model_name(service) or str(env_map.get("OLLAMA_MODEL", "")).strip()
+        if model_name:
+            append_log(deployment, f"\n[hook] Pulling Ollama model `{model_name}` inside {container_name}...\n")
+            pull_res = subprocess.run(
+                ["docker", "exec", container_name, "sh", "-lc", f"ollama pull {shlex.quote(model_name)}"],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
+            if pull_res.returncode == 0:
+                append_log(deployment, f"[hook] Ollama model `{model_name}` is ready.\n")
+            else:
+                append_log(
+                    deployment,
+                    "[hook] Ollama model pull failed:\n"
+                    f"{pull_res.stdout}\n{pull_res.stderr}\n",
+                )
+
+    if not is_ai_router_service(service):
+        return
+
+    config_text = generate_ai_router_proxy_config(service)
+    with tempfile.NamedTemporaryFile("w", suffix="-ai-router.yaml", delete=False, encoding="utf-8") as handle:
+        handle.write(config_text)
+        config_path = handle.name
+
+    try:
+        append_log(deployment, "\n[hook] Syncing LiteLLM router catalog...\n")
+        copy_res = subprocess.run(
+            ["docker", "cp", config_path, f"{container_name}:/app/proxy_server_config.yaml"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if copy_res.returncode != 0:
+            raise RuntimeError(
+                "Failed to copy router config:\n"
+                f"{copy_res.stdout}\n{copy_res.stderr}"
+            )
+
+        restart_res = subprocess.run(
+            ["docker", "restart", container_name],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if restart_res.returncode != 0:
+            raise RuntimeError(
+                "Failed to restart router container after config sync:\n"
+                f"{restart_res.stdout}\n{restart_res.stderr}"
+            )
+
+        if not _wait_for_local_container_healthy(deployment, container_id, timeout_seconds=180):
+            raise RuntimeError("Router restart completed but health did not recover in time")
+
+        append_log(deployment, "[hook] LiteLLM router catalog synced.\n")
+    finally:
+        try:
+            os.unlink(config_path)
+        except OSError:
+            pass
 
 
 def _docker_safe_segment(value: str, fallback: str = "app") -> str:
@@ -1237,6 +1340,11 @@ def _deploy_container(deployment, provider, image_name):
                         "[ROUTE-CHECK] WARNING: Route not ready before STAGED. "
                         "Will recheck at promotion.\n",
                     )
+            _run_managed_image_post_deploy_hooks(
+                deployment,
+                service,
+                resource.resource_id,
+            )
 
         # Container is live with Traefik labels - mark ACTIVE.
         # Local adapter may internally perform staged blue-green promotion

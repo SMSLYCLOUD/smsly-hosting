@@ -170,9 +170,35 @@ class LocalAdapter(BaseCloudAdapter):
         if enable_tls:
             entrypoints.append('websecure')
             labels[f'traefik.http.routers.{router_name}.tls.certresolver'] = 'letsencrypt'
-        
+
         labels[f'traefik.http.routers.{router_name}.entrypoints'] = ','.join(entrypoints)
         return labels
+
+    def _apply_router_special_labels(
+        self,
+        labels: Dict[str, str],
+        name: str,
+        env: Dict[str, str] | None,
+    ) -> None:
+        """Attach extra Traefik labels needed by managed routers."""
+        env = env or {}
+        api_base = str(env.get('AI_ROUTER_API_BASE', '') or '').strip()
+        if not api_base:
+            return
+        if api_base in {'/v1', 'v1'}:
+            return
+        if not str(env.get('LITELLM_MASTER_KEY', '')).strip():
+            return
+
+        router_name = name.replace('.', '-').replace('_', '-')
+        normalized_base = api_base if api_base.startswith('/') else f'/{api_base}'
+        middleware_name = f'{router_name}-api-base'
+        labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.regex'] = (
+            f'^{re.escape(normalized_base)}/?(.*)$'
+        )
+        labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.replacement'] = '/v1/$1'
+        labels[f'traefik.http.routers.{router_name}.middlewares'] = middleware_name
+        labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
 
     def authenticate(self) -> bool:
         return self.docker_client is not None or self.k8s_client is not None
@@ -362,17 +388,7 @@ class LocalAdapter(BaseCloudAdapter):
             labels['traefik.enable'] = 'false'
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
-            api_base = str(env.get('AI_ROUTER_API_BASE', '') or '').strip()
-            if api_base and api_base not in {'/v1', 'v1'} and str(env.get('LITELLM_MASTER_KEY', '')).strip():
-                normalized_base = api_base if api_base.startswith('/') else f'/{api_base}'
-                middleware_name = f'{router_name}-api-base'
-                labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.regex'] = (
-                    f'^{re.escape(normalized_base)}/?(.*)$'
-                )
-                labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.replacement'] = '/v1/$1'
-                labels[f'traefik.http.routers.{router_name}.middlewares'] = middleware_name
-            # Ensure the specific router has a high priority to beat the fallback notice
-            labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
+            self._apply_router_special_labels(labels, name, env)
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
@@ -563,22 +579,27 @@ class LocalAdapter(BaseCloudAdapter):
         is_public = green_labels.get('smsly.blue_green.is_public', 'True') == 'True'
         port = green_labels.get('smsly.blue_green.port', '8000')
         host_rule = green_labels.get('smsly.blue_green.host_rule', f"Host(`{name}.localhost`)")
+        green_config = green.attrs.get('Config', {}) or {}
+        green_host_config = green.attrs.get('HostConfig', {}) or {}
+        green_env = green_config.get('Env', [])
 
-        router_name = name.replace('.', '-').replace('_', '-')
         live_labels = {
             'managed_by': 'smsly-hosting',
         }
         # Add core routing labels
         live_labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
-        
+        promoted_env = {}
+        for item in green_env:
+            key, _sep, value = str(item).partition("=")
+            if key:
+                promoted_env[key] = value
+        self._apply_router_special_labels(live_labels, name, promoted_env)
+
         # Preserve metadata labels
         for k, v in green_labels.items():
             if k.startswith('smsly.'):
                 live_labels[k] = v
 
-        green_config = green.attrs.get('Config', {}) or {}
-        green_host_config = green.attrs.get('HostConfig', {}) or {}
-        green_env = green_config.get('Env', [])
         green_cmd = green_config.get('Cmd')
         green_entrypoint = green_config.get('Entrypoint')
         green_healthcheck = green_config.get('Healthcheck')
