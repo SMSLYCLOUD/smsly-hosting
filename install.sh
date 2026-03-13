@@ -1166,28 +1166,16 @@ recover_runtime_stack() {
     wait_for_container_ready "smsly-hosting-pgbouncer-1" 120 || true
     wait_for_container_ready "smsly-hosting-redis-1" 120 || true
 
-    echo -e "${BLUE}    -> Starting app services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d backend frontend || true
-    wait_for_container_ready "smsly-hosting-backend-1" 180 || true
-    wait_for_container_ready "smsly-hosting-frontend-1" 120 || true
-
-    echo -e "${BLUE}    -> Starting workers and edge services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d celery celery-beat traefik route-fallback nginx || true
-
-    # Re-attach expected networks (idempotent)
-    ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
-    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
-    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
-
     if command -v caddy >/dev/null 2>&1; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "recover_runtime_stack"
         fi
-        systemctl restart caddy >/dev/null 2>&1 || true
-        systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    fi
+
+    echo -e "${BLUE}    -> Refreshing runtime services...${NC}"
+    if ! refresh_runtime_services; then
+        echo -e "${YELLOW}  WARN Runtime recovery could not fully refresh all runtime services${NC}"
+        return 1
     fi
 
     echo -e "${GREEN}  OK Runtime recovery completed${NC}"
@@ -1249,9 +1237,10 @@ if [ "$RECOVER_MODE" = "true" ]; then
     fi
     cd "$INSTALL_DIR"
     ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
-    recover_runtime_stack
+    RECOVER_STATUS=0
+    recover_runtime_stack || RECOVER_STATUS=$?
     debug_platform_status
-    exit 0
+    exit "$RECOVER_STATUS"
 fi
 
 # =============================================================================
