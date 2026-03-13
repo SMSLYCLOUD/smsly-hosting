@@ -12,7 +12,8 @@ import {
     Layers,
     ArrowRight,
     CheckCircle2,
-    XCircle
+    XCircle,
+    ArrowUpRight
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/layout/Footer';
@@ -68,6 +69,22 @@ const battleCards = [
         ],
         highlight: false,
         color: "slate"
+    },
+    {
+        name: "Render",
+        logo: ArrowUpRight,
+        type: "Legacy PaaS",
+        price: "$25+",
+        priceDetail: "per standard dyno",
+        description: "Sleeping dynos, extremely expensive scaling, rigid buildpacks.",
+        features: [
+            "Sleeping dynos",
+            "Extremely expensive scaling",
+            "Rigid buildpacks",
+            "Slow support"
+        ],
+        highlight: false,
+        color: "slate"
     }
 ];
 
@@ -78,28 +95,28 @@ const comparisonRows = [
     {
         category: "Core Platform",
         items: [
-            { name: "Deployment Target", cn: "Any VPS / Cloud / Bare Metal", rw: "Managed GCP", vc: "Managed AWS Lambda" },
-            { name: "Compute Model", cn: "Long-running Containers", rw: "Containers", vc: "Serverless Functions" },
-            { name: "Vendor Lock-in", cn: "Zero (Standard Docker)", rw: "Low", vc: "High (Proprietary APIs)" },
-            { name: "Multi-Cloud Support", cn: true, rw: false, vc: false },
+            { name: "Deployment Target", cn: "Any VPS / Cloud / Bare Metal", rw: "Managed GCP", vc: "Managed AWS Lambda", rn: "Managed AWS/GCP" },
+            { name: "Compute Model", cn: "Long-running Containers", rw: "Containers", vc: "Serverless Functions", rn: "Containers / Dynos" },
+            { name: "Vendor Lock-in", cn: "Zero (Standard Docker)", rw: "Low", vc: "High (Proprietary APIs)", rn: "High (Proprietary YAML)" },
+            { name: "Multi-Cloud Support", cn: true, rw: false, vc: false, rn: false },
         ]
     },
     {
         category: "Pricing & Limits",
         items: [
-            { name: "Pricing Model", cn: "Flat Rate (You pay provider directly)", rw: "Usage-based markup", vc: "Per-seat + Usage + Bandwidth" },
-            { name: "Bandwidth Cost", cn: "Included (TB free usually)", rw: "$0.10/GB after limit", vc: "$0.15/GB (Enterprise only)" },
-            { name: "Execution Time Limit", cn: "Unlimited", rw: "Unlimited", vc: "10s - 60s (Plan dependent)" },
-            { name: "Seat Pricing", cn: "Unlimited Users", rw: "Unlimited", vc: "$20/user/month" },
+            { name: "Pricing Model", cn: "Flat Rate (You pay provider directly)", rw: "Usage-based markup", vc: "Per-seat + Usage + Bandwidth", rn: "Per Service Tier + Usage" },
+            { name: "Bandwidth Cost", cn: "Included (TB free usually)", rw: "$0.10/GB after limit", vc: "$0.15/GB (Enterprise only)", rn: "$0.10/GB after limit" },
+            { name: "Execution Time Limit", cn: "Unlimited", rw: "Unlimited", vc: "10s - 60s (Plan dependent)", rn: "Unlimited (unless sleeping)" },
+            { name: "Seat Pricing", cn: "Unlimited Users", rw: "Unlimited", vc: "$20/user/month", rn: "$19/user/month" },
         ]
     },
     {
         category: "Features",
         items: [
-            { name: "AI Auto-Scaling", cn: "Predictive (Proactive)", rw: "Reactive", vc: "Reactive (Serverless)" },
-            { name: "Persistent Storage", cn: "Native Volumes (Zero Cost)", rw: "Volumes (Beta / $$$)", vc: "3rd Party Integrations Only" },
-            { name: "Private Networking", cn: "Included (WireGuard Mesh)", rw: "Included", vc: "Enterprise Only" },
-            { name: "Docker Support", cn: "Native (Dockerfile / Compose)", rw: "Native", vc: "Limited (Next.js focused)" },
+            { name: "AI Auto-Scaling", cn: "Predictive (Proactive)", rw: "Reactive", vc: "Reactive (Serverless)", rn: "Reactive / Expensive" },
+            { name: "Persistent Storage", cn: "Native Volumes (Zero Cost)", rw: "Volumes (Beta / $$$)", vc: "3rd Party Integrations Only", rn: "Volumes ($$$)" },
+            { name: "Private Networking", cn: "Included (WireGuard Mesh)", rw: "Included", vc: "Enterprise Only", rn: "Included (VPC)" },
+            { name: "Docker Support", cn: "Native (Dockerfile / Compose)", rw: "Native", vc: "Limited (Next.js focused)", rn: "Native" },
         ]
     }
 ];
@@ -154,7 +171,7 @@ export default function ComparePage() {
             {/* BATTLE CARDS */}
             <section className="py-20 px-6 relative -mt-20 z-20">
                 <div className="max-w-7xl mx-auto">
-                    <div className="grid md:grid-cols-3 gap-8">
+                    <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
                         {battleCards.map((card, i) => (
                             <motion.div
                                 key={card.name}
@@ -224,17 +241,18 @@ export default function ComparePage() {
                         <table className="w-full text-left border-collapse">
                             <thead>
                                 <tr className="bg-slate-50 dark:bg-slate-950/50 border-b border-slate-200 dark:border-slate-800">
-                                    <th className="p-6 text-sm font-bold text-slate-500 uppercase tracking-wider w-1/4">Feature</th>
-                                    <th className="p-6 text-lg font-bold text-emerald-600 dark:text-emerald-400 w-1/4 bg-emerald-50/50 dark:bg-emerald-900/10 border-x border-emerald-100 dark:border-emerald-900/20">CloudNeuron</th>
-                                    <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/4">Railway</th>
-                                    <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/4">Vercel</th>
+                                    <th className="p-6 text-sm font-bold text-slate-500 uppercase tracking-wider w-1/5">Feature</th>
+                                    <th className="p-6 text-lg font-bold text-emerald-600 dark:text-emerald-400 w-1/5 bg-emerald-50/50 dark:bg-emerald-900/10 border-x border-emerald-100 dark:border-emerald-900/20">CloudNeuron</th>
+                                    <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Railway</th>
+                                    <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Vercel</th>
+                                    <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Render</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                                 {comparisonRows.map((section, sIndex) => (
                                     <Fragment key={section.category}>
                                         <tr className="bg-slate-50/50 dark:bg-slate-900/50">
-                                            <td colSpan={4} className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest bg-slate-100/50 dark:bg-slate-800/50">
+                                            <td colSpan={5} className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest bg-slate-100/50 dark:bg-slate-800/50">
                                                 {section.category}
                                             </td>
                                         </tr>
@@ -253,10 +271,15 @@ export default function ComparePage() {
                                                         row.rw ? <Check className="w-5 h-5 text-emerald-500" /> : <X className="w-5 h-5 text-slate-400" />
                                                     ) : row.rw}
                                                 </td>
-                                                <td className="px-6 py-5 text-sm text-slate-600 dark:text-slate-400">
+                                                <td className="px-6 py-5 text-sm text-slate-600 dark:text-slate-400 border-r border-slate-100 dark:border-slate-800/50">
                                                     {typeof row.vc === 'boolean' ? (
                                                         row.vc ? <Check className="w-5 h-5 text-emerald-500" /> : <X className="w-5 h-5 text-slate-400" />
                                                     ) : row.vc}
+                                                </td>
+                                                <td className="px-6 py-5 text-sm text-slate-600 dark:text-slate-400">
+                                                    {typeof row.rn === 'boolean' ? (
+                                                        row.rn ? <Check className="w-5 h-5 text-emerald-500" /> : <X className="w-5 h-5 text-slate-400" />
+                                                    ) : row.rn}
                                                 </td>
                                             </tr>
                                         ))}
