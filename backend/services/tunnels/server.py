@@ -15,8 +15,14 @@ from typing import Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 from aiohttp import web, WSMsgType
+from django.conf import settings
 
 logger = logging.getLogger('smsly.tunnels')
+
+
+def get_tunnel_base_domain() -> str:
+    """Resolve the active tunnel base domain from Django settings."""
+    return getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
 
 
 @dataclass
@@ -29,8 +35,9 @@ class TunnelConnection:  # pylint: disable=too-many-instance-attributes
     created_at: datetime = field(default_factory=datetime.utcnow)
     request_count: int = 0
 
-    def public_url(self, base_domain: str = "tunnel.smsly.cloud") -> str:
+    def public_url(self, base_domain: Optional[str] = None) -> str:
         """Get public URL."""
+        base_domain = base_domain or get_tunnel_base_domain()
         return f"https://{self.subdomain}.{base_domain}"
 
 
@@ -55,8 +62,8 @@ class TunnelServer:  # pylint: disable=too-many-instance-attributes
     Routes incoming HTTP requests to connected tunnel clients.
     """
 
-    def __init__(self, base_domain: str = "tunnel.smsly.cloud"):
-        self.base_domain = base_domain
+    def __init__(self, base_domain: Optional[str] = None):
+        self.base_domain = base_domain or get_tunnel_base_domain()
         self.tunnels: Dict[str, TunnelConnection] = {}  # subdomain -> tunnel
         self.request_logs: Dict[str, list] = {}  # tunnel_id -> [RequestLog]
         # tunnel_id -> request_id -> Future[dict]

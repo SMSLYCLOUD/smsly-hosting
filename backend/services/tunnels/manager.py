@@ -58,7 +58,7 @@ class TunnelSession(models.Model):
 
     def public_url(self) -> str:
         """Get the full public URL."""
-        base_domain = getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.smsly.cloud')
+        base_domain = getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
         return f"https://{self.subdomain}.{base_domain}"
 
     def __str__(self):

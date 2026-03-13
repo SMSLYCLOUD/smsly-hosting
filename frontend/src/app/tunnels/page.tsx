@@ -12,6 +12,39 @@ import { tunnelsApi, type Tunnel, type TunnelRequest, type ReservedSubdomain } f
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 
+const IPV4_HOST_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+function inferTunnelDomain(tunnels: Tunnel[]): string {
+  const firstPublicUrl = tunnels.find((tunnel) => tunnel.public_url)?.public_url;
+  if (firstPublicUrl) {
+    try {
+      const hostname = new URL(firstPublicUrl).hostname;
+      const labels = hostname.split('.');
+      if (labels.length > 2) {
+        return labels.slice(1).join('.');
+      }
+      if (hostname) {
+        return hostname;
+      }
+    } catch {
+      // Fall back to the platform hostname below.
+    }
+  }
+
+  if (typeof window === 'undefined') {
+    return 'tunnel.localhost';
+  }
+
+  const platformHost = window.location.hostname;
+  if (!platformHost || platformHost === 'localhost') {
+    return 'tunnel.localhost';
+  }
+  if (IPV4_HOST_RE.test(platformHost)) {
+    return `tunnel.${platformHost}.sslip.io`;
+  }
+  return `tunnel.${platformHost}`;
+}
+
 export default function TunnelsPage() {
   const confirm = useConfirm();
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
@@ -33,6 +66,8 @@ export default function TunnelsPage() {
   const [newReserve, setNewReserve] = useState('');
 
   const [copied, setCopied] = useState<string | null>(null);
+  const tunnelDomain = inferTunnelDomain(tunnels);
+  const tunnelSuffix = `.${tunnelDomain}`;
 
   const fetchData = useCallback(async () => {
     try {
@@ -126,7 +161,7 @@ export default function TunnelsPage() {
   };
 
   const handleReleaseSubdomain = async (subdomain: string) => {
-    if (!await confirm({ title: 'Release subdomain?', message: `Release ${subdomain}.tunnel.smsly.cloud? You may not be able to reclaim it.`, variant: 'destructive', confirmText: 'Release' })) return;
+    if (!await confirm({ title: 'Release subdomain?', message: `Release ${subdomain}${tunnelSuffix}? You may not be able to reclaim it.`, variant: 'destructive', confirmText: 'Release' })) return;
     try {
       await tunnelsApi.releaseSubdomain(subdomain);
       fetchData();
@@ -264,7 +299,7 @@ export default function TunnelsPage() {
                         placeholder="myapp"
                         className="flex-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                       />
-                      <span className="text-xs text-muted-foreground">.tunnel.smsly.cloud</span>
+                      <span className="text-xs text-muted-foreground">{tunnelSuffix}</span>
                     </div>
                   </div>
                   <div className="flex items-end">
@@ -435,7 +470,7 @@ export default function TunnelsPage() {
                     placeholder="myapp"
                     className="flex-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                   />
-                  <span className="flex items-center text-xs text-muted-foreground">.tunnel.smsly.cloud</span>
+                  <span className="flex items-center text-xs text-muted-foreground">{tunnelSuffix}</span>
                   <button
                     onClick={handleReserveSubdomain}
                     className="px-3 py-2 rounded-lg bg-purple-500 text-white text-xs font-semibold"
@@ -454,7 +489,7 @@ export default function TunnelsPage() {
                   <div key={sub.subdomain} className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
                     <Lock size={14} className="text-purple-500" />
                     <span className="font-semibold text-sm flex-1">
-                      {sub.subdomain}<span className="text-muted-foreground font-normal">.tunnel.smsly.cloud</span>
+                      {sub.subdomain}<span className="text-muted-foreground font-normal">{tunnelSuffix}</span>
                     </span>
                     <span className="text-[10px] text-muted-foreground">
                       {new Date(sub.created_at).toLocaleDateString()}

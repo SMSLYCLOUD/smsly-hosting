@@ -6,7 +6,7 @@ vhostHTTPPort = 7080
 
 # Authentication - all clients must use this token
 auth.method = "token"
-auth.token = "{{ FRP_AUTH_TOKEN }}"
+auth.token = "{{ .Envs.FRP_AUTH_TOKEN }}"
 
 # Dashboard (internal only)
 webServer.addr = "0.0.0.0"
@@ -21,4 +21,4 @@ transport.maxPoolCount = 50
 transport.tcpMux = true
 
 # Subdomain host - set dynamically by install.sh
-subDomainHost = "{{ TUNNEL_DOMAIN }}"
+subDomainHost = "{{ .Envs.TUNNEL_DOMAIN }}"

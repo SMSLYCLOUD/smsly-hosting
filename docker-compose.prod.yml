@@ -361,6 +361,10 @@ services:
   frps:
     image: snowdreamtech/frps:latest
     restart: unless-stopped
+    env_file: .env
+    environment:
+      FRP_AUTH_TOKEN: ${FRP_AUTH_TOKEN:?FRP_AUTH_TOKEN must be set in .env}
+      TUNNEL_DOMAIN: ${TUNNEL_DOMAIN:-tunnel.localhost}
     volumes:
       - ./infrastructure/frps/frps.toml:/etc/frp/frps.toml:ro
     ports:
