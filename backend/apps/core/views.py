@@ -3,9 +3,10 @@ from rest_framework import viewsets, mixins
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 import logging
 from django.utils import timezone
+from django.contrib.auth.models import User
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_addons import Addon
 from apps.billing.services.metering import UsageMeter
@@ -196,3 +197,23 @@ class SubdomainStubViewSet(viewsets.ViewSet):
 
     def destroy(self, request, pk=None):
         return Response(status=status.HTTP_404_NOT_FOUND)
+
+
+class AdminUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'is_active', 'is_staff', 'is_superuser', 'date_joined']
+        read_only_fields = ['id', 'username', 'email', 'is_staff', 'is_superuser', 'date_joined']
+
+
+class AdminUserViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet
+):
+    """Admin-only endpoint to manage users."""
+    permission_classes = [IsAdminUser]
+    queryset = User.objects.all().order_by('-date_joined')
+    serializer_class = AdminUserSerializer
