@@ -402,7 +402,46 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         return ManagedServerSerializer
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        server = serializer.save(owner=self.request.user)
+        # Attempt to auto-fetch the service count when connecting an existing server
+        if server.api_url and server.api_token:
+            from threading import Thread
+            Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
+
+    def perform_update(self, serializer):
+        server = serializer.save()
+        if server.api_url and server.api_token:
+            from threading import Thread
+            Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
+
+    def _sync_server_health(self, server_id):
+        """Background worker to check a server's health and service count upon connection."""
+        try:
+            server = ManagedServer.objects.get(id=server_id)
+            base = server.api_url.rstrip('/')
+
+            # Check online status
+            resp = requests.get(f"{base}/health", timeout=10)
+            server.status = ManagedServer.Status.ONLINE if resp.status_code < 500 else ManagedServer.Status.OFFLINE
+
+            # Fetch services count if online
+            if server.status == ManagedServer.Status.ONLINE:
+                api_path = "/api/v1/services/"
+                headers = _build_remote_headers(server, method="GET", path=api_path)
+                try:
+                    resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        services = data.get("results", data) if isinstance(data, dict) else data
+                        server.services_count = len(services) if isinstance(services, list) else 0
+                except requests.RequestException:
+                    pass
+
+            server.last_health_check = timezone.now()
+            server.save(update_fields=["status", "last_health_check", "services_count"])
+
+        except Exception as e:
+            logger.warning(f"Background server sync failed for {server_id}: {e}")
 
     # ── Provision New Server ─────────────────────────────────────────────
 
