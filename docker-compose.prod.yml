@@ -220,6 +220,7 @@ services:
       network: host
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
+        NODE_BUILD_MEMORY_MB: ${FRONTEND_BUILD_MEMORY_MB:-2048}
     restart: unless-stopped
     env_file: .env
     healthcheck:
