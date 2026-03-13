@@ -208,12 +208,31 @@ env_set_value() {
     local env_file="$1"
     local var_name="$2"
     local var_value="$3"
-    if grep -q "^${var_name}=" "$env_file" 2>/dev/null; then
-        # Use SOH (\x01) as sed delimiter — safe for URLs, passwords, pipes
-        sed -i "s\x01^${var_name}=.*\x01${var_name}=${var_value}\x01" "$env_file"
-    else
-        echo "${var_name}=${var_value}" >> "$env_file"
-    fi
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+replaced = False
+
+for line in lines:
+    if line.startswith(prefix) and not replaced:
+        updated.append(f"{key}={value}")
+        replaced = True
+    else:
+        updated.append(line)
+
+if not replaced:
+    updated.append(f"{key}={value}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
 }
 
 env_ensure_var() {
