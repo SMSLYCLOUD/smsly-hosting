@@ -4,6 +4,7 @@ import logging
 import secrets
 import json
 import os
+import re
 import shlex
 from typing import Dict, Any, List
 from kubernetes import client, config
@@ -361,6 +362,15 @@ class LocalAdapter(BaseCloudAdapter):
             labels['traefik.enable'] = 'false'
         else:
             labels.update(self._get_traefik_labels(name, host_rule, port, is_public))
+            api_base = str(env.get('AI_ROUTER_API_BASE', '') or '').strip()
+            if api_base and api_base not in {'/v1', 'v1'} and str(env.get('LITELLM_MASTER_KEY', '')).strip():
+                normalized_base = api_base if api_base.startswith('/') else f'/{api_base}'
+                middleware_name = f'{router_name}-api-base'
+                labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.regex'] = (
+                    f'^{re.escape(normalized_base)}/?(.*)$'
+                )
+                labels[f'traefik.http.middlewares.{middleware_name}.replacepathregex.replacement'] = '/v1/$1'
+                labels[f'traefik.http.routers.{router_name}.middlewares'] = middleware_name
             # Ensure the specific router has a high priority to beat the fallback notice
             labels[f'traefik.http.routers.{router_name}.priority'] = '1000'
 

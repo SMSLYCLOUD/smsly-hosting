@@ -26,6 +26,11 @@ from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.cloud.services.compute import ComputeService
 from apps.cloud.services.function_provisioner import FunctionProvisioner
+from apps.deployments.ai_router import (
+    DEFAULT_AI_ROUTER_API_BASE,
+    DEFAULT_AI_ROUTER_UI_BASE,
+    DEFAULT_BRAID_ALIAS,
+)
 from apps.deployments.models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from apps.deployments.models_addons import Addon, Backup
 from apps.deployments.models_backup import BackupSchedule, ServiceBackup
@@ -1824,8 +1829,9 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         v = v.replace('${LITELLM_MASTER_KEY}', os.environ.get('LITELLM_MASTER_KEY', ''))
         v = v.replace('${OLLAMA_BASE_URL}', os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434'))
         v = v.replace('${OLLAMA_MODEL}', os.environ.get('OLLAMA_MODEL', 'llama3'))
-        v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', '/api'))
-        v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', '/'))
+        v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', DEFAULT_AI_ROUTER_API_BASE))
+        v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', DEFAULT_AI_ROUTER_UI_BASE))
+        v = v.replace('${AI_ROUTER_BRAID_ALIAS}', os.environ.get('AI_ROUTER_BRAID_ALIAS', DEFAULT_BRAID_ALIAS))
 
         return v
 
@@ -1861,13 +1867,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
     if template and template.get('id') == 'ai-router':
         update_fields = []
-        ollama_base_url = render_value('${OLLAMA_BASE_URL}').strip() or 'http://ollama:11434'
-        ollama_model = render_value('${OLLAMA_MODEL}').strip() or 'llama3'
-        start_command = (
-            f"--model ollama/{ollama_model} "
-            f"--api_base {ollama_base_url} "
-            "--port 4000 --host 0.0.0.0"
-        )
+        start_command = "--port 4000 --host 0.0.0.0"
 
         if service.internal_port != 4000:
             service.internal_port = 4000
@@ -1899,6 +1899,12 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         required = {
             "LITELLM_MASTER_KEY": "${RANDOM_PASSWORD}",
             "DATABASE_URL": "${DATABASE_URL}",
+            "AI_ROUTER_API_BASE": DEFAULT_AI_ROUTER_API_BASE,
+            "AI_ROUTER_UI_BASE": DEFAULT_AI_ROUTER_UI_BASE,
+            "AI_ROUTER_AUTO_DISCOVER_MODELS": "true",
+            "AI_ROUTER_SELECTED_SERVICE_IDS": "[]",
+            "AI_ROUTER_BRAID_ALIAS": DEFAULT_BRAID_ALIAS,
+            "AI_ROUTER_BRAID_ENABLED": "true",
         }
         # Explicit Prisma migrate flag
         required["RUN_PRISMA_MIGRATE"] = "true"
@@ -1907,6 +1913,20 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         for key, val in required.items():
             if key not in existing_keys:
                 env_list.append({"key": key, "value": val, "is_secret": True})
+        existing_service_keys = {
+            str(key or "").upper()
+            for key in EnvironmentVariable.objects.filter(service=service).values_list('key', flat=True)
+        }
+        for key, val in required.items():
+            if key in existing_service_keys:
+                continue
+            EnvironmentVariable.objects.create(
+                service=service,
+                key=key,
+                value=render_value(val),
+                is_secret=key in {"LITELLM_MASTER_KEY", "DATABASE_URL"},
+            )
+            existing_service_keys.add(key)
         if update_fields:
             service.save(update_fields=update_fields)
 

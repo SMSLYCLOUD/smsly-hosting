@@ -322,6 +322,28 @@ export interface Service {
   is_public?: boolean;
 }
 
+export interface AiRouterDetectedModel {
+  service_id: string;
+  service_name: string;
+  public_domain: string;
+  model: string;
+  alias: string;
+  api_base: string;
+  mode: 'chat' | 'embedding';
+  selected: boolean;
+}
+
+export interface AiRouterConfig {
+  service_id: string;
+  api_base: string;
+  ui_base: string;
+  braid_alias: string;
+  braid_enabled: boolean;
+  selected_service_ids: string[];
+  detected_models: AiRouterDetectedModel[];
+  config_preview: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -478,6 +500,17 @@ export const servicesApi = {
   },
   patchEnvVar: async (serviceId: string, envVarId: number, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.patch(`/services/${serviceId}/env_vars/${envVarId}/`, data);
+    return response.data;
+  },
+  getAiRouterConfig: async (serviceId: string): Promise<AiRouterConfig> => {
+    const response = await api.get(`/services/${serviceId}/ai-router-config/`);
+    return response.data;
+  },
+  saveAiRouterConfig: async (
+    serviceId: string,
+    data: Pick<AiRouterConfig, 'api_base' | 'ui_base' | 'braid_alias' | 'braid_enabled' | 'selected_service_ids'>,
+  ): Promise<AiRouterConfig> => {
+    const response = await api.post(`/services/${serviceId}/ai-router-config/`, data);
     return response.data;
   },
 

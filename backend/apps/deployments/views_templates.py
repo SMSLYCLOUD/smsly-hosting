@@ -12,6 +12,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 
+from .ai_router import DEFAULT_AI_ROUTER_API_BASE, DEFAULT_AI_ROUTER_UI_BASE, DEFAULT_BRAID_ALIAS
+
 
 class TemplateSchemaSerializer(serializers.Serializer):
     """Schema placeholder for template endpoints."""
@@ -180,6 +182,9 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 v = v.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
                 v = v.replace('${DOMAIN}', service_domain)
                 v = v.replace('${AI_SENATE_URL}', os.environ.get('AI_SENATE_URL', 'https://senate.smsly.cloud'))
+                v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', DEFAULT_AI_ROUTER_API_BASE))
+                v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', DEFAULT_AI_ROUTER_UI_BASE))
+                v = v.replace('${AI_ROUTER_BRAID_ALIAS}', os.environ.get('AI_ROUTER_BRAID_ALIAS', DEFAULT_BRAID_ALIAS))
                 return v
 
             # Seed env vars from the fixture (if any).

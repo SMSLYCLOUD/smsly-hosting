@@ -22034,6 +22034,26 @@
         "is_secret": false
       },
       {
+        "key": "AI_ROUTER_AUTO_DISCOVER_MODELS",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_SELECTED_SERVICE_IDS",
+        "value": "[]",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_BRAID_ALIAS",
+        "value": "${AI_ROUTER_BRAID_ALIAS}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_BRAID_ENABLED",
+        "value": "true",
+        "is_secret": false
+      },
+      {
         "key": "AI_ROUTER_UI_BASE",
         "value": "${AI_ROUTER_UI_BASE}",
         "is_secret": false

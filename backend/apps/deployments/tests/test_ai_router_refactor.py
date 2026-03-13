@@ -112,12 +112,11 @@ def test_ai_router_runtime_defaults_are_applied():
 
     assert env_vars["DISABLE_SCHEMA_UPDATE"] == "true"
     assert env_vars["NUM_WORKERS"] == "1"
+    assert env_vars["AI_ROUTER_API_BASE"] == "/api/v1"
+    assert env_vars["AI_ROUTER_BRAID_ALIAS"] == "braid-llm"
+    assert env_vars["AI_ROUTER_SELECTED_SERVICE_IDS"] == "[]"
     assert service.internal_port == 4000
     assert service.health_check_path == "/"
     assert service.memory_mb >= 1024
     assert float(service.cpu_cores) >= 1.0
-    assert service.start_command == (
-        "--model ollama/phi3 "
-        "--api_base http://ollama.internal:11434 "
-        "--port 4000 --host 0.0.0.0"
-    )
+    assert service.start_command == "--port 4000 --host 0.0.0.0"
