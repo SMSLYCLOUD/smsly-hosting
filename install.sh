@@ -1094,18 +1094,22 @@ restart_edge_stack() {
 }
 
 refresh_runtime_services() {
-    local requested_services=(
+    local app_services_requested=(
         pgbouncer
         backend
         celery
         celery-beat
         frontend
+        frps
+    )
+    local edge_services_requested=(
         nginx
         socket-proxy
         route-fallback
         traefik
-        frps
     )
+    local app_services=()
+    local edge_services=()
     local runtime_services=()
     local failed_services=()
     local svc=""
@@ -1116,19 +1120,29 @@ refresh_runtime_services() {
     ensure_update_networks
     ensure_caddy_config_permissions
 
-    for svc in "${requested_services[@]}"; do
+    for svc in "${app_services_requested[@]}"; do
         if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
-            runtime_services+=("$svc")
+            app_services+=("$svc")
         fi
     done
+
+    for svc in "${edge_services_requested[@]}"; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+            edge_services+=("$svc")
+        fi
+    done
+
+    runtime_services=("${app_services[@]}" "${edge_services[@]}")
 
     if [ "${#runtime_services[@]}" -eq 0 ]; then
         echo -e "${YELLOW}  ⚠ No runtime services found to refresh${NC}"
         return 0
     fi
 
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${runtime_services[@]}" >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${runtime_services[@]}" >/dev/null 2>&1 || true
+    if [ "${#app_services[@]}" -gt 0 ]; then
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+    fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgbouncer-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
@@ -1142,7 +1156,7 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
-    for svc in "${runtime_services[@]}"; do
+    for svc in "${app_services[@]}"; do
         container_name="smsly-hosting-${svc}-1"
         case "$svc" in
             backend|frontend)
@@ -1156,6 +1170,24 @@ refresh_runtime_services() {
             failed_services+=("$svc")
         fi
     done
+
+    if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
+
+        ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+        ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
+        ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+        for svc in "${edge_services[@]}"; do
+            container_name="smsly-hosting-${svc}-1"
+            if ! wait_for_container_ready "$container_name" 120; then
+                failed_services+=("$svc")
+            fi
+        done
+    fi
 
     if [ "${#failed_services[@]}" -gt 0 ]; then
         echo -e "${YELLOW}  WARN Runtime refresh left services unready: ${failed_services[*]}${NC}"
