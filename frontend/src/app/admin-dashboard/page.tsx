@@ -19,6 +19,7 @@ interface PlatformEvent {
   event: string;
   user: string;
   service: string;
+  project: string;
   time: string;
 }
 
@@ -87,6 +88,7 @@ export default function AdminDashboardPage() {
             : `Status: ${d.status}`,
         user: d.triggered_by || d.user || '-',
         service: d.service_name || d.service?.name || `deploy-${String(d.id || '').slice(0, 8)}`,
+        project: d.service?.project_name || d.project_name || 'Ungrouped',
         time: d.created_at ? new Date(d.created_at).toLocaleString() : '-',
       }));
       setEvents(recentEvents);
@@ -194,6 +196,7 @@ export default function AdminDashboardPage() {
                 <tr>
                   <th className="px-6 py-3 font-medium text-muted-foreground">Event</th>
                   <th className="px-6 py-3 font-medium text-muted-foreground">User</th>
+                  <th className="px-6 py-3 font-medium text-muted-foreground">Project</th>
                   <th className="px-6 py-3 font-medium text-muted-foreground">Service</th>
                   <th className="px-6 py-3 font-medium text-muted-foreground">Time</th>
                 </tr>
@@ -201,7 +204,7 @@ export default function AdminDashboardPage() {
               <tbody className="divide-y divide-border">
                 {events.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">
+                    <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
                       No recent events
                     </td>
                   </tr>
@@ -229,12 +232,13 @@ function StatsCard({ title, value, icon, color }: any) {
   );
 }
 
-function EventRow({ type, event, user, service, time }: any) {
+function EventRow({ type, event, user, project, service, time }: any) {
   const color = type === 'success' ? 'text-emerald-500' : type === 'error' ? 'text-red-500' : 'text-blue-500';
   return (
     <tr className="hover:bg-muted/50 transition-colors">
       <td className={`px-6 py-4 font-medium ${color}`}>{event}</td>
       <td className="px-6 py-4 text-foreground">{user}</td>
+      <td className="px-6 py-4 text-muted-foreground">{project}</td>
       <td className="px-6 py-4 text-muted-foreground">{service}</td>
       <td className="px-6 py-4 text-muted-foreground">{time}</td>
     </tr>

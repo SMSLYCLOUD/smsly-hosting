@@ -332,7 +332,7 @@ const platformApps = [
     },
     {
         title: 'Team Collaboration',
-        description: 'Role based access control (RBAC), audit logs, and team workspaces for enterprise governance.',
+        description: 'Role based access control (RBAC), audit logs, and team projects for enterprise governance.',
         icon: Users,
         color: 'bg-amber-500',
     },
