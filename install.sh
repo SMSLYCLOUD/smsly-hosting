@@ -229,6 +229,277 @@ env_ensure_var() {
     fi
 }
 
+apply_env_platform_overrides() {
+    local env_file="$1"
+    local changed=false
+    local current_domain current_use_ssl current_acme_email current_wildcard current_cf_token current_public_ip
+    local desired_domain desired_use_ssl desired_acme_email desired_wildcard desired_cf_token desired_public_ip
+
+    [ -f "$env_file" ] || return 0
+
+    current_domain="$(env_get_value "$env_file" "DOMAIN")"
+    current_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    current_acme_email="$(env_get_value "$env_file" "ACME_EMAIL")"
+    current_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
+    current_cf_token="$(env_get_value "$env_file" "CLOUDFLARE_API_TOKEN")"
+    current_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ "${DOMAIN+x}" = "x" ]; then
+        desired_domain="${DOMAIN}"
+    else
+        desired_domain="${current_domain}"
+    fi
+    if [ "${USE_SSL+x}" = "x" ]; then
+        desired_use_ssl="${USE_SSL}"
+    else
+        desired_use_ssl="${current_use_ssl}"
+    fi
+    if [ "${ACME_EMAIL+x}" = "x" ]; then
+        desired_acme_email="${ACME_EMAIL}"
+    else
+        desired_acme_email="${current_acme_email}"
+    fi
+    if [ "${WILDCARD_SUBDOMAINS+x}" = "x" ]; then
+        desired_wildcard="${WILDCARD_SUBDOMAINS}"
+    else
+        desired_wildcard="${current_wildcard}"
+    fi
+    if [ "${CLOUDFLARE_API_TOKEN+x}" = "x" ]; then
+        desired_cf_token="${CLOUDFLARE_API_TOKEN}"
+    else
+        desired_cf_token="${current_cf_token}"
+    fi
+    if [ "${PUBLIC_IP+x}" = "x" ]; then
+        desired_public_ip="${PUBLIC_IP}"
+    else
+        desired_public_ip="${current_public_ip}"
+    fi
+
+    if [ -z "$desired_public_ip" ]; then
+        desired_public_ip="$(detect_public_ip)"
+    fi
+
+    if [ "$desired_domain" != "$current_domain" ]; then
+        env_set_value "$env_file" "DOMAIN" "$desired_domain"
+        changed=true
+    fi
+    if [ "$desired_use_ssl" != "$current_use_ssl" ]; then
+        env_set_value "$env_file" "USE_SSL" "$desired_use_ssl"
+        changed=true
+    fi
+    if [ "$desired_acme_email" != "$current_acme_email" ]; then
+        env_set_value "$env_file" "ACME_EMAIL" "$desired_acme_email"
+        changed=true
+    fi
+    if [ "$desired_wildcard" != "$current_wildcard" ]; then
+        env_set_value "$env_file" "WILDCARD_SUBDOMAINS" "$desired_wildcard"
+        changed=true
+    fi
+    if [ "$desired_cf_token" != "$current_cf_token" ]; then
+        env_set_value "$env_file" "CLOUDFLARE_API_TOKEN" "$desired_cf_token"
+        changed=true
+    fi
+    if [ "$desired_public_ip" != "$current_public_ip" ]; then
+        env_set_value "$env_file" "PUBLIC_IP" "$desired_public_ip"
+        changed=true
+    fi
+
+    DOMAIN="$desired_domain"
+    USE_SSL="$desired_use_ssl"
+    ACME_EMAIL="$desired_acme_email"
+    WILDCARD_SUBDOMAINS="$desired_wildcard"
+    CLOUDFLARE_API_TOKEN="$desired_cf_token"
+    PUBLIC_IP="$desired_public_ip"
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Applied platform/domain overrides to .env${NC}"
+        echo -e "${BLUE}    DOMAIN=${DOMAIN} USE_SSL=${USE_SSL} WILDCARD_SUBDOMAINS=${WILDCARD_SUBDOMAINS}${NC}"
+    fi
+}
+
+DOMAIN_SYNC_UPDATED_COUNT=0
+DOMAIN_SYNC_REDEPLOY_REQUIRED=0
+DOMAIN_SYNC_SERVICE_IDS=""
+
+sync_platform_domain_state() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    local sync_domain sync_use_ssl sync_wildcard sync_cf_token sync_public_ip
+    local sync_json=""
+
+    [ -f "$env_file" ] || return 0
+
+    sync_domain="$(env_get_value "$env_file" "DOMAIN")"
+    sync_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    sync_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
+    sync_cf_token="$(env_get_value "$env_file" "CLOUDFLARE_API_TOKEN")"
+    sync_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    [ -n "$sync_public_ip" ] || sync_public_ip="$(detect_public_ip)"
+
+    echo -e "${BLUE}  → Syncing PlatformConfig + public domains from installer state...${NC}"
+    sync_json="$(
+        docker compose -f "$COMPOSE_FILE" exec -T \
+            -e SMSLY_SYNC_DOMAIN="$sync_domain" \
+            -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
+            -e SMSLY_SYNC_WILDCARD="$sync_wildcard" \
+            -e SMSLY_SYNC_CF_TOKEN="$sync_cf_token" \
+            -e SMSLY_SYNC_PUBLIC_IP="$sync_public_ip" \
+            backend python manage.py shell <<'PY'
+import json
+import os
+
+from apps.deployments.models import EnvironmentVariable, PlatformConfig, Service
+
+
+def parse_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_platform_domain(value: str) -> str:
+    raw = str(value or "").strip().lower().rstrip(".")
+    if raw in {"", "localhost", "127.0.0.1"}:
+        return ""
+    parts = raw.split(".")
+    if len(parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in parts):
+        return ""
+    return raw
+
+
+def rewrite_public_domain(current_domain: str, old_base: str, new_base: str):
+    current = str(current_domain or "").strip().lower().rstrip(".")
+    old_base = str(old_base or "").strip().lower().rstrip(".")
+    new_base = str(new_base or "").strip().lower().rstrip(".")
+    if not current or not old_base or not new_base or old_base == new_base:
+        return None
+    if current == old_base:
+        return new_base
+    suffix = f".{old_base}"
+    if not current.endswith(suffix):
+        return None
+    prefix = current[:-len(suffix)].rstrip(".")
+    return f"{prefix}.{new_base}" if prefix else new_base
+
+
+cfg = PlatformConfig.load()
+old_base = Service.default_public_base_domain()
+original_domain = (cfg.domain or "").strip().lower().rstrip(".")
+
+cfg.domain = normalize_platform_domain(os.environ.get("SMSLY_SYNC_DOMAIN", ""))
+cfg.use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
+cfg.wildcard_subdomains = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
+cfg.cloudflare_api_token = str(os.environ.get("SMSLY_SYNC_CF_TOKEN", "") or "").strip()
+cfg.server_ip = str(os.environ.get("SMSLY_SYNC_PUBLIC_IP", "") or "").strip() or None
+cfg.save()
+
+new_base = (cfg.domain or "").strip().lower().rstrip(".")
+host_keys = ("ALLOWED_HOSTS", "DJANGO_ALLOWED_HOSTS", "MARKETER_ALLOWED_HOSTS")
+updated = 0
+service_ids = []
+
+if new_base and new_base != old_base:
+    for service in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain="").iterator():
+        current_domain = str(service.public_domain or "").strip().lower().rstrip(".")
+        next_domain = rewrite_public_domain(current_domain, old_base, new_base)
+        if not next_domain or next_domain == current_domain:
+            continue
+        if Service.objects.exclude(pk=service.pk).filter(public_domain=next_domain).exists():
+            continue
+
+        service.public_domain = next_domain
+        service.save(update_fields=["public_domain"])
+        EnvironmentVariable.objects.filter(service=service, key="PUBLIC_DOMAIN").update(value=next_domain)
+
+        for env_var in EnvironmentVariable.objects.filter(service=service, key__in=host_keys):
+            value = str(env_var.value or "")
+            if current_domain in value and next_domain not in value:
+                env_var.value = value.replace(current_domain, next_domain)
+                env_var.save(update_fields=["value"])
+
+        updated += 1
+        service_ids.append(str(service.id))
+
+result = {
+    "domain": cfg.domain,
+    "use_ssl": cfg.use_ssl,
+    "wildcard_subdomains": cfg.wildcard_subdomains,
+    "server_ip": cfg.server_ip or "",
+    "old_base_domain": old_base,
+    "original_domain": original_domain,
+    "updated_service_domains": updated,
+    "redeploy_required": bool(updated),
+    "service_ids": service_ids,
+}
+print(json.dumps(result))
+PY
+    )"
+
+    sync_json="$(echo "$sync_json" | tr -d '\r' | tail -n 1)"
+    if [ -z "$sync_json" ]; then
+        echo -e "${YELLOW}  ⚠ PlatformConfig sync did not return a result. Continuing with host-level config.${NC}"
+        return 0
+    fi
+
+    DOMAIN_SYNC_UPDATED_COUNT="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('updated_service_domains', 0))" 2>/dev/null || echo 0)"
+    DOMAIN_SYNC_REDEPLOY_REQUIRED="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(1 if json.load(sys.stdin).get('redeploy_required') else 0)" 2>/dev/null || echo 0)"
+    DOMAIN_SYNC_SERVICE_IDS="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(','.join(json.load(sys.stdin).get('service_ids', [])))" 2>/dev/null || true)"
+
+    echo -e "${GREEN}  ✓ PlatformConfig synced: domain=$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('domain', ''))" 2>/dev/null)${NC}"
+    if [ "${DOMAIN_SYNC_UPDATED_COUNT:-0}" -gt 0 ]; then
+        echo -e "${GREEN}  ✓ Rewrote ${DOMAIN_SYNC_UPDATED_COUNT} existing service public domain(s)${NC}"
+    fi
+}
+
+queue_active_service_redeploys() {
+    local reason="${1:-Installer-triggered redeploy}"
+    local service_ids="${2:-}"
+
+    docker compose -f "$COMPOSE_FILE" exec -T \
+        -e SMSLY_REDEPLOY_REASON="$reason" \
+        -e SMSLY_SERVICE_IDS="$service_ids" \
+        backend python manage.py shell <<'PY'
+import os
+import traceback
+
+from django.utils import timezone
+
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, Service
+from apps.deployments.tasks import smart_deploy_task
+
+
+service_ids = [value.strip() for value in os.environ.get("SMSLY_SERVICE_IDS", "").split(",") if value.strip()]
+reason = os.environ.get("SMSLY_REDEPLOY_REASON", "Installer-triggered redeploy")
+provider = CloudProvider.objects.filter(is_active=True).first()
+if not provider:
+    print("WARN: No active cloud provider")
+else:
+    try:
+        queryset = Service.objects.filter(id__in=service_ids) if service_ids else Service.objects.all()
+        count = 0
+        for svc in queryset:
+            dep = svc.deployments.filter(status="ACTIVE").order_by("-created_at").first()
+            if not dep or not dep.commit_hash:
+                continue
+            svc.deployments.filter(status="ACTIVE").update(
+                status="CANCELLED",
+                finished_at=timezone.now(),
+            )
+            new_dep = Deployment.objects.create(
+                service=svc,
+                status="QUEUED",
+                commit_hash=dep.commit_hash,
+                commit_message=reason,
+            )
+            smart_deploy_task.delay(str(new_dep.id), str(provider.id), skip_review=True)
+            count += 1
+            print(f"  Queued: {svc.name} ({dep.commit_hash[:7]})")
+        print(f"OK: {count} service(s) queued for redeploy")
+    except Exception as exc:  # pragma: no cover - installer runtime path
+        print(f"WARN: {exc}")
+        traceback.print_exc()
+PY
+}
+
 ensure_env_runtime_defaults() {
     local env_file="$1"
     local redis_password=""
@@ -419,6 +690,9 @@ case "${1:-}" in
         echo "  --debug            Print deep runtime diagnostics (containers, networks, health, logs)"
         echo "  --verify           Run endpoint verification only (no changes)"
         echo "  --wipe             Delete existing install artifacts (for fresh VPS reset)"
+        echo ""
+        echo "  Domain change:     sudo DOMAIN=new.example.com USE_SSL=true WILDCARD_SUBDOMAINS=true \\"
+        echo "                           CLOUDFLARE_API_TOKEN=... bash install.sh --update"
         exit 0
         ;;
 esac
@@ -764,6 +1038,93 @@ restart_edge_stack() {
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
 
+refresh_runtime_services() {
+    local requested_services=(
+        pgbouncer
+        backend
+        celery
+        celery-beat
+        frontend
+        nginx
+        socket-proxy
+        route-fallback
+        traefik
+        frps
+    )
+    local runtime_services=()
+    local failed_services=()
+    local svc=""
+    local container_name=""
+    local timeout_seconds=120
+
+    echo -e "${BLUE}  -> Performing clean runtime refresh (non-data services only)...${NC}"
+    ensure_update_networks
+    ensure_caddy_config_permissions
+
+    for svc in "${requested_services[@]}"; do
+        if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
+            runtime_services+=("$svc")
+        fi
+    done
+
+    if [ "${#runtime_services[@]}" -eq 0 ]; then
+        echo -e "${YELLOW}  ⚠ No runtime services found to refresh${NC}"
+        return 0
+    fi
+
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${runtime_services[@]}" >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${runtime_services[@]}" >/dev/null 2>&1 || true
+
+    ensure_container_on_network "smsly-net" "smsly-hosting-pgbouncer-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-celery-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+    for svc in "${runtime_services[@]}"; do
+        container_name="smsly-hosting-${svc}-1"
+        case "$svc" in
+            backend|frontend)
+                timeout_seconds=180
+                ;;
+            *)
+                timeout_seconds=120
+                ;;
+        esac
+        if ! wait_for_container_ready "$container_name" "$timeout_seconds"; then
+            failed_services+=("$svc")
+        fi
+    done
+
+    if [ "${#failed_services[@]}" -gt 0 ]; then
+        echo -e "${YELLOW}  WARN Runtime refresh left services unready: ${failed_services[*]}${NC}"
+        docker compose -f "$COMPOSE_FILE" ps "${failed_services[@]}" 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 "${failed_services[@]}" 2>/dev/null || true
+        return 1
+    fi
+
+    systemctl restart caddy >/dev/null 2>&1 || true
+    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
+    echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
+}
+
+safe_refresh_runtime_services() {
+    if refresh_runtime_services; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}  -> Runtime refresh incomplete. Running one recovery pass...${NC}"
+    recover_runtime_stack || true
+    refresh_runtime_services
+}
+
 wait_for_container_ready() {
     local container_name="$1"
     local timeout_seconds="${2:-180}"
@@ -1047,6 +1408,14 @@ if [ -n "$UPDATE_MODE" ]; then
     git fetch origin main
     git reset --hard origin/main
 
+    echo -e "${BLUE}  → Applying platform/domain overrides...${NC}"
+    apply_env_platform_overrides "$INSTALL_DIR/.env"
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}x .env validation failed after applying overrides. Fix the values and retry.${NC}"
+        exit 1
+    fi
+
     # Clean up stash marker (pull succeeded, we commit to the new code)
     rm -f "$INSTALL_DIR/.git-stash-marker"
 
@@ -1212,6 +1581,8 @@ if not created and not cp.is_active:
     cp.save()
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     echo -e "${GREEN}  ✓ Cloud provider ready${NC}"
+
+    sync_platform_domain_state "$INSTALL_DIR/.env"
 
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
@@ -1434,45 +1805,20 @@ print('Stripped tls blocks')
         fi
     fi
 
-    # ─── Auto-redeploy active services (only if platform code changed) ──
-    # H6 fix: Only redeploy if git detected actual changes (prevents unnecessary deploys)
+    safe_refresh_runtime_services
+
+    # ─── Auto-redeploy active services when platform code or domain state changes ──
     GIT_CHANGES="$(cd "$INSTALL_DIR" && git diff HEAD@{1} --name-only 2>/dev/null | head -5 || true)"
     if [ -n "$GIT_CHANGES" ]; then
         echo -e "${BLUE}  → Auto-redeploying active services (platform code changed)...${NC}"
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-import traceback
-try:
-    from apps.deployments.models import Service, Deployment
-    from apps.cloud.models import CloudProvider
-    from apps.deployments.tasks import smart_deploy_task
-    from django.utils import timezone
-    provider = CloudProvider.objects.filter(is_active=True).first()
-    if not provider:
-        print('WARN: No active cloud provider')
-    else:
-        count = 0
-        for svc in Service.objects.all():
-            dep = svc.deployments.filter(status='ACTIVE').order_by('-created_at').first()
-            if not dep or not dep.commit_hash:
-                continue
-            svc.deployments.filter(status='ACTIVE').update(
-                status='CANCELLED', finished_at=timezone.now())
-            new_dep = Deployment.objects.create(
-                service=svc,
-                status='QUEUED',
-                commit_hash=dep.commit_hash,
-                commit_message='Platform update auto-redeploy',
-            )
-            smart_deploy_task.delay(str(new_dep.id), str(provider.id), skip_review=True)
-            count += 1
-            print(f'  Queued: {svc.name} ({dep.commit_hash[:7]})')
-        print(f'OK: {count} service(s) queued for redeploy')
-except Exception as e:
-    print(f'WARN: {e}')
-    traceback.print_exc()
-" 2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+        queue_active_service_redeploys "Platform update auto-redeploy" "" \
+            2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+    elif [ "${DOMAIN_SYNC_REDEPLOY_REQUIRED:-0}" = "1" ]; then
+        echo -e "${BLUE}  → Auto-redeploying rewritten services (platform domain changed)...${NC}"
+        queue_active_service_redeploys "Platform domain change auto-redeploy" "${DOMAIN_SYNC_SERVICE_IDS}" \
+            2>/dev/null || echo -e "${YELLOW}  ⚠ Domain-change redeploy skipped (backend not ready)${NC}"
     else
-        echo -e "${GREEN}  ✓ No platform code changes detected — skipping auto-redeploy${NC}"
+        echo -e "${GREEN}  ✓ No platform code or domain-driven redeploys required${NC}"
     fi
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
@@ -2108,8 +2454,7 @@ docker network create smsly-proxy 2>/dev/null || true
 # Caddy (step 7) handles public-facing HTTP/HTTPS termination.
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
-mkdir -p "$INSTALL_DIR/caddy-config"
-chmod 777 "$INSTALL_DIR/caddy-config"
+ensure_caddy_config_permissions
 echo -e "${BLUE}  → Starting App Stack...${NC}"
 docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 
@@ -2189,6 +2534,8 @@ echo -e "${BLUE}  → Collecting Static Files...${NC}"
 # Fix volume ownership — Docker creates named volumes as root
 docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
 docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+
+sync_platform_domain_state "$INSTALL_DIR/.env"
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
@@ -2480,6 +2827,8 @@ else
     echo -e "${RED}  ✗ Caddy failed to start. Check: journalctl -u caddy --no-pager -n 20${NC}"
     exit 1
 fi
+
+safe_refresh_runtime_services
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
