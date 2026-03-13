@@ -1277,6 +1277,16 @@ export const coreApi = {
     await api.delete(`/api-keys/${id}/`);
   },
 
+  // Admin Users Management
+  adminGetUsers: async (): Promise<any[]> => {
+    const res = await api.get('/admin/users/');
+    return Array.isArray(res.data) ? res.data : res.data.results || [];
+  },
+  adminUpdateUser: async (id: number, data: any): Promise<any> => {
+    const res = await api.patch(`/admin/users/${id}/`, data);
+    return res.data;
+  },
+
   // Notifications
   getNotifications: async (): Promise<any[]> => {
     const res = await api.get('/notifications/');
