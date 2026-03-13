@@ -113,6 +113,27 @@ def _normalize_request_domain(raw_domain: str):
         return None, str(exc)
 
 
+def _rewrite_public_domain(current_domain: str, old_base_domain: str, new_base_domain: str) -> str | None:
+    """Rewrite a service public domain from one platform base domain to another."""
+    current = str(current_domain or "").strip().lower().rstrip(".")
+    old_base = str(old_base_domain or "").strip().lower().rstrip(".")
+    new_base = str(new_base_domain or "").strip().lower().rstrip(".")
+    if not current or not old_base or not new_base or old_base == new_base:
+        return None
+
+    if current == old_base:
+        return new_base
+
+    suffix = f".{old_base}"
+    if not current.endswith(suffix):
+        return None
+
+    prefix = current[:-len(suffix)].rstrip(".")
+    if not prefix:
+        return new_base
+    return f"{prefix}.{new_base}"
+
+
 def _resolve_domain_ips(hostname: str) -> set:
     """Resolve host to a set of IPs (A/AAAA). Returns empty set on errors."""
     import socket
@@ -248,7 +269,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ).start()
 
     def perform_destroy(self, instance):
-        """Stop all deployments and audit-log before deleting the service."""
+        """Stop active deployments, audit-log, delete the service, and resync routing."""
         # Cancel any active deployments
         instance.deployments.filter(
             status__in=[
@@ -266,6 +287,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             target=f'Service: {instance.name}',
             metadata={'service_id': str(instance.id), 'service_name': instance.name},
         ).save()
+        instance.delete()
+        self._sync_caddy()
 
     @action(detail=True, methods=["post"], url_path="hide-public-domain")
     def hide_public_domain(self, request, pk=None):
@@ -287,8 +310,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service.save(update_fields=["public_domain_hidden"])
         _ = self._sync_caddy()
         return Response({"message": "Public domain unhidden", "public_domain_hidden": False})
-
-        instance.delete()
 
     # --- Nested Resources: Deployments ---
     @action(detail=True, methods=['get'])
@@ -2282,9 +2303,53 @@ class DomainConfigView(GenericAPIView):
             'updated_at': config.updated_at,
         })
 
+    @staticmethod
+    def _rewrite_service_public_domains(old_base_domain: str, new_base_domain: str) -> int:
+        """
+        Rewrite generated service public domains onto the new platform base domain.
+
+        Only domains currently using the previous platform base are rewritten.
+        Custom domains stay untouched.
+        """
+        updated = 0
+        host_keys = ("ALLOWED_HOSTS", "DJANGO_ALLOWED_HOSTS", "MARKETER_ALLOWED_HOSTS")
+        for service in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain="").iterator():
+            current_domain = str(service.public_domain or "").strip().lower().rstrip(".")
+            next_domain = _rewrite_public_domain(current_domain, old_base_domain, new_base_domain)
+            if not next_domain or next_domain == current_domain:
+                continue
+
+            if Service.objects.exclude(pk=service.pk).filter(public_domain=next_domain).exists():
+                logger.warning(
+                    "Skipping public domain rewrite for service=%s due to conflict on %s",
+                    service.id,
+                    next_domain,
+                )
+                continue
+
+            service.public_domain = next_domain
+            service.save(update_fields=["public_domain"])
+
+            EnvironmentVariable.objects.filter(
+                service=service,
+                key="PUBLIC_DOMAIN",
+            ).update(value=next_domain)
+
+            for env_var in EnvironmentVariable.objects.filter(service=service, key__in=host_keys):
+                value = str(env_var.value or "")
+                if current_domain in value and next_domain not in value:
+                    env_var.value = value.replace(current_domain, next_domain)
+                    env_var.save(update_fields=["value"])
+
+            updated += 1
+
+        return updated
+
     def put(self, request):
         config = PlatformConfig.load()
         data = request.data
+        previous_base_domain = Service.default_public_base_domain()
+        original_domain = (config.domain or "").strip().lower().rstrip(".")
 
         # Update fields
         if 'domain' in data:
@@ -2320,6 +2385,26 @@ class DomainConfigView(GenericAPIView):
             )
 
         config.save()
+
+        updated_service_domains = 0
+        new_domain = (config.domain or "").strip().lower().rstrip(".")
+        if new_domain and new_domain != previous_base_domain:
+            updated_service_domains = self._rewrite_service_public_domains(
+                previous_base_domain,
+                new_domain,
+            )
+            if updated_service_domains:
+                logger.info(
+                    "Rewrote %s service public domains from %s to %s",
+                    updated_service_domains,
+                    previous_base_domain,
+                    new_domain,
+                )
+        elif original_domain and not new_domain:
+            logger.info(
+                "Platform domain cleared from %s; existing service public domains were left unchanged",
+                original_domain,
+            )
 
         # Generate and apply Caddyfile
         try:
@@ -2366,6 +2451,8 @@ class DomainConfigView(GenericAPIView):
             'message': 'Domain configuration updated and Caddyfile applied.',
             'caddy_status': config.caddy_status,
             'cloudflare_api_token_set': bool(config.cloudflare_api_token),
+            'updated_service_domains': updated_service_domains,
+            'redeploy_required': bool(updated_service_domains),
             'caddyfile_preview': caddyfile_content,
         })
 

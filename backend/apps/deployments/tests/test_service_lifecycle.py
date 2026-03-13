@@ -10,6 +10,7 @@ Validates:
 """
 from unittest.mock import patch
 from django.contrib.auth.models import User
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework import status as http_status
@@ -17,6 +18,15 @@ from apps.deployments.models import Service, Deployment
 from apps.cloud.models import CloudProvider
 
 
+TEST_CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "service-lifecycle-tests",
+    }
+}
+
+
+@override_settings(CACHES=TEST_CACHES)
 class ServiceCRUDTests(APITestCase):
     """Tests for service Create/Read/Update/Delete operations."""
 
@@ -89,7 +99,8 @@ class ServiceCRUDTests(APITestCase):
         svc.refresh_from_db()
         self.assertEqual(svc.name, 'updated-name')
 
-    def test_delete_service(self):
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    def test_delete_service(self, _sync_mock):
         """Deleting a service should remove it from DB."""
         svc = Service.objects.create(
             name='delete-me',
@@ -103,6 +114,7 @@ class ServiceCRUDTests(APITestCase):
         self.assertFalse(Service.objects.filter(name='delete-me').exists())
 
 
+@override_settings(CACHES=TEST_CACHES)
 class ServiceOwnershipTests(APITestCase):
     """Test that services are scoped to their owner."""
 
@@ -144,6 +156,7 @@ class ServiceOwnershipTests(APITestCase):
         self.assertIn('user1-svc', names)
 
 
+@override_settings(CACHES=TEST_CACHES)
 class ServiceDeployActionTests(APITestCase):
     """Test the /services/{id}/deploy/ action endpoint."""
 
@@ -248,6 +261,7 @@ class ServiceDeployActionTests(APITestCase):
         self.assertEqual(deploy.status, Deployment.Status.FAILED)
 
 
+@override_settings(CACHES=TEST_CACHES)
 class ServiceDeploymentCascadeTests(APITestCase):
     """Test that deleting a service cascades to deployments."""
 
@@ -282,7 +296,8 @@ class ServiceDeploymentCascadeTests(APITestCase):
             commit_hash='v2'
         )
 
-    def test_delete_service_cascades_deployments(self):
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    def test_delete_service_cascades_deployments(self, _sync_mock):
         """Deleting a service should also delete its deployments."""
         svc_id = self.service.id
         self.assertEqual(Deployment.objects.filter(service_id=svc_id).count(), 2)
