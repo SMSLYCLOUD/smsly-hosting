@@ -29,19 +29,11 @@ http {
         ''      $scheme;
     }
 
-    upstream backend {
-        server 127.0.0.1:${BACKEND_PORT};
-        keepalive 16;
-    }
-
-    upstream frontend {
-        server 127.0.0.1:${FRONTEND_PORT};
-        keepalive 16;
-    }
-
     server {
         listen ${PORT};
         server_name _;
+        set $backend_upstream http://127.0.0.1:${BACKEND_PORT};
+        set $frontend_upstream http://127.0.0.1:${FRONTEND_PORT};
 
         # Nginx-only health endpoint (does not depend on upstreams)
         location = /nginx-health {
@@ -66,7 +58,7 @@ http {
         # API
         location /api/ {
             limit_req zone=api_limit burst=20 nodelay;
-            proxy_pass http://backend;
+            proxy_pass $backend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -78,7 +70,7 @@ http {
 
         # WebSockets (Django Channels)
         location /ws/ {
-            proxy_pass http://backend;
+            proxy_pass $backend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -91,7 +83,7 @@ http {
         }
 
         location /accounts/ {
-            proxy_pass http://backend;
+            proxy_pass $backend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -100,7 +92,7 @@ http {
         }
 
         location /admin/ {
-            proxy_pass http://backend;
+            proxy_pass $backend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -110,7 +102,7 @@ http {
 
         # Health check (backend)
         location /health {
-            proxy_pass http://backend;
+            proxy_pass $backend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -121,7 +113,7 @@ http {
 
         # Frontend
         location / {
-            proxy_pass http://frontend;
+            proxy_pass $frontend_upstream;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
