@@ -178,3 +178,31 @@ class LocalAdapterHealthcheckCommandTests(SimpleTestCase):
             create_kwargs["command"],
             ["--model", "ollama/phi3", "--api_base", "http://ollama:11434", "--port", "4000"],
         )
+
+    @patch.object(LocalAdapter, "_wait_container_healthy", return_value=True)
+    @patch("apps.deployments.models.PlatformConfig.load")
+    def test_ai_router_api_base_adds_rewrite_middleware(self, mock_load, _wait_mock):
+        adapter, docker_client, _existing = self._build_adapter_with_mock_docker()
+        mock_load.return_value = SimpleNamespace(use_ssl=True)
+
+        adapter._deploy_docker(
+            name="ai-router",
+            image="ghcr.io/berriai/litellm:main-stable",
+            env={
+                "PORT": "4000",
+                "PUBLIC_DOMAIN": "ai-router.example.com",
+                "AI_ROUTER_API_BASE": "/api/v1",
+                "LITELLM_MASTER_KEY": "test-key",
+            },
+        )
+
+        labels = docker_client.containers.create.call_args.kwargs["labels"]
+        self.assertEqual(labels["traefik.http.routers.ai-router.middlewares"], "ai-router-api-base")
+        self.assertEqual(
+            labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.regex"],
+            r"^/api/v1/?(.*)$",
+        )
+        self.assertEqual(
+            labels["traefik.http.middlewares.ai-router-api-base.replacepathregex.replacement"],
+            "/v1/$1",
+        )

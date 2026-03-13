@@ -1,6 +1,6 @@
 import { 
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, 
-    Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network,
+    Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
     HeartPulse, Cpu, BarChart3, Box
 } from 'lucide-react';
 import Link from 'next/link';
@@ -17,6 +17,7 @@ interface ServiceLayoutProps {
 
 export function ServiceLayout({ service, activeTab, setActiveTab, children }: ServiceLayoutProps) {
     const router = useRouter();
+    const isAiRouter = (service.docker_image || '').includes('ghcr.io/berriai/litellm') || service.name.startsWith('ai-router');
 
     const tabs = [
         { id: 'overview', label: 'Overview', icon: Activity },
@@ -27,6 +28,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'addons', label: 'Addons', icon: Puzzle },
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
+        ...(isAiRouter ? [{ id: 'router', label: 'AI Router', icon: Route }] : []),
         { id: 'domains', label: 'Domains', icon: Globe },
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },
         { id: 'resources', label: 'Resources', icon: Cpu },

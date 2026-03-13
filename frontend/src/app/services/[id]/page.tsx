@@ -20,6 +20,7 @@ import { AddonsTab } from '@/components/addons/AddonsTab';
 import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
 import { BuildTab } from '@/components/settings/BuildTab';
+import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
@@ -510,6 +511,13 @@ export default function ServiceDetailPage() {
             {activeTab === 'build' && <BuildTab service={service} />}
 
             {activeTab === 'env' && <EnvVarsTab serviceId={service.id} />}
+
+            {activeTab === 'router' && (
+                <AiRouterTab
+                    serviceId={service.id}
+                    serviceDomain={service.public_domain || `${service.name}.cloud.smsly.cloud`}
+                />
+            )}
 
             {activeTab === 'domains' && <DomainsTab service={service} />}
 
