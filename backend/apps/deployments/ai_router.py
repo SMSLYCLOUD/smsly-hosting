@@ -30,6 +30,33 @@ class OllamaTarget:
     api_base: str
     mode: str
     selected: bool
+    min_ram_gb: int | None = None
+    has_enough_ram: bool = True
+
+
+def _required_ram_gb_for_model(model_name: str) -> int | None:
+    """
+    Best-effort RAM floor for common Ollama models.
+
+    This protects the AI router from auto-selecting backends that are known to
+    OOM under typical quant defaults, which manifests as 5xx from LiteLLM.
+    """
+
+    key = str(model_name or "").strip().lower()
+    if not key:
+        return None
+
+    # Keep this list small + conservative; templates can still override by
+    # explicitly selecting targets via AI_ROUTER_SELECTED_SERVICE_IDS.
+    known: dict[str, int] = {
+        "phi3": 4,
+        "nomic-embed-text": 2,
+        "qwen2.5": 8,
+        "llama3.1": 8,
+        "deepseek-r1": 8,
+        "mixtral": 24,
+    }
+    return known.get(key)
 
 
 def _env_map(service: Service) -> dict[str, str]:
@@ -84,6 +111,23 @@ def _target_from_service(service: Service, selected_ids: set[str]) -> OllamaTarg
 
     port = int(service.internal_port or 11434 or 11434)
     alias = f"ollama/{model}"
+    required_ram_gb = _required_ram_gb_for_model(model)
+    try:
+        svc_mem_mb = int(service.memory_mb or 0)
+    except (TypeError, ValueError):
+        svc_mem_mb = 0
+    has_enough_ram = True
+    if required_ram_gb is not None:
+        has_enough_ram = svc_mem_mb >= required_ram_gb * 1024
+
+    # If the user has never explicitly chosen models for this router,
+    # auto-disable targets that are likely to OOM.
+    auto_selected = (str(service.id) in selected_ids) if selected_ids else True
+    if selected_ids:
+        selected = auto_selected
+    else:
+        selected = auto_selected and has_enough_ram
+
     return OllamaTarget(
         service_id=str(service.id),
         service_name=service.name,
@@ -92,7 +136,9 @@ def _target_from_service(service: Service, selected_ids: set[str]) -> OllamaTarg
         alias=alias,
         api_base=f"http://{service.name}:{port}",
         mode="embedding" if is_embedding_model(model) else "chat",
-        selected=(str(service.id) in selected_ids) if selected_ids else True,
+        selected=selected,
+        min_ram_gb=required_ram_gb,
+        has_enough_ram=has_enough_ram,
     )
 
 
