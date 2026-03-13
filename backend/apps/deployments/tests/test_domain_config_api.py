@@ -4,12 +4,22 @@
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.deployments.models import PlatformConfig
+from apps.deployments.models import EnvironmentVariable, PlatformConfig, Service
 
 
+TEST_CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "domain-config-tests",
+    }
+}
+
+
+@override_settings(CACHES=TEST_CACHES)
 class DomainConfigApiTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_superuser(
@@ -83,3 +93,58 @@ class DomainConfigApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         cfg = PlatformConfig.load()
         self.assertEqual(cfg.cloudflare_api_token, "existing-token")
+
+    @patch("services.caddy_manager.apply_caddyfile", return_value={"ok": True, "message": "ok"})
+    @patch("services.caddy_manager.generate_caddyfile", return_value=":80 { reverse_proxy localhost:8090 }")
+    def test_put_rewrites_existing_service_public_domains(self, _gen_mock, _apply_mock):
+        service = Service.objects.create(name="marketer", owner=self.admin)
+        original_public_domain = service.public_domain
+        EnvironmentVariable.objects.create(
+            service=service,
+            key="PUBLIC_DOMAIN",
+            value=service.public_domain,
+            is_secret=False,
+        )
+        EnvironmentVariable.objects.create(
+            service=service,
+            key="ALLOWED_HOSTS",
+            value=f"localhost,{service.public_domain}",
+            is_secret=False,
+        )
+        external = Service.objects.create(
+            name="custom-domain-service",
+            owner=self.admin,
+            public_domain="kept.external.example.com",
+        )
+
+        response = self.client.put(
+            self.url,
+            {
+                "domain": "pcloud.linadeluxe.com",
+                "use_ssl": True,
+                "wildcard_subdomains": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["updated_service_domains"], 1)
+        self.assertTrue(response.data["redeploy_required"])
+
+        service.refresh_from_db()
+        external.refresh_from_db()
+        expected_public_domain = original_public_domain.replace(
+            ".cloud.smsly.cloud",
+            ".pcloud.linadeluxe.com",
+        )
+        self.assertEqual(service.public_domain, expected_public_domain)
+        self.assertEqual(external.public_domain, "kept.external.example.com")
+
+        public_domain_env = EnvironmentVariable.objects.get(service=service, key="PUBLIC_DOMAIN")
+        self.assertEqual(public_domain_env.value, service.public_domain)
+
+        allowed_hosts_env = EnvironmentVariable.objects.get(service=service, key="ALLOWED_HOSTS")
+        self.assertEqual(
+            allowed_hosts_env.value,
+            f"localhost,{service.public_domain}",
+        )
