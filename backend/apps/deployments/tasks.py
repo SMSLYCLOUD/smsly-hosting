@@ -1828,6 +1828,22 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     # Provision addons
     required_addons = (template.get('required_addons') or []) if template else []
 
+    # Honor template minimum RAM hints (e.g. Ollama models).
+    if template:
+        try:
+            min_ram_gb = int(template.get("min_ram_gb") or 0)
+        except (TypeError, ValueError):
+            min_ram_gb = 0
+        if min_ram_gb > 0:
+            min_ram_mb = min_ram_gb * 1024
+            try:
+                current_mb = int(service.memory_mb or 0)
+            except (TypeError, ValueError):
+                current_mb = 0
+            if current_mb < min_ram_mb:
+                service.memory_mb = min_ram_mb
+                service.save(update_fields=["memory_mb"])
+
     # Template-specific minimum requirements / defaults
     if template and template.get('id') == 'khoj':
         # Khoj requires pgvector; ensure Postgres addon is present
