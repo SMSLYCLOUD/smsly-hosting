@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, Mail, Play, GitCompare, Users } from 'lucide-react';
+import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { ModeToggle } from '@/components/ui/mode-toggle';
@@ -95,6 +95,7 @@ export function Navbar() {
     icon: any;
     tier: 'primary' | 'secondary' | 'tertiary';
   }> = [
+    { href: '/client', label: 'Client Area', icon: Home, tier: 'primary' },
     { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
     { href: '/projects', label: 'Projects', icon: FolderKanban, tier: 'primary' },
     { href: '/services', label: 'Services', icon: Layout, tier: 'primary' },
@@ -117,7 +118,7 @@ export function Navbar() {
 
   if (user?.is_staff) {
     authLinks.push({ href: '/backups', label: 'Backups', icon: Archive, tier: 'tertiary' });
-    authLinks.push({ href: '/admin-dashboard', label: 'Admin', icon: Shield, tier: 'tertiary' });
+    authLinks.push({ href: '/admin-dashboard/users', label: 'Admin', icon: Shield, tier: 'tertiary' });
   }
 
   const primaryAuthLinks = authLinks.filter((link) => link.tier === 'primary');
@@ -135,7 +136,7 @@ export function Navbar() {
       <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6 lg:px-8">
 
         {/* Logo - Left */}
-        <Link href={user ? '/dashboard' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
+        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
             <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={28} height={28} className="h-7 w-7 shadow-sm rounded-lg" priority />
             {!user && <span className="font-bold text-lg tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
         </Link>

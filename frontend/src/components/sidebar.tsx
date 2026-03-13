@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio, Scaling, ArrowLeftRight
+  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -17,6 +17,7 @@ export function Sidebar() {
   const [servers, setServers] = React.useState<ManagedServer[]>([]);
   const [activeServer, setActiveServer] = React.useState<string | null>(null);
   const [showSelector, setShowSelector] = React.useState(false);
+  const [user, setUser] = React.useState<{is_staff?: boolean} | null>(null);
   const [infraOpen, setInfraOpen] = React.useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("smsly_infra_open") !== "false";
@@ -28,6 +29,15 @@ export function Sidebar() {
     serversApi.list().then(setServers).catch(() => {});
     if (typeof window !== "undefined") {
       setActiveServer(localStorage.getItem("smsly_active_server"));
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        fetch(`${window.location.origin}/api/v1/auth/user/`, {
+          headers: { 'Authorization': `Token ${token}` },
+        })
+        .then(res => res.json())
+        .then(data => setUser({ is_staff: Boolean(data?.is_staff || data?.is_superuser) }))
+        .catch(() => setUser(null));
+      }
     }
   }, []);
 
@@ -65,6 +75,7 @@ export function Sidebar() {
   // ── Grouped navigation (3 sections) ──────────────────────
 
   const mainRoutes = [
+    { label: "Client Area", icon: LayoutDashboard, href: "/client" },
     { label: "Dashboard",   icon: LayoutDashboard, href: "/dashboard" },
     { label: "Services",    icon: Box,             href: "/services" },
     { label: "Deployments", icon: Rocket,          href: "/deployments" },
@@ -83,6 +94,11 @@ export function Sidebar() {
     { label: "New Project", icon: PlusCircle, href: "/new" },
     { label: "Settings",    icon: Settings,   href: "/settings" },
   ];
+
+  if (user?.is_staff) {
+    utilRoutes.push({ label: "User Admin", icon: ShieldCheck, href: "/admin-dashboard/users" });
+    utilRoutes.push({ label: "Price Settings", icon: ShieldCheck, href: "/admin-dashboard/pricing" });
+  }
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === href : pathname?.startsWith(href);
@@ -108,7 +124,7 @@ export function Sidebar() {
     <div className="flex flex-col h-full bg-slate-900 text-white overflow-y-auto">
       {/* Logo */}
       <div className="px-3 pt-3 pb-3 space-y-3">
-        <Link href="/dashboard" className="flex items-center gap-2.5 px-2">
+        <Link href="/client" className="flex items-center gap-2.5 px-2">
           <div className="w-6 h-6 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-xs shrink-0">S</div>
           <h1 className="text-base font-bold tracking-tight">CloudNeuron</h1>
         </Link>
