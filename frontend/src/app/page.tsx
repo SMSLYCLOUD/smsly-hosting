@@ -16,11 +16,9 @@ import {
     Database,
     Cloud,
     Sparkles,
-    Check,
     Server,
     Rocket,
     Lock,
-    Code,
     Activity,
     Terminal,
     Boxes,
@@ -28,9 +26,16 @@ import {
     XCircle,
     Users,
     BarChart3,
-    Settings,
     Workflow,
-    Command
+    Command,
+    RefreshCw,
+    Network,
+    Key,
+    Blocks,
+    ArrowUpRight,
+    Search,
+    BrainCircuit,
+    Bot
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -141,6 +146,75 @@ const features = [
 ];
 
 // ============================================
+// DATA: EXPANDED FEATURES
+// ============================================
+const expandedFeatures = [
+    {
+        title: "VPN Mesh Routing",
+        description: "Zero-config WireGuard mesh networks connect your clusters globally, securing node-to-node traffic entirely under the hood.",
+        icon: Network,
+        color: "text-emerald-500",
+        bg: "bg-emerald-500/10"
+    },
+    {
+        title: "Zero-Downtime Server Transfers",
+        description: "Move applications between regions or cloud providers seamlessly via SSH with DNS cutovers handled for you.",
+        icon: RefreshCw,
+        color: "text-blue-500",
+        bg: "bg-blue-500/10"
+    },
+    {
+        title: "HA Database Replication",
+        description: "Patroni-backed PostgreSQL replication configured across your VPN mesh for automated primary/replica failovers.",
+        icon: Database,
+        color: "text-violet-500",
+        bg: "bg-violet-500/10"
+    },
+    {
+        title: "AI & LLM Blueprints",
+        description: "One-click templates for Ollama, DeepSeek, vLLM, and Open-WebUI running entirely on your private GPUs.",
+        icon: BrainCircuit,
+        color: "text-pink-500",
+        bg: "bg-pink-500/10"
+    },
+    {
+        title: "100+ Add-on Catalog",
+        description: "Provision Redis, MongoDB, ElasticSearch, RabbitMQ, and more with auto-injected secrets to your apps.",
+        icon: Blocks,
+        color: "text-orange-500",
+        bg: "bg-orange-500/10"
+    },
+    {
+        title: "Auto-Remediation",
+        description: "AI-driven log analysis immediately diagnoses crash loops, suggesting fixes or auto-reverting broken commits.",
+        icon: Bot,
+        color: "text-cyan-500",
+        bg: "bg-cyan-500/10"
+    },
+    {
+        title: "Predictive Autoscaling",
+        description: "HPA-style container replicas that spin up seamlessly as traffic spikes, tracked live in the dashboard.",
+        icon: Activity,
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
+    },
+    {
+        title: "Enterprise SSO & RBAC",
+        description: "Secure your team with SAML/SSO integration, strict Audit Logs, and fine-grained Role-Based Access Controls.",
+        icon: Key,
+        color: "text-yellow-500",
+        bg: "bg-yellow-500/10"
+    },
+    {
+        title: "Global Edge Domains",
+        description: "Automatic Let's Encrypt wildcard SSL and Caddy routing proxies traffic instantly to newly spawned containers.",
+        icon: Globe,
+        color: "text-teal-500",
+        bg: "bg-teal-500/10"
+    }
+];
+
+// ============================================
 // DATA: BATTLE CARDS (COMPARISON)
 // ============================================
 const battleCards = [
@@ -175,6 +249,18 @@ const battleCards = [
         price: "$20+",
         priceDetail: "per seat + usage fees",
         features: ["Platform Lock in", "Expensive at Scale", "Black Box Runtime", "Open Core Only"],
+        color: "bg-slate-500",
+        textColor: "text-slate-500",
+        borderColor: "border-slate-200",
+        highlight: false
+    },
+    {
+        name: "Heroku / Render",
+        logo: ArrowUpRight,
+        description: "The Legacy PaaS",
+        price: "$25+",
+        priceDetail: "per standard dyno",
+        features: ["Sleeping dynos", "Extremely expensive scaling", "Rigid buildpacks", "Slow support"],
         color: "bg-slate-500",
         textColor: "text-slate-500",
         borderColor: "border-slate-200",
@@ -483,7 +569,7 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* FEATURES GRID */}
+            {/* EXPANDED FEATURES GRID */}
             <section className="py-16 md:py-32 px-4 sm:px-6 bg-slate-50 dark:bg-slate-900/50">
                 <div className="max-w-7xl mx-auto">
                     <motion.div
@@ -497,21 +583,21 @@ export default function Home() {
                             Everything Included
                         </div>
                         <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4 md:mb-6 text-slate-900 dark:text-white tracking-tight">
-                            Everything You Need to Ship
+                            More Than Just Deployments
                         </h2>
                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            Comprehensive tools for the entire application lifecycle.
+                            Comprehensive tooling spanning across application lifecycles, database management, high-availability replication, and AI inference.
                         </p>
                     </motion.div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
-                        {features.map((feature, i) => (
+                        {features.concat(expandedFeatures).map((feature, i) => (
                             <motion.div
                                 key={feature.title}
                                 initial={{ opacity: 0, y: 20 }}
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
-                                transition={{ delay: i * 0.1 }}
+                                transition={{ delay: Math.min(i * 0.05, 0.5) }}
                                 className="group p-6 md:p-8 rounded-2xl md:rounded-3xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300"
                             >
                                 <div className={`inline-flex p-3 md:p-4 rounded-xl md:rounded-2xl ${feature.bg} mb-4 md:mb-6 group-hover:rotate-6 transition-transform duration-300`}>
@@ -521,6 +607,59 @@ export default function Home() {
                                 <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 leading-relaxed">{feature.description}</p>
                             </motion.div>
                         ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* DEEP DIVE: THE INTELLIGENT CLOUD */}
+            <section className="py-16 md:py-32 bg-slate-950 text-white overflow-hidden relative">
+                <div className="absolute inset-0 bg-gradient-to-b from-slate-900 to-slate-950" />
+                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
+                        <div className="lg:w-1/2 order-2 lg:order-1">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-4">
+                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
+                                        <Database className="w-8 h-8 text-blue-400 mb-4" />
+                                        <h4 className="font-bold mb-2">Automated PGVector</h4>
+                                        <p className="text-sm text-slate-400">Embeddings databases ready out-of-the-box for RAG templates like Khoj.</p>
+                                    </div>
+                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
+                                        <BrainCircuit className="w-8 h-8 text-pink-400 mb-4" />
+                                        <h4 className="font-bold mb-2">LiteLLM AI Router</h4>
+                                        <p className="text-sm text-slate-400">Connect local Ollama nodes with OpenAI fallback seamlessly.</p>
+                                    </div>
+                                </div>
+                                <div className="space-y-4 pt-8">
+                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
+                                        <Bot className="w-8 h-8 text-emerald-400 mb-4" />
+                                        <h4 className="font-bold mb-2">Ollama GPU Native</h4>
+                                        <p className="text-sm text-slate-400">Schedule Llama3, DeepSeek-R1, and Mistral on your bare-metal machines.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="lg:w-1/2 order-1 lg:order-2">
+                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-900/30 text-emerald-400 text-xs md:text-sm font-medium rounded-full mb-6">
+                                <Sparkles className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                The Intelligent Cloud
+                            </div>
+                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight">AI Infrastructure,<br/>Self-Hosted.</h2>
+                            <p className="text-base md:text-lg text-slate-400 mb-8 leading-relaxed">
+                                Don&apos;t just host web apps. CloudNeuron brings the power of dedicated AI clusters directly to your personal VPS. Deploy complex RAG pipelines, fine-tuned models, and intelligent routers with a single click. No more struggling with CUDA drivers or Docker networking for AI stacks.
+                            </p>
+                            <ul className="space-y-4 mb-8">
+                                <li className="flex items-center gap-3 text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Pre-configured templates for 20+ Open-Source LLMs
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Automatic cross-service secret injection
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> AI diagnostics for broken code deployments
+                                </li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -616,6 +755,41 @@ export default function Home() {
                 </div>
             </section>
 
+            {/* PLATFORM APPS */}
+            <section className="py-16 md:py-32 bg-slate-100 dark:bg-slate-900/80 border-y border-slate-200 dark:border-slate-800">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="text-center mb-12 md:mb-20">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs md:text-sm font-medium rounded-full mb-4">
+                            <Boxes className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                            Platform primitives
+                        </div>
+                        <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4 md:mb-6 text-slate-900 dark:text-white tracking-tight">Deploy Any Architecture</h2>
+                        <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
+                            From simple static sites to complex AI workloads, we provide the foundational primitives you need.
+                        </p>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {platformApps.map((app, i) => (
+                            <motion.div
+                                key={i}
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                whileInView={{ opacity: 1, scale: 1 }}
+                                viewport={{ once: true }}
+                                transition={{ delay: i * 0.1 }}
+                                className="bg-white dark:bg-slate-950 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col items-start hover:shadow-lg transition-shadow"
+                            >
+                                <div className={`p-3 rounded-xl text-white mb-6 ${app.color}`}>
+                                    <app.icon className="w-6 h-6" />
+                                </div>
+                                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-3">{app.title}</h3>
+                                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">{app.description}</p>
+                            </motion.div>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
             {/* TESTIMONIALS */}
             <section className="py-16 md:py-32 bg-slate-50 dark:bg-slate-900">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -666,8 +840,49 @@ export default function Home() {
                 </div>
             </section>
 
+            {/* ENTERPRISE SECURITY */}
+            <section className="py-16 md:py-32 bg-white dark:bg-slate-950 overflow-hidden border-t border-slate-200 dark:border-slate-800">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
+                        <div className="lg:w-1/2">
+                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 text-xs md:text-sm font-medium rounded-full mb-6">
+                                <Shield className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                Enterprise Security
+                            </div>
+                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight text-slate-900 dark:text-white">Hardened for Production</h2>
+                            <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
+                                Don&apos;t compromise on compliance. CloudNeuron wraps your Docker clusters in military-grade WireGuard VPNs, enforcing strict host-key checking and AES-CBC encrypted backups at rest.
+                            </p>
+                            <ul className="space-y-4 mb-8">
+                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> End-to-end VPN mesh across regions
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Comprehensive Audit Logs for every action
+                                </li>
+                                <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Zero-Trust Addon architecture
+                                </li>
+                            </ul>
+                        </div>
+                        <div className="lg:w-1/2 w-full grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {complianceStandards.map((std, i) => (
+                                <motion.div
+                                    key={i}
+                                    whileHover={{ scale: 1.02 }}
+                                    className="p-6 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center"
+                                >
+                                    <std.icon className="w-8 h-8 text-emerald-500 mb-4" />
+                                    <h4 className="font-bold text-slate-900 dark:text-white">{std.name}</h4>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             {/* CTA SECTION */}
-            <section className="py-20 md:py-32 bg-slate-950 text-white overflow-hidden relative">
+            <section className="py-20 md:py-32 bg-slate-950 text-white overflow-hidden relative border-t border-emerald-900/50">
                 <div className="absolute inset-0 bg-gradient-to-br from-emerald-900/20 to-slate-900/20" />
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/50 to-transparent" />
 
