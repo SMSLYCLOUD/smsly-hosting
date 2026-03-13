@@ -118,6 +118,38 @@ const comparisonRows = [
             { name: "Private Networking", cn: "Included (WireGuard Mesh)", rw: "Included", vc: "Enterprise Only", rn: "Included (VPC)" },
             { name: "Docker Support", cn: "Native (Dockerfile / Compose)", rw: "Native", vc: "Limited (Next.js focused)", rn: "Native" },
         ]
+    },
+    {
+        category: "Databases & State",
+        items: [
+            { name: "Managed Postgres", cn: "Included (Patroni HA)", rw: "Included (No HA)", vc: "Vercel Postgres ($)", rn: "Render Postgres ($$$)" },
+            { name: "Vector Search (pgvector)", cn: "Included by default", rw: "Manual setup", vc: "3rd party integrations", rn: "Manual setup" },
+            { name: "Redis / In-Memory", cn: "Included", rw: "Included", vc: "Vercel KV ($)", rn: "Render Redis ($$)" },
+        ]
+    },
+    {
+        category: "Networking & Security",
+        items: [
+            { name: "VPN Mesh", cn: "WireGuard Node-to-Node", rw: false, vc: "Enterprise Only", rn: "VPC Only" },
+            { name: "Custom Domains & SSL", cn: "Unlimited (Caddy Proxy)", rw: "Included", vc: "Included", rn: "Included" },
+            { name: "DDoS Protection", cn: "Cloudflare Compatible", rw: "Included", vc: "Included", rn: "Included" },
+        ]
+    },
+    {
+        category: "AI & LLM Workloads",
+        items: [
+            { name: "Ollama / Local LLMs", cn: "Native Blueprints (1-Click)", rw: "Manual Setup", vc: false, rn: "Manual Setup" },
+            { name: "GPU Support", cn: "Any provider (AWS/Hetzner)", rw: false, vc: false, rn: false },
+            { name: "AI Request Routing", cn: "Included (LiteLLM Senate)", rw: false, vc: "Vercel AI SDK (Code level)", rn: false },
+        ]
+    },
+    {
+        category: "Deployment & DX",
+        items: [
+            { name: "Git Push to Deploy", cn: true, rw: true, vc: true, rn: true },
+            { name: "One-Click Blueprints", cn: "100+ Apps & Addons", rw: "Templates Available", vc: "Templates Available", rn: "Blueprints Available" },
+            { name: "CLI Tooling", cn: "cloudneuron CLI", rw: "railway CLI", vc: "vercel CLI", rn: "render CLI" },
+        ]
     }
 ];
 
