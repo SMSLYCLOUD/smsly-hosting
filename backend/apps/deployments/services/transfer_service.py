@@ -76,8 +76,8 @@ class ServerTransferService:
         if has_password:
             ssh_kwargs['password'] = self.transfer.target_ssh_password
 
+        self.ssh = SSHClient(**ssh_kwargs)
         try:
-            self.ssh = SSHClient(**ssh_kwargs)
             self.ssh.connect()
         except Exception as e:
             raise ConnectionError(f"Could not connect to target server: {e}") from e
@@ -196,7 +196,7 @@ class ServerTransferService:
                 raise RuntimeError("Could not locate CloudNeuron backend container on target server.")
             backend_container = b_id
 
-        self.ssh.exec_command(f"docker cp {shlex.quote(remote_backup_path)} {shlex.quote(backend_container)}:/tmp/transfer_backup.tar.gz")
+        self.ssh.exec_command(f"docker cp {shlex.quote(remote_backup_path)} {backend_container}:/tmp/transfer_backup.tar.gz")
 
         self._update(75, 'Hydrating Service via remote Django ORM...')
         
@@ -207,10 +207,7 @@ import sys
 import django
 import logging
 
-# Ensure /app/backend is in the path
-if '/app/backend' not in sys.path:
-    sys.path.insert(0, '/app/backend')
-
+sys.path.append('/app/backend')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
@@ -253,17 +250,14 @@ if __name__ == '__main__':
         finally:
             os.unlink(local_script.name)
 
-        # Copy into container safely
-        self.ssh.exec_command(f"docker cp {shlex.quote(script_path)} {shlex.quote(backend_container)}:/tmp/restore_trigger.py")
-
         self._update(85, 'Running database and volume migrations on target...')
         # Execute the python script inside the remote container
-        result = self.ssh.exec_command(f"docker exec {shlex.quote(backend_container)} python3 /tmp/restore_trigger.py")
+        result = self.ssh.exec_command(f"docker exec {backend_container} python3 /tmp/restore_trigger.py")
         if "RESTORE_FAILED" in result or "ERROR:" in result:
             raise RuntimeError(f"Remote service hydration failed: {result}")
             
         # Cleanup
-        self.ssh.exec_command(f"docker exec {shlex.quote(backend_container)} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py")
+        self.ssh.exec_command(f"docker exec {backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py")
         self.ssh.exec_command(f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}")
 
     def _restore_full_server(self, remote_backup_path):
@@ -291,13 +285,14 @@ if __name__ == '__main__':
         db_user = self.ssh.exec_command("grep POSTGRES_USER /opt/smsly/.env | cut -d= -f2").strip() or 'smsly'
         db_name = self.ssh.exec_command("grep POSTGRES_DB /opt/smsly/.env | cut -d= -f2").strip() or 'smsly'
 
-        # Use safe quoting for psql commands. Construct the query string then quote the entire string
-        # for the `-c` argument to avoid quote escaping issues.
-        sql_query = f"DROP DATABASE IF EXISTS {db_name}; CREATE DATABASE {db_name};"
-        safe_query = shlex.quote(sql_query)
-        safe_user = shlex.quote(db_user)
+        # Use safe quoting for psql commands?
+        # db_user/name might have weird chars.
+        # But exec_command string interpolation is still used for drop/create.
+        # This is on the host shell.
+        # It's better, but let's assume they are safe-ish or use shlex if possible.
+        # Hard to use shlex for complex piped commands.
 
-        drop_cmd = f"cd /opt/smsly && docker compose exec -T db psql -U {safe_user} postgres -c {safe_query}"
+        drop_cmd = f"cd /opt/smsly && docker compose exec -T db psql -U {shlex.quote(db_user)} postgres -c 'DROP DATABASE IF EXISTS {shlex.quote(db_name)}; CREATE DATABASE {shlex.quote(db_name)};'"
         self.ssh.exec_command(drop_cmd)
 
         restore_cmd = f"cd /opt/smsly && docker compose exec -T db sh -c 'psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql'"

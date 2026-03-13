@@ -57,27 +57,16 @@ class ServerTransferServiceTest(TestCase):
         mock_ssh.connect.assert_called()
         mock_backup_svc.backup_service.assert_called_with(self.service.id)
         mock_ssh.upload_file.assert_called()
-        # The new code doesn't extract the tar locally, it uses docker cp directly into the backend container
-        # So we verify that the docker cp happened instead of the old tar extraction
-        found_cp = any("docker cp" in call.args[0] and "transfer_backup.tar.gz" in call.args[0] for call in mock_ssh.exec_command.call_args_list)
-        self.assertTrue(found_cp, "Expected docker cp command not found")
+        mock_ssh.exec_command.assert_any_call(f"tar -xzf /tmp/backup.tar.gz -C /tmp/restore_{self.transfer.id}")
 
-    @patch('os.environ.get')
     @patch('apps.deployments.services.transfer_service.SSHClient')
     @patch('apps.deployments.services.transfer_service.BackupService')
-    def test_execute_full_transfer_success(self, MockBackupService, MockSSHClient, mock_env_get):
+    def test_execute_full_transfer_success(self, MockBackupService, MockSSHClient):
         MockBackup, MockSSH = MockBackupService, MockSSHClient
 
         self.transfer.transfer_type = 'FULL'
         self.transfer.service = None
         self.transfer.save()
-
-        # Mock os.environ.get to provide a fake checksum for the install script
-        def _env_get(key, default=None):
-            if key == "SMSLY_INSTALL_SCRIPT_SHA256":
-                return "fake-checksum"
-            return default
-        mock_env_get.side_effect = _env_get
 
         mock_ssh = MockSSH.return_value
         mock_ssh.check_docker.return_value = True
