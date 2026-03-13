@@ -13,6 +13,7 @@
 #   Full update:      sudo bash install.sh --update
 #   Frontend only:    sudo bash install.sh --update-frontend
 #   Backend only:     sudo bash install.sh --update-backend
+#   Runtime refresh:  sudo bash install.sh --refresh
 #   Wipe install:     sudo bash install.sh --wipe
 #
 # Features:
@@ -46,7 +47,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
     # Skip collection if values are already pre-seeded via env vars, or if
     # this is an --update / --wipe run (those don't need interactive input).
     _ARG1="${1:-}"
-    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
+    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--refresh" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
         # Detect public IP for the mode selection prompt
         _detect_ip() {
             local c="" ep=""
@@ -670,6 +671,7 @@ ROLLBACK_NEEDED=false
 UPDATE_MODE=""
 WIPE_MODE="false"
 RECOVER_MODE="false"
+REFRESH_MODE="false"
 DEBUG_MODE="false"
 case "${1:-}" in
     --update)          UPDATE_MODE="full" ;;
@@ -677,15 +679,17 @@ case "${1:-}" in
     --update-backend)  UPDATE_MODE="backend" ;;
     --wipe)            WIPE_MODE="true" ;;
     --recover)         RECOVER_MODE="true" ;;
+    --refresh)         REFRESH_MODE="true" ;;
     --debug)           DEBUG_MODE="true" ;;
     --verify)          VERIFY_MODE="true" ;;
     --help|-h)
-        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--recover|--debug|--wipe]"
+        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe]"
         echo ""
         echo "  (no args)          Fresh install"
         echo "  --update           Pull latest code and rebuild all services"
         echo "  --update-frontend  Pull latest code and rebuild frontend only"
         echo "  --update-backend   Pull latest code and rebuild backend only"
+        echo "  --refresh          Force-recreate runtime services only (no db/redis/registry restart)"
         echo "  --recover          Restart Docker/network/runtime stack without deleting data"
         echo "  --debug            Print deep runtime diagnostics (containers, networks, health, logs)"
         echo "  --verify           Run endpoint verification only (no changes)"
@@ -700,6 +704,8 @@ esac
 MODE_LABEL="fresh-install"
 if [ -n "$UPDATE_MODE" ]; then
     MODE_LABEL="update-$UPDATE_MODE"
+elif [ "$REFRESH_MODE" = "true" ]; then
+    MODE_LABEL="refresh"
 elif [ "$RECOVER_MODE" = "true" ]; then
     MODE_LABEL="recover"
 elif [ "$DEBUG_MODE" = "true" ]; then
@@ -1241,6 +1247,23 @@ if [ "$RECOVER_MODE" = "true" ]; then
     recover_runtime_stack || RECOVER_STATUS=$?
     debug_platform_status
     exit "$RECOVER_STATUS"
+fi
+
+if [ "$REFRESH_MODE" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --refresh)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env" || true
+    REFRESH_STATUS=0
+    refresh_runtime_services || REFRESH_STATUS=$?
+    debug_platform_status
+    exit "$REFRESH_STATUS"
 fi
 
 # =============================================================================
@@ -3043,6 +3066,7 @@ echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
 echo -e "${YELLOW}  Update frontend:    sudo bash install.sh --update-frontend${NC}"
 echo -e "${YELLOW}  Update backend:     sudo bash install.sh --update-backend${NC}"
 echo -e "${YELLOW}  Full update:        sudo bash install.sh --update${NC}"
+echo -e "${YELLOW}  Runtime refresh:    sudo bash install.sh --refresh${NC}"
 echo -e "${YELLOW}  Runtime recovery:   sudo bash install.sh --recover${NC}"
 echo -e "${YELLOW}  Debug snapshot:     sudo bash install.sh --debug${NC}"
 echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
