@@ -19,6 +19,14 @@ class MeshNetwork(models.Model):
     Typically one per cluster.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        'deployments.Project',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mesh_networks',
+        help_text="Project this mesh network belongs to (null = ungrouped)"
+    )
     name = models.CharField(
         max_length=100, default="default",
         help_text="Mesh network name (e.g. 'production', 'staging')",

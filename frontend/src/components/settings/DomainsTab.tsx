@@ -17,8 +17,9 @@ interface DomainStatus {
     checking: boolean;
 }
 
-export function DomainsTab({ service }: { service: Service }) {
+export function DomainsTab({ service: initialService }: { service: Service }) {
     const confirm = useConfirm();
+    const [service, setService] = useState(initialService);
     const [domains, setDomains] = useState<DomainStatus[]>([]);
     const [newDomain, setNewDomain] = useState('');
     const [loading, setLoading] = useState(true);
@@ -38,6 +39,7 @@ export function DomainsTab({ service }: { service: Service }) {
         try {
             setLoading(true);
             const latest = await servicesApi.get(service.id);
+            setService(latest);
             const domainList = Array.isArray(latest.custom_domains)
                 ? latest.custom_domains.map(d => String(d || '').trim().toLowerCase()).filter(Boolean)
                 : [];
@@ -149,19 +151,50 @@ export function DomainsTab({ service }: { service: Service }) {
 
                 {/* Default Domain */}
                 <div className="mb-8">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Default Domain</h4>
-                    <div className="flex items-center gap-3 p-3 bg-muted/30 border border-border rounded-lg">
-                        <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="font-mono text-sm flex-1">{defaultDomain}</span>
-                        <a
-                            href={`https://${defaultDomain}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:text-primary/80"
-                        >
-                            <ExternalLink size={16} />
-                        </a>
+                    <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Default Domain</h4>
+                        {domains.length > 0 && (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">Hide Default Domain</span>
+                                <Button
+                                    variant={service.public_domain_hidden ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-7 text-xs"
+                                    onClick={async () => {
+                                        try {
+                                            const newVal = !service.public_domain_hidden;
+                                            const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
+                                            setService(updated);
+                                            toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Redeploy to apply.` });
+                                        } catch (err) {
+                                            toast({ title: 'Error', description: 'Failed to update visibility', variant: 'destructive' });
+                                        }
+                                    }}
+                                >
+                                    {service.public_domain_hidden ? 'Hidden' : 'Visible'}
+                                </Button>
+                            </div>
+                        )}
                     </div>
+                    <div className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${service.public_domain_hidden ? 'bg-muted/10 border-border/50 opacity-60' : 'bg-muted/30 border-border'}`}>
+                        <div className={`h-2 w-2 rounded-full ${service.public_domain_hidden ? 'bg-zinc-500' : 'bg-emerald-500 animate-pulse'}`} />
+                        <span className={`font-mono text-sm flex-1 ${service.public_domain_hidden ? 'line-through text-muted-foreground' : ''}`}>{defaultDomain}</span>
+                        {!service.public_domain_hidden && (
+                            <a
+                                href={`https://${defaultDomain}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:text-primary/80"
+                            >
+                                <ExternalLink size={16} />
+                            </a>
+                        )}
+                    </div>
+                    {service.public_domain_hidden && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                            The default domain will not serve traffic. Only custom domains are active.
+                        </p>
+                    )}
                 </div>
 
                 {/* Custom Domains */}
