@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
 from typing import Optional
 
@@ -38,6 +39,22 @@ except ImportError:
 logger = logging.getLogger('smsly.tunnel.client')
 
 
+def default_tunnel_server_url() -> str:
+    """Resolve the tunnel server URL without a vendor-specific hardcoded host."""
+    explicit_url = (
+        os.environ.get('SMSLY_TUNNEL_SERVER_URL')
+        or os.environ.get('TUNNEL_SERVER_URL')
+    )
+    if explicit_url:
+        return explicit_url
+
+    tunnel_domain = os.environ.get('TUNNEL_DOMAIN') or os.environ.get('DOMAIN')
+    if tunnel_domain:
+        return f"wss://{tunnel_domain}/ws/tunnel"
+
+    return "ws://localhost:8080/ws/tunnel"
+
+
 class TunnelClient:
     """
     CLI tunnel client that connects to SMSLY tunnel server
@@ -47,12 +64,12 @@ class TunnelClient:
     def __init__(
         self,
         local_port: int,
-        server_url: str = "wss://tunnel.smsly.cloud/ws/tunnel",
+        server_url: Optional[str] = None,
         subdomain: Optional[str] = None,
         inspect: bool = False,
     ):
         self.local_port = local_port
-        self.server_url = server_url
+        self.server_url = server_url or default_tunnel_server_url()
         self.subdomain = subdomain
         self.inspect = inspect
         self.public_url: Optional[str] = None
@@ -223,7 +240,7 @@ def main():
     parser.add_argument(
         '--server',
         type=str,
-        default="wss://tunnel.smsly.cloud/ws/tunnel",
+        default=default_tunnel_server_url(),
         help="Tunnel server URL"
     )
     parser.add_argument(

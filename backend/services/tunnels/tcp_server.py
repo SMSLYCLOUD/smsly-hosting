@@ -15,7 +15,14 @@ from typing import Dict, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from django.conf import settings
+
 logger = logging.getLogger('smsly.tunnels.tcp')
+
+
+def get_tunnel_base_domain() -> str:
+    """Resolve the active tunnel base domain from Django settings."""
+    return getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
 
 
 @dataclass
@@ -232,7 +239,7 @@ class TCPTunnelServer:
             'type': 'tcp',
             'local_port': tunnel.local_port,
             'remote_port': tunnel.remote_port,
-            'public_host': f"tcp.tunnel.smsly.cloud:{tunnel.remote_port}",
+            'public_host': f"tcp.{get_tunnel_base_domain()}:{tunnel.remote_port}",
             'bytes_in': tunnel.bytes_in,
             'bytes_out': tunnel.bytes_out,
             'connections': tunnel.connections,
@@ -246,21 +253,21 @@ TCP_HELP = """
 TCP Tunnel Usage:
 
   smsly-tunnel tcp 5432
-  → Creates: tcp.tunnel.smsly.cloud:10XXX
+  → Creates: tcp.<your-tunnel-domain>:10XXX
 
   # Connect your database client to:
-  # tcp.tunnel.smsly.cloud:10XXX
+  # tcp.<your-tunnel-domain>:10XXX
 
 Examples:
   # PostgreSQL
   smsly-tunnel tcp 5432
-  psql -h tcp.tunnel.smsly.cloud -p 10001 -U user dbname
+  psql -h tcp.<your-tunnel-domain> -p 10001 -U user dbname
 
   # Redis
   smsly-tunnel tcp 6379
-  redis-cli -h tcp.tunnel.smsly.cloud -p 10002
+  redis-cli -h tcp.<your-tunnel-domain> -p 10002
 
   # MySQL
   smsly-tunnel tcp 3306
-  mysql -h tcp.tunnel.smsly.cloud -P 10003 -u user -p
+  mysql -h tcp.<your-tunnel-domain> -P 10003 -u user -p
 """

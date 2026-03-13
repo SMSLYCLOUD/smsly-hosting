@@ -505,6 +505,10 @@ ensure_env_runtime_defaults() {
     local env_file="$1"
     local redis_password=""
     local postgres_password=""
+    local current_domain=""
+    local current_public_ip=""
+    local current_tunnel_domain=""
+    local expected_tunnel_domain="tunnel.localhost"
     local current_redis_url=""
     local expected_redis_url=""
     local current_celery_broker_url=""
@@ -517,10 +521,29 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
+    env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     postgres_password="$(env_get_value "$env_file" "POSTGRES_PASSWORD")"
+    current_domain="$(env_get_value "$env_file" "DOMAIN")"
+    current_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+    current_tunnel_domain="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
+
+    if [ -n "$current_domain" ] && [ "$current_domain" != "localhost" ] && ! echo "$current_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        expected_tunnel_domain="tunnel.${current_domain}"
+    elif [ -n "$current_public_ip" ] && ! echo "$current_public_ip" | grep -qE '^(127\.0\.0\.1|0\.0\.0\.0)$'; then
+        expected_tunnel_domain="tunnel.${current_public_ip}.sslip.io"
+    fi
+
+    env_ensure_var "$env_file" "TUNNEL_DOMAIN" "$expected_tunnel_domain" "Base domain for FRP development tunnels"
+    if [ -z "$current_tunnel_domain" ] || [ "$current_tunnel_domain" = "tunnel.localhost" ] || [[ "$current_tunnel_domain" == tunnel.* ]]; then
+        if [ "$current_tunnel_domain" != "$expected_tunnel_domain" ]; then
+            echo -e "${BLUE}  -> Syncing TUNNEL_DOMAIN with platform domain${NC}"
+            env_set_value "$env_file" "TUNNEL_DOMAIN" "$expected_tunnel_domain"
+            echo -e "${GREEN}  OK TUNNEL_DOMAIN synced${NC}"
+        fi
+    fi
 
     if [ -n "$redis_password" ]; then
         expected_redis_url="redis://:${redis_password}@redis:6379/0"
@@ -588,6 +611,8 @@ validate_env_file() {
         "CELERY_BROKER_URL"
         "GATEWAY_SECRET"
         "GITHUB_WEBHOOK_SECRET"
+        "FRP_AUTH_TOKEN"
+        "TUNNEL_DOMAIN"
     )
     local missing_vars=()
     local invalid_vars=()
@@ -634,6 +659,11 @@ validate_env_file() {
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
     if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^redis:// ]]; then
         invalid_vars+=("CELERY_BROKER_URL (must start with redis://)")
+    fi
+
+    var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
+    if [ -n "$var_value" ] && [[ "$var_value" =~ [[:space:]] ]]; then
+        invalid_vars+=("TUNNEL_DOMAIN (must not contain spaces)")
     fi
 
     if [ ${#missing_vars[@]} -gt 0 ] || [ ${#invalid_vars[@]} -gt 0 ]; then

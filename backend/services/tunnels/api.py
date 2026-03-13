@@ -25,6 +25,10 @@ from django.utils import timezone
 from .storage import tunnel_storage
 from .rate_limit import rate_limit
 
+def get_tunnel_base_domain() -> str:
+    """Resolve the active tunnel base domain from Django settings."""
+    return getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
+
 
 class TunnelTier:
     """Tunnel service tiers."""
@@ -173,7 +177,7 @@ def tunnel_list(request):  # pylint: disable=too-many-return-statements
         tunnel = {
             'tunnel_id': tunnel_id,
             'subdomain': subdomain,
-            'public_url': f"https://{subdomain}.tunnel.smsly.cloud",
+            'public_url': f"https://{subdomain}.{get_tunnel_base_domain()}",
             'local_port': local_port,
             'type': tunnel_type,
             'user_id': user_id,

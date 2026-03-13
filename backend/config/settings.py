@@ -1,5 +1,6 @@
 """Settings module."""
 import os
+import re
 import sys
 from pathlib import Path
 from decouple import config, Csv
@@ -85,6 +86,16 @@ else:
         GITHUB_WEBHOOK_SECRET = f"{SECRET_KEY}-github-webhook"
 # SECURITY: No wildcard default - prevents host header injection
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
+_DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
+if DOMAIN and DOMAIN != 'localhost':
+    if re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN):
+        _DEFAULT_TUNNEL_BASE_DOMAIN = f'tunnel.{DOMAIN}.sslip.io'
+    else:
+        _DEFAULT_TUNNEL_BASE_DOMAIN = f'tunnel.{DOMAIN}'
+TUNNEL_BASE_DOMAIN = (
+    config('TUNNEL_DOMAIN', default=_DEFAULT_TUNNEL_BASE_DOMAIN)
+    or _DEFAULT_TUNNEL_BASE_DOMAIN
+).strip()
 ENABLE_LEGACY_TUNNEL_API = config(
     'ENABLE_LEGACY_TUNNEL_API',
     default=False,

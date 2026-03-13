@@ -11,6 +11,7 @@ Provides endpoints for the TunnelDashboard frontend component:
   - POST /api/v1/tunnels/register/     → register a new tunnel (CLI)
 """
 import uuid
+from django.conf import settings
 from rest_framework import viewsets, serializers, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -19,6 +20,11 @@ from .models_tunnels import Tunnel, TunnelRequest
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_tunnel_base_domain() -> str:
+    """Resolve the active tunnel base domain from Django settings."""
+    return getattr(settings, 'TUNNEL_BASE_DOMAIN', 'tunnel.localhost')
 
 
 # ── Serializers ──────────────────────────────────────────────────────────────
@@ -130,7 +136,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
             subdomain=subdomain,
             local_port=local_port,
             type=tunnel_type,
-            public_url=f"https://{subdomain}.tunnel.smsly.cloud",
+            public_url=f"https://{subdomain}.{get_tunnel_base_domain()}",
             is_active=True,
         )
 
@@ -242,7 +248,7 @@ class TunnelViewSet(viewsets.ModelViewSet):
             owner=request.user,
             defaults={
                 'local_port': local_port,
-                'public_url': f"https://{subdomain}.tunnel.smsly.cloud",
+                'public_url': f"https://{subdomain}.{get_tunnel_base_domain()}",
                 'is_active': True,
             })
 
