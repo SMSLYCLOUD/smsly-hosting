@@ -23,7 +23,7 @@ class BaseCloudAdapter(ABC):
     @abstractmethod
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int,
-                         replicas: int = 1, **kwargs) -> str:
+                         replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         # pylint: disable=too-many-positional-arguments, too-many-arguments
         """
         Deploy a containerized application.

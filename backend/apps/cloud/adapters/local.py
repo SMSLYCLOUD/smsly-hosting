@@ -218,7 +218,7 @@ class LocalAdapter(BaseCloudAdapter):
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int,
-                         replicas: int = 1, **kwargs) -> str:
+                         replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
         volumes = kwargs.get('volumes', None)
         healthcheck = kwargs.get('healthcheck', None)
         restart_policy = kwargs.get('restart_policy', 'unless-stopped')
@@ -226,12 +226,13 @@ class LocalAdapter(BaseCloudAdapter):
         if self.k8s_client:
             return self._deploy_k8s(
                 service_name, image, env_vars, cpu, memory, replicas,
-                healthcheck=healthcheck)
+                healthcheck=healthcheck, vpa_enabled=vpa_enabled)
         elif self.docker_client:
             return self._deploy_docker(
                 service_name, image, env_vars, volumes=volumes,
                 healthcheck=healthcheck, cpu=cpu, memory=memory,
-                restart_policy=restart_policy, command=command)
+                restart_policy=restart_policy, command=command,
+                vpa_enabled=vpa_enabled)
         else:
             raise RuntimeError("No local orchestrator available")
 
@@ -242,7 +243,7 @@ class LocalAdapter(BaseCloudAdapter):
                        healthcheck: Dict = None,
                        cpu: int = None, memory: int = None,
                        restart_policy: str = 'unless-stopped',
-                       command=None) -> str:
+                       command=None, vpa_enabled: bool = True) -> str:
         """
         Blue-green Docker deployment with rollback-safe cutover.
 
@@ -405,10 +406,17 @@ class LocalAdapter(BaseCloudAdapter):
 
         run_kwargs = {}
         if memory and memory > 0:
-            run_kwargs['mem_limit'] = f"{memory}m"
+            if vpa_enabled:
+                run_kwargs['mem_reservation'] = f"{memory}m"
+            else:
+                run_kwargs['mem_limit'] = f"{memory}m"
+
         if cpu and cpu > 0:
-            run_kwargs['cpu_period'] = 100000
-            run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
+            if vpa_enabled:
+                run_kwargs['cpu_shares'] = max(2, int((cpu / 1000) * 1024))
+            else:
+                run_kwargs['cpu_period'] = 100000
+                run_kwargs['cpu_quota'] = int((cpu / 1000) * 100000)
 
         if restart_policy == 'no':
             rp = None
@@ -617,11 +625,18 @@ class LocalAdapter(BaseCloudAdapter):
         mem_limit = green_host_config.get('Memory')
         if mem_limit and mem_limit > 0:
             run_kwargs['mem_limit'] = mem_limit
+        mem_reservation = green_host_config.get('MemoryReservation')
+        if mem_reservation and mem_reservation > 0:
+            run_kwargs['mem_reservation'] = mem_reservation
+
         cpu_period = green_host_config.get('CpuPeriod')
         cpu_quota = green_host_config.get('CpuQuota')
         if cpu_period and cpu_quota:
             run_kwargs['cpu_period'] = cpu_period
             run_kwargs['cpu_quota'] = cpu_quota
+        cpu_shares = green_host_config.get('CpuShares')
+        if cpu_shares and cpu_shares > 0:
+            run_kwargs['cpu_shares'] = cpu_shares
 
         rp_config = green_host_config.get('RestartPolicy', {}) or {}
         rp = None
@@ -827,7 +842,8 @@ class LocalAdapter(BaseCloudAdapter):
 
     def _deploy_k8s(self, name: str, image: str,
                     env: Dict[str, str], cpu: int, memory: int,
-                    replicas: int = 1, healthcheck: Dict = None) -> str:
+                    replicas: int = 1, healthcheck: Dict = None,
+                    vpa_enabled: bool = True) -> str:
         namespace = 'default'
         port = int(env.get('PORT', 8000))
 
@@ -880,7 +896,7 @@ class LocalAdapter(BaseCloudAdapter):
                                 resources=client.V1ResourceRequirements(
                                     requests={
                                         "cpu": f"{cpu}m", "memory": f"{memory}Mi"},
-                                    limits={"cpu": f"{cpu * 2}m",
+                                    limits=None if vpa_enabled else {"cpu": f"{cpu * 2}m",
                                             "memory": f"{memory * 2}Mi"}
                                 ),
                                 **probes,
