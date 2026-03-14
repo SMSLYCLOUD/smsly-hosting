@@ -1,0 +1,51 @@
+name: Rust Twin CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'rust_twin/**'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'rust_twin/**'
+      - '.github/workflows/rust-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail builds on warnings to ensure strict code quality
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust_twin
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+        targets: wasm32-unknown-unknown
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rust_twin
+
+    - name: Check Formatting
+      run: cargo fmt --all -- --check
+
+    - name: Clippy Lints
+      run: cargo clippy --workspace --all-targets --all-features
+
+    - name: Run Tests
+      # We skip the frontend crate here because WASM requires a browser environment
+      # or a Node.js runner to execute correctly in CI.
+      run: cargo test --workspace --exclude frontend --all-features
