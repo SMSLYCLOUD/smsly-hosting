@@ -1,7 +1,7 @@
 use axum::{routing::{get, post}, Router};
 use std::sync::Arc;
 
-use crate::{AppState, handlers::{project, auth}};
+use crate::{AppState, handlers::{project, auth, billing}};
 
 pub fn create_router() -> Router<Arc<AppState>> {
     Router::new()
@@ -14,5 +14,8 @@ pub fn create_router() -> Router<Arc<AppState>> {
                 // Protected Routes (Uses `AuthUser` extractor in handlers)
                 .route("/projects", get(project::list_projects).post(project::create_project))
                 .route("/projects/:id/deploy", post(project::trigger_deploy))
+                // Billing / Licensing
+                .route("/billing/license", get(billing::get_license))
+                .route("/billing/upgrade", post(billing::upgrade_license))
         )
 }
