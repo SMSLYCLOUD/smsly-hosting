@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use bollard::{
-    container::{Config, CreateContainerOptions, StartContainerOptions},
+    container::{Config, CreateContainerOptions, StartContainerOptions, LogsOptions},
     network::CreateNetworkOptions,
     Docker,
 };
-use tracing::info;
+use futures_util::StreamExt;
+use tracing::{info, warn};
 
 /// A robust async wrapper around the Docker daemon via `bollard`.
 pub struct DockerClient {
@@ -106,5 +107,35 @@ impl DockerClient {
         info!("Container {} is running.", name);
 
         Ok(id)
+    }
+
+    /// Fetches and streams logs from a running container asynchronously.
+    /// In a production environment, these logs could be broadcast to a WebSocket via Redis Pub/Sub.
+    pub async fn stream_logs(&self, container_name: &str) -> Result<()> {
+        info!("Fetching logs for container: {}", container_name);
+
+        let options = Some(LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            follow: false, // Set to true for live streaming
+            tail: "100".to_string(), // Fetch last 100 lines
+            ..Default::default()
+        });
+
+        let mut log_stream = self.engine.logs(container_name, options);
+
+        while let Some(log_result) = log_stream.next().await {
+            match log_result {
+                Ok(log_output) => {
+                    // LogOutput implements Display, safely writing stdout/stderr to standard tracing
+                    info!("[{}] {}", container_name, log_output);
+                }
+                Err(e) => {
+                    warn!("Error reading log from {}: {}", container_name, e);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
