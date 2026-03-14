@@ -46,7 +46,38 @@ async fn main() -> Result<()> {
     info!("Worker successfully initialized and ready to process jobs.");
 
     // 6. Start the Polling Loop
-    start_polling_loop(state).await
+    // We run the scheduler and the polling loop concurrently
+    tokio::try_join!(
+        start_polling_loop(Arc::clone(&state)),
+        start_scheduler(Arc::clone(&state))
+    )?;
+
+    Ok(())
+}
+
+/// Mimics Celery Beat: Periodically pushes scheduled tasks (e.g. CollectUsage) to the Redis queue.
+async fn start_scheduler(state: Arc<WorkerState>) -> Result<()> {
+    info!("Starting background cron scheduler...");
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // Run every 60s
+
+    loop {
+        interval.tick().await;
+        info!("Scheduler tick: triggering routine tasks.");
+
+        let mut conn = state.redis.get_multiplexed_async_connection().await?;
+
+        // Example: Trigger global CollectUsage for all active owners
+        let task_payload = serde_json::json!({
+            "type": "CollectUsage",
+            "payload": {
+                "owner_id": 1 // In reality, we'd query all active users from DB
+            }
+        });
+
+        let _: () = conn.lpush(QUEUE_NAME, task_payload.to_string()).await.unwrap_or_else(|e| {
+            error!("Scheduler failed to push task: {}", e);
+        });
+    }
 }
 
 async fn start_polling_loop(state: Arc<WorkerState>) -> Result<()> {
