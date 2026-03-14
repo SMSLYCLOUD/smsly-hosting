@@ -18,3 +18,4 @@ redis = { version = "0.27.6", features = ["tokio-comp"] }
 
 # Local workspace
 cn_core = { path = "../core", package = "core" }
+infrastructure = { path = "../infrastructure" }

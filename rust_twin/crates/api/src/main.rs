@@ -23,8 +23,16 @@ async fn main() -> Result<()> {
     info!("Connecting to database at {}", &config.database_url);
     let db = db::establish_connection(&config.database_url).await?;
 
-    // 4. Set up App State
-    let state = Arc::new(AppState { db, config: config.clone() });
+    // 4. Connect to Redis (used for queueing deployments)
+    let redis_url = config.get_redis_url();
+    let redis_client = redis::Client::open(redis_url).context("Failed to connect to Redis")?;
+
+    // 5. Set up App State
+    let state = Arc::new(AppState {
+        db,
+        config: config.clone(),
+        redis: redis_client,
+    });
 
     // 5. Build Axum Router
     let app = Router::new()

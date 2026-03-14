@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use cn_core::entities::{project, user};
+use axum::extract::Path;
+use redis::AsyncCommands;
+use cn_core::entities::{project, user, service, deployment};
 use crate::{AppState, middleware::AuthUser};
 
 #[derive(Serialize)]
@@ -102,4 +104,78 @@ pub async fn create_project(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(inserted))))
+}
+
+#[derive(Deserialize)]
+pub struct TriggerDeployRequest {
+    pub service_id: Uuid,
+    pub commit_hash: String,
+}
+
+pub async fn trigger_deploy(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(project_id): Path<Uuid>,
+    Json(payload): Json<TriggerDeployRequest>,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+
+    // 1. Validate project ownership
+    let project_opt = project::Entity::find_by_id(project_id)
+        .filter(project::Column::OwnerId.eq(auth_user.id))
+        .one(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if project_opt.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Project not found or access denied".to_string()));
+    }
+
+    // 2. Validate service belongs to project
+    let svc_opt = service::Entity::find_by_id(payload.service_id)
+        .filter(service::Column::ProjectId.eq(project_id))
+        .one(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if svc_opt.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Service not found in this project".to_string()));
+    }
+
+    // 3. Create a new Deployment record (PENDING)
+    let new_deploy = deployment::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        service_id: Set(payload.service_id),
+        commit_hash: Set(payload.commit_hash.clone()),
+        status: Set("PENDING".to_string()),
+        is_rollback: Set(false),
+        created_at: Set(chrono::Utc::now().into()),
+        ..Default::default()
+    };
+
+    let inserted_deploy = new_deploy
+        .insert(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // 4. Construct the Task Payload matching the Worker's `Task` Enum
+    let task_payload = serde_json::json!({
+        "type": "SmartDeploy",
+        "payload": {
+            "project_id": project_id,
+            "deployment_id": inserted_deploy.id,
+            "commit_hash": payload.commit_hash
+        }
+    });
+
+    // 5. Push task to Redis Queue `cloudneuron:tasks:default`
+    let mut redis_conn = state.redis.get_multiplexed_async_connection().await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Redis connection failed: {}", e))
+    })?;
+
+    let queue_name = "cloudneuron:tasks:default";
+    redis_conn.lpush::<_, _, ()>(queue_name, task_payload.to_string()).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to push task to queue: {}", e))
+    })?;
+
+    Ok((StatusCode::ACCEPTED, format!("Deployment {} triggered successfully", inserted_deploy.id)))
 }
