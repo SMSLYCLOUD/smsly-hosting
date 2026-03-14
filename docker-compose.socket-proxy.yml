@@ -28,7 +28,7 @@ services:
       AUTH: 0
       SECRETS: 0
       SWARM: 0
-      EXEC: 0  # Disable exec for security
+      EXEC: 1  # Required for container terminal access and database administration
       PLUGINS: 0
     networks:
       - smsly-net
