@@ -1310,6 +1310,7 @@ def _deploy_container(deployment, provider, image_name):
             healthcheck=healthcheck,
             restart_policy=service.restart_policy,
             command=(service.start_command or None),
+            vpa_enabled=service.vpa_enabled,
         )
 
         deployment.status = Deployment.Status.HEALTH_CHECK
