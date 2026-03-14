@@ -16,6 +16,9 @@
 #   Runtime refresh:  sudo bash install.sh --refresh
 #   Wipe install:     sudo bash install.sh --wipe
 #
+#   Rust Twin:        sudo bash install.sh --rust
+#                     sudo bash install.sh --update --rust
+#
 # Features:
 #   - Idempotent: safe to re-run without data loss
 #   - Full installation logging to /var/log/smsly-install.log
@@ -60,6 +63,19 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
             echo "127.0.0.1"
         }
         _PUB_IP="$(_detect_ip)"
+
+        echo ""
+        echo -e "\033[0;34mSelect Backend Architecture:\033[0m"
+        echo -e "  1) \033[0;32mLegacy Python\033[0m (Stable monolith)"
+        echo -e "  2) \033[0;36mNext-Gen Rust\033[0m (High-performance microservices, Beta)"
+
+        if [ -e /dev/tty ]; then
+            read -p "Enter choice [1]: " _ARCH_CHOICE < /dev/tty
+            if [ "$_ARCH_CHOICE" = "2" ]; then
+                RUST_TWIN_MODE="true"
+                COMPOSE_FILE="rust_twin/docker-compose.yml"
+            fi
+        fi
 
         echo ""
         echo -e "\033[0;34mSelect Deployment Mode:\033[0m"
@@ -114,6 +130,15 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
             export USE_SSL="false"
             export DOMAIN="$_PUB_IP"
         fi
+    fi
+
+    if [ "$RUST_TWIN_MODE" = "true" ]; then
+        echo -e "\033[1;36m"
+        echo "═══════════════════════════════════════════════════════════"
+        echo "  INITIALIZING NEXT-GEN RUST TWIN MODE"
+        echo "  This will deploy the high-performance Rust stack."
+        echo "═══════════════════════════════════════════════════════════"
+        echo -e "\033[0m"
     fi
 
     echo -e "\033[1;33m"
@@ -722,33 +747,35 @@ WIPE_MODE="false"
 RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
-case "${1:-}" in
-    --update)          UPDATE_MODE="full" ;;
-    --update-frontend) UPDATE_MODE="frontend" ;;
-    --update-backend)  UPDATE_MODE="backend" ;;
-    --wipe)            WIPE_MODE="true" ;;
-    --recover)         RECOVER_MODE="true" ;;
-    --refresh)         REFRESH_MODE="true" ;;
-    --debug)           DEBUG_MODE="true" ;;
-    --verify)          VERIFY_MODE="true" ;;
-    --help|-h)
-        echo "Usage: sudo bash install.sh [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe]"
-        echo ""
-        echo "  (no args)          Fresh install"
-        echo "  --update           Pull latest code and rebuild all services"
-        echo "  --update-frontend  Pull latest code and rebuild frontend only"
-        echo "  --update-backend   Pull latest code and rebuild backend only"
-        echo "  --refresh          Force-recreate runtime services only (no db/redis/registry restart)"
-        echo "  --recover          Restart Docker/network/runtime stack without deleting data"
-        echo "  --debug            Print deep runtime diagnostics (containers, networks, health, logs)"
-        echo "  --verify           Run endpoint verification only (no changes)"
-        echo "  --wipe             Delete existing install artifacts (for fresh VPS reset)"
-        echo ""
-        echo "  Domain change:     sudo DOMAIN=new.example.com USE_SSL=true WILDCARD_SUBDOMAINS=true \\"
-        echo "                           CLOUDFLARE_API_TOKEN=... bash install.sh --update"
-        exit 0
-        ;;
-esac
+RUST_TWIN_MODE="false"
+
+# Simple loop to parse multiple arguments like `--update --rust`
+for arg in "$@"; do
+    case "$arg" in
+        --update)          UPDATE_MODE="full" ;;
+        --update-frontend) UPDATE_MODE="frontend" ;;
+        --update-backend)  UPDATE_MODE="backend" ;;
+        --wipe)            WIPE_MODE="true" ;;
+        --recover)         RECOVER_MODE="true" ;;
+        --refresh)         REFRESH_MODE="true" ;;
+        --debug)           DEBUG_MODE="true" ;;
+        --verify)          VERIFY_MODE="true" ;;
+        --rust)            RUST_TWIN_MODE="true" ;;
+        --help|-h)
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe]"
+            echo ""
+            echo "  (no args)          Fresh install (Legacy Python)"
+            echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
+            echo "  --update           Pull latest code and rebuild all services"
+            exit 0
+            ;;
+    esac
+done
+
+if [ "$RUST_TWIN_MODE" = "true" ]; then
+    COMPOSE_FILE="rust_twin/docker-compose.yml"
+fi
+
 
 MODE_LABEL="fresh-install"
 if [ -n "$UPDATE_MODE" ]; then
@@ -2602,42 +2629,56 @@ echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
 sleep 5
 
-echo -e "${BLUE}  → Running Migrations...${NC}"
-# Note: Do NOT run makemigrations — migrations are committed in the repo.
-# Running makemigrations generates files inside the container that conflict on redeploy.
-MIGRATE_OK=false
-for attempt in 1 2 3; do
-    if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
-        MIGRATE_OK=true
-        break
-    fi
-    WAIT=$((attempt * 10))
-    echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
-    docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
-    sleep "$WAIT"
-done
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Running Migrations...${NC}"
+    # Note: Do NOT run makemigrations — migrations are committed in the repo.
+    # Running makemigrations generates files inside the container that conflict on redeploy.
+    MIGRATE_OK=false
+    for attempt in 1 2 3; do
+        if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
+            MIGRATE_OK=true
+            break
+        fi
+        WAIT=$((attempt * 10))
+        echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
+        docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
+        sleep "$WAIT"
+    done
 
-if [ "$MIGRATE_OK" != "true" ]; then
-    echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
-    echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
-    exit 1
+    if [ "$MIGRATE_OK" != "true" ]; then
+        echo -e "${RED}  ✗ Migrations failed after 3 attempts.${NC}"
+        echo -e "${YELLOW}  Check: docker compose -f $COMPOSE_FILE logs backend${NC}"
+        exit 1
+    fi
+else
+    echo -e "${BLUE}  → Rust Twin: Skipping Django manage.py migrations (handled via SeaORM/CLI in future steps)...${NC}"
 fi
 
-echo -e "${BLUE}  → Collecting Static Files...${NC}"
-# Fix volume ownership — Docker creates named volumes as root
-docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
-docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Collecting Static Files...${NC}"
+    # Fix volume ownership — Docker creates named volumes as root
+    docker compose -f "$COMPOSE_FILE" exec -T --user root backend chown -R 1000:1000 /app/staticfiles /app/media /app/backups 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
-sync_platform_domain_state "$INSTALL_DIR/.env"
+    sync_platform_domain_state "$INSTALL_DIR/.env"
+else
+    echo -e "${BLUE}  → Rust Twin: Skipping static file collection (handled by Trunk WASM bundler)...${NC}"
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
-ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
+
+if [ "$RUST_TWIN_MODE" = "true" ]; then
+    echo -e "${BLUE}  → Rust Twin: Skipping Python admin user creation (Use 'docker compose exec cli createsuperuser')...${NC}"
+    ADMIN_EXISTS=1
+else
+    ADMIN_EXISTS=$(echo "from django.contrib.auth import get_user_model; User = get_user_model(); print('1' if User.objects.filter(username='admin').exists() else '0')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1)
+fi
 
 if [ "${ADMIN_EXISTS:-0}" = "1" ]; then
-    echo -e "${GREEN}  ✓ Admin user already exists — skipping${NC}"
+    echo -e "${GREEN}  ✓ Admin user check bypassed or already exists — skipping${NC}"
     if [ -f "$CREDENTIALS_FILE" ]; then
         echo -e "${GREEN}  ✓ Credentials file exists — leaving unchanged${NC}"
     else
@@ -2690,6 +2731,14 @@ echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
 # 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
+
+if [ "$RUST_TWIN_MODE" = "true" ]; then
+    echo -e "${BLUE}  → Formatting Rust Twin Caddyfile...${NC}"
+    cd rust_twin && export DOMAIN && export ACME_EMAIL && caddy fmt --overwrite Caddyfile 2>/dev/null || true
+    cd ..
+    # Swap the default Caddyfile path to point to the Rust Twin version
+    cp rust_twin/Caddyfile /etc/caddy/Caddyfile 2>/dev/null || true
+fi
 
 # ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
 # Always build custom Caddy with Cloudflare DNS support, even in IP mode.
