@@ -2295,7 +2295,29 @@ class SystemConfigView(GenericAPIView):
 
             # Webhook
             'GITHUB_WEBHOOK_SECRET_SET': bool(getattr(settings, 'GITHUB_WEBHOOK_SECRET', '')),
+
+            # Storage
+            **self._get_storage_metrics(),
         })
+
+    def _get_storage_metrics(self):
+        """Fetch server root partition storage metrics using psutil or shutil."""
+        import shutil
+        try:
+            total, used, free = shutil.disk_usage("/")
+            return {
+                'STORAGE_TOTAL_GB': round(total / (2**30), 2),
+                'STORAGE_USED_GB': round(used / (2**30), 2),
+                'STORAGE_FREE_GB': round(free / (2**30), 2),
+                'STORAGE_USED_PERCENT': round((used / total) * 100, 1) if total > 0 else 0,
+            }
+        except Exception:
+            return {
+                'STORAGE_TOTAL_GB': 0,
+                'STORAGE_USED_GB': 0,
+                'STORAGE_FREE_GB': 0,
+                'STORAGE_USED_PERCENT': 0,
+            }
 
 
 class DomainConfigView(GenericAPIView):

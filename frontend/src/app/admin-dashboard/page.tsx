@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Activity, Box, DollarSign, Loader2, RefreshCw, Server } from 'lucide-react';
+import { Activity, Box, DollarSign, Loader2, RefreshCw, Server, HardDrive } from 'lucide-react';
 
 import api from '@/lib/api';
 import { DashboardShell } from '@/components/layout/DashboardShell';
@@ -12,6 +12,10 @@ interface PlatformStats {
   total_deployments: number;
   active_instances: number;
   total_revenue: number;
+  storage_total_gb: number;
+  storage_used_gb: number;
+  storage_free_gb: number;
+  storage_used_percent: number;
 }
 
 interface PlatformEvent {
@@ -29,6 +33,10 @@ export default function AdminDashboardPage() {
     total_deployments: 0,
     active_instances: 0,
     total_revenue: 0,
+    storage_total_gb: 0,
+    storage_used_gb: 0,
+    storage_free_gb: 0,
+    storage_used_percent: 0,
   });
   const [events, setEvents] = useState<PlatformEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +46,7 @@ export default function AdminDashboardPage() {
   const fetchData = async () => {
     try {
       // Admin gate: this endpoint is IsAdminUser on backend.
-      await api.get('/system/config/');
+      const configRes = await api.get('/system/config/');
       setAccessDenied(false);
 
       const [servicesRes, deploymentsRes, overviewRes] = await Promise.allSettled([
@@ -71,6 +79,10 @@ export default function AdminDashboardPage() {
         total_deployments: deployments.length,
         active_instances: activeCount,
         total_revenue: Number(overview?.total_revenue_period || 0),
+        storage_total_gb: Number(configRes.data?.STORAGE_TOTAL_GB || 0),
+        storage_used_gb: Number(configRes.data?.STORAGE_USED_GB || 0),
+        storage_free_gb: Number(configRes.data?.STORAGE_FREE_GB || 0),
+        storage_used_percent: Number(configRes.data?.STORAGE_USED_PERCENT || 0),
       });
 
       const recentEvents: PlatformEvent[] = deployments.slice(0, 10).map((d: any) => ({
@@ -159,7 +171,7 @@ export default function AdminDashboardPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
           <StatsCard
             title="Total Services"
             value={stats.total_services}
@@ -183,6 +195,13 @@ export default function AdminDashboardPage() {
             value={`$${stats.total_revenue.toLocaleString()}`}
             icon={<DollarSign size={20} className="text-yellow-500" />}
             color="border-yellow-500"
+          />
+          <StatsCard
+            title="Server Storage"
+            value={`${stats.storage_free_gb} GB left`}
+            subValue={`${stats.storage_used_percent}% used of ${stats.storage_total_gb}GB`}
+            icon={<HardDrive size={20} className="text-cyan-500" />}
+            color="border-cyan-500"
           />
         </div>
 
@@ -220,7 +239,7 @@ export default function AdminDashboardPage() {
   );
 }
 
-function StatsCard({ title, value, icon, color }: any) {
+function StatsCard({ title, value, subValue, icon, color }: any) {
   return (
     <div className={`bg-card p-6 rounded-xl shadow-sm border-l-4 ${color} border-y border-r border-border`}>
       <div className="flex items-center justify-between mb-2">
@@ -228,6 +247,9 @@ function StatsCard({ title, value, icon, color }: any) {
         {icon}
       </div>
       <p className="text-3xl font-bold text-foreground">{value}</p>
+      {subValue && (
+        <div className="text-xs text-muted-foreground mt-2">{subValue}</div>
+      )}
     </div>
   );
 }

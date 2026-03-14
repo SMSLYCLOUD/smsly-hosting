@@ -51,7 +51,7 @@ class ComputeService:
 
         # pylint: disable=too-many-positional-arguments
     def deploy_container(self, name: str, image: str,
-                         env_vars: Dict[str, str], cpu: int = 256, memory: int = 512,
+                         env_vars: Dict[str, str], cpu: int = 500, memory: int = 1024,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> CloudResource:
         """
         Deploy a container service (ECS/Cloud Run/Azure Container Apps).
