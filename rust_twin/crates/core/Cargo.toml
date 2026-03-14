@@ -13,3 +13,8 @@ tracing-subscriber = { workspace = true }
 sea-orm = { workspace = true }
 dotenvy = { workspace = true }
 envy = "0.4"
+
+# Authentication
+jsonwebtoken = "9.3"
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
