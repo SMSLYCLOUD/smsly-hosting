@@ -12,4 +12,4 @@ tracing = { workspace = true }
 axum = { workspace = true }
 sea-orm = { workspace = true }
 
-smsly_core = { path = "../core", package = "core" }
+cn_core = { path = "../core", package = "core" }

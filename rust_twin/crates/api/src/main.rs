@@ -1,7 +1,7 @@
 use axum::{routing::get, Router};
-use smsly_core::config::Config;
-use smsly_core::db;
-use smsly_core::telemetry;
+use cn_core::config::Config;
+use cn_core::db;
+use cn_core::telemetry;
 use tokio::net::TcpListener;
 use tracing::info;
 use anyhow::{Context, Result};

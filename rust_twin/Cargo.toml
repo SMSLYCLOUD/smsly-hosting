@@ -18,5 +18,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = "0.7"
 reqwest = { version = "0.12", features = ["json"] }
-sea-orm = { version = "1.0", features = [ "sqlx-postgres", "runtime-tokio-rustls", "macros" ] }
+sea-orm = { version = "1.0", features = [ "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono" ] }
 dotenvy = "0.15"
