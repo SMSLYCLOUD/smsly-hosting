@@ -11,5 +11,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 axum = { workspace = true }
 sea-orm = { workspace = true }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 cn_core = { path = "../core", package = "core" }
