@@ -61,8 +61,8 @@ fn Projects() -> impl IntoView {
         move |_| {
             let client = client.clone();
             async move {
-                // Point this to the Axum API server running on :8000
-                let url = "http://localhost:8000/api/v1/projects";
+                // Use relative path to route through the internal Nginx proxy
+                let url = "/api/v1/projects";
 
                 let response = client.get(url).send().await;
                 match response {

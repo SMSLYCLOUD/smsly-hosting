@@ -60,7 +60,7 @@ async fn start_polling_loop(state: Arc<WorkerState>) -> Result<()> {
     loop {
         // Blockingly pop from the end of the list (BRPOP), timeout 5 seconds
         let result: redis::RedisResult<Option<(String, String)>> =
-            conn.brpop(QUEUE_NAME, 5.0).await;
+            conn.brpop(QUEUE_NAME, 5.0_f64).await;
 
         match result {
             Ok(Some((_queue, payload))) => {
