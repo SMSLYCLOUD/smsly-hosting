@@ -132,7 +132,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
         fi
     fi
 
-    if [ "$RUST_TWIN_MODE" = "true" ]; then
+    if [ "${RUST_TWIN_MODE:-false}" = "true" ]; then
         echo -e "\033[1;36m"
         echo "═══════════════════════════════════════════════════════════"
         echo "  INITIALIZING NEXT-GEN RUST TWIN MODE"
