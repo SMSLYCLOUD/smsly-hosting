@@ -8,8 +8,10 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
-#[allow(dead_code)]
-struct AppState {
+pub mod handlers;
+pub mod routes;
+
+pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
 }
@@ -33,6 +35,8 @@ async fn main() -> Result<()> {
     // 5. Build Axum Router
     let app = Router::new()
         .route("/health", get(health_check))
+        // Mount v1 API routes
+        .merge(routes::create_router())
         .with_state(state);
 
     // 6. Bind and Serve
