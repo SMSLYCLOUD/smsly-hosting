@@ -1,7 +1,7 @@
 use axum::{routing::{get, post}, Router};
 use std::sync::Arc;
 
-use crate::{AppState, handlers::{project, auth, billing}};
+use crate::{AppState, handlers::{project, auth, billing, teams}};
 
 pub fn create_router() -> Router<Arc<AppState>> {
     Router::new()
@@ -17,5 +17,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
                 // Billing / Licensing
                 .route("/billing/license", get(billing::get_license))
                 .route("/billing/upgrade", post(billing::upgrade_license))
+                // Teams
+                .route("/teams", get(teams::list_teams).post(teams::create_team))
         )
 }

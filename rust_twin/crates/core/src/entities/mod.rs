@@ -6,3 +6,7 @@ pub mod api_key;
 pub mod service;
 pub mod deployment;
 pub mod platform_license;
+pub mod team;
+pub mod team_member;
+pub mod addon;
+pub mod usage;

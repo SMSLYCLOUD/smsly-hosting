@@ -15,6 +15,10 @@ pub enum Task {
         deployment_id: uuid::Uuid,
         commit_hash: String,
     },
+    ProvisionAddon {
+        addon_id: uuid::Uuid,
+        addon_type: String,
+    },
     CollectUsage {
         owner_id: i32,
     },
@@ -33,6 +37,10 @@ pub async fn process_payload(state: Arc<WorkerState>, raw_payload: String) -> Re
             deployment_id,
             commit_hash,
         } => handle_smart_deploy(state, project_id, deployment_id, commit_hash).await?,
+        Task::ProvisionAddon {
+            addon_id,
+            addon_type,
+        } => handle_provision_addon(state, addon_id, addon_type).await?,
         Task::CollectUsage { owner_id } => handle_collect_usage(state, owner_id).await?,
     }
 
@@ -122,14 +130,85 @@ async fn handle_smart_deploy(
     Ok(())
 }
 
-#[instrument(skip(_state))]
-async fn handle_collect_usage(_state: Arc<WorkerState>, owner_id: i32) -> Result<()> {
+use cn_core::entities::addon;
+
+#[instrument(skip(state))]
+async fn handle_provision_addon(state: Arc<WorkerState>, addon_id: uuid::Uuid, addon_type: String) -> Result<()> {
+    info!("Provisioning Addon: {} (Type: {})", addon_id, addon_type);
+
+    let mut addon_active: addon::ActiveModel = addon::Entity::find_by_id(addon_id)
+        .one(&state.db)
+        .await?
+        .context("Addon not found in DB")?
+        .into();
+
+    let docker = DockerClient::new()?;
+    let network_name = "smsly-net";
+    docker.ensure_network(network_name).await?;
+
+    let (image, env, port) = match addon_type.as_str() {
+        "POSTGRES" => {
+            let pass = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
+            let env = vec![
+                format!("POSTGRES_PASSWORD={}", pass),
+                "POSTGRES_USER=postgres".to_string(),
+                "POSTGRES_DB=main".to_string()
+            ];
+            ("postgres:16-alpine", env, 5432)
+        },
+        "REDIS" => {
+            let pass = uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string();
+            let env = vec![format!("REDIS_PASSWORD={}", pass)];
+            ("redis:7-alpine", env, 6379)
+        },
+        _ => return Err(anyhow::anyhow!("Unsupported addon type")),
+    };
+
+    let container_name = format!("addon-{}-{}", addon_type.to_lowercase(), addon_id);
+    let container_id = docker.run_container(image, &container_name, env, network_name).await?;
+
+    // Simulate extracting connection string from env context
+    let uri = format!("{}://user:pass@{}:{}", addon_type.to_lowercase(), container_name, port);
+
+    addon_active.status = Set("RUNNING".to_string());
+    addon_active.container_id = Set(Some(container_id));
+    addon_active.connection_uri = Set(Some(uri));
+    addon_active.save(&state.db).await?;
+
+    info!("Addon provisioned successfully");
+    Ok(())
+}
+
+use cn_core::entities::usage;
+use rand::Rng; // Simulating Docker Stats parsing
+
+#[instrument(skip(state))]
+async fn handle_collect_usage(state: Arc<WorkerState>, owner_id: i32) -> Result<()> {
     info!("Collecting usage metrics for owner {}", owner_id);
 
-    // TODO: Phase (4.3) Billing aggregation
+    // In a real environment, we would use `bollard` to stream container stats
+    // Example: docker.stats(container_id).next().await;
+    // Here we simulate capturing running container stats.
+    // NOTE: We scope the RNG generation so `ThreadRng` (which is not Send) is dropped before `await`.
+    let (cpu_used, mem_used) = {
+        let mut rng = rand::thread_rng();
+        let cpu = rng.gen_range(0.01..2.0); // 0.01 to 2 CPU Cores
+        let mem = rng.gen_range(50.0..1024.0); // 50MB to 1GB
+        (cpu, mem)
+    };
 
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    info!("collect_usage task completed successfully");
+    let new_usage = usage::ActiveModel {
+        owner_id: Set(owner_id),
+        service_id: Set(None), // Represents total account usage for demo
+        addon_id: Set(None),
+        cpu_cores_used: Set(cpu_used),
+        memory_mb_used: Set(mem_used),
+        captured_at: Set(chrono::Utc::now().into()),
+        ..Default::default()
+    };
 
+    new_usage.insert(&state.db).await?;
+
+    info!("Usage logged: {:.2} Cores, {:.2} MB", cpu_used, mem_used);
     Ok(())
 }
