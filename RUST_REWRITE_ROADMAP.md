@@ -17,8 +17,32 @@ Rewrite the entire CloudNeuron platform (Python/Django Backend, Celery Workers, 
 
 ---
 
+## Progress Tracker
+
+- [x] **Phase 1: Foundation & Infrastructure Setup** (Workspace, `.env` config, Postgres pooling, Tracing)
+- [x] **Phase 2: Database Schema & Core Models** (SeaORM `User`, `Project`, `APIKey`, `Service`, `Deployment`)
+- [x] **Phase 3: The API Layer** (Axum routing, `GET/POST /projects` endpoints)
+- [x] **Phase 4: Background Workers & Orchestration** (Redis `brpop` polling, Tokio concurrent tasks)
+- [x] **Phase 5: The Frontend UI** (Leptos WASM CSR, Client-side routing, `reqwest` integration)
+- [x] **Phase 6: CLI Tool** (Clap-based management binary, `createsuperuser` with Argon2)
+- [x] **Phase 7: Infrastructure Integrations** (Bollard Docker API wrapper, Tokio async Nixpacks builder)
+- [x] **Phase 8: Docker Orchestration** (`cargo-chef` multi-stage builds, Trunk compilation, `docker-compose.yml`)
+- [x] **Phase 9: Network & Proxy Parity** (Internal Nginx routing, External Caddy SSL termination, `deploy.sh`)
+- [x] **Phase 10: Authentication & Security** (JWT generation/validation, Axum `AuthUser` extractor, Leptos Login UI)
+- [x] **Phase 11: Deployment Pipeline** (`POST /deploy` endpoint, Redis queuing, Worker Docker execution)
+
+---
+
+## Next Steps for Future Agents
+
+*   **Phase 12: Billing Integration** (Migrate Stripe/Cryptomus logic, update `PlatformLicense` models)
+*   **Phase 13: Auto-Remediation & Intelligence** (Port the Z-Score statistical anomaly detection to Rust, integrate Gemini/OpenAI API clients)
+*   **Phase 14: SSH Transfer Engine** (Implement `thrussh` or `ssh2` for the zero-downtime ServerTransferService)
+
+---
+
 ## Workspace Structure
-The new project will be housed in a Cargo workspace (`rust_twin/`) to share models and logic across the stack:
+The new project is housed in a Cargo workspace (`rust_twin/`) sharing models and logic across the stack:
 
 ```
 rust_twin/
