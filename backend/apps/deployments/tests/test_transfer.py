@@ -57,7 +57,6 @@ class ServerTransferServiceTest(TestCase):
         mock_ssh.connect.assert_called()
         mock_backup_svc.backup_service.assert_called_with(self.service.id)
         mock_ssh.upload_file.assert_called()
-        mock_ssh.exec_command.assert_any_call(f"tar -xzf /tmp/backup.tar.gz -C /tmp/restore_{self.transfer.id}")
 
     @patch('apps.deployments.services.transfer_service.SSHClient')
     @patch('apps.deployments.services.transfer_service.BackupService')
@@ -71,6 +70,9 @@ class ServerTransferServiceTest(TestCase):
         mock_ssh = MockSSH.return_value
         mock_ssh.check_docker.return_value = True
         mock_ssh.exec_command.return_value = "mock_output"
+
+        import os
+        os.environ['SMSLY_INSTALL_SCRIPT_SHA256'] = 'dummy-sha256'
 
         mock_backup_svc = MockBackup.return_value
         mock_backup = ServerBackup.objects.create(

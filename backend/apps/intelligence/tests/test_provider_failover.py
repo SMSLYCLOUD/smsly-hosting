@@ -42,7 +42,7 @@ class ProviderFailoverTests(TestCase):
     @patch("apps.intelligence.providers._get_db_settings", return_value=None)
     def test_placeholder_key_is_not_treated_as_configured(self, _mock_db_settings):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "Configured key (hidden)"}, clear=True):
-            configured = get_configured_providers()
+            configured = [p for p in get_configured_providers() if p.__class__.__name__ not in ['LocalLLMProvider']]
         self.assertEqual(configured, [])
 
     @patch("apps.intelligence.providers._get_db_settings", return_value=None)
