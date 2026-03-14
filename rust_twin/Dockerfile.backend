@@ -36,6 +36,9 @@ RUN apt-get update && apt-get install -y \
     docker.io \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Nixpacks (required by the worker infrastructure crate to build images)
+RUN curl -sSL https://nixpacks.com/install.sh | bash
+
 WORKDIR /app
 COPY --from=builder /usr/local/bin/app_binary /usr/local/bin/app_binary
 
