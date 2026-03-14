@@ -8,13 +8,7 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
-pub mod handlers;
-pub mod routes;
-
-pub struct AppState {
-    pub db: DatabaseConnection,
-    pub config: Config,
-}
+use api::{routes, AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {

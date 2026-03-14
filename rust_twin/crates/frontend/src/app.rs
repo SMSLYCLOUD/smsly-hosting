@@ -1,6 +1,6 @@
 use leptos::*;
 use leptos_router::*;
-use reqwest::Client;
+use reqwest::{header, Client};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -14,7 +14,23 @@ pub struct ProjectResponse {
 }
 
 #[component]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user_id: i32,
+    pub username: String,
+}
+
+// Global Auth State
+#[derive(Clone, Debug)]
+pub struct AuthState(pub RwSignal<Option<AuthResponse>>);
+
+#[component]
 pub fn App() -> impl IntoView {
+    // Initialize global authentication state
+    let auth_signal = create_rw_signal(None);
+    provide_context(AuthState(auth_signal));
+
     view! {
         <Router>
             <main class="min-h-screen bg-gray-50 flex flex-col">
@@ -24,6 +40,7 @@ pub fn App() -> impl IntoView {
                         <div class="space-x-4">
                             <A href="/" class="hover:underline">"Dashboard"</A>
                             <A href="/projects" class="hover:underline">"Projects"</A>
+                            <A href="/login" class="hover:underline font-semibold border border-white px-3 py-1 rounded">"Login"</A>
                         </div>
                     </div>
                 </nav>
@@ -31,12 +48,105 @@ pub fn App() -> impl IntoView {
                 <div class="container mx-auto flex-grow p-6">
                     <Routes>
                         <Route path="/" view=Dashboard/>
+                        <Route path="/login" view=Login/>
                         <Route path="/projects" view=Projects/>
                         <Route path="/*any" view=NotFound/>
                     </Routes>
                 </div>
             </main>
         </Router>
+    }
+}
+
+#[component]
+fn Login() -> impl IntoView {
+    let auth_state = expect_context::<AuthState>();
+    let navigate = use_navigate();
+
+    let (username, set_username) = create_signal(String::new());
+    let (password, set_password) = create_signal(String::new());
+    let (error_msg, set_error_msg) = create_signal(String::new());
+
+    let login_action = create_action(move |(u, p): &(String, String)| {
+        let u = u.clone();
+        let p = p.clone();
+        let nav = navigate.clone();
+
+        async move {
+            let client = Client::new();
+            let payload = serde_json::json!({
+                "username": u,
+                "password": p
+            });
+
+            let res = client
+                .post("/api/v1/auth/login")
+                .json(&payload)
+                .send()
+                .await;
+
+            match res {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<AuthResponse>().await {
+                            auth_state.0.set(Some(data));
+                            set_error_msg.set(String::new());
+                            nav("/projects", Default::default());
+                        }
+                    } else {
+                        set_error_msg.set("Invalid credentials".to_string());
+                    }
+                }
+                Err(_) => set_error_msg.set("Network error".to_string()),
+            }
+        }
+    });
+
+    view! {
+        <div class="max-w-md mx-auto mt-10 bg-white p-8 border border-gray-200 rounded-xl shadow-sm">
+            <h2 class="text-2xl font-bold text-center mb-6">"Sign In"</h2>
+
+            <Show when=move || !error_msg.get().is_empty()>
+                <div class="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">
+                    {error_msg.get()}
+                </div>
+            </Show>
+
+            <form on:submit=move |ev| {
+                ev.prevent_default();
+                login_action.dispatch((username.get(), password.get()));
+            }>
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">"Username"</label>
+                    <input
+                        type="text"
+                        class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                        on:input=move |ev| set_username.set(event_target_value(&ev))
+                        prop:value=username
+                        required
+                    />
+                </div>
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">"Password"</label>
+                    <input
+                        type="password"
+                        class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline"
+                        on:input=move |ev| set_password.set(event_target_value(&ev))
+                        prop:value=password
+                        required
+                    />
+                </div>
+                <div class="flex items-center justify-between">
+                    <button
+                        type="submit"
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline w-full"
+                        disabled=move || login_action.pending().get()
+                    >
+                        {move || if login_action.pending().get() { "Logging in..." } else { "Sign In" }}
+                    </button>
+                </div>
+            </form>
+        </div>
     }
 }
 
@@ -52,19 +162,28 @@ fn Dashboard() -> impl IntoView {
 
 #[component]
 fn Projects() -> impl IntoView {
-    // 1. Create a reactive signal to hold the HTTP client
+    let auth_state = expect_context::<AuthState>();
     let client = Client::new();
 
-    // 2. Define an asynchronous resource that fetches from our Axum API
     let fetch_projects = create_resource(
-        || (),
-        move |_| {
+        move || auth_state.0.get(), // Refetch if auth changes
+        move |auth_data| {
             let client = client.clone();
             async move {
-                // Use relative path to route through the internal Nginx proxy
+                // If not authenticated, return None
+                let token = match auth_data {
+                    Some(data) => data.token,
+                    None => return None,
+                };
+
                 let url = "/api/v1/projects";
 
-                let response = client.get(url).send().await;
+                let response = client
+                    .get(url)
+                    .header(header::AUTHORIZATION, format!("Bearer {}", token))
+                    .send()
+                    .await;
+
                 match response {
                     Ok(resp) => {
                         if resp.status().is_success() {
@@ -85,7 +204,12 @@ fn Projects() -> impl IntoView {
 
             <Suspense fallback=move || view! { <p>"Loading projects..."</p> }>
                 {move || match fetch_projects.get() {
-                    None => view! { <p class="text-red-500">"Error loading projects or still fetching."</p> }.into_view(),
+                    None => view! {
+                        <div class="bg-red-50 p-4 border border-red-200 text-red-700 rounded">
+                            "You must be logged in to view projects."
+                            <A href="/login" class="ml-2 font-bold hover:underline">"Log in here"</A>
+                        </div>
+                    }.into_view(),
                     Some(None) => view! { <p class="text-red-500">"Failed to parse API response."</p> }.into_view(),
                     Some(Some(projects)) => {
                         if projects.is_empty() {

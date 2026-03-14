@@ -9,7 +9,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use cn_core::entities::{project, user};
-use crate::AppState;
+use crate::{AppState, middleware::AuthUser};
 
 #[derive(Serialize)]
 pub struct ProjectResponse {
@@ -36,8 +36,11 @@ impl From<project::Model> for ProjectResponse {
 
 pub async fn list_projects(
     State(state): State<Arc<AppState>>,
+    auth_user: AuthUser, // Enforces authentication middleware automatically
 ) -> Result<Json<Vec<ProjectResponse>>, (StatusCode, String)> {
+    // Only return projects belonging to the authenticated user
     let projects = project::Entity::find()
+        .filter(project::Column::OwnerId.eq(auth_user.id))
         .all(&state.db)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -52,17 +55,17 @@ pub struct CreateProjectRequest {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
-    pub owner_id: i32,
 }
 
 pub async fn create_project(
     State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<ProjectResponse>), (StatusCode, String)> {
 
     // 1. Enforce uniqueness: Ensure owner + slug is unique (Django Meta constraint)
     let existing = project::Entity::find()
-        .filter(project::Column::OwnerId.eq(payload.owner_id))
+        .filter(project::Column::OwnerId.eq(auth_user.id))
         .filter(project::Column::Slug.eq(&payload.slug))
         .one(&state.db)
         .await
@@ -75,20 +78,12 @@ pub async fn create_project(
         ));
     }
 
-    // 2. Validate the user exists (simulate Foreign Key constraint validation gracefully)
-    let user_exists = user::Entity::find_by_id(payload.owner_id)
-        .one(&state.db)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if user_exists.is_none() {
-        return Err((StatusCode::BAD_REQUEST, "Owner does not exist".to_string()));
-    }
+    // 2. Validate the user exists (skipped, guaranteed by AuthUser extractor)
 
     // 3. Create active model
     let new_project = project::ActiveModel {
         id: Set(Uuid::new_v4()),
-        owner_id: Set(payload.owner_id),
+        owner_id: Set(auth_user.id),
         name: Set(payload.name),
         slug: Set(payload.slug),
         description: Set(payload.description.unwrap_or_default()),
