@@ -1,0 +1,49 @@
+# Syntax: docker/dockerfile:1
+# Optimize builds using cargo-chef for dependency caching
+
+# Stage 1: Chef Planner
+FROM rust:1.80-slim-bookworm AS chef
+# Install core build dependencies
+RUN apt-get update && apt-get install -y pkg-config libssl-dev build-essential && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef
+WORKDIR /app
+
+# Stage 2: Recipe Extraction
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Stage 3: Builder
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+# Build dependencies - this is the caching layer!
+RUN cargo chef cook --release --recipe-path recipe.json
+# Build application
+COPY . .
+# Accepts the specific binary to build (e.g., "api", "worker", "cli")
+ARG BIN
+RUN cargo build --release --bin $BIN
+# Move to predictable location for the final stage
+RUN mv target/release/$BIN /usr/local/bin/app_binary
+
+# Stage 4: Minimal Runtime
+FROM debian:bookworm-slim AS runtime
+# Install runtime dependencies (OpenSSL is required by bollard/reqwest/sea-orm)
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /usr/local/bin/app_binary /usr/local/bin/app_binary
+
+# Expose standard Axum port
+EXPOSE 8000
+
+# Set required environment variables
+ENV RUST_LOG="info,api=debug,worker=debug,core=debug"
+
+# Run the statically linked binary
+CMD ["/usr/local/bin/app_binary"]
