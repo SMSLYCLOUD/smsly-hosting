@@ -13,5 +13,6 @@ pub fn create_router() -> Router<Arc<AppState>> {
                 .route("/auth/login", post(auth::login))
                 // Protected Routes (Uses `AuthUser` extractor in handlers)
                 .route("/projects", get(project::list_projects).post(project::create_project))
+                .route("/projects/:id/deploy", post(project::trigger_deploy))
         )
 }

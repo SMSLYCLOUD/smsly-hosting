@@ -8,4 +8,5 @@ pub mod middleware;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    pub redis: redis::Client,
 }
