@@ -15,3 +15,6 @@ bollard = "0.16"
 
 # Process stream parsing
 futures-util = "0.3"
+
+# SSH Transfer Engine
+ssh2 = "0.9"
