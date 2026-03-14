@@ -96,18 +96,29 @@ The installer prompts you to choose:
 | 8. Memory Hardening | Adds swap/sysctl tuning + OOM protection for critical containers |
 | 9. Verification | Health checks, proxy validation, container status report |
 
+### Install the Next-Gen Rust Twin (Beta)
+We are actively rewriting CloudNeuron into a high-performance, single-workspace Rust architecture. You can deploy it alongside or instead of the legacy Python version.
+
+```bash
+# Fresh install of the Rust architecture
+sudo bash install.sh --rust
+```
+
 ### Update an Existing Installation
 
 ```bash
 cd /opt/smsly-hosting
 
-# Full update (frontend + backend)
+# Full update of the legacy Python monolith
 sudo bash install.sh --update
 
-# Frontend only
+# Migrate an existing Python installation to the Rust Twin
+sudo bash install.sh --update --rust
+
+# Frontend only (Python)
 sudo bash install.sh --update-frontend
 
-# Backend only (includes migrations)
+# Backend only (Python)
 sudo bash install.sh --update-backend
 ```
 
