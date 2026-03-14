@@ -47,6 +47,13 @@ sudo bash /tmp/install.sh
 
 > **Important:** Do NOT pipe directly from `curl` (`curl ... | bash`). The installer requires interactive input unless you pre-seed SSL env vars.
 
+### Install the Next-Gen Rust Architecture (Beta)
+If you want to skip the legacy Python/Django monolith and immediately install the new high-performance Rust ecosystem (API, Worker, Frontend WASM), use the `--rust` flag:
+
+```bash
+sudo bash /tmp/install.sh --rust
+```
+
 ### Non-Interactive SSL Install (Optional)
 
 If you're automating installation (CI or one-line SSH), you can run SSL mode non-interactively:
@@ -139,6 +146,14 @@ Pulls latest code, rebuilds all containers, runs migrations:
 
 ```bash
 sudo bash install.sh --update
+```
+
+#### Migrate to Rust Twin
+
+If you are running the legacy Python monolith and want to safely switch to the new Rust ecosystem using the same PostgreSQL and Redis databases:
+
+```bash
+sudo bash install.sh --update --rust
 ```
 
 #### Frontend Only
