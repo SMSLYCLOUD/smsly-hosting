@@ -270,7 +270,7 @@ class Service(TimeStampedModel):
     autoscale_cpu_target = models.IntegerField(
         default=80, help_text="Target CPU utilization percentage (HPA)")
     vpa_enabled = models.BooleanField(
-        default=True, help_text="Enable Vertical Pod Autoscaling (VPA)")
+        default=False, help_text="Enable Vertical Pod Autoscaling (VPA)")
 
     # Multi-Region
     regions = models.ManyToManyField(
