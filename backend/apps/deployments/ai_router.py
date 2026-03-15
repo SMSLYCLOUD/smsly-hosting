@@ -168,8 +168,13 @@ def discover_ai_router_targets(service: Service) -> list[OllamaTarget]:
     for candidate in query:
         if not is_ollama_service(candidate):
             continue
-        if _latest_status(candidate) != "ACTIVE":
+
+        # Auto-mapping: if it's explicitly selected via env, always include it
+        # (LiteLLM will auto-retry connecting when it boots).
+        # Otherwise, only include it if it's currently ACTIVE.
+        if _latest_status(candidate) != "ACTIVE" and str(candidate.id) not in selected_ids:
             continue
+
         target = _target_from_service(candidate, selected_ids)
         if target is not None:
             targets.append(target)
@@ -225,7 +230,10 @@ def generate_ai_router_proxy_config(service: Service) -> str:
             "request_timeout": 300,
         },
         "router_settings": {
-            "routing_strategy": "simple-shuffle",
+            "routing_strategy": "latency-based-routing",
+            "routing_strategy_args": {
+                "ttl": 300
+            }
         },
     }
     return yaml.safe_dump(payload, sort_keys=False)
