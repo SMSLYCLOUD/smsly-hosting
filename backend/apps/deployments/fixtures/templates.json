@@ -21994,13 +21994,8 @@
         "is_secret": true
       },
       {
-        "key": "DATABASE_URL",
-        "value": "${DATABASE_URL}",
-        "is_secret": true
-      },
-      {
         "key": "DISABLE_SCHEMA_UPDATE",
-        "value": "false",
+        "value": "true",
         "is_secret": false
       },
       {
@@ -22063,9 +22058,6 @@
         "value": "ai.smsly.cloud",
         "is_secret": false
       }
-    ],
-    "required_addons": [
-      "POSTGRES"
     ]
   },
   {
