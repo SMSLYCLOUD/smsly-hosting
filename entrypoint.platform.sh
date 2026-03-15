@@ -85,12 +85,12 @@ if [ "$ROLE" = "all" ] || [ "$ROLE" = "worker" ]; then
   if [ "$ROLE" = "all" ]; then
     # In single-container mode, wait for backend health before starting Celery.
     add_program "celery" \
-      "/bin/sh -c \"until wget -q -O /dev/null http://127.0.0.1:${BACKEND_PORT}/health; do echo 'waiting for backend...'; sleep 2; done; celery -A config worker -l info --concurrency=4\"" \
+      "/bin/sh -c \"until wget -q -O /dev/null http://127.0.0.1:${BACKEND_PORT}/health; do echo 'waiting for backend...'; sleep 2; done; celery -A config worker -l info --concurrency=2\"" \
       "/app" \
       "smsly"
   else
     add_program "celery" \
-      "celery -A config worker -l info --concurrency=4" \
+      "celery -A config worker -l info --concurrency=2" \
       "/app" \
       "smsly"
   fi
