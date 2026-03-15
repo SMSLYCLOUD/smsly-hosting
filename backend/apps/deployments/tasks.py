@@ -1794,6 +1794,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         return
 
     # Load template
+    import json
     template_path = os.path.join(
         settings.BASE_DIR, 'apps/deployments/fixtures/templates.json'
     )
@@ -1801,7 +1802,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         with open(template_path, 'r', encoding='utf-8') as f:
             templates = json.load(f)
         template = next((t for t in templates if t.get('id') == template_id), None)
-    except Exception: # pylint: disable=broad-exception-caught
+    except Exception as exc: # pylint: disable=broad-exception-caught
+        print(f"DEBUG: Exception reading template JSON: {exc}")
         template = None
 
     def _verify_image_available(image: str):
@@ -1938,6 +1940,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
     # Render and store template environment variables
     def render_value(raw: str) -> str:
+        import secrets
         v = str(raw or '')
         v = v.replace('${RANDOM_PASSWORD}', secrets.token_urlsafe(24))
         v = v.replace('${DOMAIN}', service.public_domain or '')
@@ -2033,6 +2036,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         }
         # Explicit Prisma migrate flag
         required["RUN_PRISMA_MIGRATE"] = "true"
+        required["DISABLE_SCHEMA_UPDATE"] = "false"
         env_list = template.setdefault('env_vars', [])
         existing_keys = {str(ev.get("key") or "").upper() for ev in env_list}
         for key, val in required.items():
@@ -2055,6 +2059,8 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         if update_fields:
             service.save(update_fields=update_fields)
 
+
+
     # Trigger deploy
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
     if provider:
@@ -2069,6 +2075,89 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
         if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):
             append_log(deployment, "\nℹ️ Prisma migration will run post-deploy for this template.\n")
+
+
+
+        # One-Click AI Router + Ollama auto-deployment
+        if template and template.get('id') == 'ai-router':
+
+            import secrets
+            def slugify(value: str) -> str:
+                value = (value or 'service').lower()
+                value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
+                return (value[:48] or 'service')
+
+            companion_templates = ['llama-3-2', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
+            companion_service_ids = []
+
+            for c_template_id in companion_templates:
+                c_template = next((t for t in templates if t.get('id') == c_template_id), None)
+                if not c_template:
+                    continue
+
+                c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
+                c_internal_port = int(c_template.get('default_port') or 11434)
+
+                c_service = Service.objects.create(
+                    name=c_name,
+                    deploy_type='DOCKER',
+                    docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
+                    internal_port=c_internal_port,
+                    owner=service.owner,
+                    provider=provider,
+                    project=service.project,
+                    memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
+                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
+                )
+                companion_service_ids.append(str(c_service.id))
+
+                EnvironmentVariable.objects.update_or_create(
+                    service=c_service,
+                    key='PORT',
+                    defaults={'value': str(c_internal_port), 'is_secret': False}
+                )
+                EnvironmentVariable.objects.update_or_create(
+                    service=c_service,
+                    key='PUBLIC_DOMAIN',
+                    defaults={'value': c_service.public_domain, 'is_secret': False}
+                )
+
+                c_env_vars = c_template.get('env_vars') or []
+                for item in c_env_vars:
+                    key = str(item.get('key') or '').strip()
+                    if key:
+                        EnvironmentVariable.objects.update_or_create(
+                            service=c_service,
+                            key=key,
+                            defaults={
+                                'value': render_value(item.get('value', '')),
+                                'is_secret': bool(item.get('is_secret', False)),
+                            }
+                        )
+
+                # trigger smart deploy for the companion
+                c_deployment = Deployment.objects.create(
+                    service=c_service,
+                    status='QUEUED',
+                    commit_hash='template',
+                    commit_message=f"Auto-companion Template: {c_template_id}"
+                )
+                smart_deploy_task.delay(str(c_deployment.id), str(provider.id))
+
+            # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS on the router
+            if companion_service_ids:
+                try:
+                    import json
+                    EnvironmentVariable.objects.update_or_create(
+                        service=service,
+                        key='AI_ROUTER_SELECTED_SERVICE_IDS',
+                        defaults={
+                            'value': json.dumps(companion_service_ids),
+                            'is_secret': False,
+                        }
+                    )
+                except Exception as e:
+                    pass  # Fail gracefully if auto-link fails
 
 
 @shared_task(bind=True, max_retries=3)
