@@ -2030,17 +2030,10 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         if cpu_cores < 1.0:
             service.cpu_cores = 1.0
             update_fields.append('cpu_cores')
-        # Prisma schema migration hook for litellm proxy (ai-router)
-        # Mark for a post-deploy migration step.
-        EnvironmentVariable.objects.update_or_create(
-            service=service,
-            key='RUN_PRISMA_MIGRATE',
-            defaults={'value': 'true', 'is_secret': False},
-        )
+        # Removed Prisma schema migration since we're using stateless config mode
         # Critical env hints
         required = {
             "LITELLM_MASTER_KEY": "${RANDOM_PASSWORD}",
-            "DATABASE_URL": "${DATABASE_URL}",
             "AI_ROUTER_API_BASE": DEFAULT_AI_ROUTER_API_BASE,
             "AI_ROUTER_UI_BASE": DEFAULT_AI_ROUTER_UI_BASE,
             "AI_ROUTER_AUTO_DISCOVER_MODELS": "true",
@@ -2048,9 +2041,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             "AI_ROUTER_BRAID_ALIAS": DEFAULT_BRAID_ALIAS,
             "AI_ROUTER_BRAID_ENABLED": "true",
         }
-        # Explicit Prisma migrate flag
-        required["RUN_PRISMA_MIGRATE"] = "true"
-        required["DISABLE_SCHEMA_UPDATE"] = "false"
+        # Remove explicit DB migrations since we are running stateless
         env_list = template.setdefault('env_vars', [])
         existing_keys = {str(ev.get("key") or "").upper() for ev in env_list}
         for key, val in required.items():
@@ -2067,7 +2058,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 service=service,
                 key=key,
                 value=render_value(val),
-                is_secret=key in {"LITELLM_MASTER_KEY", "DATABASE_URL"},
+                is_secret=key in {"LITELLM_MASTER_KEY"},
             )
             existing_service_keys.add(key)
         if update_fields:
