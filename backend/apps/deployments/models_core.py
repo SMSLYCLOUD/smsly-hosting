@@ -259,8 +259,8 @@ class Service(TimeStampedModel):
 
     # Resource Limits (Simulated for now)
     cpu_cores = models.DecimalField(
-        max_digits=4, decimal_places=2, default=0.5)
-    memory_mb = models.IntegerField(default=1024)
+        max_digits=4, decimal_places=2, default=1.0)
+    memory_mb = models.IntegerField(default=2048)
 
     # Auto-Scaling
     min_replicas = models.IntegerField(
@@ -326,13 +326,16 @@ class Service(TimeStampedModel):
         null=True, blank=True,
         help_text="Port for health checks. Leave blank to auto-detect from PORT env var.")
     health_check_interval = models.IntegerField(
-        default=60, help_text="Seconds between health checks")
+        default=30, help_text="Seconds between health checks")
     health_check_timeout = models.IntegerField(
-        default=15, help_text="Seconds to wait for health check response")
+        default=300, help_text="Seconds to wait for health check response")
     health_check_retries = models.IntegerField(
-        default=8, help_text="Consecutive failures before marking unhealthy")
+        default=90, help_text="Consecutive failures before marking unhealthy")
     auto_restart = models.BooleanField(
         default=True, help_text="Automatically restart unhealthy containers")
+    health_webhook_token = models.CharField(
+        max_length=64, blank=True,
+        help_text="Token for the service to push health status to the platform")
     health_status = models.CharField(
         max_length=20, default='unknown',
         choices=[
@@ -421,6 +424,10 @@ class Service(TimeStampedModel):
     def save(self, *args, **kwargs):
         if not self.verification_token:
             self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
+
+        if not self.health_webhook_token:
+            import secrets
+            self.health_webhook_token = secrets.token_urlsafe(32)
 
         # Auto-generate deterministic subdomain from owner + name
         # Same owner + same name = same domain, always.

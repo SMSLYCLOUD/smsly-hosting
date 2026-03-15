@@ -19,6 +19,7 @@ from .views_chat import AIChatView
 from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
 from .views_subdomains import subdomains_list_create, subdomains_release
+from .views_health_webhook import ServiceHealthWebhookView
 from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import (
     github_connection, github_connect, github_oauth_url, github_oauth_callback,
@@ -96,6 +97,7 @@ urlpatterns = router.urls + [
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
+    path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
