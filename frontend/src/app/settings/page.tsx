@@ -589,34 +589,84 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="security">
-          <Card>
-            <CardHeader>
-              <CardTitle>Security Settings</CardTitle>
-              <CardDescription>Manage your account security.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Current Password</Label>
-                <Input type="password" placeholder="********" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>New Password</Label>
-                <Input type="password" placeholder="********" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label>Confirm New Password</Label>
-                <Input type="password" placeholder="********" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleChangePassword} disabled={changingPassword}>
-                  {changingPassword ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Changing...</> : "Change Password"}
-                </Button>
-                <Link href="/dashboard">
-                  <Button variant="ghost">Cancel</Button>
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Account Security</CardTitle>
+                <CardDescription>Manage your account password.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Current Password</Label>
+                  <Input type="password" placeholder="********" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>New Password</Label>
+                  <Input type="password" placeholder="********" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Confirm New Password</Label>
+                  <Input type="password" placeholder="********" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handleChangePassword} disabled={changingPassword}>
+                    {changingPassword ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Changing...</> : "Change Password"}
+                  </Button>
+                  <Link href="/dashboard">
+                    <Button variant="ghost">Cancel</Button>
+                  </Link>
+                </div>
+              </CardContent>
+            </Card>
+
+            {systemConfig && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-indigo-500" /> Platform Security Configuration</CardTitle>
+                  <CardDescription>Read-only server security settings.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Setting</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">USE_SSL</TableCell>
+                        <TableCell><Badge variant={systemConfig.USE_SSL ? "default" : "secondary"}>{systemConfig.USE_SSL ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SECURE_SSL_REDIRECT</TableCell>
+                        <TableCell><Badge variant={systemConfig.SECURE_SSL_REDIRECT ? "default" : "secondary"}>{systemConfig.SECURE_SSL_REDIRECT ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SECURE_HSTS_SECONDS</TableCell>
+                        <TableCell>{systemConfig.SECURE_HSTS_SECONDS}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SECURE_HSTS_INCLUDE_SUBDOMAINS</TableCell>
+                        <TableCell><Badge variant={systemConfig.SECURE_HSTS_INCLUDE_SUBDOMAINS ? "default" : "secondary"}>{systemConfig.SECURE_HSTS_INCLUDE_SUBDOMAINS ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SECURE_HSTS_PRELOAD</TableCell>
+                        <TableCell><Badge variant={systemConfig.SECURE_HSTS_PRELOAD ? "default" : "secondary"}>{systemConfig.SECURE_HSTS_PRELOAD ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SESSION_COOKIE_SECURE</TableCell>
+                        <TableCell><Badge variant={systemConfig.SESSION_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.SESSION_COOKIE_SECURE ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CSRF_COOKIE_SECURE</TableCell>
+                        <TableCell><Badge variant={systemConfig.CSRF_COOKIE_SECURE ? "default" : "secondary"}>{systemConfig.CSRF_COOKIE_SECURE ? "Enabled" : "Disabled"}</Badge></TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SMSLY_DISABLE_SIGNATURE_CHECK</TableCell>
+                        <TableCell><Badge variant={systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "destructive" : "default"}>{systemConfig.SMSLY_DISABLE_SIGNATURE_CHECK ? "Disabled" : "Active"}</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="providers">
@@ -866,6 +916,25 @@ export default function SettingsPage() {
           <div className="space-y-6">
             <GitHubIntegrationCard />
             <OAuthTab />
+            {systemConfig && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-indigo-400" /> Webhook Configuration</CardTitle>
+                  <CardDescription>Platform-wide incoming webhook configuration.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">GITHUB_WEBHOOK_SECRET</TableCell>
+                        <TableCell><Badge variant={systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "default" : "secondary"}>{systemConfig.GITHUB_WEBHOOK_SECRET_SET ? "Configured" : "Not Set"}</Badge></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </TabsContent>
 
@@ -1070,24 +1139,105 @@ export default function SettingsPage() {
                     <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
                     <TableBody>
                       <TableRow>
-                        <TableCell className="font-mono">ENGINE</TableCell>
-                        <TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_ENGINE}</TableCell>
-                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
+                        <TableCell className="font-mono">DATABASE_CONFIGURED</TableCell>
+                        <TableCell className="truncate max-w-[300px]">{systemConfig.DATABASE_CONFIGURED ? "Yes" : "No"}</TableCell>
+                        <TableCell><Badge variant={systemConfig.DATABASE_CONFIGURED ? "default" : "secondary"}>Config</Badge></TableCell>
                       </TableRow>
                       <TableRow>
-                        <TableCell className="font-mono">DATABASE</TableCell>
-                        <TableCell>{systemConfig.DATABASE_NAME}</TableCell>
-                        <TableCell><Badge variant="outline">Info</Badge></TableCell>
-                      </TableRow>
-                      <TableRow>
-                        <TableCell className="font-mono">HOST</TableCell>
-                        <TableCell>{systemConfig.DATABASE_HOST}</TableCell>
+                        <TableCell className="font-mono">DATABASE_ENGINE_TYPE</TableCell>
+                        <TableCell className="capitalize">{systemConfig.DATABASE_ENGINE_TYPE}</TableCell>
                         <TableCell><Badge variant="outline">Info</Badge></TableCell>
                       </TableRow>
                     </TableBody>
                   </Table>
                 </CardContent>
               </Card>
+
+              {/* Storage */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Server className="h-5 w-5 text-green-500" /> Storage</CardTitle>
+                  <CardDescription>Server root partition storage metrics.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Metric</TableHead><TableHead>Value</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">STORAGE_TOTAL_GB</TableCell>
+                        <TableCell>{systemConfig.STORAGE_TOTAL_GB} GB</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">STORAGE_USED_GB</TableCell>
+                        <TableCell>{systemConfig.STORAGE_USED_GB} GB ({systemConfig.STORAGE_USED_PERCENT}%)</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">STORAGE_FREE_GB</TableCell>
+                        <TableCell>{systemConfig.STORAGE_FREE_GB} GB</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* Network Configuration */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Globe className="h-5 w-5 text-blue-400" /> Network</CardTitle>
+                  <CardDescription>Platform network settings.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">ALLOWED_HOSTS</TableCell>
+                        <TableCell className="truncate max-w-[300px]">{systemConfig.ALLOWED_HOSTS?.join(", ")}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CORS_ALLOWED_ORIGINS</TableCell>
+                        <TableCell className="truncate max-w-[300px]">{systemConfig.CORS_ALLOWED_ORIGINS?.join(", ") || "None"}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">CSRF_TRUSTED_ORIGINS</TableCell>
+                        <TableCell className="truncate max-w-[300px]">{systemConfig.CSRF_TRUSTED_ORIGINS?.join(", ") || "None"}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
+              {/* General Configuration */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><SettingsIcon className="h-5 w-5 text-slate-500" /> General</CardTitle>
+                  <CardDescription>Platform general configuration.</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader><TableRow><TableHead>Variable</TableHead><TableHead>Value</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      <TableRow>
+                        <TableCell className="font-mono">VERSION</TableCell>
+                        <TableCell>{systemConfig.VERSION}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">DEBUG</TableCell>
+                        <TableCell>{systemConfig.DEBUG ? "Enabled" : "Disabled"}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">TIME_ZONE</TableCell>
+                        <TableCell>{systemConfig.TIME_ZONE}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell className="font-mono">SITE_ID</TableCell>
+                        <TableCell>{systemConfig.SITE_ID}</TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+
             </div>
           ) : (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
