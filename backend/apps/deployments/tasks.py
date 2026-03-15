@@ -97,19 +97,33 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
     env_map = {ev.key: ev.value for ev in service.env_vars.all()}
 
     if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
-        append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
-        prisma_res = subprocess.run(
-            ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        from apps.deployments.ai_router import is_ai_router_service
+        # LiteLLM's internal migrations often miss tables or get out of sync with its schema.
+        # Using 'db push' forces the schema to align perfectly and creates missing tables
+        # like LiteLLM_UserTable, LiteLLM_BudgetTable, etc. We ONLY do this for AI Router to prevent data loss elsewhere.
+        if is_ai_router_service(service):
+            append_log(deployment, "\n[hook] Forcing Prisma DB schema push to initialize LiteLLM tables...\n")
+            prisma_res = subprocess.run(
+                ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma db push --accept-data-loss"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        else:
+            append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
+            prisma_res = subprocess.run(
+                ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
         if prisma_res.returncode == 0:
-            append_log(deployment, "[hook] Prisma migrate deploy succeeded.\n")
+            append_log(deployment, "[hook] Prisma migration succeeded.\n")
         else:
             append_log(
                 deployment,
-                "[hook] Prisma migrate deploy failed:\n"
+                "[hook] Prisma migration failed:\n"
                 f"{prisma_res.stdout}\n{prisma_res.stderr}\n",
             )
 
@@ -2061,8 +2075,90 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
 
 
-    # Trigger deploy
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
+
+    # One-Click AI Router + Ollama auto-deployment
+    if provider and template and template.get('id') == 'ai-router':
+        import secrets
+        import re
+        def slugify(value: str) -> str:
+            value = (value or 'service').lower()
+            value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
+            return (value[:48] or 'service')
+
+        companion_templates = ['llama-3-2', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
+        companion_service_ids = []
+
+        for c_template_id in companion_templates:
+            c_template = next((t for t in templates if t.get('id') == c_template_id), None)
+            if not c_template:
+                continue
+
+            c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
+            c_internal_port = int(c_template.get('default_port') or 11434)
+
+            c_service = Service.objects.create(
+                name=c_name,
+                deploy_type='DOCKER',
+                docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
+                internal_port=c_internal_port,
+                owner=service.owner,
+                provider=provider,
+                project=service.project,
+                memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
+                cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
+            )
+            companion_service_ids.append(str(c_service.id))
+
+            EnvironmentVariable.objects.update_or_create(
+                service=c_service,
+                key='PORT',
+                defaults={'value': str(c_internal_port), 'is_secret': False}
+            )
+            EnvironmentVariable.objects.update_or_create(
+                service=c_service,
+                key='PUBLIC_DOMAIN',
+                defaults={'value': c_service.public_domain, 'is_secret': False}
+            )
+
+            c_env_vars = c_template.get('env_vars') or []
+            for item in c_env_vars:
+                key = str(item.get('key') or '').strip()
+                if key:
+                    EnvironmentVariable.objects.update_or_create(
+                        service=c_service,
+                        key=key,
+                        defaults={
+                            'value': render_value(item.get('value', '')),
+                            'is_secret': bool(item.get('is_secret', False)),
+                        }
+                    )
+
+            # trigger smart deploy for the companion
+            c_deployment = Deployment.objects.create(
+                service=c_service,
+                status='QUEUED',
+                commit_hash='template',
+                commit_message=f"Auto-companion Template: {c_template_id}"
+            )
+            smart_deploy_task.delay(str(c_deployment.id), str(provider.id))
+
+        # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS on the router before deploying it
+        if companion_service_ids:
+            try:
+                import json
+                EnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key='AI_ROUTER_SELECTED_SERVICE_IDS',
+                    defaults={
+                        'value': json.dumps(companion_service_ids),
+                        'is_secret': False,
+                    }
+                )
+            except Exception as e:
+                pass  # Fail gracefully if auto-link fails
+
+    # Trigger deploy for the main template
     if provider:
         deployment = Deployment.objects.create(
             service=service,
@@ -2075,89 +2171,6 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
         if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):
             append_log(deployment, "\nℹ️ Prisma migration will run post-deploy for this template.\n")
-
-
-
-        # One-Click AI Router + Ollama auto-deployment
-        if template and template.get('id') == 'ai-router':
-
-            import secrets
-            def slugify(value: str) -> str:
-                value = (value or 'service').lower()
-                value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
-                return (value[:48] or 'service')
-
-            companion_templates = ['llama-3-2', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
-            companion_service_ids = []
-
-            for c_template_id in companion_templates:
-                c_template = next((t for t in templates if t.get('id') == c_template_id), None)
-                if not c_template:
-                    continue
-
-                c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
-                c_internal_port = int(c_template.get('default_port') or 11434)
-
-                c_service = Service.objects.create(
-                    name=c_name,
-                    deploy_type='DOCKER',
-                    docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
-                    internal_port=c_internal_port,
-                    owner=service.owner,
-                    provider=provider,
-                    project=service.project,
-                    memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
-                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
-                )
-                companion_service_ids.append(str(c_service.id))
-
-                EnvironmentVariable.objects.update_or_create(
-                    service=c_service,
-                    key='PORT',
-                    defaults={'value': str(c_internal_port), 'is_secret': False}
-                )
-                EnvironmentVariable.objects.update_or_create(
-                    service=c_service,
-                    key='PUBLIC_DOMAIN',
-                    defaults={'value': c_service.public_domain, 'is_secret': False}
-                )
-
-                c_env_vars = c_template.get('env_vars') or []
-                for item in c_env_vars:
-                    key = str(item.get('key') or '').strip()
-                    if key:
-                        EnvironmentVariable.objects.update_or_create(
-                            service=c_service,
-                            key=key,
-                            defaults={
-                                'value': render_value(item.get('value', '')),
-                                'is_secret': bool(item.get('is_secret', False)),
-                            }
-                        )
-
-                # trigger smart deploy for the companion
-                c_deployment = Deployment.objects.create(
-                    service=c_service,
-                    status='QUEUED',
-                    commit_hash='template',
-                    commit_message=f"Auto-companion Template: {c_template_id}"
-                )
-                smart_deploy_task.delay(str(c_deployment.id), str(provider.id))
-
-            # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS on the router
-            if companion_service_ids:
-                try:
-                    import json
-                    EnvironmentVariable.objects.update_or_create(
-                        service=service,
-                        key='AI_ROUTER_SELECTED_SERVICE_IDS',
-                        defaults={
-                            'value': json.dumps(companion_service_ids),
-                            'is_secret': False,
-                        }
-                    )
-                except Exception as e:
-                    pass  # Fail gracefully if auto-link fails
 
 
 @shared_task(bind=True, max_retries=3)
