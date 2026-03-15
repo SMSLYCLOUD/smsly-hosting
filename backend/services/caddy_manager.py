@@ -75,7 +75,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
                 public_domain = ""
-            if isinstance(service.public_domain, str) and service.public_domain.strip():
+            elif isinstance(service.public_domain, str) and service.public_domain.strip():
                 try:
                     public_domain = normalize_domain(service.public_domain)
                 except ValueError:
@@ -152,7 +152,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
                 public_domain = ""
-            if isinstance(service.public_domain, str) and service.public_domain.strip():
+            elif isinstance(service.public_domain, str) and service.public_domain.strip():
                 try:
                     public_domain = normalize_domain(service.public_domain)
                 except ValueError:
