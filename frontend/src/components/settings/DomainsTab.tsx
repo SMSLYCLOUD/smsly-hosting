@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api, { servicesApi, systemApi, Service } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Globe, Plus, Trash2, CheckCircle, XCircle, ExternalLink, RefreshCw, Copy, Loader2, ArrowRight } from 'lucide-react';
@@ -155,14 +156,12 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                         <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Default Domain</h4>
                         {domains.length > 0 && (
                             <div className="flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground">Hide Default Domain</span>
-                                <Button
-                                    variant={service.public_domain_hidden ? 'default' : 'outline'}
-                                    size="sm"
-                                    className="h-7 text-xs"
-                                    onClick={async () => {
+                                <span className="text-xs text-muted-foreground">Public Default Domain</span>
+                                <Switch
+                                    checked={!service.public_domain_hidden}
+                                    onCheckedChange={async (checked) => {
                                         try {
-                                            const newVal = !service.public_domain_hidden;
+                                            const newVal = !checked; // hidden is inverse of checked (visible)
                                             const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
                                             setService(updated);
                                             toast({ title: 'Success', description: `Default domain is now ${newVal ? 'hidden' : 'visible'}. Redeploy to apply.` });
@@ -170,9 +169,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                                             toast({ title: 'Error', description: 'Failed to update visibility', variant: 'destructive' });
                                         }
                                     }}
-                                >
-                                    {service.public_domain_hidden ? 'Hidden' : 'Visible'}
-                                </Button>
+                                />
                             </div>
                         )}
                     </div>
