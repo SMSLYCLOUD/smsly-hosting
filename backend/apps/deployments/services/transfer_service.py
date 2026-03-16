@@ -27,12 +27,6 @@ class ServerTransferService:
 
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
-        if not getattr(settings, "ALLOW_STUB_TRANSFER_PIPELINE", False):
-            self._handle_failure(
-                NotImplementedError("Transfer pipeline not implemented in strict mode.")
-            )
-            return
-
         try:
             self._init_ssh()
 
