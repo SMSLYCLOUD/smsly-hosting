@@ -16,7 +16,7 @@ This guide provides step-by-step instructions on how to generate an SSH key for 
    ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
    ```
 
-3. When prompted to "Enter a file in which to save the key," press **Enter** to accept the default location (`/root/.ssh/id_ed25519` or `/root/.ssh/id_rsa`).
+3. When prompted to "Enter a file in which to save the key," press **Enter** to accept the default location (`~/.ssh/id_ed25519` or `~/.ssh/id_rsa`). This ensures the key is placed in the current user's `.ssh` directory.
 4. When prompted to type a secure passphrase, you can either enter a passphrase for extra security or leave it empty for no passphrase (useful for automated scripts).
 
 ## Step 2: Start the SSH Agent and Add Your Key
@@ -30,18 +30,20 @@ This guide provides step-by-step instructions on how to generate an SSH key for 
 2. Add your newly generated SSH private key to the ssh-agent:
 
    ```bash
-   ssh-add /root/.ssh/id_ed25519
+   ssh-add ~/.ssh/id_ed25519
    ```
-   *(If you used RSA, use `ssh-add /root/.ssh/id_rsa` instead).*
+   *(If you used RSA, use `ssh-add ~/.ssh/id_rsa` instead).*
+
+   **Troubleshooting:** If you receive a "Permission denied" error, it likely means you did not switch to the `root` user in Step 1 (e.g., you are still logged in as `ubuntu` and are trying to access `/root/`). If you get "Could not open a connection to your authentication agent" when using `sudo ssh-add`, this is because `sudo` strips the `ssh-agent` environment variables. Ensure you run `sudo -i` *before* starting Step 1, or use the `~/.ssh/` path which automatically maps to your current user.
 
 ## Step 3: Add the SSH Public Key to Your GitHub Account
 
 1. Output the contents of your public key file to your terminal:
 
    ```bash
-   cat /root/.ssh/id_ed25519.pub
+   cat ~/.ssh/id_ed25519.pub
    ```
-   *(Or `cat /root/.ssh/id_rsa.pub` if using RSA).*
+   *(Or `cat ~/.ssh/id_rsa.pub` if using RSA).*
 
 2. Copy the entire output to your clipboard. It should start with `ssh-ed25519` or `ssh-rsa` and end with your email address.
 3. Go to GitHub and log in to your account.
