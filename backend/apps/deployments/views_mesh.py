@@ -14,6 +14,7 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .models_mesh import MeshNetwork, WireGuardPeer
+from .tasks_mesh import deploy_mesh_task
 from .services.wireguard_service import WireGuardService
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,9 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         try:
             peer = WireGuardService.add_peer_to_mesh(mesh, server=server)
             # Deploy updated configs to all peers
-            results = WireGuardService.deploy_full_mesh(mesh)
+            # Deploy via celery to avoid connection reset when interface restarts
+            deploy_mesh_task.delay(mesh.id)
+            results = {"status": "Deploying in background"}
             return Response({
                 "peer": WireGuardPeerSerializer(peer).data,
                 "deployment": results,
@@ -194,7 +197,9 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         """Deploy WireGuard configs to all peers in the mesh."""
         mesh = self.get_object()
         try:
-            results = WireGuardService.deploy_full_mesh(mesh)
+            # Deploy via celery to avoid connection reset when interface restarts
+            deploy_mesh_task.delay(mesh.id)
+            results = {"status": "Deploying in background"}
             return Response(results)
         except Exception as e:
             return Response(
