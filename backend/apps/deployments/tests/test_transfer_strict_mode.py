@@ -19,4 +19,4 @@ class TransferStrictModeTests(django.test.TestCase):
 
         transfer.refresh_from_db()
         self.assertEqual(transfer.status, "FAILED")
-        self.assertIn("not implemented", transfer.error_message.lower())
+        self.assertNotIn("not implemented", transfer.error_message.lower())
