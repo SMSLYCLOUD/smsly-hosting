@@ -41,6 +41,29 @@ class FailoverSerializer(serializers.Serializer):
     target_wg_address = serializers.CharField()
 
 
+class ConnectReplicaPreflightSerializer(serializers.Serializer):
+    mesh_id = serializers.UUIDField()
+    target_wg_address = serializers.CharField()
+
+
+class ConnectReplicaSerializer(serializers.Serializer):
+    mesh_id = serializers.UUIDField()
+    target_wg_address = serializers.CharField()
+    db_password = serializers.CharField(write_only=True)
+    admin_password = serializers.CharField(write_only=True)
+    replication_password = serializers.CharField(
+        write_only=True, required=True, allow_blank=False,
+        help_text="Strong unique password for replication user"
+    )
+
+    def validate_replication_password(self, value):
+        if not value or value.strip().lower() == "repl_pass":
+            raise serializers.ValidationError(
+                "replication_password must be provided and cannot use the default 'repl_pass'."
+            )
+        return value
+
+
 # ─── ViewSet ─────────────────────────────────────────────────────────────────
 
 class ReplicationViewSet(viewsets.ViewSet):
@@ -134,6 +157,62 @@ class ReplicationViewSet(viewsets.ViewSet):
             "status": "Failover initiated",
             "target": target,
         }, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=["post"])
+    def preflight(self, request):
+        """Run pre-flight checks for a new replica."""
+        ser = ConnectReplicaPreflightSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        try:
+            mesh = MeshNetwork.objects.get(id=ser.validated_data["mesh_id"])
+        except MeshNetwork.DoesNotExist:
+            return Response(
+                {"error": "Mesh not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            result = ReplicationService.preflight_check(
+                mesh, ser.validated_data["target_wg_address"]
+            )
+            return Response(result)
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(detail=False, methods=["post"])
+    def connect_replica(self, request):
+        """Finalize the connection of a new replica."""
+        ser = ConnectReplicaSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        try:
+            mesh = MeshNetwork.objects.get(id=ser.validated_data["mesh_id"])
+        except MeshNetwork.DoesNotExist:
+            return Response(
+                {"error": "Mesh not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            ReplicationService.connect_replica(
+                mesh,
+                ser.validated_data["target_wg_address"],
+                ser.validated_data["db_password"],
+                ser.validated_data["admin_password"],
+                ser.validated_data["replication_password"]
+            )
+            return Response(
+                {"status": "Replica connected successfully"}
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=False, methods=["post"])
     def reinitialize(self, request):
