@@ -1,392 +1,262 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
+import React, { useState, useEffect } from 'react';
+import PageHeader from '@/components/PageHeader';
+import { servicesApi, addonsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ArrowRight, Loader2, Server, CheckCircle2, RotateCcw, Lock, Key } from 'lucide-react';
-import { useToast } from '@/components/ui/use-toast';
-import api, { servicesApi, Service, serversApi, ManagedServer } from '@/lib/api';
-import { Progress } from '@/components/ui/progress';
-import { RequiresTier } from '@/components/licensing/RequiresTier';
+import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function TransfersPage() {
-    const { toast } = useToast();
-    const [services, setServices] = useState<Service[]>([]);
-    const [servers, setServers] = useState<ManagedServer[]>([]);
-    const [serversLoading, setServersLoading] = useState(false);
-    const [step, setStep] = useState(1);
-    const [sshAuthMethod, setSshAuthMethod] = useState<'password' | 'key'>('password');
-    const [formData, setFormData] = useState({
-        transfer_type: 'SERVICE',
-        service_id: '',
-        target_server_ip: '',
-        target_server_id: '',
-        target_ssh_key: '',
-        target_ssh_password: '',
-    });
-    const [transfers, setTransfers] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
-    const hasTargetIp = formData.target_server_ip.trim().length > 0;
-    const hasAuth = sshAuthMethod === 'password'
-        ? formData.target_ssh_password.trim().length > 0
-        : formData.target_ssh_key.trim().length > 0;
-    const usingConnectedTarget = formData.target_server_id.trim().length > 0;
+    const [servers, setServers] = useState<any[]>([]);
+    const [services, setServices] = useState<any[]>([]);
+    const [addons, setAddons] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
 
-    const isValidIp = (value: string) => {
-        const v4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-        const v6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|::1)$/;
-        return v4.test(value.trim()) || v6.test(value.trim());
-    };
-
-    const loadServers = useCallback(async () => {
-        setServersLoading(true);
-        try {
-            const list = await serversApi.list();
-            const normalized = (Array.isArray(list) ? list : []).sort((a, b) => {
-                if (a.status === b.status) return a.name.localeCompare(b.name);
-                if (a.status === 'ONLINE') return -1;
-                if (b.status === 'ONLINE') return 1;
-                return 0;
-            });
-
-            if (normalized.length > 0) {
-                setServers(normalized);
-            } else {
-                const refreshed = await serversApi.checkAll().catch(() => ({ servers: [] }));
-                setServers(Array.isArray(refreshed?.servers) ? refreshed.servers : []);
-            }
-        } catch (err) {
-            console.error(err);
-            toast({
-                title: "Connected servers unavailable",
-                description: "Could not load managed servers list.",
-                variant: "destructive",
-            });
-        } finally {
-            setServersLoading(false);
-        }
-    }, [toast]);
-
-    const loadTransfers = useCallback(async () => {
-        try {
-            const res = await api.get('/transfers/');
-            setTransfers(Array.isArray(res.data) ? res.data : res.data.results || []);
-        } catch (err) { console.error(err); }
-    }, []);
+    // Grouping structure for DnD
+    const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
 
     useEffect(() => {
-        servicesApi.list().then(setServices);
-        loadServers();
-        loadTransfers();
-    }, [loadServers, loadTransfers]);
+        const fetchData = async () => {
+            try {
+                // Fetch connected servers
+                const serversRes = await servicesApi.get('/servers/');
+                const serversData = serversRes.data.results || serversRes.data;
+                setServers(serversData);
 
-    const handleStartTransfer = async () => {
-        setLoading(true);
-        try {
-            await api.post('/transfers/', formData);
-            toast({ title: "Transfer Initiated", description: "Migration process started." });
-            setStep(1);
-            setFormData({
-                transfer_type: 'SERVICE',
-                service_id: '',
-                target_server_ip: '',
-                target_server_id: '',
-                target_ssh_key: '',
-                target_ssh_password: '',
-            });
-            loadTransfers();
-        } catch (err: any) {
-            const data = err.response?.data;
-            let msg = 'Error starting transfer';
-            if (data) {
-                if (typeof data === 'string') msg = data;
-                else if (data.error) msg = data.error;
-                else if (data.non_field_errors) msg = data.non_field_errors.join(', ');
-                else {
-                    // DRF field-level validation errors: {field: ["msg"]}
-                    const parts = Object.entries(data).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
-                    if (parts.length) msg = parts.join(' | ');
-                }
+                // Fetch services
+                const servicesRes = await servicesApi.get('/services/');
+                const servicesData = servicesRes.data.results || servicesRes.data;
+                setServices(servicesData);
+
+                // Fetch addons
+                const addonsRes = await addonsApi.get('/addons/');
+                const addonsData = addonsRes.data.results || addonsRes.data;
+                setAddons(addonsData);
+
+                // Group by server
+                const grouped: Record<string, any[]> = {};
+                // Initialize with all servers including local node
+                grouped['local'] = []; // Assume local has id 'local' or we use empty for default
+                serversData.forEach((srv: any) => {
+                    grouped[srv.id] = [];
+                });
+
+                // Add services
+                servicesData.forEach((srv: any) => {
+                    const serverId = srv.server || 'local';
+                    if (!grouped[serverId]) grouped[serverId] = [];
+                    grouped[serverId].push({ ...srv, type: 'service' });
+                });
+
+                // Add addons
+                addonsData.forEach((addon: any) => {
+                    const serverId = addon.server || 'local';
+                    if (!grouped[serverId]) grouped[serverId] = [];
+                    grouped[serverId].push({ ...addon, type: 'addon' });
+                });
+
+                setGroupedServices(grouped);
+            } catch (error) {
+                console.error("Failed to fetch transfer data", error);
+                toast.error("Failed to load connected servers or services");
+            } finally {
+                setLoading(false);
             }
-            toast({ title: "Transfer Failed", description: msg, variant: "destructive" });
-        } finally {
-            setLoading(false);
+        };
+        fetchData();
+    }, []);
+
+    // ─────────────────────────────────────────────────────────────────
+    // DnD Handlers
+    // ─────────────────────────────────────────────────────────────────
+    const handleDragStart = (e: React.DragEvent, itemId: string, itemType: string, sourceServerId: string) => {
+        e.dataTransfer.setData('itemId', itemId);
+        e.dataTransfer.setData('itemType', itemType);
+        e.dataTransfer.setData('sourceServerId', sourceServerId);
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault(); // Necessary to allow dropping
+    };
+
+    const handleDrop = async (e: React.DragEvent, targetServerId: string) => {
+        e.preventDefault();
+        const itemId = e.dataTransfer.getData('itemId');
+        const itemType = e.dataTransfer.getData('itemType');
+        const sourceServerId = e.dataTransfer.getData('sourceServerId');
+
+        if (!itemId || sourceServerId === targetServerId) return;
+
+        // Optimistic UI update
+        const itemToMove = groupedServices[sourceServerId].find(item => item.id === itemId);
+        if (!itemToMove) return;
+
+        setGroupedServices(prev => {
+            const next = { ...prev };
+            next[sourceServerId] = next[sourceServerId].filter(i => i.id !== itemId);
+            next[targetServerId] = [...(next[targetServerId] || []), itemToMove];
+            return next;
+        });
+
+        // Trigger API transfer request
+        try {
+            const endpoint = `/transfers/`;
+            const payload = {
+                target_server_id: targetServerId === 'local' ? null : targetServerId,
+                service_id: itemType === 'service' ? itemId : undefined,
+                addon_id: itemType === 'addon' ? itemId : undefined
+            };
+
+            await servicesApi.post(endpoint, payload);
+            toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
+        } catch (error: any) {
+            console.error("Transfer failed", error);
+            toast.error(error.response?.data?.error || "Transfer request failed");
+
+            // Revert UI on failure
+            setGroupedServices(prev => {
+                const next = { ...prev };
+                next[targetServerId] = next[targetServerId].filter(i => i.id !== itemId);
+                next[sourceServerId] = [...(next[sourceServerId] || []), itemToMove];
+                return next;
+            });
         }
     };
 
+    const getServerName = (id: string) => {
+        if (id === 'local') return 'Local Server (This Node)';
+        const srv = servers.find(s => s.id === id);
+        return srv ? srv.name : 'Unknown Server';
+    };
+
+    const renderItemIcon = (type: string, itemType: string) => {
+        if (itemType === 'addon') return <Database className="w-4 h-4 text-gray-500" />;
+        if (type === 'template') return <LayoutTemplate className="w-4 h-4 text-gray-500" />;
+        return <Box className="w-4 h-4 text-gray-500" />;
+    };
+
+    // ─────────────────────────────────────────────────────────────────
+    // Render
+    // ─────────────────────────────────────────────────────────────────
     return (
-        <DashboardShell>
-            <RequiresTier tier="pro">
-            <div className="container max-w-5xl mx-auto p-6 space-y-8">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <h1 className="text-3xl font-bold">Server Migration</h1>
-                        <p className="text-muted-foreground">Move services or entire servers with zero-downtime DNS cutover.</p>
-                    </div>
+        <div className="max-w-6xl mx-auto space-y-8 p-6">
+            <div>
+                <h1 className="text-2xl font-bold text-gray-900 mb-2">Server Transfers</h1>
+                <p className="text-gray-500 text-sm">
+                    Drag and drop services between connected servers to seamlessly migrate data and traffic.
+                </p>
+            </div>
+
+            {loading ? (
+                <div className="flex justify-center items-center h-64">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                 </div>
+            ) : (
+                <div className="flex gap-6 relative">
+                    {/* Left/Main Column - Servers map */}
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* Always show local server */}
+                        <ServerColumn
+                            id="local"
+                            name="Local Server (This Node)"
+                            items={groupedServices['local'] || []}
+                            isLocal={true}
+                            onDragStart={handleDragStart}
+                            onDragOver={handleDragOver}
+                            onDrop={handleDrop}
+                            renderItemIcon={renderItemIcon}
+                        />
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Wizard */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>New Transfer</CardTitle>
-                            <CardDescription>Step {step} of 3</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            {step === 1 && (
-                                <>
-                                    <div className="space-y-2">
-                                        <Label>Scope</Label>
-                                        <div className="rounded-lg border p-3 text-sm font-medium">
-                                            Single Service
-                                        </div>
-                                    </div>
-                                    {formData.transfer_type === 'SERVICE' && (
-                                        <div className="space-y-2">
-                                            <Label>Select Service</Label>
-                                            <Select
-                                                value={formData.service_id}
-                                                onValueChange={v => setFormData({...formData, service_id: v})}
-                                            >
-                                                <SelectTrigger><SelectValue placeholder="Choose service..." /></SelectTrigger>
-                                                <SelectContent>
-                                                    {services.map(s => (
-                                                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    )}
-                                    <Button
-                                        onClick={() => setStep(2)}
-                                        disabled={formData.transfer_type === 'SERVICE' && !formData.service_id}
-                                        className="w-full"
-                                    >
-                                        Next <ArrowRight className="ml-2 w-4 h-4" />
-                                    </Button>
-                                </>
-                            )}
-
-                            {step === 2 && (
-                                <>
-                                    <div className="space-y-2">
-                                        <Label>Target Server IP</Label>
-                                        <Input
-                                            placeholder="1.2.3.4"
-                                            value={formData.target_server_ip}
-                                            onChange={e => setFormData({
-                                                ...formData,
-                                                target_server_ip: e.target.value,
-                                                target_server_id: '',
-                                            })}
-                                        />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Authentication</Label>
-                                        {usingConnectedTarget && (
-                                            <p className="text-xs text-emerald-600">
-                                                Using saved SSH credentials from selected connected server.
-                                            </p>
-                                        )}
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <button
-                                                onClick={() => setSshAuthMethod('password')}
-                                                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
-                                                    sshAuthMethod === 'password'
-                                                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/30'
-                                                        : 'border border-border text-muted-foreground hover:text-foreground'
-                                                }`}
-                                            >
-                                                <Lock className="w-3 h-3" /> Password
-                                            </button>
-                                            <button
-                                                onClick={() => setSshAuthMethod('key')}
-                                                className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
-                                                    sshAuthMethod === 'key'
-                                                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/30'
-                                                        : 'border border-border text-muted-foreground hover:text-foreground'
-                                                }`}
-                                            >
-                                                <Key className="w-3 h-3" /> SSH Key
-                                            </button>
-                                        </div>
-
-                                        {sshAuthMethod === 'password' ? (
-                                            <>
-                                                <Input
-                                                    type="password"
-                                                    placeholder="Root SSH password"
-                                                    value={formData.target_ssh_password}
-                                                    onChange={e => setFormData({...formData, target_ssh_password: e.target.value})}
-                                                />
-                                                <p className="text-xs text-muted-foreground">Password is used once for rsync and never stored.</p>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <textarea
-                                                    className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 font-mono"
-                                                    placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"}
-                                                    value={formData.target_ssh_key}
-                                                    onChange={e => setFormData({...formData, target_ssh_key: e.target.value})}
-                                                    spellCheck={false}
-                                                />
-                                                <p className="text-xs text-muted-foreground">Key is only used once for rsync and never stored.</p>
-                                            </>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <Button variant="outline" onClick={() => setStep(1)} className="flex-1">Back</Button>
-                                            <Button
-                                                onClick={() => setStep(3)}
-                                                disabled={!hasTargetIp || !(hasAuth || usingConnectedTarget)}
-                                                className="flex-1"
-                                            >
-                                                Next
-                                            </Button>
-                                    </div>
-                                </>
-                            )}
-
-                            {step === 3 && (
-                                <>
-                                    <div className="p-4 border rounded bg-muted/20 space-y-2">
-                                        <div className="flex justify-between">
-                                            <span className="text-muted-foreground">Type:</span>
-                                            <span className="font-medium">{formData.transfer_type}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-muted-foreground">Target:</span>
-                                            <span className="font-medium">{formData.target_server_ip}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-muted-foreground">Est. Downtime:</span>
-                                            <span className="font-medium text-emerald-600">~15 seconds</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <Button variant="outline" onClick={() => setStep(2)} className="flex-1">Back</Button>
-                                        <Button onClick={handleStartTransfer} disabled={loading} className="flex-1">
-                                            {loading ? <Loader2 className="mr-2 w-4 h-4 animate-spin" /> : <Server className="mr-2 w-4 h-4" />}
-                                            Start Migration
-                                        </Button>
-                                    </div>
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    {/* Active Transfers */}
-                    <div className="space-y-4">
-                        <h2 className="text-xl font-bold">Connected Servers ({servers.length})</h2>
-                        <Card>
-                            <CardContent className="p-4 space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <p className="text-sm text-muted-foreground">
-                                        Select a connected server as transfer target.
-                                    </p>
-                                    <Button size="sm" variant="outline" onClick={loadServers} disabled={serversLoading}>
-                                        {serversLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Refresh"}
-                                    </Button>
-                                </div>
-                                {servers.length === 0 ? (
-                                    <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                                        No connected servers found.
-                                    </div>
-                                ) : (
-                                    <div className="space-y-2">
-                                        {servers.map((server) => {
-                                            const hostValue = (server.host || '').trim();
-                                            const canUseAsTarget = isValidIp(hostValue);
-                                            const statusTone =
-                                                server.status === 'ONLINE'
-                                                    ? 'text-emerald-600 bg-emerald-500/10'
-                                                    : server.status === 'OFFLINE'
-                                                        ? 'text-red-600 bg-red-500/10'
-                                                        : 'text-amber-600 bg-amber-500/10';
-                                            return (
-                                                <div key={server.id} className="flex items-center justify-between rounded-lg border p-3">
-                                                    <div className="min-w-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <p className="font-medium truncate">{server.name}</p>
-                                                            <span className={`text-[10px] px-2 py-0.5 rounded ${statusTone}`}>
-                                                                {server.status}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-xs text-muted-foreground truncate">
-                                                            {server.host} {server.api_url ? `• ${server.api_url}` : ''}
-                                                        </p>
-                                                    </div>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        disabled={!canUseAsTarget}
-                                                        onClick={() => {
-                                                            setFormData((prev) => ({
-                                                                ...prev,
-                                                                target_server_ip: hostValue,
-                                                                target_server_id: server.id,
-                                                            }));
-                                                            setStep(2);
-                                                        }}
-                                                    >
-                                                        Use Target
-                                                    </Button>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
-
-                        <h2 className="text-xl font-bold">Active Transfers</h2>
-                        {transfers.filter(t => ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'].includes(t.status)).length === 0 && (
-                            <div className="p-8 border rounded-xl text-center text-muted-foreground bg-muted/10">
-                                No active transfers.
-                            </div>
-                        )}
-                        {transfers.filter(t => ['PREPARING', 'UPLOADING', 'RESTORING', 'DNS_CUTOVER', 'VERIFYING'].includes(t.status)).map(t => (
-                            <Card key={t.id}>
-                                <CardContent className="p-4 space-y-3">
-                                    <div className="flex justify-between items-center">
-                                        <div className="font-medium">{t.transfer_type} → {t.target_server_ip}</div>
-                                        <div className="text-xs font-mono bg-blue-100 text-blue-700 px-2 py-1 rounded">{t.status}</div>
-                                    </div>
-                                    <Progress value={t.progress_percent} />
-                                    <p className="text-xs text-muted-foreground">{t.current_step}</p>
-                                </CardContent>
-                            </Card>
+                        {/* Connected Servers */}
+                        {servers.map(server => (
+                            <ServerColumn
+                                key={server.id}
+                                id={server.id}
+                                name={server.name}
+                                items={groupedServices[server.id] || []}
+                                isLocal={false}
+                                onDragStart={handleDragStart}
+                                onDragOver={handleDragOver}
+                                onDrop={handleDrop}
+                                renderItemIcon={renderItemIcon}
+                            />
                         ))}
+                    </div>
 
-                        <h2 className="text-xl font-bold pt-4">History</h2>
-                        <div className="space-y-2">
-                            {transfers.filter(t => ['COMPLETED', 'FAILED', 'ROLLED_BACK'].includes(t.status)).map(t => (
-                                <div key={t.id} className="flex items-center justify-between p-3 border rounded-lg bg-background">
-                                    <div className="flex items-center gap-3">
-                                        {t.status === 'COMPLETED' ? <CheckCircle2 className="text-emerald-500 w-5 h-5" /> :
-                                         t.status === 'ROLLED_BACK' ? <RotateCcw className="text-orange-500 w-5 h-5" /> :
-                                         <span className="w-2 h-2 rounded-full bg-red-500" />}
-                                        <div>
-                                            <div className="text-sm font-medium">{t.target_server_ip}</div>
-                                            <div className="text-xs text-muted-foreground">{new Date(t.created_at).toLocaleDateString()}</div>
-                                        </div>
-                                    </div>
-                                    {t.can_rollback && (
-                                        <Button size="sm" variant="outline" onClick={() => api.post(`/transfers/${t.id}/rollback/`)}>
-                                            Rollback
-                                        </Button>
-                                    )}
-                                </div>
-                            ))}
+                    {/* Right Sidebar - Status */}
+                    <div className="w-80 space-y-6">
+                        <div>
+                            <h3 className="text-lg font-semibold text-gray-900 mb-4">Active Transfers</h3>
+                            <div className="bg-gray-50 rounded-xl p-8 border border-gray-100 flex flex-col items-center justify-center text-center">
+                                <p className="text-sm text-gray-500">No active transfers.</p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 className="text-lg font-semibold text-gray-900 mb-4">History</h3>
+                            <p className="text-sm text-gray-500">No past transfers.</p>
                         </div>
                     </div>
                 </div>
+            )}
+        </div>
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Server Column Component
+// ─────────────────────────────────────────────────────────────────
+function ServerColumn({
+    id, name, items, isLocal,
+    onDragStart, onDragOver, onDrop, renderItemIcon
+}: any) {
+    return (
+        <div
+            className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-[400px]"
+            onDragOver={onDragOver}
+            onDrop={(e) => onDrop(e, id)}
+        >
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                <div className="flex items-center gap-2">
+                    <Server className="w-5 h-5 text-gray-500" />
+                    <h3 className="font-semibold text-gray-900">{name}</h3>
+                </div>
+                {isLocal ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase bg-emerald-100 text-emerald-700">Online</span>
+                ) : (
+                    <span className="w-4 h-1 rounded-full bg-gray-200" />
+                )}
             </div>
-            </RequiresTier>
-        </DashboardShell>
+
+            {/* Body */}
+            <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-gray-50/20">
+                {items.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-sm text-gray-400 italic">
+                        No services
+                    </div>
+                ) : (
+                    items.map((item: any) => (
+                        <div
+                            key={item.id}
+                            draggable
+                            onDragStart={(e) => onDragStart(e, item.id, item.type, id)}
+                            className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between cursor-grab active:cursor-grabbing hover:border-gray-300 hover:shadow-sm transition-all group"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="p-1.5 bg-gray-50 rounded-md group-hover:bg-gray-100 transition-colors">
+                                    {renderItemIcon(item.source_type, item.type)}
+                                </div>
+                                <div>
+                                    <p className="text-sm font-medium text-gray-900">{item.name}</p>
+                                </div>
+                            </div>
+                            <ServerCog className="w-4 h-4 text-gray-300" />
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
     );
 }
