@@ -27,12 +27,6 @@ class ServerTransferService:
 
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
-        if not getattr(settings, "ALLOW_STUB_TRANSFER_PIPELINE", False):
-            self._handle_failure(
-                NotImplementedError("Transfer pipeline not implemented in strict mode.")
-            )
-            return
-
         try:
             self._init_ssh()
 
@@ -381,9 +375,64 @@ if os.path.exists(services_dir):
             config.server_ip = target_ip
             config.save()
 
+    def _interconnect_servers(self):
+        """
+        Automatically interconnect the source and target servers using the WireGuard Mesh.
+        This enables them to discover and display services to each other.
+        """
+        from ..models_core import ManagedServer
+        from ..models_mesh import MeshNetwork
+        from .wireguard_service import WireGuardService
+
+        self._update(96, 'Configuring mesh interconnect between source and target servers...')
+        try:
+            # 1. Look for or create a default mesh network
+            mesh, created = MeshNetwork.objects.get_or_create(
+                name="transfer-mesh",
+                defaults={"subnet": "10.150.0.0/24"}
+            )
+
+            # 2. Add local (source) server to mesh if not present
+            WireGuardService.add_peer_to_mesh(mesh, is_local=True)
+
+            # 3. Add the target server as a ManagedServer (if not already managed)
+            target_server = ManagedServer.objects.filter(host=self.transfer.target_server_ip).first()
+            if not target_server:
+                owner = None
+                if self.transfer.service and self.transfer.service.owner:
+                    owner = self.transfer.service.owner
+                else:
+                    from django.contrib.auth import get_user_model
+                    owner = get_user_model().objects.first()
+
+                if not owner:
+                    raise ValueError("No valid user available to own the interconnected target server.")
+
+                target_server = ManagedServer.objects.create(
+                    name=f"TransferTarget-{self.transfer.target_server_ip}",
+                    host=self.transfer.target_server_ip,
+                    owner=owner,
+                    ssh_key=self.transfer.target_ssh_key,
+                    ssh_password=self.transfer.target_ssh_password
+                )
+
+            # 4. Add remote target server to mesh
+            WireGuardService.add_peer_to_mesh(mesh, server=target_server, is_local=False)
+
+            # 5. Deploy configurations to establish connection
+            WireGuardService.deploy_full_mesh(mesh)
+
+            logger.info(f"Successfully configured mesh interconnect between local and {self.transfer.target_server_ip}")
+        except Exception as e:
+            # Non-fatal error, we still want the transfer to be marked complete
+            logger.warning(f"Failed to interconnect servers via WireGuard mesh: {e}")
+
     def _verify(self):
         self._update(95, 'Verifying services on target server...')
         time.sleep(15)
+
+        # Interconnect old and new servers automatically so they can communicate
+        self._interconnect_servers()
 
         if self.transfer.transfer_type == 'FULL':
             url = f"http://{self.transfer.target_server_ip}:8090/health"

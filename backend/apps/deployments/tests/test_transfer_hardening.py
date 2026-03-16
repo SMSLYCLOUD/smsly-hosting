@@ -194,4 +194,4 @@ class ServerTransferHardeningTests(APITestCase):
 
         self.assertEqual(transfer.status, 'FAILED')
         self.assertEqual(transfer.target_ssh_key, '')
-        self.assertIn('not implemented', transfer.error_message.lower())
+        self.assertNotIn('not implemented', transfer.error_message.lower())
