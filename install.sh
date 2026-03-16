@@ -2821,6 +2821,7 @@ fi
 # ─── Configure Caddyfile ──────────────────────────────────────────────────────
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
 mkdir -p /var/log/caddy
+mkdir -p /etc/caddy
 touch /var/log/caddy/access.log
 if id caddy >/dev/null 2>&1; then
     chown -R caddy:caddy /var/log/caddy
