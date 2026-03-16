@@ -3227,16 +3227,13 @@ fi
 # ─── Check 2: Health check ─────────────────────────────────────────────────
 echo -e "${BLUE}  → [2/5] Running health check...${NC}"
 HEALTH_OK=false
-for attempt in 1 2 3 4 5; do
+for attempt in {1..12}; do
     if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
-    elif curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
-        HEALTH_OK=true
-        break
     fi
-    echo -e "${YELLOW}  → Health check attempt $attempt/5 — waiting...${NC}"
-    if [ "$attempt" -eq 1 ]; then
+    echo -e "${YELLOW}  → Health check attempt $attempt/12 — waiting...${NC}"
+    if [ "$attempt" -eq 2 ]; then
         docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
     fi
     sleep 5
