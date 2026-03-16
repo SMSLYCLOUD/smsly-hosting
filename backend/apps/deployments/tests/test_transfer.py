@@ -9,7 +9,9 @@ from apps.deployments.models_backup import ServiceBackup, ServerBackup
 
 class ServerTransferServiceTest(TestCase):
     def setUp(self):
-        self.service = Service.objects.create(name="test-service", deploy_type='DOCKER')
+        from django.contrib.auth.models import User
+        self.user = User.objects.create(username="testuser", email="test@test.com")
+        self.service = Service.objects.create(name="test-service", deploy_type='DOCKER', owner=self.user)
         self.transfer = ServerTransfer.objects.create(
             service=self.service,
             source_server_ip="1.2.3.4",
