@@ -268,10 +268,10 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                 <div key={d.id}>
                                     {/* Clickable Row */}
                                     <div
-                                        className={`p-4 flex items-center justify-between hover:bg-muted/30 transition-colors cursor-pointer ${isLive ? 'bg-emerald-500/5 border-l-2 border-l-emerald-500' : ''}`}
+                                        className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-muted/30 transition-colors cursor-pointer ${isLive ? 'bg-emerald-500/5 border-l-2 border-l-emerald-500' : ''}`}
                                         onClick={() => toggleExpand(d)}
                                     >
-                                        <div className="flex items-center gap-4">
+                                        <div className="flex items-center gap-4 w-full sm:w-auto">
                                             {/* Checkbox for bulk cancel */}
                                             {cancellableStatuses.includes(d.status) && (
                                                 <input
@@ -311,7 +311,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                                             </div>
                                         </div>
 
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap mt-2 sm:mt-0 w-full sm:w-auto justify-end sm:justify-start">
                                             {/* Approve button for REVIEW */}
                                             {d.status === 'REVIEW' && (
                                                 <Button
