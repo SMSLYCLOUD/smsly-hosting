@@ -6,9 +6,17 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
 import {
     Database, RefreshCw, Loader2, Crown, Server, AlertTriangle,
-    ArrowRightLeft, RotateCcw, Zap, Eye
+    ArrowRightLeft, RotateCcw, Zap, Eye, CheckCircle2
 } from 'lucide-react';
 import api from '@/lib/api';
+
+interface MeshPeer {
+    id: string;
+    server?: { name: string };
+    wg_address: string;
+    is_active: boolean;
+    is_local: boolean;
+}
 
 interface ReplicationNode {
     name: string;
@@ -49,6 +57,10 @@ export default function ReplicationPage() {
     const [replPassword, setReplPassword] = useState('repl_pass');
     const [oneClicking, setOneClicking] = useState(false);
 
+    // Scale out states
+    const [availablePeers, setAvailablePeers] = useState<MeshPeer[]>([]);
+    const [connectState, setConnectState] = useState<Record<string, { status: 'idle' | 'testing' | 'awaiting_approval' | 'connecting' | 'connected' }>>({});
+
     const fetchMeshes = useCallback(async () => {
         try {
             const res = await api.get('/mesh/');
@@ -70,11 +82,30 @@ export default function ReplicationPage() {
         try {
             const res = await api.get(`/replication/health/${selectedMesh}/`);
             setHealth(res.data);
+
+            // Fetch mesh peers to find available nodes
+            const meshRes = await api.get(`/mesh/${selectedMesh}/`);
+            const peers: MeshPeer[] = meshRes.data.peers || [];
+
+            // Filter peers that are active and not in the health nodes list
+            const inClusterIps = new Set(res.data.nodes.map((n: any) => n.wg_address));
+            const available = peers.filter(p => p.is_active && !inClusterIps.has(p.wg_address));
+
+            setAvailablePeers(available);
+
+            // Initialize connect state for available peers
+            const newState: Record<string, any> = {};
+            available.forEach(p => {
+                newState[p.wg_address] = connectState[p.wg_address] || { status: 'idle' };
+            });
+            setConnectState(newState);
+
         } catch (err: any) {
             if (err?.response?.status !== 404) {
                 toast({ title: 'Error', description: 'Health check failed', variant: 'destructive' });
             }
             setHealth(null);
+            setAvailablePeers([]);
         } finally {
             setChecking(false);
         }
@@ -82,6 +113,67 @@ export default function ReplicationPage() {
 
     useEffect(() => { fetchMeshes(); }, [fetchMeshes]);
     useEffect(() => { if (selectedMesh) checkHealth(); }, [selectedMesh, checkHealth]);
+
+    const runPreflight = async (wgAddress: string) => {
+        setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'testing' } }));
+        try {
+            await api.post('/replication/preflight/', {
+                mesh_id: selectedMesh,
+                target_wg_address: wgAddress
+            });
+            setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'awaiting_approval' } }));
+            toast({ title: 'Pre-flight Passed', description: `Ready to connect ${wgAddress}.` });
+        } catch (err: any) {
+            setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'idle' } }));
+            toast({
+                title: 'Pre-flight Failed',
+                description: err?.response?.data?.error || 'Failed to verify node readiness',
+                variant: 'destructive'
+            });
+        }
+    };
+
+    const confirmConnect = async (wgAddress: string) => {
+        // Need passwords to deploy - ideally we'd prompt for them, but for one-click simplicity
+        // we'll require the user to input them or generate new ones (if using auto).
+        // Since we don't store the db password in plaintext, we'll prompt the user for it if not auto-deploying.
+        let dbPass = dbPassword;
+        let adminPass = adminPassword;
+        let replPass = replPassword;
+
+        if (!dbPass || !adminPass) {
+            dbPass = prompt('Enter DB Superuser Password to connect this replica:') || '';
+            if (!dbPass) return;
+            adminPass = prompt('Enter Admin Password:') || '';
+            if (!adminPass) return;
+            replPass = prompt('Enter Replication Password:') || '';
+            if (!replPass || replPass === 'repl_pass') {
+                alert('Please enter a valid, non-default replication password.');
+                return;
+            }
+        }
+
+        setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'connecting' } }));
+        try {
+            await api.post('/replication/connect-replica/', {
+                mesh_id: selectedMesh,
+                target_wg_address: wgAddress,
+                db_password: dbPass,
+                admin_password: adminPass,
+                replication_password: replPass
+            });
+            setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'connected' } }));
+            toast({ title: 'Replica Connected', description: `Successfully deployed replica to ${wgAddress}.` });
+            setTimeout(checkHealth, 3000);
+        } catch (err: any) {
+            setConnectState(prev => ({ ...prev, [wgAddress]: { status: 'idle' } }));
+            toast({
+                title: 'Connection Failed',
+                description: err?.response?.data?.error || 'Failed to connect replica',
+                variant: 'destructive'
+            });
+        }
+    };
 
     const deployReplication = async () => {
         if (!selectedMesh || !dbPassword || !adminPassword) return;
@@ -437,6 +529,73 @@ export default function ReplicationPage() {
                                     ))}
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {/* Available Servers to Connect */}
+                    {availablePeers.length > 0 && (
+                        <div className="space-y-4 pt-6 border-t border-border mt-8">
+                            <h2 className="text-xl font-bold flex items-center gap-2">
+                                <Server className="text-blue-500" size={24} />
+                                Available Servers
+                            </h2>
+                            <p className="text-muted-foreground text-sm">
+                                These nodes are part of the mesh but are not running a Patroni replica.
+                            </p>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {availablePeers.map(peer => {
+                                    const cState = connectState[peer.wg_address]?.status || 'idle';
+
+                                    return (
+                                        <div key={peer.wg_address} className="bg-card border border-border rounded-xl p-5 flex items-center justify-between">
+                                            <div>
+                                                <h3 className="font-bold">{peer.server?.name || (peer.is_local ? 'Local Server' : 'Unknown')}</h3>
+                                                <p className="text-sm text-muted-foreground font-mono">{peer.wg_address}</p>
+
+                                                {/* Status Badges */}
+                                                <div className="mt-2">
+                                                    {cState === 'testing' && <span className="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-500">Running Pre-flight...</span>}
+                                                    {cState === 'awaiting_approval' && <span className="text-xs px-2 py-0.5 rounded bg-amber-500/10 text-amber-500">Pre-flight Passed</span>}
+                                                    {cState === 'connecting' && <span className="text-xs px-2 py-0.5 rounded bg-purple-500/10 text-purple-500">Connecting Replica...</span>}
+                                                    {cState === 'connected' && <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500">Connected Successfully</span>}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                {cState === 'idle' && (
+                                                    <Button variant="outline" size="sm" onClick={() => runPreflight(peer.wg_address)}>
+                                                        <CheckCircle2 size={14} className="mr-2" /> Connect Replica
+                                                    </Button>
+                                                )}
+
+                                                {cState === 'testing' && (
+                                                    <Button variant="outline" size="sm" disabled>
+                                                        <Loader2 size={14} className="animate-spin mr-2" /> Testing
+                                                    </Button>
+                                                )}
+
+                                                {cState === 'awaiting_approval' && (
+                                                    <>
+                                                        <Button variant="ghost" size="sm" onClick={() => setConnectState(prev => ({ ...prev, [peer.wg_address]: { status: 'idle' } }))}>
+                                                            Cancel
+                                                        </Button>
+                                                        <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => confirmConnect(peer.wg_address)}>
+                                                            <Zap size={14} className="mr-2" /> Confirm & Connect
+                                                        </Button>
+                                                    </>
+                                                )}
+
+                                                {cState === 'connecting' && (
+                                                    <Button size="sm" disabled className="bg-purple-600">
+                                                        <Loader2 size={14} className="animate-spin mr-2" /> Connecting
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     )}
                 </div>
