@@ -5,19 +5,18 @@ This guide provides step-by-step instructions on how to generate an SSH key for 
 ## Step 1: Generate a New SSH Key for the `root` User
 
 1. Log in to your Linux server as the `root` user (or use `sudo -i`).
-2. Open your terminal and run the following command to generate a new SSH key, substituting your email address:
+2. Open your terminal and run the following command to generate a new SSH key, substituting your email address. This command automatically saves the key to `~/.ssh/id_ed25519`:
 
    ```bash
-   ssh-keygen -t ed25519 -C "your_email@example.com"
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -C "your_email@example.com"
    ```
 
    *Note: If your system doesn't support the `ed25519` algorithm, you can use RSA instead:*
    ```bash
-   ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
+   ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -C "your_email@example.com"
    ```
 
-3. When prompted to "Enter a file in which to save the key," press **Enter** to accept the default location (`~/.ssh/id_ed25519` or `~/.ssh/id_rsa`). This ensures the key is placed in the current user's `.ssh` directory.
-4. When prompted to type a secure passphrase, you can either enter a passphrase for extra security or leave it empty for no passphrase (useful for automated scripts).
+3. When prompted to type a secure passphrase, you can either enter a passphrase for extra security or leave it empty for no passphrase (useful for automated scripts).
 
 ## Step 2: Start the SSH Agent and Add Your Key
 
