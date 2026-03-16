@@ -21768,15 +21768,22 @@
   },
   {
     "id": "comfyui",
-    "name": "ComfyUI",
-    "description": "The most powerful and modular stable diffusion GUI and backend.",
+    "name": "ComfyUI (Generative Video & Image)",
+    "description": "Professional-grade media generation engine. Perfect for Flux.1 (Images) and Wan/Hunyuan (Video). Requires 24GB+ VRAM.",
     "icon": "https://comfyui.org/logo.png",
     "category": "intelligence",
     "repository_url": "https://hub.docker.com/r/yanwk/comfyui-boot",
     "docker_image": "yanwk/comfyui-boot:latest",
     "default_port": 8188,
-    "min_ram_gb": 8,
-    "gpu_required": true
+    "min_ram_gb": 32,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "CLI_ARGS",
+        "value": "--listen 0.0.0.0 --port 8188",
+        "is_secret": false
+      }
+    ]
   },
   {
     "id": "automatic1111",
