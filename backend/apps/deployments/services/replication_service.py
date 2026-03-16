@@ -196,6 +196,65 @@ class ReplicationService:
         """)
         return compose, haproxy_cfg
 
+    # ── Pre-flight & Scale Out ───────────────────────────────────────────
+
+    @classmethod
+    def preflight_check(cls, mesh, target_wg_address):
+        """
+        Run a pre-flight check before connecting a new replica.
+
+        - Verifies SSH connectivity
+        - Checks RAM and Disk resources
+        - Verifies Docker installation
+        - Verifies network reachability via ping
+        """
+        from apps.deployments.services.wireguard_service import WireGuardService
+        import subprocess
+
+        target_peer = mesh.peers.filter(wg_address=target_wg_address, is_active=True).first()
+        if not target_peer:
+            raise ValueError(f"Target peer {target_wg_address} not found or inactive")
+
+        # 1. Ping the target IP from the local server to verify WG network
+        try:
+            subprocess.run(
+                ["ping", "-c", "1", "-W", "3", target_wg_address],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except subprocess.CalledProcessError:
+            raise RuntimeError(f"Network check failed: Cannot ping WireGuard IP {target_wg_address}")
+
+        if not target_peer.is_local and target_peer.server:
+            # 2. SSH check and system checks
+            try:
+                # Check memory (>1GB) and disk (>2GB) and docker
+                script = """
+                free -m | awk '/^Mem:/ {if ($2 < 1000) exit 1}';
+                df -m /opt | awk 'NR==2 {if ($4 < 2000) exit 1}';
+                command -v docker >/dev/null 2>&1 || exit 1;
+                """
+                WireGuardService._ssh_run(target_peer.server, script, timeout=10)
+            except Exception as e:
+                raise RuntimeError(f"System requirement check failed: Ensure target has >1GB RAM, >2GB Disk, and Docker installed. ({e})")
+
+        # 3. Dry run config generation to catch template errors
+        try:
+            cls.generate_patroni_compose(mesh, "dummy", "dummy", "dummy")
+            cls.generate_haproxy_compose(mesh)
+        except Exception as e:
+            raise RuntimeError(f"Config generation failed: {e}")
+
+        return {"status": "ok", "message": "Pre-flight checks passed."}
+
+    @classmethod
+    def connect_replica(cls, mesh, target_wg_address, db_password, admin_password, replication_password="repl_pass"):
+        """
+        Finalize connection by deploying the updated configurations across the mesh.
+        Since Patroni/etcd relies on a consistent config, we redeploy to all nodes.
+        """
+        # Redeploy Patroni/etcd and HAProxy with the new mesh topology
+        return cls.deploy_replication(mesh, db_password, admin_password, replication_password)
+
     # ── Deployment ───────────────────────────────────────────────────────
 
     @classmethod
