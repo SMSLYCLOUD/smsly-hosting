@@ -22057,6 +22057,16 @@
         "key": "CUSTOM_DOMAINS",
         "value": "ai.smsly.cloud",
         "is_secret": false
+      },
+      {
+        "key": "UI_USERNAME",
+        "value": "admin",
+        "is_secret": false
+      },
+      {
+        "key": "UI_PASSWORD",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
       }
     ]
   },
