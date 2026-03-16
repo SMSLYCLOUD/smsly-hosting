@@ -2298,12 +2298,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
             cp -rn . "$INSTALL_DIR/" 2>/dev/null || cp -r . "$INSTALL_DIR/"
         fi
     else
-        if [ -d "$INSTALL_DIR/.git" ]; then
-             cd "$INSTALL_DIR"
-             # Force-reset to match remote (handles chmod changes, local edits, etc.)
-             git fetch origin main
-             git reset --hard origin/main
-        else
+        if [ ! -d "$INSTALL_DIR/.git" ]; then
              git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
         fi
     fi
@@ -2475,6 +2470,7 @@ redis_pass = secrets.token_hex(16)
 gateway_secret = secrets.token_hex(32)
 webhook_secret = secrets.token_hex(32)
 autoscaler_token = secrets.token_hex(32)
+frp_token = secrets.token_hex(32)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -2486,6 +2482,7 @@ print(f'REDIS_PASSWORD={redis_pass}')
 print(f'GATEWAY_SECRET={gateway_secret}')
 print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
 print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
+print(f'FRP_AUTH_TOKEN={frp_token}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -2543,7 +2540,20 @@ PUBLIC_IP=$PUBLIC_IP
 
 # Autoscaler API authentication (shared with smsly-autoscaler.service)
 AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
+
+# FRP Tunnel Relay Authentication Token
+FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 EOF
+
+    # Derive expected tunnel domain
+    if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        EXPECTED_TUNNEL_DOMAIN="tunnel.${DOMAIN}"
+    elif [ -n "$PUBLIC_IP" ] && ! echo "$PUBLIC_IP" | grep -qE '^(127\.0\.0\.1|0\.0\.0\.0)$'; then
+        EXPECTED_TUNNEL_DOMAIN="tunnel.${PUBLIC_IP}.sslip.io"
+    else
+        EXPECTED_TUNNEL_DOMAIN="tunnel.localhost"
+    fi
+    echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$INSTALL_DIR/.env"
 
     chmod 600 "$INSTALL_DIR/.env"
     if ! validate_env_file "$INSTALL_DIR/.env"; then
