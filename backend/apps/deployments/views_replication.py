@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 class ReplicationDeploySerializer(serializers.Serializer):
     mesh_id = serializers.UUIDField()
-    db_password = serializers.CharField(write_only=True)
-    admin_password = serializers.CharField(write_only=True)
+    db_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    admin_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     replication_password = serializers.CharField(
         write_only=True, required=True, allow_blank=False,
         help_text="Strong unique password for replication user"
@@ -49,8 +49,8 @@ class ConnectReplicaPreflightSerializer(serializers.Serializer):
 class ConnectReplicaSerializer(serializers.Serializer):
     mesh_id = serializers.UUIDField()
     target_wg_address = serializers.CharField()
-    db_password = serializers.CharField(write_only=True)
-    admin_password = serializers.CharField(write_only=True)
+    db_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    admin_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
     replication_password = serializers.CharField(
         write_only=True, required=True, allow_blank=False,
         help_text="Strong unique password for replication user"

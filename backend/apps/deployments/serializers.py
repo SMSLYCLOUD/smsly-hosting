@@ -57,6 +57,8 @@ class ServiceSerializer(serializers.ModelSerializer):
         many=True, queryset=Region.objects.all(), required=False)
     primary_region = serializers.PrimaryKeyRelatedField(
         queryset=Region.objects.all(), required=False)
+    repository_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    docker_image = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     latest_deployment = serializers.SerializerMethodField()
     service_url = serializers.SerializerMethodField()
     project_name = serializers.CharField(
