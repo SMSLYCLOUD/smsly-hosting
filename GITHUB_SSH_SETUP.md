@@ -90,3 +90,39 @@ Now that your server is authenticated with GitHub, you can clone your private re
    ```
 
 Your private repository will now be cloned to your server using the SSH key!
+
+---
+
+## Appendix: Downloading and Running Scripts from Private Repositories
+
+If you are trying to download and run a specific script (like an `install.sh` script) from your private repository using a tool like `curl` or `wget` (e.g., `curl -fsSL https://raw.githubusercontent.com/...`), you will likely receive a **404 Not Found** error.
+
+**Why does this happen?**
+Your new SSH key only authenticates Git traffic (`git clone`, `git fetch`) over the SSH protocol (`git@github.com`). It does not magically grant authentication to anonymous HTTPS requests like `curl`. Because your repository is private, GitHub hides the raw file from anonymous HTTP requests by returning a 404 error.
+
+To securely run an installation script from your private repository using your SSH key, you have two options:
+
+### Option 1: Clone the repository first (Recommended)
+This is the standard and most reliable method.
+
+1. Clone your repository over SSH:
+   ```bash
+   git clone git@github.com:SMSLYCLOUD/smsly-hosting.git /tmp/smsly-hosting
+   ```
+2. Navigate to the directory and run your script:
+   ```bash
+   cd /tmp/smsly-hosting
+   sudo bash install.sh
+   ```
+
+### Option 2: Use `git archive` to download a single file over SSH
+If you don't want to clone the entire repository, you can instruct Git to stream just the specific file over your authenticated SSH connection and save it locally.
+
+1. Run this command to download `install.sh` to `/tmp/install.sh`:
+   ```bash
+   git archive --remote=git@github.com:SMSLYCLOUD/smsly-hosting.git HEAD install.sh | tar -x -O > /tmp/install.sh
+   ```
+2. Make it executable and run it:
+   ```bash
+   sudo bash /tmp/install.sh
+   ```
