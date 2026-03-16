@@ -2818,6 +2818,40 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
     rm -rf "$CADDY_TMP"
 fi
 
+if ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Installing Caddy systemd service...${NC}"
+    # Add a dedicated caddy user and group
+    groupadd --system caddy 2>/dev/null || true
+    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy \
+        --shell /usr/sbin/nologin --comment "Caddy web server" caddy 2>/dev/null || true
+
+    cat > /etc/systemd/system/caddy.service <<'CADDYSRV'
+[Unit]
+Description=Caddy
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+LimitNPROC=512
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+CADDYSRV
+    systemctl daemon-reload
+    echo -e "${GREEN}  ✓ Caddy systemd service installed${NC}"
+fi
+
 # ─── Configure Caddyfile ──────────────────────────────────────────────────────
 echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
 mkdir -p /var/log/caddy
