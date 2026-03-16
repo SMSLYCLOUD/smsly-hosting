@@ -96,34 +96,22 @@ def _run_managed_image_post_deploy_hooks(deployment, service: Service, container
 
     env_map = {ev.key: ev.value for ev in service.env_vars.all()}
 
-    if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
-        from apps.deployments.ai_router import is_ai_router_service
-        # LiteLLM's internal migrations often miss tables or get out of sync with its schema.
-        # Using 'db push' forces the schema to align perfectly and creates missing tables
-        # like LiteLLM_UserTable, LiteLLM_BudgetTable, etc. We ONLY do this for AI Router to prevent data loss elsewhere.
-        if is_ai_router_service(service):
-            append_log(deployment, "\n[hook] Forcing Prisma DB schema push to initialize LiteLLM tables...\n")
-            prisma_res = subprocess.run(
-                ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma db push --accept-data-loss"],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        else:
-            append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
-            prisma_res = subprocess.run(
-                ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
+    from apps.deployments.ai_router import is_ai_router_service
 
+    if str(env_map.get("RUN_PRISMA_MIGRATE", "")).strip().lower() in {"1", "true", "yes"}:
+        append_log(deployment, "\n[hook] Running Prisma migrate deploy inside container...\n")
+        prisma_res = subprocess.run(
+            ["docker", "exec", container_name, "sh", "-lc", "cd /app && npx prisma migrate deploy"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
         if prisma_res.returncode == 0:
-            append_log(deployment, "[hook] Prisma migration succeeded.\n")
+            append_log(deployment, "[hook] Prisma migrate deploy succeeded.\n")
         else:
             append_log(
                 deployment,
-                "[hook] Prisma migration failed:\n"
+                "[hook] Prisma migrate deploy failed:\n"
                 f"{prisma_res.stdout}\n{prisma_res.stderr}\n",
             )
 
