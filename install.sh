@@ -2833,7 +2833,7 @@ After=network.target network-online.target
 Requires=network-online.target
 
 [Service]
-Type=notify
+Type=exec
 User=caddy
 Group=caddy
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
