@@ -2674,7 +2674,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
-        create_service_backup_task.delay(str(backup.service.id), 'MANUAL', str(backup.id))
+        create_service_backup_task.delay(str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
@@ -2757,7 +2757,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(status='PENDING')
-        create_server_backup_task.delay(backup_id=str(backup.id))
+        create_server_backup_task.delay(str(backup.id))
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
