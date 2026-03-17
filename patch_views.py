@@ -1,65 +1,43 @@
+import subprocess
 import re
 
 with open("backend/apps/deployments/views.py", "r") as f:
     content = f.read()
 
-# Make sure we don't patch twice
-if "setup_github_webhook" not in content:
-    # Add import
-    import_statement = "from apps.deployments.services.github_webhooks import setup_github_webhook\nimport threading"
-    content = re.sub(r'from \.models import', f'{import_statement}\nfrom .models import', content)
+service_backup_patch = """    def perform_destroy(self, instance):
+        import os
+        import logging
+        if instance.file_path and os.path.exists(instance.file_path):
+            try:
+                os.remove(instance.file_path)
+            except OSError as e:
+                logging.getLogger(__name__).warning("Failed to delete backup file %s: %s", instance.file_path, e)
+        instance.delete()
 
-    # Patch perform_create
-    old_create = """    def perform_create(self, serializer):
-        deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
-        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
-        if deploy_type == 'FUNCTION' and not tier_gates_disabled:
-            license = PlatformLicense.load()
-            if license.is_community:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Serverless Functions require Pro tier.")
-        serializer.save(owner=self.request.user)"""
+    def perform_create(self, serializer):"""
 
-    new_create = """    def perform_create(self, serializer):
-        deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
-        tier_gates_disabled = bool(getattr(settings, "SMSLY_DISABLE_TIER_GATES", False))
-        if deploy_type == 'FUNCTION' and not tier_gates_disabled:
-            license = PlatformLicense.load()
-            if license.is_community:
-                from rest_framework.exceptions import PermissionDenied
-                raise PermissionDenied("Serverless Functions require Pro tier.")
+server_backup_patch = """    def perform_destroy(self, instance):
+        import os
+        import logging
+        if instance.file_path and os.path.exists(instance.file_path):
+            try:
+                os.remove(instance.file_path)
+            except OSError as e:
+                logging.getLogger(__name__).warning("Failed to delete server backup file %s: %s", instance.file_path, e)
+        instance.delete()
 
-        service = serializer.save(owner=self.request.user)
+    def perform_create(self, serializer):"""
 
-        # Setup GitHub Webhook if applicable
-        if service.deploy_type == 'GIT' and service.repository_url:
-            threading.Thread(
-                target=setup_github_webhook,
-                args=(self.request.user, service.repository_url),
-                daemon=True
-            ).start()"""
+content = content.replace(
+    "    def perform_create(self, serializer):\n        backup = serializer.save(created_by=self.request.user, status='PENDING')",
+    service_backup_patch + "\n        backup = serializer.save(created_by=self.request.user, status='PENDING')"
+)
 
-    content = content.replace(old_create, new_create)
+content = content.replace(
+    "    def perform_create(self, serializer):\n        backup = serializer.save(status='PENDING')",
+    server_backup_patch + "\n        backup = serializer.save(status='PENDING')"
+)
 
-    # Patch perform_update
-    old_update = """    def perform_update(self, serializer):
-        old_status = serializer.instance.status"""
+with open("backend/apps/deployments/views.py", "w") as f:
+    f.write(content)
 
-    new_update = """    def perform_update(self, serializer):
-        old_repo = serializer.instance.repository_url
-        old_status = serializer.instance.status
-
-        service = serializer.save()
-
-        if service.deploy_type == 'GIT' and service.repository_url and service.repository_url != old_repo:
-            threading.Thread(
-                target=setup_github_webhook,
-                args=(self.request.user, service.repository_url),
-                daemon=True
-            ).start()"""
-
-    if "def perform_update(self, serializer):" in content and "old_repo =" not in content:
-        content = content.replace(old_update, new_update)
-
-    with open("backend/apps/deployments/views.py", "w") as f:
-        f.write(content)
