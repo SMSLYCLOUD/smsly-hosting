@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import PageHeader from '@/components/PageHeader';
-import { servicesApi, addonsApi, serversApi } from '@/lib/api';
+import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
@@ -25,13 +25,13 @@ export default function TransfersPage() {
                 setServers(serversData);
 
                 // Fetch services
-                const servicesRes = await servicesApi.get('/services/');
-                const servicesData = servicesRes.data.results || servicesRes.data;
+                const servicesRes = await servicesApi.list();
+                const servicesData = servicesRes;
                 setServices(servicesData);
 
                 // Fetch addons
-                const addonsRes = await addonsApi.get('/addons/');
-                const addonsData = addonsRes.data.results || addonsRes.data;
+                const addonsRes = await addonsApi.list();
+                const addonsData = addonsRes;
                 setAddons(addonsData);
 
                 // Group by server
@@ -108,7 +108,7 @@ export default function TransfersPage() {
                 addon_id: itemType === 'addon' ? itemId : undefined
             };
 
-            await servicesApi.post(endpoint, payload);
+            await api.post(endpoint, payload);
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
         } catch (error: any) {
             console.error("Transfer failed", error);
