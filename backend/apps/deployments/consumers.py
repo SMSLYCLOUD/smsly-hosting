@@ -142,7 +142,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         try:
             while True:
                 data = await loop.run_in_executor(None, self._blocking_read)
-                if not data:
+
+                if data is None:
+                    # None means a real error or disconnect occurred
                     logger.info("Terminal session ended for deployment %s", self.deployment_id)
                     try:
                         await self.send(text_data=json.dumps({
@@ -151,6 +153,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     except Exception:
                         pass
                     break
+
+                if data == b'':
+                    # If we got exactly b'' from a socket timeout, just sleep briefly and retry
+                    # to prevent busy looping but keep connection alive.
+                    await asyncio.sleep(0.05)
+                    continue
 
                 text = data.decode('utf-8', errors='replace')
                 await self.send(text_data=json.dumps({'message': text}))
@@ -161,10 +169,20 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor."""
+        import socket
         try:
             # We use the socket wrapper's recv directly.
-            return self.exec_socket.recv(4096)
-        except Exception:
+            # Docker socket can timeout if idle. We just catch it and return b''
+            # so the loop continues instead of breaking the connection.
+            data = self.exec_socket.recv(4096)
+            if not data:
+                # Actual EOF (connection closed by remote docker side)
+                return None
+            return data
+        except socket.timeout:
+            return b''  # Signal that it was just a timeout, not a disconnect
+        except Exception as e:
+            logger.debug("Terminal _blocking_read exception (disconnecting): %s", e)
             return None
 
     @database_sync_to_async
@@ -231,6 +249,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 socket=True,
                 tty=True,
             )
+
+            # Prevent the socket from aggressively timing out during idle periods
+            # The docker-py client uses a wrapped socket.
+            try:
+                # The underlying python socket
+                if hasattr(self.exec_socket, '_sock'):
+                    self.exec_socket._sock.settimeout(60.0)
+            except Exception as e:
+                logger.debug("Could not set timeout on exec_socket: %s", e)
 
             return True
         except Exception as e:

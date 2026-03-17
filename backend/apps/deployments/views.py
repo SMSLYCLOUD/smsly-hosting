@@ -2711,14 +2711,16 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     @require_tier('pro', 'enterprise')
     def download(self, request, pk=None):
-        backup = self.get_object()
-        if not backup.file_path or not os.path.exists(backup.file_path):
-            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
-        from django.http import FileResponse
         import os
-        from .services.backup_service import BackupService
+        from django.http import FileResponse
 
+        backup = self.get_object()
         file_path = backup.file_path
+
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .services.backup_service import BackupService
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
 
         # If the file is encrypted, we must decrypt it for the user to download
@@ -2779,14 +2781,16 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
-        backup = self.get_object()
-        if not backup.file_path or not os.path.exists(backup.file_path):
-            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
-        from django.http import FileResponse
         import os
-        from .services.backup_service import BackupService
+        from django.http import FileResponse
 
+        backup = self.get_object()
         file_path = backup.file_path
+
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .services.backup_service import BackupService
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
 
         # If the file is encrypted, we must decrypt it for the user to download
@@ -2820,9 +2824,9 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return FileResponse(
-            open(backup.file_path, 'rb'),
+            open(file_path, 'rb'),
             as_attachment=True,
-            filename=os.path.basename(backup.file_path),
+            filename=os.path.basename(file_path),
         )
 
     @action(detail=False, methods=['post'], url_path='upload-restore',
