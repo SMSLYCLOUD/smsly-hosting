@@ -2237,9 +2237,9 @@ def restore_addon_task(self, backup_id: str):
         raise e
 
 @shared_task(bind=True, soft_time_limit=3600, time_limit=3900)
-def create_service_backup_task(self, service_id, backup_type='MANUAL'):
+def create_service_backup_task(self, service_id, backup_type='MANUAL', backup_id=None):
     backup_service = BackupService()
-    backup_service.backup_service(service_id)
+    backup_service.backup_service(service_id, backup_id=backup_id, backup_type=backup_type)
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
 def create_server_backup_task(self, backup_id=None):
