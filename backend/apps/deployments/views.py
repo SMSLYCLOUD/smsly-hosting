@@ -1844,22 +1844,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'message': f'{count} deployment(s) cancelled.',
         })
 
-    @action(detail=False, methods=['post'], url_path='cleanup-failed')
-    def cleanup_failed(self, request):
-        """
-        Delete deployments with FAILED status.
-        POST /api/v1/deployments/cleanup-failed/
-        """
-        # Only allow cleaning up deployments the user owns
-        qs = self.get_queryset().filter(status=Deployment.Status.FAILED)
-        count = qs.count()
-        qs.delete()
-
-        return Response({
-            'deleted': count,
-            'message': f'{count} failed deployment(s) cleaned up.',
-        })
-
     @action(detail=True, methods=['get'])
     def review(self, request, pk=None):
         """
@@ -2716,15 +2700,19 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             try:
                 # Decrypt to a temporary file
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                class AutoDeleteFile:
-                    def __init__(self, filepath):
-                        self.filepath = filepath
-                        self.f = open(filepath, 'rb')
-                        self.name = filepath
-                    def read(self, *args, **kwargs):
-                        return self.f.read(*args, **kwargs)
-                    def close(self):
-                        self.f.close()
+                from django.http import StreamingHttpResponse
+                import asyncio
+
+                async def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                # We yield control back to the event loop between chunks
+                                data = await asyncio.to_thread(f.read, chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
                         try:
                             os.remove(self.filepath)
                         except OSError:
@@ -2794,15 +2782,18 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if file_path.endswith('.enc') and key:
             try:
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                class AutoDeleteFile:
-                    def __init__(self, filepath):
-                        self.filepath = filepath
-                        self.f = open(filepath, 'rb')
-                        self.name = filepath
-                    def read(self, *args, **kwargs):
-                        return self.f.read(*args, **kwargs)
-                    def close(self):
-                        self.f.close()
+                from django.http import StreamingHttpResponse
+                import asyncio
+
+                async def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                data = await asyncio.to_thread(f.read, chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
                         try:
                             os.remove(self.filepath)
                         except OSError:
