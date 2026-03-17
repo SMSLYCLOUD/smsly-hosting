@@ -54,27 +54,18 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        target_server_ip = payload.get('target_server_ip')
+        target_server_id = payload.get('target_server_id')
+        
         target_server = None
-        if payload.get('target_server_id'):
-            target_server = ManagedServer.objects.filter(
-                id=payload['target_server_id'],
-                owner=request.user,
-            ).first()
-            if not target_server:
-                return Response(
-                    {'error': 'Connected target server not found'},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+        if target_server_id:
+            target_server = ManagedServer.objects.filter(id=target_server_id, owner=request.user).first()
+        else:
+            target_server = ManagedServer.objects.filter(host=target_server_ip, owner=request.user).first()
 
-        target_server_ip = payload.get('target_server_ip') or (
-            target_server.host if target_server else PlatformConfig.load().server_ip
-        )
-        target_server_ip = str(target_server_ip or '').strip()
         if not target_server_ip:
-            return Response(
-                {'error': 'Target server IP is required (local node IP not set).'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({'error': 'Target server IP is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             ipaddress.ip_address(target_server_ip)
         except ValueError:

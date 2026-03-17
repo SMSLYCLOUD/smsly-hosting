@@ -1844,6 +1844,22 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'message': f'{count} deployment(s) cancelled.',
         })
 
+    @action(detail=False, methods=['post'], url_path='cleanup-failed')
+    def cleanup_failed(self, request):
+        """
+        Delete deployments with FAILED status.
+        POST /api/v1/deployments/cleanup-failed/
+        """
+        # Only allow cleaning up deployments the user owns
+        qs = self.get_queryset().filter(status=Deployment.Status.FAILED)
+        count = qs.count()
+        qs.delete()
+
+        return Response({
+            'deleted': count,
+            'message': f'{count} failed deployment(s) cleaned up.',
+        })
+
     @action(detail=True, methods=['get'])
     def review(self, request, pk=None):
         """

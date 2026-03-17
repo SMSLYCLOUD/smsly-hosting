@@ -37,23 +37,38 @@ export default function TransfersPage() {
                 // Group by server
                 const grouped: Record<string, any[]> = {};
                 // Initialize with all servers including local node
-                grouped['local'] = []; // Assume local has id 'local' or we use empty for default
+                grouped['local'] = [];
                 serversData.forEach((srv: any) => {
                     grouped[srv.id] = [];
                 });
 
-                // Add services
+                // 1. Group addons by service id for easy lookup
+                const addonsByService: Record<string, any[]> = {};
+                addonsData.forEach((addon: any) => {
+                    if (!addonsByService[addon.service]) addonsByService[addon.service] = [];
+                    addonsByService[addon.service].push(addon);
+                });
+
+                // 2. Add services with their nested addons
                 servicesData.forEach((srv: any) => {
                     const serverId = srv.server || 'local';
                     if (!grouped[serverId]) grouped[serverId] = [];
-                    grouped[serverId].push({ ...srv, type: 'service' });
+                    
+                    grouped[serverId].push({ 
+                        ...srv, 
+                        type: 'service',
+                        nestedAddons: addonsByService[srv.id] || []
+                    });
                 });
 
-                // Add addons
+                // 3. Add any orphaned addons (should be rare)
+                const serviceIds = new Set(servicesData.map(s => s.id));
                 addonsData.forEach((addon: any) => {
-                    const serverId = addon.server || 'local';
-                    if (!grouped[serverId]) grouped[serverId] = [];
-                    grouped[serverId].push({ ...addon, type: 'addon' });
+                    if (!serviceIds.has(addon.service)) {
+                        const serverId = addon.server || 'local';
+                        if (!grouped[serverId]) grouped[serverId] = [];
+                        grouped[serverId].push({ ...addon, type: 'addon' });
+                    }
                 });
 
                 setGroupedServices(grouped);
@@ -276,6 +291,20 @@ function ServerColumn({
                                 </div>
                                 <div>
                                     <p className={`text-sm font-medium ${isLocal ? 'text-white' : 'text-gray-900'}`}>{item.name}</p>
+                                    {item.nestedAddons && item.nestedAddons.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                            {item.nestedAddons.map((addon: any) => (
+                                                <div key={addon.id} className={`flex items-center gap-1 px-1.5 py-0.5 border rounded text-[10px] font-medium ${
+                                                    isLocal 
+                                                    ? "bg-gray-800 border-gray-700 text-gray-300" 
+                                                    : "bg-blue-50/50 border-blue-100 text-blue-600"
+                                                }`}>
+                                                    <Database className="w-2.5 h-2.5" />
+                                                    {addon.addon_type}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-400 group-hover:text-gray-300' : 'text-gray-200'}`} />
