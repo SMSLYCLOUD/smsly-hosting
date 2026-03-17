@@ -157,7 +157,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if data == b'':
                     # If we got exactly b'' from a socket timeout, just sleep briefly and retry
                     # to prevent busy looping but keep connection alive.
-                    await asyncio.sleep(0.05)
+                    # Send a ping-like keepalive message to prevent the proxy from dropping the idle WS
+                    try:
+                        await self.send(text_data=json.dumps({'message': ''}))
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
                     continue
 
                 text = data.decode('utf-8', errors='replace')
@@ -170,6 +175,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor."""
         import socket
+        import urllib3.exceptions
+        import requests.exceptions
         try:
             # We use the socket wrapper's recv directly.
             # Docker socket can timeout if idle. We just catch it and return b''
@@ -179,10 +186,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 # Actual EOF (connection closed by remote docker side)
                 return None
             return data
-        except socket.timeout:
+        except (socket.timeout, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, TimeoutError):
             return b''  # Signal that it was just a timeout, not a disconnect
         except Exception as e:
-            logger.debug("Terminal _blocking_read exception (disconnecting): %s", e)
+            # Check if this exception is functionally a timeout disguised as a generic error
+            if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
+                return b''
+            logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
             return None
 
     @database_sync_to_async
