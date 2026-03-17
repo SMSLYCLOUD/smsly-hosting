@@ -73,20 +73,41 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                 {'service_id': "service_id must not be provided when transfer_type=FULL."}
             )
 
-        if not target_server_ip and not target_server_id:
-            from .models import PlatformConfig
-            if not PlatformConfig.load().server_ip:
-                raise serializers.ValidationError(
-                    {'target_server_ip': "target_server_ip or target_server_id is required (local node IP not set)."}
-                )
+        target_server_ip = attrs.get('target_server_ip')
+        target_server_id = attrs.get('target_server_id')
+
+        from .models import PlatformConfig
+        from .models_servers import ManagedServer
+        
+        request = self.context.get('request')
+        user = request.user if request else None
+
+        # Resolve target server if possible
+        target_server = None
+        if target_server_id:
+            target_server = ManagedServer.objects.filter(id=target_server_id).first()
+        elif target_server_ip:
+            target_server = ManagedServer.objects.filter(host=target_server_ip).first()
+        else:
+            local_ip = PlatformConfig.load().server_ip
+            if local_ip:
+                target_server = ManagedServer.objects.filter(host=local_ip).first()
+                attrs['target_server_ip'] = local_ip # Set fallback IP in attrs
+
+        # Validate IP presence
+        if not attrs.get('target_server_ip') and not target_server:
+            raise serializers.ValidationError(
+                {'target_server_ip': "target_server_ip or target_server_id is required."}
+            )
 
         # Require at least one SSH auth method
         has_key = bool(attrs.get('target_ssh_key', '').strip())
         has_password = bool(attrs.get('target_ssh_password', '').strip())
-        has_managed_target = bool(target_server_id)
-        if not has_key and not has_password and not has_managed_target:
+        has_managed_target_creds = target_server and (target_server.ssh_key or target_server.ssh_password)
+        
+        if not has_key and not has_password and not has_managed_target_creds:
             raise serializers.ValidationError(
-                "Provide target_ssh_key, target_ssh_password, or target_server_id with saved SSH credentials."
+                "Provide target_ssh_key, target_ssh_password, or use a connected server with saved SSH credentials."
             )
 
         return attrs
