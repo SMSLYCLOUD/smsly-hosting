@@ -112,25 +112,21 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 "WebSocket disconnected: User %s from "
                 "deployment %s", self.user.id, self.deployment_id)
 
-        # Differentiate between control messages (JSON) and raw input (string)
-        try:
-            data = json.loads(text_data)
-            if isinstance(data, dict):
-                if data.get('type') == 'resize':
-                    cols = data.get('cols')
-                    rows = data.get('rows')
-                    if cols and rows:
-                        await self._resize_tty(cols, rows)
-                    return
-        except (json.JSONDecodeError, TypeError):
-            # Not a control message, treat as raw input
-            pass
+    async def receive(self, text_data):
+        # SECURITY: Re-check authentication on each message
+        if not self.user:
+            await self.close(code=4001)
+            return
+
+        if not self.exec_socket:
+            return
 
         # Forward raw input to the container's exec stdin
         try:
-            if self.exec_socket:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self.exec_socket.send, text_data.encode('utf-8'))
+            # We use character-by-character forwarding for true interactive terminal support.
+            # No manual newline appending here — let the client send what it needs.
+            await asyncio.get_event_loop().run_in_executor(
+                None, self.exec_socket.send, text_data.encode('utf-8'))
         except Exception as e:
             logger.error("Terminal exec send error for %s: %s", self.deployment_id, e)
             try:
@@ -182,51 +178,22 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         import urllib3.exceptions
         import requests.exceptions
         try:
-            if not self.exec_socket:
-                return None
-                
-            # Try various ways to read from the socket (depends on docker-py version)
-            # Docker socket can timeout if idle. We catch it and return b''
+            # We use the socket wrapper's recv directly.
+            # Docker socket can timeout if idle. We just catch it and return b''
             # so the loop continues instead of breaking the connection.
-            try:
-                if hasattr(self.exec_socket, 'recv'):
-                    data = self.exec_socket.recv(4096)
-                elif hasattr(self.exec_socket, '_sock') and hasattr(self.exec_socket._sock, 'recv'):
-                    data = self.exec_socket._sock.recv(4096)
-                else:
-                    logger.error("Terminal socket object has no recv method")
-                    return None
-            except socket.timeout:
-                return b''  # Signal that it was just a timeout, not a disconnect
-
+            data = self.exec_socket.recv(4096)
             if not data:
                 # Actual EOF (connection closed by remote docker side)
-                logger.debug("Terminal socket returned EOF for %s", self.deployment_id)
                 return None
             return data
+        except (socket.timeout, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, TimeoutError):
+            return b''  # Signal that it was just a timeout, not a disconnect
         except Exception as e:
             # Check if this exception is functionally a timeout disguised as a generic error
             if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
                 return b''
             logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
             return None
-
-    async def _resize_tty(self, cols, rows):
-        """Resize the TTY for the exec session."""
-        if not self.exec_id:
-            return
-            
-        def _blocking_resize():
-            from apps.cloud.docker_client import get_docker_client
-            try:
-                client = get_docker_client()
-                client.api.exec_resize(self.exec_id, height=rows, width=cols)
-                return True
-            except Exception as e:
-                logger.error("Failed to resize terminal for %s: %s", self.deployment_id, e)
-                return False
-                
-        await asyncio.get_event_loop().run_in_executor(None, _blocking_resize)
 
     @database_sync_to_async
     def _find_container(self):
@@ -243,7 +210,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             containers = client.containers.list(
                 filters={'name': service_name, 'status': 'running'})
             if containers:
-                logger.debug("Found container by name for service %s: %s", service_name, containers[0].id)
                 return containers[0].id
 
             # Also try by label
@@ -251,13 +217,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 filters={'label': f'smsly.service={service_name}',
                          'status': 'running'})
             if containers:
-                logger.debug("Found container by label for service %s: %s", service_name, containers[0].id)
                 return containers[0].id
 
-            logger.warning("No running container found for service %s", service_name)
             return None
         except Exception as e:
-            logger.error("Error finding container for deployment %s: %s", self.deployment_id, e)
+            logger.error("Error finding container: %s", e)
             return None
 
     @database_sync_to_async
@@ -268,51 +232,33 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             client = get_docker_client()
             container = client.containers.get(self.container_id)
 
-            # Detect available shell
-            shells = ['/bin/bash', '/bin/sh', '/bin/ash', '/bin/zsh', 'sh', 'bash']
-            shell = '/bin/sh'
-            
-            for s in shells:
-                try:
-                    res = container.exec_run(['which', s])
-                    if res.exit_code == 0:
-                        shell = s
-                        break
-                except Exception:
-                    continue
+            # Try bash first, fall back to sh
+            shell = '/bin/bash'
+            try:
+                exit_code, _ = container.exec_run(
+                    'which bash', demux=True)
+                if exit_code != 0:
+                    shell = '/bin/sh'
+            except Exception:
+                shell = '/bin/sh'
 
             # Create exec instance with TTY
             exec_instance = client.api.exec_create(
                 self.container_id,
-                [shell],
+                shell,
                 stdin=True,
                 stdout=True,
                 stderr=True,
                 tty=True,
-                environment={
-                    "TERM": "xterm-256color",
-                    "LANG": "C.UTF-8",
-                    "COLUMNS": "120",
-                    "LINES": "40",
-                }
             )
             self.exec_id = exec_instance['Id']
 
             # Attach to the exec instance (returns a socket-like object)
-            logger.debug("Starting exec attachment for %s (shell: %s)", self.deployment_id, shell)
             self.exec_socket = client.api.exec_start(
                 self.exec_id,
-                detach=False,
-                tty=True,
-                stream=False,
                 socket=True,
+                tty=True,
             )
-            
-            if hasattr(self.exec_socket, '_socket'):
-                # Some versions of docker-py wrap the socket
-                self.exec_socket._socket.settimeout(None)
-            
-            logger.info("Exec socket attached and ready for %s", self.deployment_id)
 
             # Prevent the socket from aggressively timing out during idle periods
             # The docker-py client uses a wrapped socket.
@@ -325,7 +271,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
             return True
         except Exception as e:
-            logger.error("Error starting exec for %s: %s", self.deployment_id, e)
+            logger.error("Error starting exec: %s", e)
             return False
 
     @database_sync_to_async
