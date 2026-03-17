@@ -7,6 +7,7 @@ import logging
 import shutil
 import traceback
 import docker
+import tempfile
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.text import slugify

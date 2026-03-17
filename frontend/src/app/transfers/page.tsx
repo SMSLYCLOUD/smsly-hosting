@@ -119,6 +119,7 @@ export default function TransfersPage() {
         try {
             const endpoint = `/transfers/`;
             const payload: any = {
+                source_server_id: sourceServerId === 'local' ? null : sourceServerId,
                 target_server_id: targetServerId === 'local' ? null : targetServerId,
                 transfer_type: 'SERVICE',
             };
@@ -265,19 +266,19 @@ function ServerColumn({
                             key={item.id}
                             draggable={isLocal}
                             onDragStart={(e) => isLocal ? onDragStart(e, item.id, item.type, id) : e.preventDefault()}
-                            className={`bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between transition-all group ${
-                                isLocal ? "cursor-grab active:cursor-grabbing hover:border-gray-300 hover:shadow-sm" : "opacity-75 cursor-not-allowed"
+                            className={`border rounded-lg p-4 flex items-center justify-between transition-all group ${
+                                isLocal ? "bg-gray-900 border-gray-800 text-white cursor-grab active:cursor-grabbing hover:border-gray-700 hover:shadow-md" : "bg-white border-gray-200 opacity-75 cursor-not-allowed"
                             }`}
                         >
                             <div className="flex items-center gap-3">
-                                <div className="p-1.5 bg-gray-50 rounded-md group-hover:bg-gray-100 transition-colors">
-                                    {renderItemIcon(item.source_type, item.type)}
+                                <div className={`p-1.5 rounded-md transition-colors ${isLocal ? 'bg-gray-800 group-hover:bg-gray-700' : 'bg-gray-50 group-hover:bg-gray-100'}`}>
+                                    {renderItemIcon(item.source_type, item.type, isLocal)}
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-gray-900">{item.name}</p>
+                                    <p className={`text-sm font-medium ${isLocal ? 'text-white' : 'text-gray-900'}`}>{item.name}</p>
                                 </div>
                             </div>
-                            <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-300' : 'text-gray-200'}`} />
+                            <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-400 group-hover:text-gray-300' : 'text-gray-200'}`} />
                         </div>
                     ))
                 )}
