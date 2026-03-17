@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import PageHeader from '@/components/PageHeader';
-import { servicesApi, addonsApi } from '@/lib/api';
+import { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
@@ -20,8 +20,8 @@ export default function TransfersPage() {
         const fetchData = async () => {
             try {
                 // Fetch connected servers
-                const serversRes = await servicesApi.get('/servers/');
-                const serversData = serversRes.data.results || serversRes.data;
+                const serversRes = await serversApi.list();
+                const serversData = serversRes;
                 setServers(serversData);
 
                 // Fetch services
