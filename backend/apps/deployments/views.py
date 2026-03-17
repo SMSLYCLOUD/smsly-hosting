@@ -16,7 +16,6 @@ from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
 from apps.licensing.models import PlatformLicense
-from apps.licensing.decorators import require_tier
 from .ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
@@ -1365,7 +1364,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return Response(serialize_ai_router_config(service))
 
     @action(detail=True, methods=['post'], url_path='verify-domain')
-    @require_tier('pro', 'enterprise')
     def verify_domain(self, request, pk=None):
         """
         Verify that a custom domain's DNS points to this service's server.
@@ -1517,7 +1515,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
-    @require_tier('pro', 'enterprise')
     def add_domain(self, request, pk=None):
         """
         Add a custom domain to the service.
@@ -1616,7 +1613,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='delete-domain')
-    @require_tier('pro', 'enterprise')
     def delete_domain(self, request, pk=None):
         """
         Remove a custom domain from the service.
@@ -2200,11 +2196,9 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('enterprise')
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
@@ -2666,15 +2660,12 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('pro', 'enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
@@ -2683,10 +2674,9 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
-        create_service_backup_task.delay(str(backup.service.id), 'MANUAL')
+        create_service_backup_task.delay(str(backup.service.id), 'MANUAL', str(backup.id))
 
     @action(detail=True, methods=['post'])
-    @require_tier('pro', 'enterprise')
     def restore(self, request, pk=None):
         backup = self.get_object()
         target_service_id = request.data.get('target_service_id')
@@ -2709,7 +2699,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         return Response({'status': 'restore_started'})
 
     @action(detail=True, methods=['get'])
-    @require_tier('pro', 'enterprise')
     def download(self, request, pk=None):
         import os
         from django.http import FileResponse
@@ -2877,23 +2866,18 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     serializer_class = BackupScheduleSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('pro', 'enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def partial_update(self, request, *args, **kwargs):
         return super().partial_update(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
 
