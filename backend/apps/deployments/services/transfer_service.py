@@ -467,6 +467,15 @@ if os.path.exists(services_dir):
         self.transfer.rollback_deadline = timezone.now() + timedelta(hours=48)
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
+
+        # Update Service record to point to the new server for grouping in Transfers page
+        if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+            from ..models_core import ManagedServer
+            target_server = ManagedServer.objects.filter(host=self.transfer.target_server_ip).first()
+            if target_server:
+                self.transfer.service.server = target_server
+                self.transfer.service.save(update_fields=['server'])
+
         self.transfer.save()
         self._update(100, 'Transfer complete!')
 

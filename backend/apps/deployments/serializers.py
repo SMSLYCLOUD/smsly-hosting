@@ -76,6 +76,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'owner',
+            'server',
             'verification_token']
 
     def get_service_url(self, obj: Service) -> str:

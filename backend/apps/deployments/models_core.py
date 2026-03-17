@@ -232,6 +232,15 @@ class Service(TimeStampedModel):
         blank=True,
         related_name='services')
 
+    server = models.ForeignKey(
+        'ManagedServer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='services_on_node',
+        help_text="The managed server where this service is currently hosted"
+    )
+
     # Project grouping (Railway-style)
     project = models.ForeignKey(
         'deployments.Project',

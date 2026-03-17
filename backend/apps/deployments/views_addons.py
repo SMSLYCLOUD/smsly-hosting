@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class AddonSerializer(serializers.ModelSerializer):
+    server = serializers.ReadOnlyField(source='service.server_id')
+
     class Meta:
         model = Addon
         fields = [
@@ -20,6 +22,7 @@ class AddonSerializer(serializers.ModelSerializer):
             'name',
             'addon_type',
             'status',
+            'server',
             'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
 

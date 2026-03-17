@@ -109,28 +109,10 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
     connectWebSocket();
 
-    // Buffer full command and send on Enter. (Server expects full command lines.)
+    // Forward raw data immediately to support interactive terminal (arrows, shortcuts, etc.)
     const onDataDisposable: IDisposable = terminal.onData((data) => {
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-      if (data === '\r') {
-        terminal.write('\r\n');
-        const cmd = inputBuffer.current;
-        inputBuffer.current = '';
-        socket.send(cmd);
-        return;
-      }
-
-      if (data === '\u007F') {
-        if (inputBuffer.current.length > 0) {
-          inputBuffer.current = inputBuffer.current.slice(0, -1);
-          terminal.write('\b \b');
-        }
-        return;
-      }
-
-      inputBuffer.current += data;
-      terminal.write(data);
+      socket.send(data);
     });
 
     return () => {
