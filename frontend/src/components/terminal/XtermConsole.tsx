@@ -115,6 +115,11 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       socket.send(data);
     });
 
+    const onResizeDisposable: IDisposable = terminal.onResize(({ cols, rows }) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: 'resize', cols, rows }));
+    });
+
     return () => {
       disposed = true;
       reconnectAttemptsRef.current = 0;
@@ -122,6 +127,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
         clearTimeout(reconnectTimer);
       }
       onDataDisposable.dispose();
+      onResizeDisposable.dispose();
       terminal.dispose();
       try {
         socket?.close();

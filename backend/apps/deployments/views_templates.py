@@ -167,7 +167,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
             internal_port = int(template.get('default_port') or 8000)
             service = Service.objects.create(
                 name=name,
-                deploy_type='DOCKER',
+                deploy_type='TEMPLATE',
                 docker_image=str(docker_image),
                 internal_port=internal_port,
                 owner=request.user,

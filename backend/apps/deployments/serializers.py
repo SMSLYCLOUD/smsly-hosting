@@ -137,11 +137,14 @@ class DeploymentTimelineSerializer(serializers.ModelSerializer):
     duration_seconds = serializers.FloatField(read_only=True, allow_null=True)
     service_name = serializers.CharField(
         source='service.name', read_only=True)
+    service_deploy_type = serializers.CharField(
+        source='service.deploy_type', read_only=True)
 
     class Meta:
         model = Deployment
         fields = [
-            'id', 'service', 'service_name', 'commit_hash',
+            'id', 'service', 'service_name', 'service_deploy_type',
+            'commit_hash',
             'commit_message', 'status', 'is_rollback',
             'ai_diagnosis',
             'started_at', 'finished_at', 'duration_seconds',
