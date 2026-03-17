@@ -454,12 +454,10 @@ export default function BillingPage() {
                       <CardFooter>
                         <Button
                           className="w-full"
-                          variant={isCurrent ? 'outline' : 'default'}
-                          disabled={isCurrent || upgradingTo === p.code}
-                          onClick={() => handleUpgrade(p.code)}
+                          variant="outline"
+                          disabled={true}
                         >
-                          {upgradingTo === p.code ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                          {isCurrent ? 'Current Plan' : p.cta}
+                          Included in Self-Hosted
                         </Button>
                       </CardFooter>
                     </Card>
