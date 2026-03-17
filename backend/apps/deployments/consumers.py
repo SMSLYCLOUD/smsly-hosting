@@ -119,51 +119,51 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         if not self.exec_socket:
-            await self.send(text_data=json.dumps({
-                'message': '\x1b[31m[error] No exec session active.\x1b[0m\r\n'
-            }))
             return
 
-        # Send raw input to the container's exec stdin
+        # Forward raw input to the container's exec stdin
         try:
-            data = text_data
-            # Frontend sends full commands on Enter but for interactive
-            # terminals we forward raw bytes. Add newline for command lines.
-            if not data.endswith('\n'):
-                data += '\n'
+            # We use character-by-character forwarding for true interactive terminal support.
+            # No manual newline appending here — let the client send what it needs.
             await asyncio.get_event_loop().run_in_executor(
-                None, self.exec_socket._sock.sendall, data.encode('utf-8'))
+                None, self.exec_socket.send, text_data.encode('utf-8'))
         except Exception as e:
-            logger.error("Error sending to exec: %s", e)
-            await self.send(text_data=json.dumps({
-                'message': f'\r\n\x1b[31m[error] {str(e)}\x1b[0m\r\n'
-            }))
+            logger.error("Terminal exec send error for %s: %s", self.deployment_id, e)
+            try:
+                await self.send(text_data=json.dumps({
+                    'message': f'\r\n\x1b[31m[send-error] {str(e)}\x1b[0m\r\n'
+                }))
+            except Exception:
+                pass
 
     async def _read_output(self):
         """Background task: read from exec socket and send to WebSocket."""
         loop = asyncio.get_event_loop()
         try:
             while True:
-                data = await loop.run_in_executor(
-                    None, self._blocking_read)
+                data = await loop.run_in_executor(None, self._blocking_read)
                 if not data:
-                    await self.send(text_data=json.dumps({
-                        'message': '\r\n\x1b[31m[session ended]\x1b[0m\r\n'
-                    }))
+                    logger.info("Terminal session ended for deployment %s", self.deployment_id)
+                    try:
+                        await self.send(text_data=json.dumps({
+                            'message': '\r\n\x1b[31m[session ended]\x1b[0m\r\n'
+                        }))
+                    except Exception:
+                        pass
                     break
-                # Docker exec may prepend stream headers (8-byte prefix)
-                # For TTY mode, output is raw
+
                 text = data.decode('utf-8', errors='replace')
                 await self.send(text_data=json.dumps({'message': text}))
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error("Error reading exec output: %s", e)
+            logger.error("Terminal output read error for %s: %s", self.deployment_id, e)
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor."""
         try:
-            return self.exec_socket._sock.recv(4096)
+            # We use the socket wrapper's recv directly.
+            return self.exec_socket.recv(4096)
         except Exception:
             return None
 
