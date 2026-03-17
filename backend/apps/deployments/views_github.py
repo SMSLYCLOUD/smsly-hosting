@@ -15,7 +15,7 @@ from rest_framework.response import Response
 logger = logging.getLogger(__name__)
 
 
-def _get_github_token(user):
+def _get_github_token(user, force_refresh=False):
     """Retrieve the stored GitHub OAuth token for *user*, refreshing if expired."""
     try:
         from allauth.socialaccount.models import SocialAccount, SocialToken
@@ -35,13 +35,19 @@ def _get_github_token(user):
         if not token_obj:
             return None
 
-        # Check if token is expired and attempt refresh
-        if token_obj.expires_at:
+        # Check if token is expired (or about to expire) and attempt refresh
+        needs_refresh = force_refresh
+        if not needs_refresh and token_obj.expires_at:
             from django.utils import timezone
-            if token_obj.expires_at <= timezone.now():
-                refreshed = _refresh_github_token(token_obj)
-                if not refreshed:
-                    return None
+            from datetime import timedelta
+            # Add a 5 minute buffer to prevent token expiring mid-request
+            if token_obj.expires_at <= timezone.now() + timedelta(minutes=5):
+                needs_refresh = True
+
+        if needs_refresh:
+            refreshed = _refresh_github_token(token_obj)
+            if not refreshed:
+                return None
 
         return token_obj.token
     except Exception:
@@ -197,6 +203,62 @@ def github_repos(request):
 
     except requests.exceptions.HTTPError as exc:
         sc = exc.response.status_code if exc.response is not None else 502
+
+        # If we hit a 401, the token might have expired before the database knew it.
+        # Force a refresh and try one more time.
+        if sc == 401:
+            refreshed_token = _get_github_token(request.user, force_refresh=True)
+            if refreshed_token and refreshed_token != token:
+                headers["Authorization"] = f"token {refreshed_token}"
+                try:
+                    if q:
+                        gh = requests.get(
+                            "https://api.github.com/search/repositories",
+                            headers=headers,
+                            params={
+                                "q": f"{q} user:@me fork:true",
+                                "sort": "updated",
+                                "per_page": per_page,
+                                "page": page,
+                            },
+                            timeout=10,
+                        )
+                    else:
+                        gh = requests.get(
+                            "https://api.github.com/user/repos",
+                            headers=headers,
+                            params={
+                                "sort": sort,
+                                "direction": "desc",
+                                "per_page": per_page,
+                                "page": page,
+                                "affiliation": "owner,collaborator,organization_member",
+                            },
+                            timeout=10,
+                        )
+                    gh.raise_for_status()
+                    raw = gh.json()
+                    items = raw.get("items", raw) if q else raw
+                    repos = [
+                        {
+                            "full_name": r["full_name"],
+                            "name": r["name"],
+                            "private": r["private"],
+                            "default_branch": r.get("default_branch", "main"),
+                            "html_url": r["html_url"],
+                            "clone_url": r["clone_url"],
+                            "description": r.get("description") or "",
+                            "language": r.get("language") or "",
+                            "updated_at": r.get("updated_at"),
+                            "stargazers_count": r.get("stargazers_count", 0),
+                        }
+                        for r in items if isinstance(r, dict)
+                    ]
+                    return Response({"repos": repos, "page": page, "per_page": per_page})
+                except Exception:
+                    # If the second try fails, fall through to the error response
+                    pass
+
         detail = "GitHub API error"
         if sc == 401:
             detail = "GitHub token expired or revoked. Please reconnect your account."
