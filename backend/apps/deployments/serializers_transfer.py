@@ -74,9 +74,11 @@ class ServerTransferCreateSerializer(serializers.Serializer):
             )
 
         if not target_server_ip and not target_server_id:
-            raise serializers.ValidationError(
-                {'target_server_ip': "target_server_ip or target_server_id is required."}
-            )
+            from .models import PlatformConfig
+            if not PlatformConfig.load().server_ip:
+                raise serializers.ValidationError(
+                    {'target_server_ip': "target_server_ip or target_server_id is required (local node IP not set)."}
+                )
 
         # Require at least one SSH auth method
         has_key = bool(attrs.get('target_ssh_key', '').strip())
