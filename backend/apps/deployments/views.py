@@ -2660,6 +2660,16 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
+    def perform_destroy(self, instance):
+        import os
+        import logging
+        if instance.file_path and os.path.exists(instance.file_path):
+            try:
+                os.remove(instance.file_path)
+            except OSError as e:
+                logging.getLogger(__name__).warning("Failed to delete backup file %s: %s", instance.file_path, e)
+        instance.delete()
+
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
         create_service_backup_task.delay(str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
@@ -2742,6 +2752,16 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServerBackupSerializer
     permission_classes = [permissions.IsAdminUser]
     queryset = ServerBackup.objects.all().order_by('-created_at')
+
+    def perform_destroy(self, instance):
+        import os
+        import logging
+        if instance.file_path and os.path.exists(instance.file_path):
+            try:
+                os.remove(instance.file_path)
+            except OSError as e:
+                logging.getLogger(__name__).warning("Failed to delete server backup file %s: %s", instance.file_path, e)
+        instance.delete()
 
     def perform_create(self, serializer):
         backup = serializer.save(status='PENDING')
