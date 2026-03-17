@@ -2715,7 +2715,49 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
         from django.http import FileResponse
-        return FileResponse(open(backup.file_path, 'rb'), as_attachment=True)
+        import os
+        from .services.backup_service import BackupService
+
+        file_path = backup.file_path
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+
+        # If the file is encrypted, we must decrypt it for the user to download
+        # otherwise they just get binary encrypted garbage
+        if file_path.endswith('.enc') and key:
+            try:
+                # Decrypt to a temporary file
+                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                from django.http import StreamingHttpResponse
+                def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                data = f.read(chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                return response
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
+                return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return FileResponse(
+            open(file_path, 'rb'),
+            as_attachment=True,
+            filename=os.path.basename(file_path)
+        )
 
 class ServerBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServerBackupSerializer
@@ -2741,6 +2783,42 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if not backup.file_path or not os.path.exists(backup.file_path):
             return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
         from django.http import FileResponse
+        import os
+        from .services.backup_service import BackupService
+
+        file_path = backup.file_path
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+
+        # If the file is encrypted, we must decrypt it for the user to download
+        if file_path.endswith('.enc') and key:
+            try:
+                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                from django.http import StreamingHttpResponse
+                def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                data = f.read(chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                return response
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
+                return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return FileResponse(
             open(backup.file_path, 'rb'),
             as_attachment=True,
