@@ -16,7 +16,6 @@ from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
 from apps.licensing.models import PlatformLicense
-from apps.licensing.decorators import require_tier
 from .ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
@@ -1365,7 +1364,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return Response(serialize_ai_router_config(service))
 
     @action(detail=True, methods=['post'], url_path='verify-domain')
-    @require_tier('pro', 'enterprise')
     def verify_domain(self, request, pk=None):
         """
         Verify that a custom domain's DNS points to this service's server.
@@ -1517,7 +1515,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
-    @require_tier('pro', 'enterprise')
     def add_domain(self, request, pk=None):
         """
         Add a custom domain to the service.
@@ -1616,7 +1613,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='delete-domain')
-    @require_tier('pro', 'enterprise')
     def delete_domain(self, request, pk=None):
         """
         Remove a custom domain from the service.
@@ -2216,11 +2212,9 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('enterprise')
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
@@ -2682,15 +2676,12 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('pro', 'enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
@@ -2699,10 +2690,9 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
-        create_service_backup_task.delay(str(backup.service.id), 'MANUAL')
+        create_service_backup_task.delay(str(backup.service.id), 'MANUAL', str(backup.id))
 
     @action(detail=True, methods=['post'])
-    @require_tier('pro', 'enterprise')
     def restore(self, request, pk=None):
         backup = self.get_object()
         target_service_id = request.data.get('target_service_id')
@@ -2725,13 +2715,56 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         return Response({'status': 'restore_started'})
 
     @action(detail=True, methods=['get'])
-    @require_tier('pro', 'enterprise')
     def download(self, request, pk=None):
-        backup = self.get_object()
-        if not backup.file_path or not os.path.exists(backup.file_path):
-            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+        import os
         from django.http import FileResponse
-        return FileResponse(open(backup.file_path, 'rb'), as_attachment=True)
+
+        backup = self.get_object()
+        file_path = backup.file_path
+
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .services.backup_service import BackupService
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+
+        # If the file is encrypted, we must decrypt it for the user to download
+        # otherwise they just get binary encrypted garbage
+        if file_path.endswith('.enc') and key:
+            try:
+                # Decrypt to a temporary file
+                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                from django.http import StreamingHttpResponse
+                def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                data = f.read(chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                return response
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
+                return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return FileResponse(
+            open(file_path, 'rb'),
+            as_attachment=True,
+            filename=os.path.basename(file_path)
+        )
 
 class ServerBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServerBackupSerializer
@@ -2753,14 +2786,52 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
-        backup = self.get_object()
-        if not backup.file_path or not os.path.exists(backup.file_path):
-            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
+        import os
         from django.http import FileResponse
+
+        backup = self.get_object()
+        file_path = backup.file_path
+
+        if not file_path or not os.path.exists(file_path):
+            return Response({'error': 'Backup file not found on disk.'}, status=status.HTTP_404_NOT_FOUND)
+
+        from .services.backup_service import BackupService
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+
+        # If the file is encrypted, we must decrypt it for the user to download
+        if file_path.endswith('.enc') and key:
+            try:
+                decrypted_path = BackupService.decrypt_backup(file_path, key)
+                from django.http import StreamingHttpResponse
+                def file_iterator(filepath, chunk_size=8192):
+                    try:
+                        with open(filepath, 'rb') as f:
+                            while True:
+                                data = f.read(chunk_size)
+                                if not data:
+                                    break
+                                yield data
+                    finally:
+                        try:
+                            os.remove(filepath)
+                        except OSError:
+                            pass
+
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                return response
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
+                return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         return FileResponse(
-            open(backup.file_path, 'rb'),
+            open(file_path, 'rb'),
             as_attachment=True,
-            filename=os.path.basename(backup.file_path),
+            filename=os.path.basename(file_path),
         )
 
     @action(detail=False, methods=['post'], url_path='upload-restore',
@@ -2811,23 +2882,18 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     serializer_class = BackupScheduleSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('pro', 'enterprise')
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         return super().create(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def update(self, request, *args, **kwargs):
         return super().update(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def partial_update(self, request, *args, **kwargs):
         return super().partial_update(request, *args, **kwargs)
 
-    @require_tier('pro', 'enterprise')
     def destroy(self, request, *args, **kwargs):
         return super().destroy(request, *args, **kwargs)
 

@@ -86,6 +86,12 @@ export default function TransfersPage() {
     // DnD Handlers
     // ─────────────────────────────────────────────────────────────────
     const handleDragStart = (e: React.DragEvent, itemId: string, itemType: string, sourceServerId: string) => {
+        // Only allow dragging from the local server
+        if (sourceServerId !== 'local') {
+            e.preventDefault();
+            toast.error("Transfers must originate from the Local Server.");
+            return;
+        }
         e.dataTransfer.setData('itemId', itemId);
         e.dataTransfer.setData('itemType', itemType);
         e.dataTransfer.setData('sourceServerId', sourceServerId);
@@ -103,6 +109,16 @@ export default function TransfersPage() {
 
         if (!itemId || sourceServerId === targetServerId) return;
 
+        if (sourceServerId !== 'local') {
+            toast.error("Transfers must originate from the Local Server.");
+            return;
+        }
+
+        if (targetServerId === 'local') {
+            toast.error("Cannot transfer to the Local Server. Select a remote server.");
+            return;
+        }
+
         // Optimistic UI update
         const itemToMove = groupedServices[sourceServerId].find(item => item.id === itemId);
         if (!itemToMove) return;
@@ -118,6 +134,7 @@ export default function TransfersPage() {
         try {
             const endpoint = `/transfers/`;
             const payload: any = {
+                source_server_id: sourceServerId === 'local' ? null : sourceServerId,
                 target_server_id: targetServerId === 'local' ? null : targetServerId,
                 transfer_type: 'SERVICE',
             };
@@ -262,20 +279,26 @@ function ServerColumn({
                     items.map((item: any) => (
                         <div
                             key={item.id}
-                            draggable
-                            onDragStart={(e) => onDragStart(e, item.id, item.type, id)}
-                            className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between cursor-grab active:cursor-grabbing hover:border-gray-300 hover:shadow-sm transition-all group"
+                            draggable={isLocal}
+                            onDragStart={(e) => isLocal ? onDragStart(e, item.id, item.type, id) : e.preventDefault()}
+                            className={`border rounded-lg p-4 flex items-center justify-between transition-all group ${
+                                isLocal ? "bg-gray-900 border-gray-800 text-white cursor-grab active:cursor-grabbing hover:border-gray-700 hover:shadow-md" : "bg-white border-gray-200 opacity-75 cursor-not-allowed"
+                            }`}
                         >
                             <div className="flex items-center gap-3">
-                                <div className="p-1.5 bg-gray-50 rounded-md group-hover:bg-gray-100 transition-colors">
-                                    {renderItemIcon(item.source_type, item.type)}
+                                <div className={`p-1.5 rounded-md transition-colors ${isLocal ? 'bg-gray-800 group-hover:bg-gray-700' : 'bg-gray-50 group-hover:bg-gray-100'}`}>
+                                    {renderItemIcon(item.source_type, item.type, isLocal)}
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-gray-900">{item.name}</p>
+                                    <p className={`text-sm font-medium ${isLocal ? 'text-white' : 'text-gray-900'}`}>{item.name}</p>
                                     {item.nestedAddons && item.nestedAddons.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5 mt-1.5">
                                             {item.nestedAddons.map((addon: any) => (
-                                                <div key={addon.id} className="flex items-center gap-1 px-1.5 py-0.5 bg-blue-50/50 border border-blue-100 rounded text-[10px] text-blue-600 font-medium">
+                                                <div key={addon.id} className={`flex items-center gap-1 px-1.5 py-0.5 border rounded text-[10px] font-medium ${
+                                                    isLocal 
+                                                    ? "bg-gray-800 border-gray-700 text-gray-300" 
+                                                    : "bg-blue-50/50 border-blue-100 text-blue-600"
+                                                }`}>
                                                     <Database className="w-2.5 h-2.5" />
                                                     {addon.addon_type}
                                                 </div>
@@ -284,7 +307,7 @@ function ServerColumn({
                                     )}
                                 </div>
                             </div>
-                            <ServerCog className="w-4 h-4 text-gray-300" />
+                            <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-400 group-hover:text-gray-300' : 'text-gray-200'}`} />
                         </div>
                     ))
                 )}

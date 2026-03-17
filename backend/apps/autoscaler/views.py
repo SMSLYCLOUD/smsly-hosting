@@ -16,7 +16,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
-from apps.licensing.decorators import require_tier
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +274,6 @@ def _run_autoscaler_check():
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def autoscaler_status(request):
     """Return current autoscaler status with live container stats."""
     try:
@@ -291,7 +289,6 @@ def autoscaler_status(request):
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def autoscaler_history(request):
     """Return autoscaler history from cache."""
     try:
@@ -311,7 +308,6 @@ def autoscaler_history(request):
 
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def autoscaler_config(request):
     """Update autoscaler config."""
     try:
@@ -326,7 +322,6 @@ def autoscaler_config(request):
 
 @api_view(['POST'])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def autoscaler_trigger(request):
     """Trigger an immediate autoscaler check."""
     try:

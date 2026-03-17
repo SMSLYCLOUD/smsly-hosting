@@ -7,6 +7,7 @@ import logging
 import shutil
 import traceback
 import docker
+import tempfile
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.text import slugify
@@ -31,10 +32,10 @@ class BackupService:
     def _get_backups_dir(subdir: str) -> str:
         """Get or create a writable backups directory.
 
-        Tries /data/backups/{subdir} first (shared Docker volume),
+        Tries /app/backups/{subdir} first (shared Docker volume in production),
         then falls back to /tmp/backups/{subdir} if not available.
         """
-        primary = os.path.join('/data', 'backups', subdir)
+        primary = os.path.join('/app', 'backups', subdir)
         try:
             os.makedirs(primary, exist_ok=True)
             # Test write access by creating a temp file
@@ -52,18 +53,32 @@ class BackupService:
             os.makedirs(fallback, exist_ok=True)
             return fallback
 
-    def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
+    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL') -> ServiceBackup:
         if not self.docker_client:
             raise RuntimeError(
                 "Docker is not available. Backups require a running Docker daemon. "
                 "Please ensure Docker is installed and accessible."
             )
         service = Service.objects.get(id=service_id)
-        backup = ServiceBackup.objects.create(
-            service=service,
-            status='IN_PROGRESS',
-            backup_type=backup_type
-        )
+
+        if backup_id:
+            try:
+                backup = ServiceBackup.objects.get(id=backup_id)
+                backup.status = 'IN_PROGRESS'
+                backup.save(update_fields=['status'])
+            except ServiceBackup.DoesNotExist:
+                backup = ServiceBackup.objects.create(
+                    service=service,
+                    status='IN_PROGRESS',
+                    backup_type=backup_type
+                )
+        else:
+            backup = ServiceBackup.objects.create(
+                service=service,
+                status='IN_PROGRESS',
+                backup_type=backup_type
+            )
+
         temp_dir = None
         try:
             # Snapshot env vars — mask secrets to prevent credential leakage

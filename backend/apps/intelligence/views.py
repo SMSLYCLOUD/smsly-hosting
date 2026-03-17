@@ -11,7 +11,6 @@ from rest_framework.decorators import api_view, permission_classes, authenticati
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework import status
-from apps.licensing.decorators import require_tier
 
 from .providers import (
     get_available_providers,
@@ -49,7 +48,6 @@ def _parse_int(value, default):
 @extend_schema(responses=OpenApiTypes.OBJECT)
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def ai_providers_status(request):
     """
     Return all AI providers with config status, model, and balance.
@@ -119,7 +117,6 @@ def ai_providers_status(request):
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def ai_providers_update(request):
     """
     Update AI provider settings (admin only).
@@ -183,7 +180,6 @@ def ai_providers_update(request):
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def ai_test_prompt(request):
     """
     Test AI providers with a prompt.
@@ -216,7 +212,6 @@ def ai_test_prompt(request):
 @api_view(["POST"])
 @authentication_classes([APIKeyAuthentication, CsrfExemptSessionAuthentication])
 @permission_classes([IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def ai_chat_completions(request):
     """
     OpenAI-compatible chat completions endpoint.
@@ -277,7 +272,6 @@ def ai_chat_completions(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def ai_analyze_logs(request):
     """
     POST /api/v1/ai/analyze/
@@ -310,7 +304,6 @@ def ai_analyze_logs(request):
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
-@require_tier('pro', 'enterprise')
 def ai_cost_estimate(request):
     """
     POST /api/v1/ai/cost-estimate/
@@ -335,7 +328,6 @@ def ai_cost_estimate(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def ai_intelligence_report(request):
     """
     GET /api/v1/ai/report/
@@ -389,7 +381,6 @@ def ai_intelligence_report(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def ai_anomaly_history(request):
     """
     GET /api/v1/ai/anomalies/

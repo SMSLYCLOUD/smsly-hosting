@@ -3,7 +3,6 @@ import ipaddress
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.licensing.decorators import require_tier
 from .models_transfer import ServerTransfer
 from .serializers import ServerTransferSerializer, ServerTransferCreateSerializer
 from .models import Service, PlatformConfig
@@ -19,7 +18,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
-    @require_tier('pro', 'enterprise')
     def create(self, request, *args, **kwargs):
         serializer = ServerTransferCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -113,7 +111,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         return Response(ServerTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
-    @require_tier('pro', 'enterprise')
     def rollback(self, request, pk=None):
         transfer = self.get_object()
         if not transfer.can_rollback:
