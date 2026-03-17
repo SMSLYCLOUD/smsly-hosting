@@ -69,12 +69,12 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 )
 
         target_server_ip = payload.get('target_server_ip') or (
-            target_server.host if target_server else ''
+            target_server.host if target_server else PlatformConfig.load().server_ip
         )
         target_server_ip = str(target_server_ip or '').strip()
         if not target_server_ip:
             return Response(
-                {'error': 'Target server IP is required.'},
+                {'error': 'Target server IP is required (local node IP not set).'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:

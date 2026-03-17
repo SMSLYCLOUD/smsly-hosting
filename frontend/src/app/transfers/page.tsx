@@ -102,11 +102,18 @@ export default function TransfersPage() {
         // Trigger API transfer request
         try {
             const endpoint = `/transfers/`;
-            const payload = {
+            const payload: any = {
                 target_server_id: targetServerId === 'local' ? null : targetServerId,
-                service_id: itemType === 'service' ? itemId : undefined,
-                addon_id: itemType === 'addon' ? itemId : undefined
+                transfer_type: 'SERVICE',
             };
+
+            if (itemType === 'service') {
+                payload.service_id = itemId;
+            } else if (itemType === 'addon') {
+                // For addons, we transfer the parent service
+                const addon = addons.find((a: any) => a.id === itemId);
+                payload.service_id = addon?.service;
+            }
 
             await api.post(endpoint, payload);
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
