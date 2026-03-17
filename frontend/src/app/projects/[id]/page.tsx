@@ -7,15 +7,14 @@
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
-import {
-  ArrowLeft, Plus, FolderOpen, Settings2,
-  GitBranch, Globe, Layers, Trash2, X, Save,
-  Database
-} from 'lucide-react';
-import { projectsApi, servicesApi, addonsApi, Project, Service } from '@/lib/api';
+import { projectsApi, servicesApi, Project, Service } from '@/lib/api';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
+import {
+  ArrowLeft, Plus, FolderOpen, Settings2,
+  GitBranch, Globe, Layers, Trash2, X, Save,
+} from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -57,28 +56,12 @@ function ProjectDetailContent() {
 
   const load = useCallback(async () => {
     try {
-      const [proj, svcs, adns] = await Promise.all([
+      const [proj, svcs] = await Promise.all([
         projectsApi.get(projectId),
         projectsApi.services(projectId),
-        addonsApi.list(), // Fetch all to filter or use a project-specific endpoint if available
       ]);
       setProject(proj);
-      
-      // Group addons by service
-      const projectAddons = adns.filter((a: any) => a.project === projectId);
-      const addonsByService: Record<string, any[]> = {};
-      projectAddons.forEach((a: any) => {
-        if (!addonsByService[a.service]) addonsByService[a.service] = [];
-        addonsByService[a.service].push(a);
-      });
-
-      // Nest addons in services
-      const nestedSvcs = svcs.map((s: any) => ({
-        ...s,
-        nestedAddons: addonsByService[s.id] || []
-      }));
-
-      setServices(nestedSvcs);
+      setServices(svcs);
       setEditName(proj.name);
       setEditDesc(proj.description || '');
       setEditEmoji(proj.icon_emoji);
@@ -336,16 +319,6 @@ function ProjectDetailContent() {
                           <div className="flex items-center gap-1.5">
                             <Globe className="w-3 h-3" />
                             <span className="truncate">{svc.public_domain}</span>
-                          </div>
-                        )}
-                        {(svc as any).nestedAddons && (svc as any).nestedAddons.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5 mt-2">
-                            {(svc as any).nestedAddons.map((adn: any) => (
-                              <div key={adn.id} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[9px] font-bold">
-                                <Database className="w-2.5 h-2.5" />
-                                {adn.addon_type}
-                              </div>
-                            ))}
                           </div>
                         )}
                       </div>

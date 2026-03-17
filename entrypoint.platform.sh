@@ -64,7 +64,7 @@ EOF
 
 if [ "$ROLE" = "all" ] || [ "$ROLE" = "web" ]; then
   add_program "backend" \
-    "/app/entrypoint.sh gunicorn --bind 127.0.0.1:${BACKEND_PORT} config.asgi:application --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 120" \
+    "/app/entrypoint.sh gunicorn --bind 127.0.0.1:${BACKEND_PORT} config.asgi:application --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 120" \
     "/app" \
     "smsly"
 
@@ -85,12 +85,12 @@ if [ "$ROLE" = "all" ] || [ "$ROLE" = "worker" ]; then
   if [ "$ROLE" = "all" ]; then
     # In single-container mode, wait for backend health before starting Celery.
     add_program "celery" \
-      "/bin/sh -c \"until wget -q -O /dev/null http://127.0.0.1:${BACKEND_PORT}/health; do echo 'waiting for backend...'; sleep 2; done; celery -A config worker -l info --concurrency=2\"" \
+      "/bin/sh -c \"until wget -q -O /dev/null http://127.0.0.1:${BACKEND_PORT}/health; do echo 'waiting for backend...'; sleep 2; done; celery -A config worker -l info --concurrency=1\"" \
       "/app" \
       "smsly"
   else
     add_program "celery" \
-      "celery -A config worker -l info --concurrency=2" \
+      "celery -A config worker -l info --concurrency=1" \
       "/app" \
       "smsly"
   fi
