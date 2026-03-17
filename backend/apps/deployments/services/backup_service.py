@@ -53,18 +53,32 @@ class BackupService:
             os.makedirs(fallback, exist_ok=True)
             return fallback
 
-    def backup_service(self, service_id, backup_type='MANUAL') -> ServiceBackup:
+    def backup_service(self, service_id, backup_id=None, backup_type='MANUAL') -> ServiceBackup:
         if not self.docker_client:
             raise RuntimeError(
                 "Docker is not available. Backups require a running Docker daemon. "
                 "Please ensure Docker is installed and accessible."
             )
         service = Service.objects.get(id=service_id)
-        backup = ServiceBackup.objects.create(
-            service=service,
-            status='IN_PROGRESS',
-            backup_type=backup_type
-        )
+
+        if backup_id:
+            try:
+                backup = ServiceBackup.objects.get(id=backup_id)
+                backup.status = 'IN_PROGRESS'
+                backup.save(update_fields=['status'])
+            except ServiceBackup.DoesNotExist:
+                backup = ServiceBackup.objects.create(
+                    service=service,
+                    status='IN_PROGRESS',
+                    backup_type=backup_type
+                )
+        else:
+            backup = ServiceBackup.objects.create(
+                service=service,
+                status='IN_PROGRESS',
+                backup_type=backup_type
+            )
+
         temp_dir = None
         try:
             # Snapshot env vars — mask secrets to prevent credential leakage

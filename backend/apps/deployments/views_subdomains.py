@@ -9,7 +9,6 @@ Provides endpoints for the tunnels page subdomain reservation:
 from rest_framework import serializers, status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from apps.licensing.decorators import require_tier
 from .models_tunnels import ReservedSubdomain, Tunnel
 import logging
 import re
@@ -31,7 +30,6 @@ SUBDOMAIN_RE = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def subdomains_list_create(request):
     """
     GET  /api/v1/subdomains/ — list reserved subdomains for the user.
@@ -92,7 +90,6 @@ def subdomains_list_create(request):
 
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated])
-@require_tier('pro', 'enterprise')
 def subdomains_release(request, subdomain):
     """DELETE /api/v1/subdomains/{subdomain}/ — release a reserved subdomain."""
     try:
