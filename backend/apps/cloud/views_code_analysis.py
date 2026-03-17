@@ -25,7 +25,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.deployments.models import Service
-from apps.licensing.decorators import require_tier
 
 logger = logging.getLogger(__name__)
 
@@ -525,7 +524,6 @@ class CodeAnalysisViewSet(viewsets.GenericViewSet):
     serializer_class = CodeAnalysisRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @require_tier('pro', 'enterprise')
     @action(detail=False, methods=['post'], url_path='analyze')
     def analyze(self, request):
         """

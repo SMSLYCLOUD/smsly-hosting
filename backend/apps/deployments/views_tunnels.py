@@ -15,7 +15,6 @@ from django.conf import settings
 from rest_framework import viewsets, serializers, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.licensing.decorators import require_tier
 from .models_tunnels import Tunnel, TunnelRequest
 import logging
 
@@ -109,7 +108,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
 
     # ── List ─────────────────────────────────────────────────────────────
 
-    @require_tier('pro', 'enterprise')
     def list(self, request):
         """GET /api/v1/tunnels/ — returns {tunnels: [...]}"""
         queryset = self.get_queryset()
@@ -118,7 +116,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
 
     # ── Create (from UI) ─────────────────────────────────────────────────
 
-    @require_tier('pro', 'enterprise')
     def create(self, request):
         """POST /api/v1/tunnels/ — create tunnel from dashboard."""
         write_serializer = TunnelCreateSerializer(data=request.data)
@@ -146,7 +143,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
 
     # ── Delete (soft-delete) ─────────────────────────────────────────────
 
-    @require_tier('pro', 'enterprise')
     def destroy(self, request, pk=None):
         """DELETE /api/v1/tunnels/{id}/ — soft-delete (deactivate)."""
         tunnel = self.get_object()
@@ -157,7 +153,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
     # ── Requests Inspector ───────────────────────────────────────────────
 
     @action(detail=True, methods=['get'], url_path='requests')
-    @require_tier('pro', 'enterprise')
     def get_requests(self, request, pk=None):
         """GET /api/v1/tunnels/{id}/requests/ — returns {requests: [...]}"""
         tunnel = self.get_object()
@@ -172,7 +167,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
         methods=['post'],
         url_path=r'replay/(?P<request_id>[0-9a-f-]{36})',
     )
-    @require_tier('pro', 'enterprise')
     def replay(self, request, pk=None, request_id=None):
         """POST /api/v1/tunnels/{id}/replay/{req_id}/ — replay a request"""
         tunnel = self.get_object()
@@ -200,7 +194,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
     # ── Share ────────────────────────────────────────────────────────────
 
     @action(detail=True, methods=['post'], url_path='share')
-    @require_tier('pro', 'enterprise')
     def share(self, request, pk=None):
         """POST /api/v1/tunnels/{id}/share/ — share tunnel with a user."""
         tunnel = self.get_object()
@@ -232,7 +225,6 @@ class TunnelViewSet(viewsets.ModelViewSet):
     # ── Register (from CLI) ──────────────────────────────────────────────
 
     @action(detail=False, methods=['post'])
-    @require_tier('pro', 'enterprise')
     def register(self, request):
         """POST /api/v1/tunnels/register/ — register tunnel from CLI tool"""
         subdomain = request.data.get('subdomain')

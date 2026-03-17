@@ -3,7 +3,6 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from apps.licensing.decorators import require_tier
 from .models_addons import Addon
 from .models import Service, EnvironmentVariable
 import logging
