@@ -86,7 +86,7 @@ class ServerTransferCreateSerializer(serializers.Serializer):
         has_managed_target = bool(target_server_id)
         if not has_key and not has_password and not has_managed_target:
             raise serializers.ValidationError(
-                "Provide target_ssh_key, target_ssh_password, or target_server_id with saved SSH credentials."
+                {"error": "No SSH credentials provided. Provide target_ssh_key, target_ssh_password, or use a connected server with saved SSH credentials."}
             )
 
         return attrs
