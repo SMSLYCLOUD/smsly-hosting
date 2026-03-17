@@ -2716,26 +2716,26 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
             try:
                 # Decrypt to a temporary file
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                from django.http import StreamingHttpResponse
-                def file_iterator(filepath, chunk_size=8192):
-                    try:
-                        with open(filepath, 'rb') as f:
-                            while True:
-                                data = f.read(chunk_size)
-                                if not data:
-                                    break
-                                yield data
-                    finally:
+                class AutoDeleteFile:
+                    def __init__(self, filepath):
+                        self.filepath = filepath
+                        self.f = open(filepath, 'rb')
+                        self.name = filepath
+                    def read(self, *args, **kwargs):
+                        return self.f.read(*args, **kwargs)
+                    def close(self):
+                        self.f.close()
                         try:
-                            os.remove(filepath)
+                            os.remove(self.filepath)
                         except OSError:
                             pass
 
-                response = StreamingHttpResponse(
-                    file_iterator(decrypted_path),
-                    content_type='application/gzip'
+                response = FileResponse(
+                    AutoDeleteFile(decrypted_path),
+                    as_attachment=True,
+                    filename=os.path.basename(file_path).replace(".enc", "")
                 )
-                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                response['Content-Length'] = os.path.getsize(decrypted_path)
                 return response
             except Exception as e:
                 import logging
@@ -2794,26 +2794,26 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if file_path.endswith('.enc') and key:
             try:
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                from django.http import StreamingHttpResponse
-                def file_iterator(filepath, chunk_size=8192):
-                    try:
-                        with open(filepath, 'rb') as f:
-                            while True:
-                                data = f.read(chunk_size)
-                                if not data:
-                                    break
-                                yield data
-                    finally:
+                class AutoDeleteFile:
+                    def __init__(self, filepath):
+                        self.filepath = filepath
+                        self.f = open(filepath, 'rb')
+                        self.name = filepath
+                    def read(self, *args, **kwargs):
+                        return self.f.read(*args, **kwargs)
+                    def close(self):
+                        self.f.close()
                         try:
-                            os.remove(filepath)
+                            os.remove(self.filepath)
                         except OSError:
                             pass
 
-                response = StreamingHttpResponse(
-                    file_iterator(decrypted_path),
-                    content_type='application/gzip'
+                response = FileResponse(
+                    AutoDeleteFile(decrypted_path),
+                    as_attachment=True,
+                    filename=os.path.basename(file_path).replace(".enc", "")
                 )
-                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
+                response['Content-Length'] = os.path.getsize(decrypted_path)
                 return response
             except Exception as e:
                 import logging

@@ -60,7 +60,9 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         target_server = None
         if target_server_id:
             target_server = ManagedServer.objects.filter(id=target_server_id, owner=request.user).first()
-        else:
+            if target_server and not target_server_ip:
+                target_server_ip = target_server.host
+        elif target_server_ip:
             target_server = ManagedServer.objects.filter(host=target_server_ip, owner=request.user).first()
 
         if not target_server_ip:

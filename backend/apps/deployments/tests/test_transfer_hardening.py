@@ -43,7 +43,7 @@ class ServerTransferHardeningTests(APITestCase):
         }
 
         response = self.client.post(self.url, payload, format='json')
-
+        print(response.data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertNotIn('target_ssh_key', response.data)
 
@@ -113,7 +113,7 @@ class ServerTransferHardeningTests(APITestCase):
             'target_ssh_password': 'root-password-here',
         }
         response = self.client.post(self.url, payload, format='json')
-
+        print(response.data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         transfer = ServerTransfer.objects.get(id=response.data['id'])
         self.assertEqual(transfer.target_ssh_key, '')
@@ -139,7 +139,7 @@ class ServerTransferHardeningTests(APITestCase):
             'target_server_id': str(target.id),
         }
         response = self.client.post(self.url, payload, format='json')
-
+        print(response.data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         transfer = ServerTransfer.objects.get(id=response.data['id'])
         self.assertEqual(transfer.target_server_ip, '203.0.113.60')
