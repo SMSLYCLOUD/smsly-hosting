@@ -1482,36 +1482,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def _enforce_custom_domain_quota(self, service: Service, new_total: int):
         """
         Enforce billing plan limit for custom domains.
-        Defaults to 1 when no active subscription exists.
+        (Disabled for self-hosted instances).
         """
-        try:
-            from apps.billing.models import UserSubscription
-            sub = (
-                UserSubscription.objects
-                .select_related("plan")
-                .filter(
-                    user=service.owner,
-                    status__in=["ACTIVE", "TRIAL"],
-                )
-                .first()
-            )
-            limit = 1
-            if sub and sub.plan and sub.plan.max_custom_domains is not None:
-                limit = int(sub.plan.max_custom_domains)
-        except Exception:  # pylint: disable=broad-exception-caught
-            limit = 1
-
-        # Non-positive means unlimited.
-        if limit > 0 and new_total > limit:
-            return Response(
-                {
-                    "error": (
-                        f"Custom domain limit reached ({limit}). "
-                        "Upgrade your plan to add more domains."
-                    )
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
         return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
