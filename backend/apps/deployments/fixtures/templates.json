@@ -21994,6 +21994,9 @@
     "default_port": 4000,
     "min_ram_gb": 1,
     "min_cpu_cores": 1,
+    "required_addons": [
+      "POSTGRES"
+    ],
     "env_vars": [
       {
         "key": "LITELLM_MASTER_KEY",
@@ -22002,8 +22005,13 @@
       },
       {
         "key": "DISABLE_SCHEMA_UPDATE",
-        "value": "true",
+        "value": "false",
         "is_secret": false
+      },
+      {
+        "key": "DATABASE_URL",
+        "value": "${DATABASE_URL}",
+        "is_secret": true
       },
       {
         "key": "NUM_WORKERS",

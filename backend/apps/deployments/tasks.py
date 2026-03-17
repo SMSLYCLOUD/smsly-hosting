@@ -1875,7 +1875,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
     # Template crash-clarity: enforce required envs for intelligence templates
     intelligence_templates = {
         'librechat', 'khoj', 'flowise', 'langflow',
-        'dify', 'memgpt', 'anythingllm'
+        'dify', 'memgpt', 'anythingllm', 'ai-router'
     }
     if template and template.get('id') in intelligence_templates:
         env_list = template.setdefault('env_vars', [])
