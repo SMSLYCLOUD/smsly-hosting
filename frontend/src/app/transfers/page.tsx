@@ -71,6 +71,12 @@ export default function TransfersPage() {
     // DnD Handlers
     // ─────────────────────────────────────────────────────────────────
     const handleDragStart = (e: React.DragEvent, itemId: string, itemType: string, sourceServerId: string) => {
+        // Only allow dragging from the local server
+        if (sourceServerId !== 'local') {
+            e.preventDefault();
+            toast.error("Transfers must originate from the Local Server.");
+            return;
+        }
         e.dataTransfer.setData('itemId', itemId);
         e.dataTransfer.setData('itemType', itemType);
         e.dataTransfer.setData('sourceServerId', sourceServerId);
@@ -87,6 +93,16 @@ export default function TransfersPage() {
         const sourceServerId = e.dataTransfer.getData('sourceServerId');
 
         if (!itemId || sourceServerId === targetServerId) return;
+
+        if (sourceServerId !== 'local') {
+            toast.error("Transfers must originate from the Local Server.");
+            return;
+        }
+
+        if (targetServerId === 'local') {
+            toast.error("Cannot transfer to the Local Server. Select a remote server.");
+            return;
+        }
 
         // Optimistic UI update
         const itemToMove = groupedServices[sourceServerId].find(item => item.id === itemId);
@@ -247,9 +263,11 @@ function ServerColumn({
                     items.map((item: any) => (
                         <div
                             key={item.id}
-                            draggable
-                            onDragStart={(e) => onDragStart(e, item.id, item.type, id)}
-                            className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between cursor-grab active:cursor-grabbing hover:border-gray-300 hover:shadow-sm transition-all group"
+                            draggable={isLocal}
+                            onDragStart={(e) => isLocal ? onDragStart(e, item.id, item.type, id) : e.preventDefault()}
+                            className={`bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between transition-all group ${
+                                isLocal ? "cursor-grab active:cursor-grabbing hover:border-gray-300 hover:shadow-sm" : "opacity-75 cursor-not-allowed"
+                            }`}
                         >
                             <div className="flex items-center gap-3">
                                 <div className="p-1.5 bg-gray-50 rounded-md group-hover:bg-gray-100 transition-colors">
@@ -259,7 +277,7 @@ function ServerColumn({
                                     <p className="text-sm font-medium text-gray-900">{item.name}</p>
                                 </div>
                             </div>
-                            <ServerCog className="w-4 h-4 text-gray-300" />
+                            <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-300' : 'text-gray-200'}`} />
                         </div>
                     ))
                 )}

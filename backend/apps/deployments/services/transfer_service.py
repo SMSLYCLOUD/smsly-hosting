@@ -99,7 +99,7 @@ class ServerTransferService:
                 # Fallback: look for any container with 'backend' in name
                 b_id = self.ssh.exec_command(
                     "docker ps -q -f name=backend"
-                ).strip().split('\\n')[0]
+                ).strip().split('\n')[0]
             if not b_id:
                 raise RuntimeError(
                     "CloudNeuron backend container not found on target server. "
@@ -185,7 +185,7 @@ class ServerTransferService:
         b_id = self.ssh.exec_command(check_cmd).strip()
         if not b_id:
             # Fallback search
-            b_id = self.ssh.exec_command("docker ps -q -f name=backend").strip().split('\\n')[0]
+            b_id = self.ssh.exec_command("docker ps -q -f name=backend").strip().split('\n')[0]
             if not b_id:
                 raise RuntimeError("Could not locate CloudNeuron backend container on target server.")
             backend_container = b_id
