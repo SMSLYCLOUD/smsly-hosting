@@ -15,7 +15,6 @@ interface Deployment {
   id: string;
   service_name?: string;
   service?: string;  // FK UUID from backend
-  service_deploy_type?: string;
   status: string;
   created_at: string;
   commit_hash?: string;
@@ -26,8 +25,6 @@ export default function DeploymentsPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [showTemplates, setShowTemplates] = useState(false);
 
   const fetchDeployments = async () => {
     try {
@@ -39,20 +36,6 @@ export default function DeploymentsPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
-    }
-  };
-
-  const handleCleanup = async () => {
-    if (!window.confirm("Are you sure you want to delete all failed deployments? This will clean up the red dots in the topology view.")) return;
-    
-    setCleaning(true);
-    try {
-      await api.post("/deployments/cleanup-failed/");
-      fetchDeployments();
-    } catch (err) {
-      console.error("Failed to cleanup deployments:", err);
-    } finally {
-      setCleaning(false);
     }
   };
 
@@ -71,15 +54,11 @@ export default function DeploymentsPage() {
     switch (status?.toUpperCase()) {
       case "RUNNING":
       case "SUCCESS":
-      case "ACTIVE":
-      case "SUCCEEDED":
         return <CheckCircle className="h-4 w-4 text-emerald-500" />;
       case "FAILED":
-      case "ERROR":
         return <XCircle className="h-4 w-4 text-red-500" />;
       case "BUILDING":
       case "PENDING":
-      case "QUEUED":
         return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
       default:
         return <Clock className="h-4 w-4 text-gray-500" />;
@@ -90,23 +69,12 @@ export default function DeploymentsPage() {
     const colors: Record<string, string> = {
       RUNNING: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
       SUCCESS: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
-      ACTIVE: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
-      SUCCEEDED: "bg-emerald-500/20 text-emerald-500 border-emerald-500/30",
       FAILED: "bg-red-500/20 text-red-500 border-red-500/30",
-      ERROR: "bg-red-500/20 text-red-500 border-red-500/30",
       BUILDING: "bg-blue-500/20 text-blue-500 border-blue-500/30",
       PENDING: "bg-yellow-500/20 text-yellow-500 border-yellow-500/30",
-      QUEUED: "bg-yellow-500/20 text-yellow-500 border-yellow-500/30",
     };
     return colors[status?.toUpperCase()] || "bg-gray-500/20 text-gray-500 border-gray-500/30";
   };
-
-  const filteredDeployments = deployments.filter(d => {
-    if (!showTemplates && d.service_deploy_type === 'TEMPLATE') return false;
-    return true;
-  });
-
-  const failedCount = deployments.filter(d => d.status?.toUpperCase() === 'FAILED').length;
 
   if (loading) {
     return (
@@ -131,24 +99,6 @@ export default function DeploymentsPage() {
         backHref="/dashboard"
         actions={
           <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => setShowTemplates(!showTemplates)}
-            >
-              {showTemplates ? "Hide Addons" : "Show Addons"}
-            </Button>
-            {failedCount > 0 && (
-              <Button 
-                variant="destructive" 
-                size="sm" 
-                onClick={handleCleanup} 
-                disabled={cleaning}
-              >
-                <RefreshCw className={`h-4 w-4 mr-2 ${cleaning ? "animate-spin" : ""}`} />
-                Clean Up Failed ({failedCount})
-              </Button>
-            )}
             <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
               <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
@@ -163,7 +113,7 @@ export default function DeploymentsPage() {
         }
       />
 
-      {filteredDeployments.length === 0 ? (
+      {deployments.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <Rocket className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -179,7 +129,7 @@ export default function DeploymentsPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {filteredDeployments.map((deploy, i) => (
+          {deployments.map((deploy, i) => (
             <motion.div
               key={deploy.id}
               initial={{ opacity: 0, x: -20 }}
