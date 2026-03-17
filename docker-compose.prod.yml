@@ -154,6 +154,7 @@ services:
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -190,6 +191,8 @@ services:
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     restart: unless-stopped
     env_file: .env
+    environment:
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     depends_on:
       pgbouncer:
         condition: service_healthy
