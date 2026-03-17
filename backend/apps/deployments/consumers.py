@@ -161,7 +161,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if data == b'':
                     # If we got exactly b'' from a socket timeout, just sleep briefly and retry
                     # to prevent busy looping but keep connection alive.
-                    await asyncio.sleep(0.05)
+                    # Send a ping-like keepalive message to prevent the proxy from dropping the idle WS
+                    try:
+                        await self.send(text_data=json.dumps({'message': ''}))
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
                     continue
 
                 text = data.decode('utf-8', errors='replace')
@@ -174,6 +179,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor."""
         import socket
+        import urllib3.exceptions
+        import requests.exceptions
         try:
             if not self.exec_socket:
                 return None
@@ -198,7 +205,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return None
             return data
         except Exception as e:
-            logger.debug("Terminal _blocking_read exception (disconnecting): %s", e)
+            # Check if this exception is functionally a timeout disguised as a generic error
+            if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
+                return b''
+            logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
             return None
 
     async def _resize_tty(self, cols, rows):
