@@ -799,7 +799,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         elif service.deploy_type == 'FUNCTION':
             image_name = _build_function(deployment, service)
 
-        elif service.deploy_type == 'DOCKER':
+        elif service.deploy_type in ('DOCKER', 'TEMPLATE'):
             image_name = service.docker_image
 
         elif service.deploy_type == 'UPLOAD':
