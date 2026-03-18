@@ -519,11 +519,7 @@ def _trigger_restart(service, service_key: str) -> bool:
         service.health_status = "starting"
         service.save(update_fields=["health_status", "updated_at"])
 
-        smart_deploy_task.delay(
-            deployment_id=str(new_deployment.id),
-            provider_id=str(provider.id),
-            skip_review=True
-        )
+        smart_deploy_task.delay(str(new_deployment.id), str(provider.id), skip_review=True)
         _record_restart_attempt(service_key)
 
         state = cache.get(_restart_key(service_key)) or {}

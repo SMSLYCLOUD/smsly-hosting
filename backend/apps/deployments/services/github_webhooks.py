@@ -88,39 +88,6 @@ def setup_github_webhook(user, repo_url: str):
 
     except requests.exceptions.HTTPError as exc:
         sc = exc.response.status_code if exc.response is not None else 502
-
-        if sc == 401:
-            logger.info(f"GitHub webhook setup for {full_name} failed with 401. Forcing token refresh and retrying.")
-            refreshed_token = _get_github_token(user, force_refresh=True)
-            if refreshed_token and refreshed_token != token:
-                headers["Authorization"] = f"token {refreshed_token}"
-                try:
-                    resp = requests.get(
-                        f"https://api.github.com/repos/{full_name}/hooks",
-                        headers=headers,
-                        timeout=10
-                    )
-                    resp.raise_for_status()
-                    hooks = resp.json()
-
-                    for hook in hooks:
-                        config = hook.get("config", {})
-                        if config.get("url") == target_webhook_url:
-                            logger.info(f"Webhook already exists for {full_name} pointing to {target_webhook_url}")
-                            return
-
-                    create_resp = requests.post(
-                        f"https://api.github.com/repos/{full_name}/hooks",
-                        headers=headers,
-                        json=payload,
-                        timeout=10
-                    )
-                    create_resp.raise_for_status()
-                    logger.info(f"Successfully created GitHub webhook for {full_name}")
-                    return
-                except Exception as retry_exc:
-                    logger.error(f"Retry failed to setup GitHub webhook for {full_name}: {retry_exc}")
-
         logger.error(f"Failed to setup GitHub webhook for {full_name}. Status: {sc}. Response: {exc.response.text if exc.response else ''}")
     except Exception as exc:
         logger.exception(f"Unexpected error setting up GitHub webhook for {full_name}: {exc}")

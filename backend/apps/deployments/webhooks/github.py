@@ -46,18 +46,13 @@ class GitHubWebhookHandler:
         if not repo_url or not ref:
             return False
 
-        # Extract repo path (e.g., owner/repo) to handle various clone URL formats
-        repo_path = repo_url.replace('https://github.com/', '').replace('http://github.com/', '').strip('/')
-        if repo_path.endswith('.git'):
-            repo_path = repo_path[:-4]
-
         branch = ref.replace('refs/heads/', '')
         commit_hash = payload.get('after')
         commit_message = payload.get('head_commit', {}).get('message', '')
 
         # Find services listening to this repo/branch
         services = Service.objects.filter(
-            repository_url__icontains=repo_path,
+            repository_url__icontains=repo_url,
             branch=branch,
             deploy_type='GIT',
             is_preview=False  # Do not trigger on preview services themselves
@@ -80,11 +75,8 @@ class GitHubWebhookHandler:
                 service.provider.id) if service.provider else None
 
             if provider_id:
-                smart_deploy_task.delay(
-                    deployment_id=str(deployment.id),
-                    provider_id=provider_id,
-                    skip_review=True
-                )
+                smart_deploy_task.delay(str(deployment.id), provider_id,
+                                       skip_review=True)
                 triggered_count += 1
             else:
                 logger.warning(
@@ -100,11 +92,6 @@ class GitHubWebhookHandler:
         pr_number = payload.get('number')
         repo_url = payload.get('repository', {}).get('html_url')
 
-        # Extract repo path (e.g., owner/repo) to handle various clone URL formats
-        repo_path = repo_url.replace('https://github.com/', '').replace('http://github.com/', '').strip('/') if repo_url else ''
-        if repo_path.endswith('.git'):
-            repo_path = repo_path[:-4]
-
         # Get the Pull Request info
         pr_info = payload.get('pull_request', {})
         head_ref = pr_info.get('head', {}).get('ref')  # The branch name of the PR
@@ -116,7 +103,7 @@ class GitHubWebhookHandler:
 
         # Find the Parent Service (the one deployed from the base branch)
         parent_services = Service.objects.filter(
-            repository_url__icontains=repo_path,
+            repository_url__icontains=repo_url,
             branch=base_ref,
             deploy_type='GIT',
             is_preview=False
@@ -188,11 +175,8 @@ class GitHubWebhookHandler:
         provider_id = str(
             preview_service.provider.id) if preview_service.provider else None
         if provider_id:
-            smart_deploy_task.delay(
-                deployment_id=str(deployment.id),
-                provider_id=provider_id,
-                skip_review=True
-            )
+            smart_deploy_task.delay(str(deployment.id), provider_id,
+                                   skip_review=True)
             return 1
         return 0
 
