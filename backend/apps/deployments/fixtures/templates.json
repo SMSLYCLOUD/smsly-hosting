@@ -21994,17 +21994,19 @@
     "default_port": 4000,
     "min_ram_gb": 1,
     "min_cpu_cores": 1,
-    "required_addons": [],
+    "required_addons": [
+      "POSTGRES"
+    ],
     "env_vars": [
       {
         "key": "LITELLM_MASTER_KEY",
-        "value": "${RANDOM_PASSWORD}",
+        "value": "sk-${RANDOM_PASSWORD}",
         "is_secret": true
       },
       {
-        "key": "DISABLE_SCHEMA_UPDATE",
-        "value": "true",
-        "is_secret": false
+        "key": "DATABASE_URL",
+        "value": "${DATABASE_URL}",
+        "is_secret": true
       },
       {
         "key": "NUM_WORKERS",
@@ -22078,7 +22080,7 @@
       },
       {
         "key": "STORE_MODEL_IN_DB",
-        "value": "False",
+        "value": "True",
         "is_secret": false
       },
       {
