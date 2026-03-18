@@ -96,15 +96,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         }))
 
         # Start background task to read container output
-        self._read_task = asyncio.ensure_future(self._read_output())
+        # Sleep slightly before starting the blocking read so the WS can settle
+        await asyncio.sleep(0.1)
+        self._read_task = asyncio.create_task(self._read_output())
 
     async def disconnect(self, close_code):
         if self._read_task:
             self._read_task.cancel()
+            try:
+                # Give it a moment to cancel gracefully
+                await asyncio.wait_for(self._read_task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
         if self.exec_socket:
             try:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self.exec_socket.close)
+                # Use a short timeout so we don't hang the worker
+                await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, self.exec_socket.close),
+                    timeout=2.0
+                )
             except Exception:
                 pass
         if self.user:
@@ -181,6 +191,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         try:
             # The docker-py exec_start(socket=True) returns a SocketIO object.
             # Use .read() instead of .recv() to avoid AttributeError.
+            #
+            # IMPORTANT: For urllib3 streams, read(4096) might block indefinitely if no data is sent.
+            # We must use a smaller amount or rely on the underlying socket timeout.
             data = self.exec_socket.read(4096)
 
             if not data:
@@ -189,10 +202,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return data
         except (socket.timeout, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, TimeoutError):
             return b''  # Signal that it was just a timeout, not a disconnect
+        # Catch ChunkedEncodingError which happens when the connection is prematurely closed
+        except requests.exceptions.ChunkedEncodingError:
+            return None
         except Exception as e:
             # Check if this exception is functionally a timeout disguised as a generic error
             if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
                 return b''
+            # 'Connection broken' might happen if the proxy kills it
+            if 'connection broken' in str(e).lower():
+                return None
             logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
             return None
 
