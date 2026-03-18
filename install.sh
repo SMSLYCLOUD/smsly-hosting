@@ -15,7 +15,6 @@
 #   Backend only:     sudo bash install.sh --update-backend
 #   Runtime refresh:  sudo bash install.sh --refresh
 #   Wipe install:     sudo bash install.sh --wipe
-#   Clear space:      sudo bash install.sh --clear
 #
 #   Rust Twin:        sudo bash install.sh --rust
 #                     sudo bash install.sh --update --rust
@@ -41,7 +40,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
 # To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]] && [[ "${1:-}" != "--clear" ]]; then
+if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
@@ -51,7 +50,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
     # Skip collection if values are already pre-seeded via env vars, or if
     # this is an --update / --wipe run (those don't need interactive input).
     _ARG1="${1:-}"
-    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--clear" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--refresh" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
+    if [[ "$_ARG1" != "--update"* ]] && [[ "$_ARG1" != "--wipe" ]] && [[ "$_ARG1" != "--recover" ]] && [[ "$_ARG1" != "--refresh" ]] && [[ "$_ARG1" != "--debug" ]] && [[ "$_ARG1" != "--verify" ]] && [ -z "${USE_SSL:-}" ]; then
         # Detect public IP for the mode selection prompt
         _detect_ip() {
             local c="" ep=""
@@ -745,7 +744,6 @@ ROLLBACK_NEEDED=false
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
 WIPE_MODE="false"
-CLEAR_MODE="false"
 RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
@@ -758,19 +756,17 @@ for arg in "$@"; do
         --update-frontend) UPDATE_MODE="frontend" ;;
         --update-backend)  UPDATE_MODE="backend" ;;
         --wipe)            WIPE_MODE="true" ;;
-        --clear)           CLEAR_MODE="true" ;;
         --recover)         RECOVER_MODE="true" ;;
         --refresh)         REFRESH_MODE="true" ;;
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --rust)            RUST_TWIN_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear]"
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services"
-            echo "  --clear            Clear cache, failed deployments, and unused docker data (leaves DBs running)"
             exit 0
             ;;
     esac
@@ -792,8 +788,6 @@ elif [ "$DEBUG_MODE" = "true" ]; then
     MODE_LABEL="debug"
 elif [ "$WIPE_MODE" = "true" ]; then
     MODE_LABEL="wipe"
-elif [ "$CLEAR_MODE" = "true" ]; then
-    MODE_LABEL="clear"
 fi
 
 # Log all output to file AND terminal
@@ -842,82 +836,6 @@ echo -e "${BLUE}═════════════════════�
 echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
-
-# =============================================================================
-# CLEAR MODE — Clear space, failed deployments, cache, and prune docker
-# =============================================================================
-clear_system_state() {
-    echo -e "${YELLOW}[CLEAR] Cleaning up space, caches, and failed deployments...${NC}"
-
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}x Please run as root (sudo bash install.sh --clear)${NC}"
-        exit 1
-    fi
-
-    if [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
-        echo -e "${RED}x Missing $INSTALL_DIR/$COMPOSE_FILE. Run a fresh install first.${NC}"
-        exit 1
-    fi
-
-    cd "$INSTALL_DIR"
-
-    # 1. Ensure critical stateful services are running so Docker doesn't prune them
-    echo -e "${BLUE}  → Ensuring critical stateful services (db, pgbouncer, redis) are running...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis
-    sleep 5
-
-    # 2. Clear Failed Deployments via Django Shell
-    echo -e "${BLUE}  → Clearing failed deployments from database...${NC}"
-    if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from apps.deployments.models import Deployment
-failed = Deployment.objects.filter(status='FAILED')
-count = failed.count()
-failed.delete()
-print(f'Deleted {count} failed deployments.')
-" 2>/dev/null; then
-        echo -e "${GREEN}  ✓ Failed deployments cleared from DB.${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Could not clear deployments from DB (is backend running?). Skipping.${NC}"
-    fi
-
-    # 3. Clear Django/Redis cache
-    echo -e "${BLUE}  → Clearing application cache...${NC}"
-    if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
-from django.core.cache import cache
-cache.clear()
-print('Cache cleared.')
-" 2>/dev/null; then
-        echo -e "${GREEN}  ✓ Application cache cleared.${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Could not clear application cache. Skipping.${NC}"
-    fi
-
-    # 4. Clear the /opt/smsly-cache/ directory on disk
-    echo -e "${BLUE}  → Clearing /opt/smsly-cache/ directory...${NC}"
-    if [ -d "/opt/smsly-cache" ]; then
-        rm -rf /opt/smsly-cache/*
-        echo -e "${GREEN}  ✓ Cleared /opt/smsly-cache/.${NC}"
-    else
-        echo -e "${GREEN}  ✓ /opt/smsly-cache/ does not exist, skipping.${NC}"
-    fi
-
-    # 5. Prune Docker containers and images
-    echo -e "${BLUE}  → Pruning unused Docker containers, images, and build cache...${NC}"
-    # Remove stopped containers
-    docker container prune -f >/dev/null 2>&1
-    # Remove unused images
-    docker image prune -a -f >/dev/null 2>&1
-    # Remove build cache
-    docker builder prune -a -f >/dev/null 2>&1
-    echo -e "${GREEN}  ✓ Docker space pruned safely.${NC}"
-
-    echo -e "${GREEN}OK Clear complete. Space has been freed.${NC}"
-    exit 0
-}
-
-if [ "$CLEAR_MODE" = "true" ]; then
-    clear_system_state
-fi
 
 # =============================================================================
 # WIPE MODE — Remove all install artifacts for a clean re-install

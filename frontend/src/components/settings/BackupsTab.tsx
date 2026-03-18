@@ -187,10 +187,11 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                 <Button variant="ghost" size="sm" onClick={() => handleRestore(backup.id)} title="Restore">
                                                     <RotateCcw className="w-4 h-4" />
                                                 </Button>
-                                                <Button variant="ghost" size="sm" asChild title="Download">
-                                                    <a href={`/api/v1/backups/${backup.id}/download/`} target="_blank" rel="noopener noreferrer">
-                                                        <Download className="w-4 h-4" />
-                                                    </a>
+                                                <Button variant="ghost" size="sm" onClick={() => {
+                                                    const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+                                                    window.location.href = `/api/v1/backups/${backup.id}/download/?token=${token}`;
+                                                }} title="Download">
+                                                    <Download className="w-4 h-4" />
                                                 </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => handleDeleteBackup(backup.id)} title="Delete" className="text-red-400 hover:text-red-500">
                                                     <Trash2 className="w-4 h-4" />

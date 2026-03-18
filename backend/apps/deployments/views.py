@@ -2644,16 +2644,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
-    def perform_destroy(self, instance):
-        import os
-        import logging
-        if instance.file_path and os.path.exists(instance.file_path):
-            try:
-                os.remove(instance.file_path)
-            except OSError as e:
-                logging.getLogger(__name__).warning("Failed to delete backup file %s: %s", instance.file_path, e)
-        instance.delete()
-
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
         create_service_backup_task.delay(str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
@@ -2680,8 +2670,20 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         )
         return Response({'status': 'restore_started'})
 
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
+        # Allow token via query param for direct browser downloads
+        token_key = request.query_params.get('token')
+        if token_key:
+            from rest_framework.authtoken.models import Token
+            try:
+                token = Token.objects.select_related('user').get(key=token_key)
+                request.user = token.user
+            except Token.DoesNotExist:
+                return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
+        elif not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+
         import os
         from django.http import FileResponse
 
@@ -2714,16 +2716,15 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                                 yield data
                     finally:
                         try:
-                            os.remove(self.filepath)
+                            os.remove(filepath)
                         except OSError:
                             pass
 
-                response = FileResponse(
-                    AutoDeleteFile(decrypted_path),
-                    as_attachment=True,
-                    filename=os.path.basename(file_path).replace(".enc", "")
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
                 )
-                response['Content-Length'] = os.path.getsize(decrypted_path)
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
                 return response
             except Exception as e:
                 import logging
@@ -2741,16 +2742,6 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAdminUser]
     queryset = ServerBackup.objects.all().order_by('-created_at')
 
-    def perform_destroy(self, instance):
-        import os
-        import logging
-        if instance.file_path and os.path.exists(instance.file_path):
-            try:
-                os.remove(instance.file_path)
-            except OSError as e:
-                logging.getLogger(__name__).warning("Failed to delete server backup file %s: %s", instance.file_path, e)
-        instance.delete()
-
     def perform_create(self, serializer):
         backup = serializer.save(status='PENDING')
         create_server_backup_task.delay(str(backup.id))
@@ -2764,8 +2755,22 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         restore_server_backup_task.delay(backup_id=str(backup.id))
         return Response({'status': 'Restore started. Services will be recreated from backup.'})
 
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
+        # Allow token via query param for direct browser downloads
+        token_key = request.query_params.get('token')
+        if token_key:
+            from rest_framework.authtoken.models import Token
+            try:
+                token = Token.objects.select_related('user').get(key=token_key)
+                request.user = token.user
+                if not request.user.is_superuser and not request.user.is_staff:
+                    return Response({'error': 'Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
+            except Token.DoesNotExist:
+                return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
+        elif not request.user.is_authenticated:
+            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+
         import os
         from django.http import FileResponse
 
@@ -2795,16 +2800,15 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                                 yield data
                     finally:
                         try:
-                            os.remove(self.filepath)
+                            os.remove(filepath)
                         except OSError:
                             pass
 
-                response = FileResponse(
-                    AutoDeleteFile(decrypted_path),
-                    as_attachment=True,
-                    filename=os.path.basename(file_path).replace(".enc", "")
+                response = StreamingHttpResponse(
+                    file_iterator(decrypted_path),
+                    content_type='application/gzip'
                 )
-                response['Content-Length'] = os.path.getsize(decrypted_path)
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
                 return response
             except Exception as e:
                 import logging
