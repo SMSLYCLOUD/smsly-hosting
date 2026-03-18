@@ -1565,6 +1565,9 @@ if [ -n "$UPDATE_MODE" ]; then
     echo -e "${GREEN}  ✓ All required files present${NC}"
 
     # ─── Disk space check (prevents mid-build failure) ───────────────────────
+    echo -e "${BLUE}  → Running comprehensive Docker prune to free up disk space...${NC}"
+    docker container prune -f || true
+    docker image prune -af || true
     DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
     if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
         echo -e "${YELLOW}  ⚠ WARNING: Only ${DISK_AVAIL_MB}MB disk space available.${NC}"
