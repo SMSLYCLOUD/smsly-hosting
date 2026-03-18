@@ -79,6 +79,7 @@ services:
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
       - backups_data:/app/backups
+      - repo_cache_data:/app/repo_cache
     ports:
       - "8000:8000"
     env_file:
@@ -122,6 +123,7 @@ services:
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
       - backups_data:/app/backups
+      - repo_cache_data:/app/repo_cache
     env_file:
       - .env
     environment:
@@ -159,6 +161,7 @@ services:
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     volumes:
       - ./backend:/app
+      - repo_cache_data:/app/repo_cache
     env_file:
       - .env
     environment:
