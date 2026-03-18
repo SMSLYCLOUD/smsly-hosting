@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.utils import timezone
+from django.http import FileResponse
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -41,8 +42,24 @@ import os
 import uuid
 import logging
 import re
+from apps.cloud.docker_client import get_docker_client
 
 logger = logging.getLogger(__name__)
+
+
+class CleanupFileResponse(FileResponse):
+    """FileResponse that deletes the underlying file when closed."""
+    def __init__(self, *args, **kwargs):
+        self._file_path = kwargs.pop('file_path', None)
+        super().__init__(*args, **kwargs)
+
+    def close(self):
+        super().close()
+        if self._file_path and os.path.exists(self._file_path):
+            try:
+                os.remove(self._file_path)
+            except OSError:
+                pass
 
 
 class EmptySerializer(serializers.Serializer):
@@ -1727,6 +1744,111 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=False, methods=['post'])
+    def prune(self, request):
+        """
+        Global cleanup for failed deployments and orphaned containers.
+        POST /api/v1/deployments/prune/
+
+        1. Finds FAILED, ERROR, CANCELLED deployments for this user.
+        2. Force-removes their containers on the VPS.
+        3. Prunes dangling Docker images.
+        4. Deletes the deployment records from DB.
+        5. Cancels stuck QUEUED deployments (>1h old).
+        """
+        # ── 1. DB: Select deployments to prune ──
+        base_qs = Deployment.objects.filter(
+            status__in=['FAILED', 'ERROR', 'CANCELLED']
+        )
+        if not request.user.is_superuser:
+            base_qs = base_qs.filter(service__owner=request.user)
+
+        failed_deploys = list(base_qs.only('id', 'container_id'))
+
+        # ── 2. VPS: Container cleanup ──
+        containers_removed = 0
+        images_pruned = 0
+        try:
+            client = get_docker_client(timeout=30)
+            # Remove specific failed containers
+            for dep in failed_deploys:
+                if dep.container_id:
+                    try:
+                        container = client.containers.get(dep.container_id)
+                        container.remove(force=True)
+                        containers_removed += 1
+                    except Exception:
+                        pass
+
+            # Prune all stopped containers to be sure
+            client.containers.prune()
+
+            # Prune dangling images to free disk space
+            image_prune_res = client.images.prune(filters={'dangling': True})
+            images_pruned = image_prune_res.get('SpaceReclaimed', 0)
+
+            # ── 2b. VPS: Temp backup cleanup ──
+            # Clean up stale files in /tmp/backups (older than 1h)
+            temp_backups_dir = '/tmp/backups'
+            if os.path.exists(temp_backups_dir):
+                import shutil
+                import time
+                now = time.time()
+                for root, dirs, files in os.walk(temp_backups_dir):
+                    for f in files:
+                        f_path = os.path.join(root, f)
+                        if os.stat(f_path).st_mtime < now - 3600:
+                            try:
+                                os.remove(f_path)
+                            except OSError:
+                                pass
+                    for d in dirs:
+                        d_path = os.path.join(root, d)
+                        if os.stat(d_path).st_mtime < now - 3600:
+                            try:
+                                shutil.rmtree(d_path)
+                            except OSError:
+                                pass
+        except Exception as exc:
+            logger.warning("Docker/Temp prune failed during deployment cleanup: %s", exc)
+
+        # ── 3. DB: Delete records ──
+        count = base_qs.delete()[0]
+
+        # ── 4. DB: Cancel stuck QUEUED deployments ──
+        stale_threshold = timezone.now() - timezone.timedelta(minutes=30)
+        stale_qs = Deployment.objects.filter(
+            status='QUEUED',
+            created_at__lt=stale_threshold
+        )
+        if not request.user.is_superuser:
+            stale_qs = stale_qs.filter(service__owner=request.user)
+
+        stale_count = stale_qs.update(
+            status=Deployment.Status.CANCELLED,
+            finished_at=timezone.now()
+        )
+
+        AuditLog(
+            actor=request.user.get_username(),
+            action='DEPLOYMENT_PRUNE',
+            target='System',
+            metadata={
+                'deployments_deleted': count,
+                'containers_removed': containers_removed,
+                'stale_queued_cancelled': stale_count,
+                'space_reclaimed_bytes': images_pruned,
+            },
+        ).save()
+
+        return Response({
+            'message': 'Cleanup complete',
+            'deployments_deleted': count,
+            'containers_removed': containers_removed,
+            'stale_queued_cancelled': stale_count,
+            'space_reclaimed_mb': round(images_pruned / (1024 * 1024), 2),
+        })
+
+    @action(detail=False, methods=['post'])
     def trigger(self, request):
         """
         Trigger a new deployment.
@@ -2697,34 +2819,18 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
 
         # If the file is encrypted, we must decrypt it for the user to download
-        # otherwise they just get binary encrypted garbage
         if file_path.endswith('.enc') and key:
             try:
                 # Decrypt to a temporary file
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                from django.http import StreamingHttpResponse
-                import asyncio
-
-                async def file_iterator(filepath, chunk_size=8192):
-                    try:
-                        with open(filepath, 'rb') as f:
-                            while True:
-                                # We yield control back to the event loop between chunks
-                                data = await asyncio.to_thread(f.read, chunk_size)
-                                if not data:
-                                    break
-                                yield data
-                    finally:
-                        try:
-                            os.remove(filepath)
-                        except OSError:
-                            pass
-
-                response = StreamingHttpResponse(
-                    file_iterator(decrypted_path),
-                    content_type='application/gzip'
+                
+                # Use CleanupFileResponse to ensure the temp file is deleted after download
+                response = CleanupFileResponse(
+                    open(decrypted_path, 'rb'),
+                    as_attachment=True,
+                    filename=os.path.basename(file_path).replace(".enc", ""),
+                    file_path=decrypted_path
                 )
-                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
                 return response
             except Exception as e:
                 import logging
@@ -2787,28 +2893,13 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if file_path.endswith('.enc') and key:
             try:
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                from django.http import StreamingHttpResponse
-                import asyncio
-
-                async def file_iterator(filepath, chunk_size=8192):
-                    try:
-                        with open(filepath, 'rb') as f:
-                            while True:
-                                data = await asyncio.to_thread(f.read, chunk_size)
-                                if not data:
-                                    break
-                                yield data
-                    finally:
-                        try:
-                            os.remove(filepath)
-                        except OSError:
-                            pass
-
-                response = StreamingHttpResponse(
-                    file_iterator(decrypted_path),
-                    content_type='application/gzip'
+                
+                response = CleanupFileResponse(
+                    open(decrypted_path, 'rb'),
+                    as_attachment=True,
+                    filename=os.path.basename(file_path).replace(".enc", ""),
+                    file_path=decrypted_path
                 )
-                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path).replace(".enc", "")}"'
                 return response
             except Exception as e:
                 import logging

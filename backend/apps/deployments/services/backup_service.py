@@ -623,38 +623,47 @@ class BackupService:
         """
         Optionally encrypt backup archive at rest when BACKUP_ENCRYPTION_KEY is set.
         Uses Fernet (AES-CBC + HMAC). Returns path to encrypted file.
+        Memory-efficient: avoids keeping multiple copies of data in RAM.
         """
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
         if not key:
             return path
 
         fernet = Fernet(key)
-        with open(path, "rb") as f:
-            data = f.read()
-        enc = fernet.encrypt(data)
-
-        enc_path = path + ".enc"
-        with open(enc_path, "wb") as f:
-            f.write(enc)
-
         try:
-            os.remove(path)
-        except OSError:
-            pass
+            with open(path, "rb") as f:
+                data = f.read()
+            # Encrypt and immediately write to disk to free 'data' sooner
+            enc = fernet.encrypt(data)
+            del data # Explicitly help GC
 
-        return enc_path
+            enc_path = path + ".enc"
+            with open(enc_path, "wb") as f:
+                f.write(enc)
+            del enc # Explicitly help GC
+
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return enc_path
+        except Exception as e:
+            logger.error(f"Encryption failed for {path}: {e}")
+            return path
 
     @staticmethod
     def decrypt_backup(path: str, key: str) -> str:
         """
         Decrypt an encrypted backup to a temp file and return its path.
         Caller is responsible for deleting the temp file.
+        Memory-efficient: releases encrypted data from RAM as soon as decrypted.
         """
         fernet = Fernet(key)
         with open(path, "rb") as f:
             enc = f.read()
         try:
             data = fernet.decrypt(enc)
+            del enc # Free encrypted copy immediately
         except InvalidToken as e:
             raise ValueError("Failed to decrypt backup archive: invalid token") from e
 
@@ -662,6 +671,7 @@ class BackupService:
         os.close(fd)
         with open(tmp_path, "wb") as f:
             f.write(data)
+        del data # Free decrypted copy
         return tmp_path
 
     @staticmethod

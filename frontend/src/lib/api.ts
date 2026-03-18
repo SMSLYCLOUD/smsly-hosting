@@ -473,6 +473,16 @@ export const servicesApi = {
     const response = await api.post(`/deployments/${deploymentId}/promote/`);
     return response.data;
   },
+  pruneDeployments: async (): Promise<{
+    message: string;
+    deployments_deleted: number;
+    containers_removed: number;
+    stale_queued_cancelled: number;
+    space_reclaimed_mb: number;
+  }> => {
+    const response = await api.post('/deployments/prune/');
+    return response.data;
+  },
 
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
