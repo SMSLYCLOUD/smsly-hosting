@@ -2018,10 +2018,18 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         if cpu_cores < 1.0:
             service.cpu_cores = 1.0
             update_fields.append('cpu_cores')
-        # Removed Prisma schema migration since we're using stateless config mode
+
+        # Post-deploy hooks (e.g., Prisma migrate) for ai-router
+        post_deploy_hooks = service.post_deploy_hooks or []
+        migration_hook = "prisma migrate db push --accept-data-loss"
+        if migration_hook not in post_deploy_hooks:
+            post_deploy_hooks.append(migration_hook)
+            service.post_deploy_hooks = post_deploy_hooks
+            update_fields.append('post_deploy_hooks')
+
         # Critical env hints
         required = {
-            "LITELLM_MASTER_KEY": "${RANDOM_PASSWORD}",
+            "LITELLM_MASTER_KEY": "sk-${RANDOM_PASSWORD}",
             "AI_ROUTER_API_BASE": DEFAULT_AI_ROUTER_API_BASE,
             "AI_ROUTER_UI_BASE": DEFAULT_AI_ROUTER_UI_BASE,
             "AI_ROUTER_AUTO_DISCOVER_MODELS": "true",
