@@ -80,9 +80,10 @@ export default function TopologyPage() {
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === 'city' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
                 >
                    <Building className="w-3.5 h-3.5" /> City
-                </button>
-             </div>
-          </div>
+                 </button>
+              </div>
+           </div>
+        </div>
 
           <div className="flex-1 relative overflow-hidden bg-[#04070f]">
              {view === '3d' && <Topology3D />}
