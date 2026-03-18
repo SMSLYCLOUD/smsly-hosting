@@ -6,7 +6,7 @@ WORKDIR /app
 # In production install_host.sh, this should be set to the relative path /api
 # This allows Traefik to proxy the requests to the backend on the same port (8090)
 ARG NEXT_PUBLIC_API_URL=/api
-ARG NODE_BUILD_MEMORY_MB=4096
+ARG NODE_BUILD_MEMORY_MB=8192
 
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 

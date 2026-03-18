@@ -254,6 +254,13 @@ if __name__ == '__main__':
         self.ssh.exec_command(f"docker exec {backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py")
         self.ssh.exec_command(f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}")
 
+        self._update(90, 'Starting service container on target...')
+        # After restoration, the container exists but is not running. 
+        # We use the metadata from the source backup to generate the run command.
+        metadata = self.transfer.source_backup.metadata
+        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
+        self.ssh.exec_command(run_cmd)
+
     def _restore_full_server(self, remote_backup_path):
         self._update(60, 'Installing CloudNeuron platform on target...')
 
