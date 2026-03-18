@@ -92,7 +92,22 @@ class SecurityMiddleware:
         if self._has_valid_token_auth_header(request):
             return False
 
+        # Check if a token is passed via query params for downloads
+        if self._has_valid_query_token(request):
+            return False
+
         return self.enforce_signature
+
+    def _has_valid_query_token(self, request):
+        token_key = request.GET.get('token')
+        if not token_key:
+            return False
+
+        try:
+            from rest_framework.authtoken.models import Token
+            return Token.objects.filter(key=token_key).exists()
+        except Exception:
+            return False
 
     def _has_valid_token_auth_header(self, request):
         """

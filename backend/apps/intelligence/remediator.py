@@ -240,11 +240,7 @@ class RemediationEngine:
             )
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(
-                    deployment_id=str(new_deploy.id),
-                    provider_id=provider_id,
-                    skip_review=True
-                )
+                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
                 return True
         return False
 
@@ -303,11 +299,7 @@ class RemediationEngine:
 
             provider_id = str(service.provider.id) if service.provider else None
             if provider_id:
-                smart_deploy_task.delay(
-                    deployment_id=str(new_deploy.id),
-                    provider_id=provider_id,
-                    skip_review=True
-                )
+                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
                 logger.info("Rollback triggered for %s", service.name)
                 return True
             return False
