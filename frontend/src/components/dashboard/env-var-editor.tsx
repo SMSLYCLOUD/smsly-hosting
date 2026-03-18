@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Plus, Trash2, Eye, EyeOff, Save, Copy, FileText, List } from "lucide-react"
+import { Plus, Trash2, Eye, EyeOff, Save, Copy, FileText, List, Upload, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -14,6 +14,7 @@ export interface EnvVar {
   value: string
   isSecret: boolean
   id?: string
+  source?: string
 }
 
 interface EnvVarEditorProps {
@@ -25,6 +26,7 @@ interface EnvVarEditorProps {
 export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: EnvVarEditorProps) {
   const [vars, setVars] = React.useState<EnvVar[]>(initialVars)
   const [mode, setMode] = React.useState<"simple" | "bulk">("simple")
+  const [bulkMode, setBulkMode] = React.useState<"import" | "export">("import")
   const [bulkText, setBulkText] = React.useState("")
   const [isSaving, setIsSaving] = React.useState(false)
 
@@ -53,8 +55,8 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
     if (nextMode === mode) return
 
     if (nextMode === "bulk") {
-      const text = vars.map((v) => `${v.key}=${v.value}`).join("\n")
-      setBulkText(text)
+      setBulkMode("import")
+      setBulkText("")
       setMode(nextMode)
       return
     }
@@ -65,6 +67,27 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
     }
     setMode(nextMode)
   }
+
+  const handleBulkExportToggle = () => {
+    setBulkMode("export")
+    const exportVars = vars
+      .filter(v => v.source !== 'ADDON' && v.source !== 'SYSTEM')
+      .map(v => `${v.key}=${v.value}`)
+    setBulkText(exportVars.join('\n'))
+    setMode("bulk")
+  }
+
+  const handleDownloadEnv = () => {
+    const blob = new Blob([bulkText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '.env';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   const addVar = () => {
     setVars([...vars, { key: "", value: "", isSecret: false }])
@@ -87,14 +110,40 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
     try {
       // If in bulk mode, parse first
       let finalVars = vars
-      if (mode === "bulk") {
-          const parsed: EnvVar[] = []
+      if (mode === "bulk" && bulkMode === "import") {
+          const parsedVarsMap = new Map<string, EnvVar>()
+
+          // First, add all existing vars to the map
+          vars.forEach(v => {
+            parsedVarsMap.set(v.key, v)
+          })
+
+          // Then, process the imported text
           bulkText.trim().split("\n").forEach(line => {
               if (!line.trim() || line.startsWith("#")) return
               const [k, ...v] = line.split("=")
-              if (k) parsed.push({ key: k.trim(), value: v.join("=").trim(), isSecret: false })
+              if (k) {
+                const key = k.trim();
+                const existing = vars.find(ev => ev.key === key);
+
+                // Skip overwriting system or addon variables
+                if (existing && (existing.source === 'ADDON' || existing.source === 'SYSTEM')) {
+                  return;
+                }
+
+                // Add or update the variable in the map
+                parsedVarsMap.set(key, {
+                  key: key,
+                  value: v.join("=").trim(),
+                  isSecret: existing ? existing.isSecret : false,
+                  id: existing ? existing.id : undefined,
+                  source: existing ? existing.source : undefined
+                })
+              }
           })
-          finalVars = parsed
+
+          // Convert map back to array
+          finalVars = Array.from(parsedVarsMap.values())
       }
       
       await onSave(finalVars)
@@ -116,7 +165,7 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
           </p>
         </div>
         <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-lg border bg-muted p-1">
+            <div className="flex items-center rounded-lg border bg-muted p-1 gap-1">
                 <Button 
                     variant={mode === "simple" ? "secondary" : "ghost"} 
                     size="sm" 
@@ -125,17 +174,24 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
                     <List className="mr-2 h-4 w-4" /> Simple
                 </Button>
                 <Button 
-                    variant={mode === "bulk" ? "secondary" : "ghost"} 
+                    variant={mode === "bulk" && bulkMode === "import" ? "secondary" : "ghost"}
                     size="sm" 
                     onClick={() => switchMode("bulk")}
                 >
-                    <FileText className="mr-2 h-4 w-4" /> Bulk
+                    <Upload className="mr-2 h-4 w-4" /> Import
+                </Button>
+                <Button
+                    variant={mode === "bulk" && bulkMode === "export" ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={handleBulkExportToggle}
+                >
+                    <Download className="mr-2 h-4 w-4" /> Export
                 </Button>
             </div>
         </div>
       </div>
 
-      {mode === "simple" ? (
+      {mode === "simple" && (
         <div className="space-y-2">
           {vars.map((v, i) => (
             <div key={i} className="flex gap-2 items-start">
@@ -181,18 +237,30 @@ export function EnvVarEditor({ initialVars = [], onSave, readOnly = false }: Env
             </Button>
           )}
         </div>
-      ) : (
+      )}
+
+      {mode === "bulk" && (
         <div className="space-y-2">
             <textarea
                 value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                className="w-full h-64 font-mono text-sm p-4 rounded-md border bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring"
+                onChange={(e) => bulkMode === "import" && setBulkText(e.target.value)}
+                readOnly={bulkMode === "export"}
+                className={`w-full h-64 font-mono text-sm p-4 rounded-md border bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring ${bulkMode === "export" ? "opacity-90" : ""}`}
                 placeholder="KEY=VALUE&#10;ANOTHER_KEY=another_value"
-                disabled={readOnly}
+                disabled={readOnly && bulkMode !== "export"}
             />
-            <p className="text-xs text-muted-foreground">
-                Paste your .env file content here. Secrets are not encrypted until saved.
-            </p>
+            <div className="flex justify-between items-center">
+              <p className="text-xs text-muted-foreground">
+                  {bulkMode === "import"
+                    ? "Paste your .env file content here. SYSTEM and ADDON variables are excluded from updates."
+                    : "Copy these variables or download as a .env file. SYSTEM and ADDON variables are excluded."}
+              </p>
+              {bulkMode === "export" && (
+                <Button variant="outline" size="sm" onClick={handleDownloadEnv} disabled={!bulkText.trim()}>
+                  <Download className="mr-2 h-4 w-4" /> Download .env
+                </Button>
+              )}
+            </div>
         </div>
       )}
 

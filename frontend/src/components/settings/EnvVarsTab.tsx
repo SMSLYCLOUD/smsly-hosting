@@ -40,6 +40,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
   const [hasChanges, setHasChanges] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
+  const [bulkMode, setBulkMode] = useState<"import" | "export">("import");
   const [bulkText, setBulkText] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
 
@@ -70,6 +71,12 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     try {
       for (const { key, value } of parsed) {
         const existing = vars.find((v) => v.key === key);
+
+        // Skip overwriting system or addon variables
+        if (existing && (existing.source === 'ADDON' || existing.source === 'SYSTEM')) {
+          continue;
+        }
+
         if (existing) {
           // Update: delete old, create new
           await servicesApi.deleteEnvVar(serviceId, existing.id);
@@ -164,6 +171,50 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
     setEditValue(v.value);
     // Make sure the value is visible while editing
     setVisibleValues((prev) => ({ ...prev, [v.id]: true }));
+  };
+
+  const handleDownloadEnv = () => {
+    const blob = new Blob([bulkText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '.env';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleBulkExportToggle = async () => {
+    if (!showBulk || bulkMode !== "export") {
+      setBulkMode("export");
+
+      // Fetch all secret values that are currently masked
+      const missingSecretIds = vars
+        .filter(v => v.is_secret && v.source !== 'ADDON' && v.source !== 'SYSTEM' && !unmaskedSecrets[v.id])
+        .map(v => v.id);
+
+      const newUnmaskedSecrets = { ...unmaskedSecrets };
+
+      for (const id of missingSecretIds) {
+        try {
+            const val = await servicesApi.getEnvVarValue(serviceId, id);
+            newUnmaskedSecrets[id] = val;
+        } catch (error) {
+            console.error(`Error fetching secret value for var ${id}`);
+        }
+      }
+      setUnmaskedSecrets(newUnmaskedSecrets);
+
+      const exportVars = vars
+        .filter(v => v.source !== 'ADDON' && v.source !== 'SYSTEM')
+        .map(v => {
+          const val = newUnmaskedSecrets[v.id] || v.value || '';
+          return `${v.key}=${val}`;
+        });
+      setBulkText(exportVars.join('\n'));
+    }
+    setShowBulk(true);
   };
 
   const cancelEdit = () => {
@@ -276,16 +327,20 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
               Configured for the build and runtime environments.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex gap-2">
             <Button variant="outline" onClick={() => {
-              if (!showBulk) {
-                // Pre-fill with existing vars (Railway-style)
-                const existing = vars.map(v => `${v.key}=${v.is_secret && !visibleValues[v.id] ? '••••••••' : v.value}`).join('\n');
-                setBulkText(existing);
+              if (!showBulk || bulkMode !== "import") {
+                setBulkMode("import");
+                setBulkText("");
               }
-              setShowBulk(!showBulk);
-            }} size="sm">
-              <FileText className="w-4 h-4 mr-2" /> Bulk Import
+              setShowBulk(true);
+            }} className={showBulk && bulkMode === "import" ? "bg-accent" : ""} size="sm">
+              <Upload className="w-4 h-4 mr-2" />
+              Bulk Import
+            </Button>
+            <Button variant="outline" onClick={handleBulkExportToggle} className={showBulk && bulkMode === "export" ? "bg-accent" : ""} size="sm">
+              <Download className="w-4 h-4 mr-2" />
+              Bulk Export
             </Button>
             <Button variant="outline" onClick={loadVars} size="sm">
               <RotateCcw className="w-4 h-4 mr-2" /> Refresh
@@ -293,32 +348,70 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
           </div>
         </div>
 
-        {/* Bulk Import Panel */}
+        {/* Bulk Editor Panel */}
         {showBulk && (
           <div className="mb-6 bg-muted/30 p-4 rounded-lg border border-dashed border-primary/40 animate-in slide-in-from-top-2 fade-in">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h4 className="font-semibold text-sm">Bulk Import</h4>
-                <p className="text-xs text-muted-foreground">Paste your .env content below. Lines starting with # are ignored.</p>
+                <h4 className="font-semibold text-sm">{bulkMode === "import" ? "Bulk Import" : "Bulk Export"} (.env format)</h4>
+                <p className="text-xs text-muted-foreground">
+                  {bulkMode === "import"
+                    ? "Paste your .env file contents here. Existing variables will be updated (excluding SYSTEM/ADDON), new ones created."
+                    : "Copy these variables or download as a .env file. SYSTEM and ADDON variables are excluded."}
+                </p>
               </div>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowBulk(false)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setShowBulk(false)}
+              >
                 <X className="w-4 h-4" />
               </Button>
             </div>
             <textarea
               value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
+              onChange={(e) => bulkMode === "import" && setBulkText(e.target.value)}
+              readOnly={bulkMode === "export"}
               placeholder={`SECRET_KEY=my-super-secret-key\nDEBUG=False\nALLOWED_HOSTS=example.com,localhost\n# Comments are ignored`}
-              className="w-full h-48 font-mono text-sm p-3 rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+              className={`w-full h-48 font-mono text-sm p-3 rounded-md border bg-background focus:outline-none focus:ring-2 focus:ring-ring resize-y ${bulkMode === "export" ? "opacity-90" : ""}`}
             />
             <div className="flex items-center justify-between mt-3">
               <p className="text-xs text-muted-foreground">
-                {bulkText.trim() ? `${bulkText.trim().split('\n').filter(l => l.trim() && !l.startsWith('#') && l.includes('=')).length} variables detected` : 'Waiting for input...'}
+                {bulkMode === "import"
+                  ? (bulkText.trim()
+                    ? `${
+                        bulkText
+                          .trim()
+                          .split("\n")
+                          .filter(
+                            (l) => l.trim() && !l.startsWith("#") && l.includes("="),
+                          ).length
+                      } variables detected`
+                    : "Waiting for input...")
+                  : `${bulkText.trim().split('\n').filter(l => l.trim()).length} variables exported`}
               </p>
-              <Button onClick={handleBulkImport} disabled={bulkSaving || !bulkText.trim()}>
-                {bulkSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-                {bulkSaving ? 'Importing...' : 'Import All'}
-              </Button>
+              <div className="flex gap-2">
+                {bulkMode === "export" && (
+                  <Button variant="outline" onClick={handleDownloadEnv} disabled={!bulkText.trim()}>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download .env
+                  </Button>
+                )}
+                {bulkMode === "import" && (
+                  <Button
+                    onClick={handleBulkImport}
+                    disabled={bulkSaving || !bulkText.trim()}
+                  >
+                    {bulkSaving ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4 mr-2" />
+                    )}
+                    {bulkSaving ? "Importing..." : "Import All"}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         )}
