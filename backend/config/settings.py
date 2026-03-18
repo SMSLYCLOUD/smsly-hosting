@@ -491,6 +491,16 @@ CHANNEL_LAYERS = {
     },
 }
 CELERY_RESULT_BACKEND = 'django-db'
+
+# Use separate queues for different task types
+CELERY_TASK_DEFAULT_QUEUE = 'celery'
+CELERY_TASK_ROUTES = {
+    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.auto_promote_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deployments'},
+}
+
 # Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
 CELERY_TASK_SOFT_TIME_LIMIT = 7200  # 2 hours
 CELERY_TASK_TIME_LIMIT = 7500       # 2h 5m hard kill
