@@ -22003,7 +22003,7 @@
       },
       {
         "key": "DISABLE_SCHEMA_UPDATE",
-        "value": "false",
+        "value": "true",
         "is_secret": false
       },
       {
