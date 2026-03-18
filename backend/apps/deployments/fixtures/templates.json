@@ -21994,9 +21994,7 @@
     "default_port": 4000,
     "min_ram_gb": 1,
     "min_cpu_cores": 1,
-    "required_addons": [
-      "POSTGRES"
-    ],
+    "required_addons": [],
     "env_vars": [
       {
         "key": "LITELLM_MASTER_KEY",
@@ -22007,11 +22005,6 @@
         "key": "DISABLE_SCHEMA_UPDATE",
         "value": "false",
         "is_secret": false
-      },
-      {
-        "key": "DATABASE_URL",
-        "value": "${DATABASE_URL}",
-        "is_secret": true
       },
       {
         "key": "NUM_WORKERS",
@@ -22082,6 +22075,16 @@
         "key": "UI_PASSWORD",
         "value": "${RANDOM_PASSWORD}",
         "is_secret": true
+      },
+      {
+        "key": "STORE_MODEL_IN_DB",
+        "value": "False",
+        "is_secret": false
+      },
+      {
+        "key": "LITELLM_CONFIG_PATH",
+        "value": "/app/proxy_server_config.yaml",
+        "is_secret": false
       }
     ]
   },
