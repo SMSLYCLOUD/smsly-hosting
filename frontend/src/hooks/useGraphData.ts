@@ -32,10 +32,17 @@ export function useGraphData(pollInterval: number = 0): UseGraphDataResult {
   useEffect(() => {
     fetchData();
 
+    const handleRefresh = () => fetchData();
+    window.addEventListener('smsly:topology-refresh', handleRefresh);
+
     if (pollInterval > 0) {
       const intervalId = setInterval(fetchData, pollInterval);
-      return () => clearInterval(intervalId);
+      return () => {
+        clearInterval(intervalId);
+        window.removeEventListener('smsly:topology-refresh', handleRefresh);
+      };
     }
+    return () => window.removeEventListener('smsly:topology-refresh', handleRefresh);
   }, [fetchData, pollInterval]);
 
   return { data, loading, error, refresh: fetchData };

@@ -125,8 +125,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         try:
             # We use character-by-character forwarding for true interactive terminal support.
             # No manual newline appending here — let the client send what it needs.
+            # Docker socket wrapper lacks .send(), use underlying _sock.send()
             await asyncio.get_event_loop().run_in_executor(
-                None, self.exec_socket.send, text_data.encode('utf-8'))
+                None, self.exec_socket._sock.send, text_data.encode('utf-8'))
         except Exception as e:
             logger.error("Terminal exec send error for %s: %s", self.deployment_id, e)
             try:
@@ -178,10 +179,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         import urllib3.exceptions
         import requests.exceptions
         try:
-            # We use the socket wrapper's recv directly.
-            # Docker socket can timeout if idle. We just catch it and return b''
-            # so the loop continues instead of breaking the connection.
-            data = self.exec_socket.recv(4096)
+            # The docker-py exec_start(socket=True) returns a SocketIO object.
+            # Use .read() instead of .recv() to avoid AttributeError.
+            data = self.exec_socket.read(4096)
+
             if not data:
                 # Actual EOF (connection closed by remote docker side)
                 return None

@@ -6,11 +6,35 @@ import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
 import { SolarSystemView } from '@/components/topology/SolarSystemView';
 import CityTopologyView from '@/components/topology/CityTopologyView';
-import { Network, Map as MapIcon, Orbit, Building } from 'lucide-react';
+import { Network, Map as MapIcon, Orbit, Building, Trash2, Loader2 } from 'lucide-react';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
+import { servicesApi } from '@/lib/api';
+import { toast } from 'sonner';
 
 export default function TopologyPage() {
   const [view, setView] = useState<'3d' | '2d' | 'solar' | 'city'>('3d');
+  const [isPruning, setIsPruning] = useState(false);
+
+  const handlePrune = async () => {
+    if (!confirm('Are you sure you want to clear all failed deployments and containers? This will also attempt to free up disk space on the VPS.')) {
+      return;
+    }
+    
+    setIsPruning(true);
+    try {
+      const res = await servicesApi.pruneDeployments();
+      toast.success(
+        `Cleanup complete: ${res.deployments_deleted} deployments cleared, ${res.containers_removed} containers removed. Reclaimed ${res.space_reclaimed_mb}MB.`
+      );
+      // Trigger global refresh for all topology views
+      window.dispatchEvent(new CustomEvent('smsly:topology-refresh'));
+    } catch (err) {
+      toast.error('Failed to prune deployments');
+      console.error(err);
+    } finally {
+      setIsPruning(false);
+    }
+  };
 
   return (
     <DashboardShell>
@@ -22,7 +46,17 @@ export default function TopologyPage() {
                 <p className="text-sm text-zinc-500">Visualize your services and their dependencies</p>
              </div>
 
-             <div className="flex bg-zinc-900/50 rounded-lg p-1 border border-zinc-800 backdrop-blur-sm">
+             <div className="flex items-center gap-4">
+                <button
+                  onClick={handlePrune}
+                  disabled={isPruning}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all bg-red-950/30 text-red-400 border border-red-900/30 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isPruning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  {isPruning ? 'Pruning...' : 'Clear Failed'}
+                </button>
+
+                <div className="flex bg-zinc-900/50 rounded-lg p-1 border border-zinc-800 backdrop-blur-sm">
                 <button
                   onClick={() => setView('3d')}
                   className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === '3d' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
