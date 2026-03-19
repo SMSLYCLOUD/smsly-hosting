@@ -186,7 +186,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor."""
         import socket
-        import urllib3.exceptions
         import requests.exceptions
         try:
             # The docker-py exec_start(socket=True) returns a SocketIO object.
@@ -200,12 +199,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 # Actual EOF (connection closed by remote docker side)
                 return None
             return data
-        except (socket.timeout, urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, TimeoutError):
+        except (socket.timeout, requests.exceptions.ReadTimeout, TimeoutError):
             return b''  # Signal that it was just a timeout, not a disconnect
         # Catch ChunkedEncodingError which happens when the connection is prematurely closed
         except requests.exceptions.ChunkedEncodingError:
             return None
         except Exception as e:
+            # Catch urllib3 ReadTimeoutError via string matching to avoid ModuleNotFoundError
+            if e.__class__.__name__ == 'ReadTimeoutError':
+                return b''
             # Check if this exception is functionally a timeout disguised as a generic error
             if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
                 return b''
