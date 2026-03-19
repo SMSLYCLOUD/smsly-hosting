@@ -20,6 +20,7 @@ import {
   Loader2,
   FileText,
   Upload,
+  Download,
 } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
