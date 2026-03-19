@@ -341,8 +341,6 @@ class AddonProvisioner:
             '-e', f'RABBITMQ_DEFAULT_USER={user}',
             '-e', f'RABBITMQ_DEFAULT_PASS={password}',
             '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
-            '-p', f'{port}:5672',
-            '-p', '15672:15672',  # management UI
             '-v', f'{container_name}-data:/var/lib/rabbitmq',
         ]
         if alias_name:
