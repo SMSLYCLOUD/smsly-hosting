@@ -44,6 +44,7 @@ export function EnvVarsTab({ serviceId }: { serviceId: string }) {
   const [bulkMode, setBulkMode] = useState<"import" | "export">("import");
   const [bulkText, setBulkText] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
+  const [unmaskedSecrets, setUnmaskedSecrets] = useState<Record<number, string>>({});
 
   const handleBulkImport = async () => {
     const lines = bulkText
