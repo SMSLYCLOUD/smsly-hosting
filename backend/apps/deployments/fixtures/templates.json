@@ -21990,13 +21990,11 @@
     "icon": "https://litellm.ai/logo.png",
     "category": "intelligence",
     "repository_url": "https://ghcr.io/berriai/litellm",
-    "docker_image": "ghcr.io/berriai/litellm:main-stable",
+    "docker_image": "ghcr.io/berriai/litellm:main-v1.45.0",
     "default_port": 4000,
     "min_ram_gb": 1,
     "min_cpu_cores": 1,
-    "required_addons": [
-      "POSTGRES"
-    ],
+    "required_addons": [],
     "env_vars": [
       {
         "key": "LITELLM_MASTER_KEY",
@@ -22004,9 +22002,9 @@
         "is_secret": true
       },
       {
-        "key": "DATABASE_URL",
-        "value": "${DATABASE_URL}",
-        "is_secret": true
+        "key": "DISABLE_SCHEMA_UPDATE",
+        "value": "true",
+        "is_secret": false
       },
       {
         "key": "NUM_WORKERS",
@@ -22080,7 +22078,7 @@
       },
       {
         "key": "STORE_MODEL_IN_DB",
-        "value": "True",
+        "value": "False",
         "is_secret": false
       },
       {
