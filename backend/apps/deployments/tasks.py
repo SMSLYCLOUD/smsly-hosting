@@ -2019,13 +2019,14 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             service.cpu_cores = 1.0
             update_fields.append('cpu_cores')
 
-        # Post-deploy hooks (e.g., Prisma migrate) for ai-router
-        post_deploy_hooks = service.post_deploy_hooks or []
-        migration_hook = "prisma migrate db push --accept-data-loss"
-        if migration_hook not in post_deploy_hooks:
-            post_deploy_hooks.append(migration_hook)
-            service.post_deploy_hooks = post_deploy_hooks
-            update_fields.append('post_deploy_hooks')
+        # Ensure we set a Prisma migration env var instead of nonexistent model fields
+        if not EnvironmentVariable.objects.filter(service=service, key="RUN_PRISMA_MIGRATE").exists():
+            EnvironmentVariable.objects.create(
+                service=service,
+                key="RUN_PRISMA_MIGRATE",
+                value="true",
+                is_secret=False
+            )
 
         # Critical env hints
         required = {
