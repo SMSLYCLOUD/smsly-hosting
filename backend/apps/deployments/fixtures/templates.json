@@ -22431,19 +22431,19 @@
     ]
   },
   {
-    "id": "llama3.1-8b",
-    "name": "Llama 3.1 (8B)",
-    "description": "Meta's 8B parameter version of Llama 3.1, offering a great balance of speed and reasoning for 16GB RAM systems.",
+    "id": "llama3.1-7b",
+    "name": "Llama 3.1 (7B)",
+    "description": "Meta's 7B parameter version of Llama 3.1, offering a great balance of speed and reasoning for 16GB RAM systems.",
     "icon": "https://llama.meta.com/assets/images/llama-logo.png",
     "category": "intelligence",
-    "repository_url": "https://ollama.com/library/llama3.1:8b",
+    "repository_url": "https://ollama.com/library/llama3.1:7b",
     "docker_image": "ollama/ollama:latest",
     "default_port": 11434,
     "min_ram_gb": 8,
     "env_vars": [
       {
         "key": "OLLAMA_MODEL",
-        "value": "llama3.1:8b",
+        "value": "llama3.1:7b",
         "is_secret": false
       }
     ]
