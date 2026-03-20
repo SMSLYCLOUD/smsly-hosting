@@ -2074,7 +2074,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
             return (value[:48] or 'service')
 
-        companion_templates = ['llama3.1-8b', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
+        companion_templates = ['llama3.1-7b', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
         companion_service_ids = []
 
         for c_template_id in companion_templates:
