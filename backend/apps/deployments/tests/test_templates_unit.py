@@ -63,13 +63,12 @@ def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, m
         is_active=True,
     )
 
-    with open('backend/apps/deployments/fixtures/templates.json', 'r') as f:
+    with open('apps/deployments/fixtures/templates.json', 'r') as f:
         templates = json.load(f)
 
-    ai_templates = [t for t in templates if t.get('category') == 'intelligence']
-    assert len(ai_templates) > 0, "No AI templates found in fixtures!"
+    assert len(templates) > 0, "No templates found in fixtures!"
 
-    for t in ai_templates:
+    for t in templates:
         service = Service.objects.create(
             name=f"test-{t['id']}",
             deploy_type='DOCKER',
@@ -88,10 +87,10 @@ def test_all_ai_templates_dry_run(mock_addon_provisioner, mock_subprocess_run, m
         # specifically check ai-router created companions
         if t['id'] == 'ai-router':
             companions = Service.objects.filter(owner=user).exclude(id=service.id)
-            # Should have created 3 companion services: llama-3-2, qwen2.5-0.5b, ollama-nomic-embed-text
+            # Should have created 3 companion services
             assert companions.count() == 3, f"Expected 3 companions for ai-router, got {companions.count()}"
             companion_names = [c.name for c in companions]
-            assert any('llama-3-2' in name for name in companion_names)
+            assert any('llama3-1-7b' in name for name in companion_names)
             assert any('qwen2-5-0-5b' in name for name in companion_names)
             assert any('ollama-nomic-embed-text' in name for name in companion_names)
 

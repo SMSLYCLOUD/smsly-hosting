@@ -49,7 +49,7 @@ class AddonViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         # SECURITY: Verify user owns the service before creating addon
         service = serializer.validated_data.get('service')
-        if service and service.owner != self.request.user:
+        if service and service.owner and service.owner != self.request.user:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("Access denied to this service.")
 

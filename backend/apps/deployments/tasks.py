@@ -2018,7 +2018,16 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         if cpu_cores < 1.0:
             service.cpu_cores = 1.0
             update_fields.append('cpu_cores')
-        # Removed Prisma schema migration since we're using stateless config mode
+
+        # Ensure we set a Prisma migration env var instead of nonexistent model fields
+        if not EnvironmentVariable.objects.filter(service=service, key="RUN_PRISMA_MIGRATE").exists():
+            EnvironmentVariable.objects.create(
+                service=service,
+                key="RUN_PRISMA_MIGRATE",
+                value="true",
+                is_secret=False
+            )
+
         # Critical env hints
         required = {
             "LITELLM_MASTER_KEY": "sk-${RANDOM_PASSWORD}",
