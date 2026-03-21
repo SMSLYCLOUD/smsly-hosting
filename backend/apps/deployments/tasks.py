@@ -2338,3 +2338,76 @@ def platform_rollback_task(self, update_id: str):
         return
 
     _rollback(update)
+
+@shared_task(bind=True, soft_time_limit=300, time_limit=360)
+def run_maintenance_task(self, command_flag: str):
+    """
+    Run maintenance commands via the Docker API from inside the Celery container.
+    Valid flags: --clear, --update, --refresh
+    """
+    if command_flag not in ['--clear', '--update', '--refresh']:
+        logger.error(f"Invalid maintenance command: {command_flag}")
+        return {"status": "error", "reason": "invalid_command"}
+
+    try:
+        logger.info(f"Running maintenance command: {command_flag}")
+
+        if command_flag == '--clear':
+            import docker
+            import shutil
+            import os
+            client = docker.from_env()
+
+            # 1. Prune unused docker resources
+            client.containers.prune()
+            client.images.prune(filters={'dangling': False})
+
+            # 2. Remove stale/orphaned service addons and green deployment containers
+            removed = []
+            for c in client.containers.list(all=True, filters={'status': ['exited', 'created', 'dead']}):
+                name = c.name
+                if 'smsly-addon-' in name or '-green-' in name or 'ai-router-' in name:
+                    try:
+                        c.remove(force=True)
+                        removed.append(name)
+                        logger.info(f"Removed orphaned container: {name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to remove {name}: {e}")
+
+            # 3. Clean caches (only if mounted)
+            cache_dir = "/opt/smsly-cache"
+            if os.path.exists(cache_dir):
+                for item in os.listdir(cache_dir):
+                    item_path = os.path.join(cache_dir, item)
+                    try:
+                        if os.path.isfile(item_path) or os.path.islink(item_path):
+                            os.unlink(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to clear cache item {item_path}: {e}")
+
+            return {"status": "success", "message": f"Cleared unused Docker resources and removed {len(removed)} orphaned containers."}
+
+        elif command_flag == '--refresh':
+            # Restart caddy via the shared volume .reload flag
+            from apps.deployments.models import PlatformConfig
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+
+            config = PlatformConfig.load()
+            content = generate_caddyfile(config)
+            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+
+            result = apply_caddyfile(content, cloudflare_token=cf_token)
+            if result.get('ok'):
+                logger.info("Proxy refresh flag written to shared volume successfully.")
+                return {"status": "success", "message": "Proxy refresh flag written. The host will reload Caddy shortly."}
+            else:
+                return {"status": "error", "message": result.get('message', 'Failed to write proxy reload flag.')}
+
+        elif command_flag == '--update':
+            return {"status": "warning", "message": "Platform updates must be triggered via the host terminal (sudo bash install.sh --update) for safety."}
+
+    except Exception as e:
+        logger.exception(f"Exception during maintenance {command_flag}: {e}")
+        return {"status": "error", "reason": str(e)}
