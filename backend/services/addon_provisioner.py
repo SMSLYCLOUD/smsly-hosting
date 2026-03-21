@@ -120,13 +120,13 @@ class AddonProvisioner:
         self._network_checked = False
 
         # Register generic addons so they are recognized across the platform
-        for addon, config in self.GENERIC_ADDONS_CONFIG.items():
+        for addon, addon_cfg in self.GENERIC_ADDONS_CONFIG.items():
             if addon not in self.ADDON_IMAGES:
-                self.ADDON_IMAGES[addon] = config['image']
+                self.ADDON_IMAGES[addon] = addon_cfg['image']
             if addon not in self.ADDON_PORTS:
-                self.ADDON_PORTS[addon] = config['port']
-            if addon not in self.ENV_KEY_MAP and 'env_url' in config:
-                self.ENV_KEY_MAP[addon] = config['env_url']
+                self.ADDON_PORTS[addon] = addon_cfg['port']
+            if addon not in self.ENV_KEY_MAP and 'env_url' in addon_cfg:
+                self.ENV_KEY_MAP[addon] = addon_cfg['env_url']
 
     def _container_status(self, container_name: str) -> Tuple[Optional[str], bool]:
         """
