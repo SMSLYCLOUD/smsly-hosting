@@ -761,12 +761,14 @@ for arg in "$@"; do
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --rust)            RUST_TWIN_MODE="true" ;;
+        --clear)           CLEAR_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe]"
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services"
+            echo "  --clear            Wipes stale addons and frees up docker resources"
             exit 0
             ;;
     esac
@@ -1372,6 +1374,40 @@ if [ "$REFRESH_MODE" = "true" ]; then
     refresh_runtime_services || REFRESH_STATUS=$?
     debug_platform_status
     exit "$REFRESH_STATUS"
+fi
+
+# =============================================================================
+# CLEAR MODE — Remove stale addons and cache
+# =============================================================================
+if [ "${CLEAR_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --clear)${NC}"
+        exit 1
+    fi
+    echo -e "\n${BLUE}  🧹 Running Maintenance Clear...${NC}"
+
+    # Prune unused docker resources
+    echo -e "  → Pruning unused Docker containers and images..."
+    docker container prune -f >/dev/null 2>&1
+    docker image prune -af >/dev/null 2>&1
+
+    # Stop and remove all stale smsly-addon-* containers (only those NOT running)
+    echo -e "  → Removing stale/orphaned service addons (protecting active databases)..."
+    ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon" --filter "status=exited" --filter "status=created" --filter "status=dead")
+    if [ -n "$ADDON_IDS" ]; then
+        docker rm -f $ADDON_IDS >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Removed inactive orphaned addon containers.${NC}"
+    else
+        echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
+    fi
+
+    # Clean caches
+    echo -e "  → Cleaning system caches..."
+    rm -rf /opt/smsly-cache/* 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Cleared /opt/smsly-cache/.${NC}"
+
+    echo -e "\n${GREEN}  ✨ Maintenance complete. You can now re-run deployments.${NC}"
+    exit 0
 fi
 
 # =============================================================================
