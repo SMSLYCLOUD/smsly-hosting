@@ -232,7 +232,7 @@ class LocalAdapter(BaseCloudAdapter):
                 service_name, image, env_vars, volumes=volumes,
                 healthcheck=healthcheck, cpu=cpu, memory=memory,
                 restart_policy=restart_policy, command=command,
-                vpa_enabled=vpa_enabled)
+                vpa_enabled=vpa_enabled, **kwargs)
         else:
             raise RuntimeError("No local orchestrator available")
 
@@ -243,7 +243,7 @@ class LocalAdapter(BaseCloudAdapter):
                        healthcheck: Dict = None,
                        cpu: int = None, memory: int = None,
                        restart_policy: str = 'unless-stopped',
-                       command=None, vpa_enabled: bool = True) -> str:
+                       command=None, vpa_enabled: bool = True, **kwargs) -> str:
         """
         Blue-green Docker deployment with rollback-safe cutover.
 
@@ -393,10 +393,18 @@ class LocalAdapter(BaseCloudAdapter):
 
         container_name = name
         aliases = [name, f"{name}.default.internal"]
+        
+        # Add extra alias if provided (e.g. for addons)
+        alias_name = kwargs.get('alias_name')
+        if alias_name and alias_name != name:
+            aliases.append(alias_name)
+
         if stage_before_cutover:
             suffix = secrets.token_hex(3)
             container_name = f"{name}-green-{suffix}"
             aliases = [container_name, f"{container_name}.default.internal"]
+            if alias_name:
+                aliases.append(alias_name)
 
         logger.info(
             "Deploy strategy for %s: %s",
@@ -843,7 +851,7 @@ class LocalAdapter(BaseCloudAdapter):
     def _deploy_k8s(self, name: str, image: str,
                     env: Dict[str, str], cpu: int, memory: int,
                     replicas: int = 1, healthcheck: Dict = None,
-                    vpa_enabled: bool = True) -> str:
+                    vpa_enabled: bool = True, **kwargs) -> str:
         namespace = 'default'
         port = int(env.get('PORT', 8000))
 
@@ -936,6 +944,24 @@ class LocalAdapter(BaseCloudAdapter):
         except client.exceptions.ApiException as e:
             if e.status != 409:
                 logger.warning(f"Failed to create service for {name}: {e}")
+
+        # 3. Handle Extra DNS Alias (e.g. for addons)
+        alias_name = kwargs.get('alias_name')
+        if alias_name and alias_name != name:
+            alias_svc = client.V1Service(
+                metadata=client.V1ObjectMeta(name=alias_name),
+                spec=client.V1ServiceSpec(
+                    selector={"app": name},
+                    ports=[client.V1ServicePort(port=80, target_port=port)],
+                    type="ClusterIP"
+                )
+            )
+            try:
+                self.k8s_client.create_namespaced_service(
+                    namespace=namespace, body=alias_svc)
+            except client.exceptions.ApiException as e:
+                if e.status != 409:
+                    logger.warning(f"Failed to create alias service {alias_name}: {e}")
 
         return f"k8s://{namespace}/{name}"
 
