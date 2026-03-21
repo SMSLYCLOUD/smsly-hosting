@@ -1598,8 +1598,17 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
 
     echo -e "${BLUE}  → Force-pulling latest code from GitHub...${NC}"
-    git fetch origin main
+    git fetch origin main >/dev/null 2>&1 || true
     git reset --hard origin/main
+
+    # ─── Self-Update Check ──────────────────────────────────────────────────
+    # If the installer itself was updated, we MUST re-execute it to pick up
+    # new service names (e.g., celery-deploy) and self-healing logic.
+    if [[ "${SMSLY_REEXEC:-}" != "1" ]]; then
+        echo -e "${GREEN}  → Installer updated. Re-executing for safe synchronization...${NC}"
+        export SMSLY_REEXEC=1
+        exec bash "$SCRIPT_PATH" "$@"
+    fi
 
     echo -e "${BLUE}  → Applying platform/domain overrides...${NC}"
     apply_env_platform_overrides "$INSTALL_DIR/.env"
