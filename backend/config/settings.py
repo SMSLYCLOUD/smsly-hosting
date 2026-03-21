@@ -494,15 +494,36 @@ CELERY_RESULT_BACKEND = 'django-db'
 
 # Use separate queues for different task types
 CELERY_TASK_DEFAULT_QUEUE = 'celery'
+CELERY_TASK_DEFAULT_EXCHANGE = 'celery'
+CELERY_TASK_DEFAULT_ROUTING_KEY = 'celery'
+
+CELERY_QUEUES = {
+    'celery': {
+        'exchange': 'celery',
+        'exchange_type': 'direct',
+        'routing_key': 'celery',
+    },
+    'deploy': {
+        'exchange': 'deploy',
+        'exchange_type': 'direct',
+        'routing_key': 'deploy',
+    },
+    'fast': {
+        'exchange': 'fast',
+        'exchange_type': 'direct',
+        'routing_key': 'fast',
+    },
+}
+
 CELERY_TASK_ROUTES = {
-    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.auto_promote_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.provision_addon_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.backup_addon_task': {'queue': 'deployments'},
-    'apps.deployments.tasks.restore_addon_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.auto_promote_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
 }
 
 # Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
