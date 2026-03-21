@@ -499,6 +499,10 @@ CELERY_TASK_ROUTES = {
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deployments'},
     'apps.deployments.tasks.auto_promote_task': {'queue': 'deployments'},
     'apps.deployments.tasks.promote_deployment_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.provision_addon_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.backup_addon_task': {'queue': 'deployments'},
+    'apps.deployments.tasks.restore_addon_task': {'queue': 'deployments'},
 }
 
 # Allow heavy Docker builds (e.g. torch, playwright) up to 2 hours
