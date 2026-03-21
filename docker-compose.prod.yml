@@ -239,8 +239,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 4G
+          cpus: "1.0"
+          memory: 2G
 
   celery_deployments:
     build:
@@ -280,8 +280,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4.0"
-          memory: 8G
+          cpus: "2.0"
+          memory: 4G
 
   nginx:
     image: nginx:1.25-alpine
