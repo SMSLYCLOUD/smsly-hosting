@@ -148,7 +148,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=8 -Q celery,deployments
+    command: celery -A config worker -l info --concurrency=8 -Q celery
     restart: unless-stopped
     env_file: .env
     environment:
@@ -239,8 +239,49 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 512M
+          cpus: "2.0"
+          memory: 4G
+
+  celery_deployments:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A config worker -l info --concurrency=32 -Q deployments
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CONTAINER_REGISTRY_URL: registry:5000
+      DOCKER_HOST: tcp://socket-proxy:2375
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
+    volumes:
+      - media_volume:/app/media
+      - caddy_config:/caddy-config
+      - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
+      - /opt/smsly-cache:/opt/smsly-cache
+      - backups_data:/app/backups
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
 
   nginx:
     image: nginx:1.25-alpine
