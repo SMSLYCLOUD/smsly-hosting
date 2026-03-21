@@ -271,12 +271,16 @@ services:
       - backups_data:/app/backups
     healthcheck:
       test:
-        - "CMD-SHELL"
-        - "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
+        ]
       interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 60s
+    networks:
+      - smsly-net
     deploy:
       resources:
         limits:
