@@ -32,6 +32,57 @@ services:
       - /run
       - /tmp
 
+  # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
+  celery-fast:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - db
+    command: celery -A config worker --loglevel=info -Q fast --concurrency=8
+    restart: always
+    networks:
+      - smsly-net
+      - socket-proxy
+
+  # Deploy worker (Builds, Cleanup) - High latency, low frequency
+  celery-deploy:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - db
+    command: celery -A config worker --loglevel=info -Q deploy --concurrency=8
+    restart: always
+    networks:
+      - smsly-net
+      - socket-proxy
+
+  # Default worker (Everything else)
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+      - db
+    command: celery -A config worker --loglevel=info -Q default --concurrency=8
+    restart: always
+    networks:
+      - smsly-net
+      - socket-proxy
+
   # ============================================================
   # Database
   # ============================================================
@@ -80,6 +131,7 @@ services:
       - ./:/platform-src:ro
       - backups_data:/app/backups
       - repo_cache_data:/app/repo_cache
+      - ./caddy-config:/caddy-config
     ports:
       - "8000:8000"
     env_file:
@@ -111,46 +163,6 @@ services:
       - smsly-net
       - socket-proxy
 
-  # ============================================================
-  # Celery Worker
-  # ============================================================
-  celery:
-    build: ./backend
-    restart: unless-stopped
-    command: celery -A config worker -l info
-    volumes:
-      - ./backend:/app
-      - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
-      - backups_data:/app/backups
-      - repo_cache_data:/app/repo_cache
-    env_file:
-      - .env
-    environment:
-      - DEBUG=${DEBUG:-False}
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
-      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY:?FIELD_ENCRYPTION_KEY must be set in .env}
-      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-smsly_hosting}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - DOCKER_HOST=tcp://socket-proxy:2375
-    depends_on:
-      backend:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      socket-proxy:
-        condition: service_started
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A config inspect ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - smsly-net
-      - socket-proxy
 
   # ============================================================
   # Celery Beat (Scheduler)

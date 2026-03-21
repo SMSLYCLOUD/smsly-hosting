@@ -37,6 +37,23 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
 # =============================================================================
+# =============================================================================
+# Task Routing — Separate fast, deploy, and default queues
+# =============================================================================
+app.conf.task_routes = {
+    # Fast / Frequent tasks (Heartbeat, Metrics)
+    'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
+    'apps.deployments.tasks_metrics.collect_metrics_task': {'queue': 'fast'},
+    'apps.deployments.services.health_monitor.monitor_health_task': {'queue': 'fast'},
+    'apps.deployments.tasks_replication.check_replication_health_task': {'queue': 'fast'},
+    
+    # Heavy / Deployment tasks
+    'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
+    'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
+}
+
 app.conf.beat_schedule = {
     # Collect real Docker stats every 60 seconds
     'collect-metrics-every-60s': {

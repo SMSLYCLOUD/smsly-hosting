@@ -95,7 +95,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     # Use ASGI so Django Channels WebSockets (`/ws/...`) work in production.
-    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 120
+    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 600
     restart: unless-stopped
     env_file: .env
     environment:

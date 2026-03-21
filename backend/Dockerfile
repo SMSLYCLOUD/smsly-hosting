@@ -13,6 +13,9 @@ RUN apt-get update \
     postgresql-client \
     curl \
     wget \
+    iputils-ping \
+    dnsutils \
+    net-tools \
     # Security: Install Docker via official repo with GPG verification
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
@@ -34,7 +37,7 @@ COPY . .
 
 # Security: Run as non-root user
 RUN chmod +x entrypoint.sh && \
-    mkdir -p /app/staticfiles /app/backups/services /app/backups/server /app/repo_cache && \
+    mkdir -p /app/staticfiles /app/backups/services /app/backups/server /app/repo_cache /caddy-config && \
     useradd -m -u 1000 smsly && \
     chown -R smsly:smsly /app
 USER smsly

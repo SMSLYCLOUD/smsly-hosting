@@ -188,12 +188,18 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         import socket
         import requests.exceptions
         try:
-            # The docker-py exec_start(socket=True) returns a SocketIO object.
-            # Use .read() instead of .recv() to avoid AttributeError.
-            #
-            # IMPORTANT: For urllib3 streams, read(4096) might block indefinitely if no data is sent.
-            # We must use a smaller amount or rely on the underlying socket timeout.
-            data = self.exec_socket.read(4096)
+            # The docker-py exec_start(socket=True) returns a SocketIO-like object.
+            # Upstream recommends .read() instead of .recv() to avoid AttributeError.
+            # Depending on the docker-py version and connection type, it might
+            # use .read(), .recv() or expose the underlying _sock.
+            if hasattr(self.exec_socket, 'read'):
+                data = self.exec_socket.read(4096)
+            elif hasattr(self.exec_socket, 'recv'):
+                data = self.exec_socket.recv(4096)
+            elif hasattr(self.exec_socket, '_sock') and hasattr(self.exec_socket._sock, 'recv'):
+                data = self.exec_socket._sock.recv(4096)
+            else:
+                raise AttributeError("exec_socket has no read or recv method")
 
             if not data:
                 # Actual EOF (connection closed by remote docker side)
