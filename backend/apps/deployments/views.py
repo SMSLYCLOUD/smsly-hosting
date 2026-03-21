@@ -1814,6 +1814,13 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         failed_deploys = list(base_qs.only('id', 'container_id'))
 
+        # ── 1b. DB: Select failed addons to prune ──
+        from apps.deployments.models_addons import Addon
+        addon_qs = Addon.objects.filter(status='FAILED')
+        if not request.user.is_superuser:
+            addon_qs = addon_qs.filter(service__owner=request.user)
+        failed_addons = list(addon_qs)
+
         # ── 2. VPS: Container cleanup ──
         containers_removed = 0
         images_pruned = 0
@@ -1821,8 +1828,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             # Increase timeout for global cleanup operations
             client = get_docker_client(timeout=60)
             # Remove specific failed containers
-            if not failed_deploys:
-                logger.info("No failed deployments found to prune from Docker.")
+            if not failed_deploys and not failed_addons:
+                logger.info("No failed deployments or addons found to prune from Docker.")
             
             for dep in failed_deploys:
                 if dep.container_id:
@@ -1832,6 +1839,21 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         containers_removed += 1
                     except Exception:
                         pass
+
+            for addon_obj in failed_addons:
+                container_name = f"smsly-addon-{addon_obj.addon_type.lower()}-{addon_obj.id}"
+                try:
+                    c = client.containers.get(container_name)
+                    c.remove(force=True)
+                    containers_removed += 1
+                except Exception:
+                    pass
+                try:
+                    c = client.containers.get(addon_obj.name)
+                    c.remove(force=True)
+                    containers_removed += 1
+                except Exception:
+                    pass
 
             # Prune all stopped containers to be sure
             client.containers.prune()
@@ -1867,6 +1889,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         # ── 3. DB: Delete records ──
         count = base_qs.delete()[0]
+        addon_count = addon_qs.delete()[0]
 
         # ── 4. DB: Cancel stuck QUEUED deployments ──
         stale_threshold = timezone.now() - timezone.timedelta(minutes=30)
