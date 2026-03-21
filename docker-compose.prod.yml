@@ -137,6 +137,7 @@ services:
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     depends_on:
       pgbouncer:
@@ -232,6 +233,7 @@ services:
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     depends_on:
       pgbouncer:
@@ -275,6 +277,7 @@ services:
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
+      DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
     depends_on:
       pgbouncer:
