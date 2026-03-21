@@ -1072,6 +1072,34 @@ class PipelineManager:
             )
 
             to_provision = (detected_types | failed) - existing
+
+            # Re-provision/verify existing addons to ensure they are running and connected
+            # to the network before deployment resumes.
+            existing_addons = Addon.objects.filter(
+                service=self.service,
+                addon_type__in=existing,
+                status__in=['ACTIVE', 'PROVISIONING']
+            )
+            for addon in existing_addons:
+                try:
+                    _, url = addon_provisioner.provision(addon)
+                    if url and addon.connection_url != url:
+                        addon.connection_url = url
+                        addon.status = Addon.Status.ACTIVE
+                        addon.save()
+                        # Re-inject updated URL
+                        env_key = addon_provisioner.ENV_KEY_MAP.get(
+                            addon.addon_type, f"{addon.addon_type}_URL"
+                        )
+                        from apps.deployments.models import EnvironmentVariable
+                        EnvironmentVariable.objects.update_or_create(
+                            service=self.service, key=env_key,
+                            defaults={'value': url, 'is_secret': True}
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to verify existing addon {addon.addon_type}: {e}")
+                    append_log(self.deployment, f"  ⚠️ Could not verify existing addon {addon.addon_type}: {e}\n")
+
             if not to_provision:
                 append_log(
                     self.deployment,
