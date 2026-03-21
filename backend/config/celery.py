@@ -1,7 +1,11 @@
 """Celery module."""
 import os
-from celery import Celery
+import logging
+from celery import Celery, signals
+from kombu import Exchange, Queue
 from celery.schedules import crontab
+
+logger = logging.getLogger(__name__)
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
@@ -26,6 +30,8 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.services.autoscaler  # noqa: F401
     import apps.deployments.services.health_monitor  # noqa: F401
     import apps.deployments.services.provisioner  # noqa: F401
+    import apps.addons.tasks  # noqa: F401
+    import apps.deployments.tasks  # noqa: F401
     import apps.deployments.tasks_alerts  # noqa: F401
     import apps.deployments.tasks_ai  # noqa: F401
     import apps.deployments.tasks_ecosystem  # noqa: F401
@@ -40,17 +46,27 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
 # =============================================================================
 # Task Routing — Separate fast, deploy, and default queues
 # =============================================================================
+# Use separate queues for different task types
+app.conf.task_default_queue = 'celery'
+app.conf.task_default_exchange = 'celery'
+app.conf.task_default_routing_key = 'celery'
+
+app.conf.task_queues = (
+    Queue('celery', Exchange('celery'), routing_key='celery'),
+    Queue('deploy', Exchange('deploy'), routing_key='deploy'),
+    Queue('fast', Exchange('fast'), routing_key='fast'),
+)
+
 app.conf.task_routes = {
-    # Fast / Frequent tasks (Heartbeat, Metrics)
-    'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
-    'apps.deployments.tasks_metrics.collect_metrics_task': {'queue': 'fast'},
-    'apps.deployments.services.health_monitor.monitor_health_task': {'queue': 'fast'},
-    'apps.deployments.tasks_replication.check_replication_health_task': {'queue': 'fast'},
-    
-    # Heavy / Deployment tasks
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},
     'apps.deployments.tasks.resume_deploy_task': {'queue': 'deploy'},
-    'apps.deployments.tasks_mesh.check_mesh_health_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.auto_promote_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.promote_deployment_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.provision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.deprovision_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.backup_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
 }
 
