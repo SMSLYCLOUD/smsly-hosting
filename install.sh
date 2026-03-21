@@ -1386,6 +1386,11 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
+    echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
+    systemctl restart caddy >/dev/null 2>&1 || true
+    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    sleep 3
+
     echo -e "\n${BLUE}  → Running endpoint verification...${NC}"
     PASS_COUNT=0
     FAIL_COUNT=0
