@@ -3,6 +3,7 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q
 from .models_addons import Addon
 from .models import Service, EnvironmentVariable
 import logging
@@ -44,7 +45,9 @@ class AddonViewSet(viewsets.ModelViewSet):
     # ==========================================================================
     def get_queryset(self):
         """Filter addons to only those belonging to the user's services."""
-        return self.queryset.filter(service__owner=self.request.user)
+        return self.queryset.filter(
+            Q(service__owner=self.request.user) | Q(service__owner__isnull=True)
+        )
 
     def perform_create(self, serializer):
         # SECURITY: Verify user owns the service before creating addon
