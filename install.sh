@@ -1391,15 +1391,14 @@ if [ "${CLEAR_MODE:-false}" = "true" ]; then
     docker container prune -f >/dev/null 2>&1
     docker image prune -af >/dev/null 2>&1
 
-    # Stop and remove all stale smsly-addon-* containers
-    echo -e "  → Removing stale/orphaned service addons..."
-    ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon")
+    # Stop and remove all stale smsly-addon-* containers (only those NOT running)
+    echo -e "  → Removing stale/orphaned service addons (protecting active databases)..."
+    ADDON_IDS=$(docker ps -a -q --filter "name=smsly-addon" --filter "status=exited" --filter "status=created" --filter "status=dead")
     if [ -n "$ADDON_IDS" ]; then
-        docker stop $ADDON_IDS >/dev/null 2>&1 || true
         docker rm -f $ADDON_IDS >/dev/null 2>&1 || true
-        echo -e "${GREEN}  ✓ Removed orphaned addon containers.${NC}"
+        echo -e "${GREEN}  ✓ Removed inactive orphaned addon containers.${NC}"
     else
-        echo -e "${YELLOW}  - No orphaned addons found.${NC}"
+        echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
     fi
 
     # Clean caches
