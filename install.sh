@@ -1401,6 +1401,20 @@ if [ "${CLEAR_MODE:-false}" = "true" ]; then
         echo -e "${YELLOW}  - No inactive orphaned addons found.${NC}"
     fi
 
+    # Stop and remove all stale deployment/blue-green containers
+    echo -e "  → Removing stale deployment containers (protecting active routes)..."
+    GREEN_IDS=$(docker ps -a -q --filter "name=-green-" --filter "status=exited" --filter "status=created" --filter "status=dead")
+    ROUTER_IDS=$(docker ps -a -q --filter "name=ai-router" --filter "status=exited" --filter "status=created" --filter "status=dead")
+
+    if [ -n "$GREEN_IDS" ]; then
+        docker rm -f $GREEN_IDS >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Removed inactive deployment containers.${NC}"
+    fi
+    if [ -n "$ROUTER_IDS" ]; then
+        docker rm -f $ROUTER_IDS >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓ Removed inactive AI routers.${NC}"
+    fi
+
     # Clean caches
     echo -e "  → Cleaning system caches..."
     rm -rf /opt/smsly-cache/* 2>/dev/null || true
