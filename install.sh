@@ -923,29 +923,43 @@ ensure_update_networks() {
     docker network inspect socket-proxy >/dev/null 2>&1 || docker network create --driver bridge --internal socket-proxy >/dev/null 2>&1 || true
 }
 
-ensure_caddy_config_permissions() {
+ensure_infrastructure_permissions() {
     local caddy_config_dir="/opt/smsly-hosting/caddy-config"
+    local staticfiles_dir="/opt/smsly-hosting/backend/staticfiles"
 
+    echo -e "${BLUE}  -> Ensuring infrastructure permissions...${NC}"
+
+    # 1. Handle Bind-Mounts (Caddy Config & Staticfiles)
     mkdir -p "$caddy_config_dir"
+    mkdir -p "$staticfiles_dir"
 
-    # Backend container writes /caddy-config as uid/gid 1000 ("smsly").
-    # Keep this idempotent and non-fatal for heterogeneous hosts.
+    # UID 1000 is the "smsly" user inside the containers.
     if id smsly >/dev/null 2>&1; then
-        chown -R smsly:smsly "$caddy_config_dir" 2>/dev/null || true
+        chown -R smsly:smsly "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
     else
-        chown -R 1000:1000 "$caddy_config_dir" 2>/dev/null || true
+        chown -R 1000:1000 "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
     fi
-    # Keep directory group-writable and sticky for future files.
-    chmod -R u+rwX,g+rwX "$caddy_config_dir" 2>/dev/null || true
-    find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
 
-    # Ensure key files are writable by backend uid 1000.
+    chmod -R u+rwX,g+rwX "$caddy_config_dir" "$staticfiles_dir" 2>/dev/null || true
+    find "$caddy_config_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+    find "$staticfiles_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
+
+    # Caddy-specific file permissions
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
-    [ -f "$caddy_config_dir/.cloudflare_token" ] && chmod 600 "$caddy_config_dir/.cloudflare_token" 2>/dev/null || true
-    [ -f "$caddy_config_dir/.cloudflare_token_clear" ] && chmod 600 "$caddy_config_dir/.cloudflare_token_clear" 2>/dev/null || true
 
-    # Fast write probe so --update can self-heal before UI writes Caddyfile.
+    # 2. Handle Named Volumes (repo_cache_data, backups_data)
+    # We use a one-off container to safely chown existing named volumes.
+    if command -v docker >/dev/null 2>&1; then
+        for vol in repo_cache_data backups_data; do
+            if docker volume inspect "$vol" >/dev/null 2>&1; then
+                echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
+                docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Fast write probe for Caddy
     echo "perm-check $(date +%s)" > "$caddy_config_dir/.perm_probe" 2>/dev/null || true
 }
 
@@ -1147,7 +1161,7 @@ refresh_runtime_services() {
 
     echo -e "${BLUE}  -> Performing clean runtime refresh (non-data services only)...${NC}"
     ensure_update_networks
-    ensure_caddy_config_permissions
+    ensure_infrastructure_permissions
 
     for svc in "${app_services_requested[@]}"; do
         if docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null | grep -qx "$svc"; then
@@ -1267,7 +1281,7 @@ recover_runtime_stack() {
     echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
 
     ensure_update_networks
-    ensure_caddy_config_permissions
+    ensure_infrastructure_permissions
 
     if systemctl list-unit-files docker.service >/dev/null 2>&1; then
         echo -e "${BLUE}    -> Restarting Docker daemon...${NC}"
@@ -1549,7 +1563,7 @@ if [ -n "$UPDATE_MODE" ]; then
         exit 1
     fi
 
-    ensure_caddy_config_permissions
+    ensure_infrastructure_permissions
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
         echo -e "${RED}✗ No git repository found at $INSTALL_DIR. Run a fresh install first.${NC}"
@@ -2642,7 +2656,7 @@ docker network create smsly-proxy 2>/dev/null || true
 # Caddy (step 7) handles public-facing HTTP/HTTPS termination.
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
-ensure_caddy_config_permissions
+ensure_infrastructure_permissions
 echo -e "${BLUE}  → Starting App Stack...${NC}"
 docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
 
@@ -3022,7 +3036,7 @@ CADDYEOF
 fi
 
 # ─── Create caddy-config volume directory for Settings UI writes ──────────────
-ensure_caddy_config_permissions
+ensure_infrastructure_permissions
 
 # ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
 if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then

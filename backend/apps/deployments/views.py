@@ -51,6 +51,8 @@ class CleanupFileResponse(FileResponse):
     """FileResponse that deletes the underlying file when closed."""
     def __init__(self, *args, **kwargs):
         self._file_path = kwargs.pop('file_path', None)
+        # Larger blksize for better performance with large backups
+        kwargs.setdefault('blksize', 65536)
         super().__init__(*args, **kwargs)
 
     def close(self):
@@ -1768,8 +1770,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         containers_removed = 0
         images_pruned = 0
         try:
-            client = get_docker_client(timeout=30)
+            # Increase timeout for global cleanup operations
+            client = get_docker_client(timeout=60)
             # Remove specific failed containers
+            if not failed_deploys:
+                logger.info("No failed deployments found to prune from Docker.")
+            
             for dep in failed_deploys:
                 if dep.container_id:
                     try:
@@ -1917,6 +1923,29 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         deployment.status = Deployment.Status.CANCELLED
         deployment.finished_at = timezone.now()
         deployment.build_logs += "\n\n[CANCELLED] Deployment cancelled by user."
+
+        # Clean up any running containers associated with this deployment
+        try:
+            if deployment.green_container_id or deployment.container_id:
+                import docker
+                client = docker.from_env()
+                c_ids_to_remove = [id for id in [deployment.green_container_id, deployment.container_id] if id]
+                cleaned_any = False
+                for c_id in set(c_ids_to_remove):
+                    try:
+                        container = client.containers.get(c_id)
+                        container.remove(force=True)
+                        logger.info(f"Cleaned up cancelled container {c_id} for deployment {deployment.id}")
+                        cleaned_any = True
+                    except docker.errors.NotFound:
+                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup container {c_id}: {e}")
+                if cleaned_any:
+                    deployment.build_logs += f"\n🧹 Cleaned up container resources."
+        except Exception as e:
+            logger.warning(f"Docker client error during cancel cleanup: {e}")
+
         deployment.save()
 
         # Clean up orphaned build dir from analysis phase (REVIEW status only)
@@ -2849,13 +2878,15 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                     filename=os.path.basename(file_path).replace(".enc", ""),
                     file_path=decrypted_path
                 )
+                response['Content-Length'] = os.path.getsize(decrypted_path)
+                response['Content-Type'] = 'application/x-tar'
                 return response
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return FileResponse(
+        response = FileResponse(
             open(file_path, 'rb'),
             as_attachment=True,
             filename=os.path.basename(file_path)
@@ -2918,17 +2949,24 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
                     filename=os.path.basename(file_path).replace(".enc", ""),
                     file_path=decrypted_path
                 )
+                # Ensure proxy (Traefik/Nginx) knows exact size to prevent ERR_HTTP2_PROTOCOL_ERROR
+                response['Content-Length'] = os.path.getsize(decrypted_path)
+                response['Content-Type'] = 'application/x-tar' # or similar
                 return response
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return FileResponse(
+        response = FileResponse(
             open(file_path, 'rb'),
             as_attachment=True,
             filename=os.path.basename(file_path),
+            blksize=65536
         )
+        response['Content-Length'] = os.path.getsize(file_path)
+        response['Content-Type'] = 'application/x-tar'
+        return response
 
     @action(detail=False, methods=['post'], url_path='upload-restore',
             parser_classes=[parsers.MultiPartParser])

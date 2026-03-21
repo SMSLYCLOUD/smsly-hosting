@@ -757,8 +757,8 @@ def _safe_extract_zip(zip_path: str, destination: str):
 @shared_task(
     bind=True,
     max_retries=3,
-    soft_time_limit=7200,  # 2 hours (heavy deps: torch, playwright, transformers)
-    time_limit=7500,       # 2h 5m hard kill
+    soft_time_limit=3600,  # 1 hour (reduced to prevent queue staleness)
+    time_limit=3900,       # 1h 5m hard kill
 )
 def smart_deploy_task(self, deployment_id: str, provider_id: str,
                      skip_review: bool = False):
@@ -820,8 +820,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 @shared_task(
     bind=True,
     max_retries=2,
-    soft_time_limit=7200,
-    time_limit=7500,
+    soft_time_limit=3600,
+    time_limit=3900,
 )
 def resume_deploy_task(self, deployment_id: str, provider_id: str):
     """
@@ -1747,6 +1747,29 @@ def _handle_failure(task, deployment, error_msg, reason):
             deployment.build_logs += f"\n✗ {reason}: {error_msg}\n"
             deployment.save()
             broadcast_status(deployment)
+
+            # Cleanup orphaned container if one was created
+            try:
+                if deployment.green_container_id or deployment.container_id:
+                    import docker
+                    client = docker.from_env()
+                    c_ids_to_remove = [id for id in [deployment.green_container_id, deployment.container_id] if id]
+                    cleaned_any = False
+                    for c_id in set(c_ids_to_remove):
+                        try:
+                            container = client.containers.get(c_id)
+                            container.remove(force=True)
+                            logger.info(f"Cleaned up orphaned container {c_id} for failed deployment {deployment.id}")
+                            cleaned_any = True
+                        except docker.errors.NotFound:
+                            pass
+                        except Exception as e:
+                            logger.warning(f"Failed to cleanup container {c_id}: {e}")
+                    if cleaned_any:
+                        deployment.build_logs += f"\n🧹 Cleaned up orphaned container resources.\n"
+                        deployment.save(update_fields=['build_logs'])
+            except Exception as e:
+                logger.warning(f"Docker client error during failure cleanup: {e}")
 
             try:
                 from apps.deployments.tasks_alerts import alert_user_task
