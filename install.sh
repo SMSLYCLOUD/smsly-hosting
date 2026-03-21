@@ -1825,6 +1825,8 @@ if a_count > 0:
 
     # ─── Verification: Celery Worker Health ─────────────────────────────────
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
+    # Give workers a moment to connect to Redis and report active queues
+    sleep 15
     if docker exec -i smsly-hosting-backend-1 celery -A config inspect active_queues 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
     else
