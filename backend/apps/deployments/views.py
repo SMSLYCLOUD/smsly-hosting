@@ -305,6 +305,54 @@ class ServiceViewSet(viewsets.ModelViewSet):
             target=f'Service: {instance.name}',
             metadata={'service_id': str(instance.id), 'service_name': instance.name},
         ).save()
+
+        # Clean up all associated docker containers before deleting the DB record
+        import docker
+        try:
+            client = docker.from_env()
+            container_names_to_remove = set()
+            
+            # Add known container names from the service slug
+            container_names_to_remove.update([
+                instance.slug,
+                f"{instance.slug}-frontend",
+                f"{instance.slug}-backend",
+                f"{instance.slug}-db",
+                f"{instance.slug}-redis",
+            ])
+            
+            # Add container IDs extracted from past deployments
+            for dep in instance.deployments.all():
+                if dep.container_id:
+                    container_names_to_remove.add(dep.container_id)
+                if dep.green_container_id:
+                    container_names_to_remove.add(dep.green_container_id)
+                    
+            # 1. Remove by exact names or IDs
+            for c_name in container_names_to_remove:
+                try:
+                    c = client.containers.get(c_name)
+                    c.remove(force=True)
+                except docker.errors.NotFound:
+                    pass
+                except Exception:
+                    pass
+                    
+            # 2. Remove by Compose project label (for compose deployments)
+            try:
+                compose_containers = client.containers.list(all=True, filters={"label": f"com.docker.compose.project={instance.slug}"})
+                for c in compose_containers:
+                    try:
+                        c.remove(force=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+                
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to clean up docker containers for service {instance.name}: {e}")
+
         instance.delete()
         self._sync_caddy()
 
