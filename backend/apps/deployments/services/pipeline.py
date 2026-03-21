@@ -228,11 +228,14 @@ class PipelineManager:
             else:
                 self.source_dir = self.build_dir
         else:
-            raise InfraError(
-                "Build directory from analysis phase not found. "
-                "The deployment may need to be restarted. "
-                f"Expected source: {saved_source or self.build_dir}"
+            append_log(
+                self.deployment,
+                "ℹ️ Build directory from analysis phase not found locally. Re-cloning repository for build phase...\n"
             )
+            self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
+            os.makedirs(self.build_dir, exist_ok=True)
+            self.source_dir = self.build_dir
+            self._clone_repo()
 
         # Reload secrets for log redaction
         env_vars = self.service.env_vars.all()
