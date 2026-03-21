@@ -219,10 +219,10 @@ class LocalAdapter(BaseCloudAdapter):
     def deploy_container(self, service_name: str, image: str,
                          env_vars: Dict[str, str], cpu: int, memory: int,
                          replicas: int = 1, vpa_enabled: bool = True, **kwargs) -> str:
-        volumes = kwargs.get('volumes', None)
-        healthcheck = kwargs.get('healthcheck', None)
-        restart_policy = kwargs.get('restart_policy', 'unless-stopped')
-        command = kwargs.get('command', None)
+        volumes = kwargs.pop('volumes', None)
+        healthcheck = kwargs.pop('healthcheck', None)
+        restart_policy = kwargs.pop('restart_policy', 'unless-stopped')
+        command = kwargs.pop('command', None)
         if self.k8s_client:
             return self._deploy_k8s(
                 service_name, image, env_vars, cpu, memory, replicas,
