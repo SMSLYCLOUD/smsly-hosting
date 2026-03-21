@@ -293,7 +293,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             try:
                 # The underlying python socket
                 if hasattr(self.exec_socket, '_sock'):
-                    self.exec_socket._sock.settimeout(60.0)
+                    self.exec_socket._sock.settimeout(300.0)
             except Exception as e:
                 logger.debug("Could not set timeout on exec_socket: %s", e)
 
