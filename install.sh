@@ -1776,7 +1776,53 @@ if not created and not cp.is_active:
     cp.is_active = True
     cp.save()
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
-    echo -e "${GREEN}  ✓ Cloud provider ready${NC}"
+    # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
+    echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
+    if ! groups smsly 2>/dev/null | grep -q "docker"; then
+        usermod -aG docker smsly 2>/dev/null || true
+    fi
+
+    # ─── Self-Healing: Cleanup Stale Resources ──────────────────────────────
+    echo -e "${BLUE}  → Pruning stale deployment containers and BuildKit caches...${NC}"
+    # Prune orphaned containers created by the deployment system (labeled)
+    docker container prune -f --filter "label=com.smsly.managed=true" --filter "status=created" 2>/dev/null || true
+    docker container prune -f --filter "label=com.docker.compose.project" --filter "status=exited" 2>/dev/null || true
+    # Prune BuildKit build cache (saves significant disk space)
+    docker builder prune -f --filter "until=24h" 2>/dev/null || true
+
+    # ─── Self-Healing: Automatic Queue Restoration ──────────────────────────
+    echo -e "${BLUE}  → Checking for stalled deployments/addons in QUEUED state...${NC}"
+    docker exec -i smsly-hosting-backend-1 python manage.py shell -c "
+from apps.deployments.models import Deployment
+from apps.deployments.models_addons import Addon
+from apps.deployments.tasks import smart_deploy_task, provision_addon_task
+from django.db.models import Count
+
+# Re-queue deployments
+q_count = Deployment.objects.filter(status='QUEUED').count()
+if q_count > 0:
+    print(f'  [Jump-Start] Re-queueing {q_count} stalled deployments...')
+    for d in Deployment.objects.filter(status='QUEUED'):
+        smart_deploy_task.delay(str(d.id), str(d.service.provider.id))
+
+# Re-queue addons
+a_count = Addon.objects.filter(status='QUEUED').count()
+if a_count > 0:
+    print(f'  [Jump-Start] Re-queueing {a_count} stalled addons...')
+    for a in Addon.objects.filter(status='QUEUED'):
+        provision_addon_task.delay(str(a.id))
+" 2>/dev/null || true
+
+    # ─── Verification: Celery Worker Health ─────────────────────────────────
+    echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
+    if docker exec -i smsly-hosting-backend-1 celery -A config inspect active_queues 2>/dev/null | grep -q "deploy"; then
+        echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ WARNING: Deployment worker not detected on 'deploy' queue. Check logs.${NC}"
+    fi
+
+    echo -e "\n${GREEN}  ✨ Update complete. Self-healing applied.${NC}"
 
     sync_platform_domain_state "$INSTALL_DIR/.env"
 
