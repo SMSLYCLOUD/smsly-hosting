@@ -439,6 +439,9 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/stop/`);
     return response.data;
   },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/services/${id}/`);
+  },
 
   // Deployment Management
   getDeployments: async (serviceId: string): Promise<Deployment[]> => {

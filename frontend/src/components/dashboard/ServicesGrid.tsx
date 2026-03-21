@@ -22,7 +22,7 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Service, servicesApi } from '@/lib/api';
-import api from '@/lib/api';
+
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 
@@ -39,7 +39,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
     setActionLoading(serviceId);
     try {
-      await api.post(`/services/${serviceId}/deploy/`, { ref: 'HEAD' });
+      await servicesApi.deploy(serviceId);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Deploy failed:', err);
@@ -88,7 +88,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     if (!await confirm({ title: 'Delete service?', message: `Are you sure you want to delete "${service.name}"? This cannot be undone.`, variant: 'destructive', confirmText: 'Delete' })) return;
     setActionLoading(service.id);
     try {
-      await api.delete(`/services/${service.id}/`);
+      await servicesApi.delete(service.id);
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Delete failed:', err);
