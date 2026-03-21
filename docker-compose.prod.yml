@@ -141,7 +141,6 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
           memory: 1G
 
   celery:
@@ -239,7 +238,6 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
           memory: 2G
 
   celery_deployments:
@@ -284,7 +282,6 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
           memory: 4G
 
   nginx:
