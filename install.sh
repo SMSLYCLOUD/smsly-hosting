@@ -1087,7 +1087,7 @@ bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
-    for svc in frontend backend celery celery_deployments celery-beat; do
+    for svc in frontend backend celery celery-deploy celery-fast celery-beat; do
         local image_ids=""
         image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
@@ -1141,7 +1141,8 @@ refresh_runtime_services() {
         pgbouncer
         backend
         celery
-        celery_deployments
+        celery-deploy
+        celery-fast
         celery-beat
         frontend
         frps
@@ -1192,7 +1193,8 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-celery_deployments-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-celery-deploy-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-celery-fast-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -1697,13 +1699,13 @@ if [ -n "$UPDATE_MODE" ]; then
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery_deployments celery-beat
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-deploy celery-fast celery-beat
             ;;
         full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery_deployments celery-beat nginx traefik socket-proxy route-fallback"
+            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat nginx traefik socket-proxy route-fallback"
             echo -e "${BLUE}    ↳ Stopping core services...${NC}"
             docker compose -f "$COMPOSE_FILE" stop $CORE_SERVICES 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" rm -f $CORE_SERVICES 2>/dev/null || true
@@ -1758,7 +1760,7 @@ if [ -n "$UPDATE_MODE" ]; then
             # 9. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" restart celery-beat celery_deployments 2>/dev/null || true
+            docker compose -f "$COMPOSE_FILE" restart celery-beat celery-deploy celery-fast 2>/dev/null || true
             ;;
     esac
 
@@ -2216,7 +2218,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery_deployments-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
+    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true

@@ -185,6 +185,7 @@ services:
         condition: service_healthy
     volumes:
       - media_volume:/app/media
+      - caddy_config:/caddy-config
     tmpfs:
       - /tmp
     healthcheck:
@@ -220,11 +221,55 @@ services:
     networks:
       - smsly-net
 
-  celery_deployments:
+  # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
+  celery-fast:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=32 -Q deployments
+    command: celery -A config worker -l info --concurrency=8 -Q fast
+    restart: always
+    env_file: .env
+    environment:
+      CONTAINER_REGISTRY_URL: registry:5000
+      DOCKER_HOST: tcp://socket-proxy:2375
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
+    volumes:
+      - media_volume:/app/media
+      - caddy_config:/caddy-config
+      - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
+      - /opt/smsly-cache:/opt/smsly-cache
+      - backups_data:/app/backups
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 60s
+    networks:
+      - smsly-net
+      - socket-proxy
+
+  # Deploy worker (Builds, Cleanup) - High latency, low frequency
+  celery-deploy:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # Queue 'deploy' matches routing in settings.py / celery.py
+    command: celery -A config worker -l info --concurrency=32 -Q deploy
     restart: unless-stopped
     env_file: .env
     environment:
@@ -259,6 +304,7 @@ services:
       start_period: 60s
     networks:
       - smsly-net
+      - socket-proxy
 
   nginx:
     image: nginx:1.25-alpine
