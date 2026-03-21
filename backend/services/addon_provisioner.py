@@ -39,6 +39,7 @@ class AddonProvisioner:
         'QDRANT': 'qdrant/qdrant:v1.12.1',
         'ELASTICSEARCH': 'docker.elastic.co/elasticsearch/elasticsearch:8.12.0',
         'RABBITMQ': 'rabbitmq:3.13-management',
+        'MINIO': 'minio/minio:latest',
     }
 
     # Default ports for each addon
@@ -50,6 +51,7 @@ class AddonProvisioner:
         'QDRANT': 6333,
         'ELASTICSEARCH': 9200,
         'RABBITMQ': 5672,
+        'MINIO': 9000,
     }
 
     # Environment variable keys for connection URLs
@@ -61,6 +63,7 @@ class AddonProvisioner:
         'QDRANT': 'QDRANT_URL',
         'ELASTICSEARCH': 'ELASTICSEARCH_URL',
         'RABBITMQ': 'RABBITMQ_URL',
+        'MINIO': 'MINIO_URL',
     }
 
     def __init__(self):
@@ -204,6 +207,11 @@ class AddonProvisioner:
             # Attempt best-effort reconstruction from container config to avoid password rotation.
             hostname = alias_name or container_name
             try:
+                if addon_type == 'MINIO':
+                    minio_user = self._get_container_env(container_name, 'MINIO_ROOT_USER')
+                    minio_password = self._get_container_env(container_name, 'MINIO_ROOT_PASSWORD')
+                    return existing_cid, f"s3://{minio_user}:{minio_password}@{hostname}:{port}"
+
                 if addon_type == 'POSTGRES':
                     db_user = self._get_container_env(container_name, 'POSTGRES_USER')
                     db_name = self._get_container_env(container_name, 'POSTGRES_DB')
@@ -258,8 +266,12 @@ class AddonProvisioner:
             username = str(parsed.get('username') or '').strip()
             db_name = str(parsed.get('database') or '').strip()
 
-            if addon_type in ('POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'RABBITMQ') and not password:
+            if addon_type in ('POSTGRES', 'REDIS', 'MYSQL', 'MONGODB', 'RABBITMQ', 'MINIO') and not password:
                 raise ValueError("Existing connection_url is missing a password; refusing to reprovision.")
+
+            if addon_type == 'MINIO':
+                container_id, _ = self._provision_minio(container_name, password, port, hostname, username=username)
+                return container_id, existing_url
 
             if addon_type == 'POSTGRES':
                 container_id, _ = self._provision_postgres(
@@ -305,9 +317,14 @@ class AddonProvisioner:
             'MYSQL',
             'MONGODB',
             'RABBITMQ',
+            'MINIO',
         ) else ''
 
-        if addon_type == 'POSTGRES':
+        if addon_type == 'MINIO':
+            # Minio needs a username too, we can auto-generate one or use a default like 'admin'
+            username = secrets.token_hex(8)
+            container_id, connection_url = self._provision_minio(container_name, password, port, alias_name, username=username)
+        elif addon_type == 'POSTGRES':
             container_id, connection_url = self._provision_postgres(container_name, password, port, alias_name)
         elif addon_type == 'REDIS':
             container_id, connection_url = self._provision_redis(container_name, password, port, alias_name)
@@ -354,6 +371,39 @@ class AddonProvisioner:
         connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
 
         self._wait_for_health(container_name, port, path="/api/health/checks/alarms", use_http=True)
+        return container_id, connection_url
+
+    def _provision_minio(self, container_name: str,
+                         password: str, port: int,
+                         alias_name: str = '', username: str = 'admin') -> Tuple[str, str]:
+        """Provision a MinIO container."""
+        cmd = [
+            'docker', 'run', '-d',
+            '--name', container_name,
+            '--network', self.network_name,
+            '--restart', 'unless-stopped',
+            '-e', f'MINIO_ROOT_USER={username}',
+            '-e', f'MINIO_ROOT_PASSWORD={password}',
+            '-v', f'{container_name}-data:/data',
+        ]
+        if alias_name:
+            cmd.extend(['--network-alias', alias_name])
+        cmd.extend([
+            self.ADDON_IMAGES['MINIO'],
+            'server', '/data', '--console-address', ':9001'
+        ])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True)
+        container_id = result.stdout.strip()[:12]
+
+        hostname = alias_name or container_name
+        connection_url = f"s3://{username}:{password}@{hostname}:{port}"
+
+        self._wait_for_health(container_name, port, path="/minio/health/live", use_http=True)
         return container_id, connection_url
 
     def _provision_postgres(
