@@ -2407,6 +2407,24 @@ class SystemConfigView(GenericAPIView):
                 'STORAGE_USED_PERCENT': 0,
             }
 
+    def post(self, request):
+        """Trigger a maintenance script task via the API."""
+        action = request.data.get('action')
+
+        from .tasks import run_maintenance_task
+
+        if action == 'clear':
+            run_maintenance_task.delay('--clear')
+            return Response({"status": "queued", "message": "System cache and stale container clearance initiated."})
+        elif action == 'update':
+            run_maintenance_task.delay('--update')
+            return Response({"status": "queued", "message": "Platform update initiated."})
+        elif action == 'refresh':
+            run_maintenance_task.delay('--refresh')
+            return Response({"status": "queued", "message": "Proxy routing refresh initiated."})
+
+        return Response({"error": "Invalid maintenance action specified. Use clear, update, or refresh."}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class DomainConfigView(GenericAPIView):
     """

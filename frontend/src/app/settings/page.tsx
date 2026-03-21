@@ -46,6 +46,7 @@ const SETTINGS_SECTIONS = [
   { value: "ai", label: "AI", icon: Sparkles },
   { value: "oauth", label: "OAuth", icon: Key },
   { value: "infra", label: "Infra", icon: Server },
+  { value: "maintenance", label: "Maintenance", icon: Server },
 ] as const;
 
 export default function SettingsPage() {
@@ -1092,6 +1093,57 @@ export default function SettingsPage() {
           ) : (
             <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
           )}
+        </TabsContent>
+
+        <TabsContent value="maintenance">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-red-500" /> System Maintenance</CardTitle>
+                <CardDescription>Perform dangerous maintenance actions on the host server. These actions run asynchronously in the background.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="flex flex-col gap-4 rounded-lg border p-4 bg-muted/20">
+                  <div className="flex flex-row justify-between items-center gap-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-medium">Clear Orphaned Containers</h4>
+                      <p className="text-xs text-muted-foreground">Forcefully delete all stale deployment containers, old AI routers, and unused project addons to free up server RAM and CPU. This will NOT affect running databases.</p>
+                    </div>
+                    <Button variant="destructive" onClick={() => {
+                      toast({ title: "Initiating Clear", description: "Cleaning up system caches and docker containers..." });
+                      systemApi.post('/system/config/', { action: 'clear' })
+                        .then(() => toast({ title: "Clear Triggered", description: "Task queued successfully." }))
+                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
+                    }}>Clear System</Button>
+                  </div>
+                  <div className="flex flex-row justify-between items-center gap-4 border-t pt-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-medium">Sync Proxy Routing</h4>
+                      <p className="text-xs text-muted-foreground">Force Traefik/Caddy to reload their configurations and discover new backend IP addresses. Useful if you are encountering 502 Bad Gateway errors.</p>
+                    </div>
+                    <Button variant="outline" onClick={() => {
+                      toast({ title: "Syncing Proxy", description: "Restarting Caddy and proxy watchers..." });
+                      systemApi.post('/system/config/', { action: 'refresh' })
+                        .then(() => toast({ title: "Proxy Synced", description: "Task queued successfully." }))
+                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
+                    }}>Sync Proxy</Button>
+                  </div>
+                  <div className="flex flex-row justify-between items-center gap-4 border-t pt-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-medium">Update Platform</h4>
+                      <p className="text-xs text-muted-foreground">Pull the latest code from GitHub and restart the backend. (Warning: Causes a few seconds of downtime).</p>
+                    </div>
+                    <Button variant="default" onClick={() => {
+                      toast({ title: "Initiating Update", description: "Pulling latest code..." });
+                      systemApi.post('/system/config/', { action: 'update' })
+                        .then(() => toast({ title: "Update Triggered", description: "Task queued successfully." }))
+                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
+                    }}>Update Platform</Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>
