@@ -247,6 +247,37 @@ class AddonProvisioner:
                 time.sleep(1)
                 existing_cid, _ = self._container_status(container_name)
 
+            # Enforce network connection for existing containers to fix missing aliases
+            # when upgrading from older platforms or recovering from network drops.
+            parsed_hostname = alias_name or container_name
+            if existing_url:
+                parsed_hostname = str(self._parse_connection_url(existing_url).get('hostname') or parsed_hostname).strip()
+
+            try:
+                # Check if the container is already connected to the network with the correct alias
+                # to prevent dropping active database connections on every deployment.
+                inspect_proc = subprocess.run(
+                    ['docker', 'inspect', '-f', f'{{{{range .NetworkSettings.Networks}}}}{{{{.Aliases}}}}{{{{end}}}}', container_name],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+
+                # If the alias is not found in the output, attempt to attach it.
+                if parsed_hostname not in inspect_proc.stdout:
+                    subprocess.run(
+                        ['docker', 'network', 'disconnect', self.network_name, container_name],
+                        capture_output=True,
+                        check=False
+                    )
+                    subprocess.run(
+                        ['docker', 'network', 'connect', '--alias', parsed_hostname, self.network_name, container_name],
+                        capture_output=True,
+                        check=False
+                    )
+            except Exception as e:
+                logger.debug("Network reconnect failed/ignored for %s: %s", container_name, e)
+
             # Wait for readiness to reduce flakiness on immediate retries.
             try:
                 if addon_type == 'RABBITMQ':
