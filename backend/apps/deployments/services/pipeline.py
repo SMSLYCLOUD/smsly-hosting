@@ -1129,6 +1129,8 @@ class PipelineManager:
                     addon.status = Addon.Status.ACTIVE
                     addon.save()
 
+                    from apps.deployments.models import EnvironmentVariable
+
                     # Inject connection URL as env var
                     env_key = addon_provisioner.ENV_KEY_MAP.get(
                         addon_type, f"{addon_type}_URL"

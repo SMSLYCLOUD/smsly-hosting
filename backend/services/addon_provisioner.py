@@ -644,6 +644,7 @@ class AddonProvisioner:
         alias_name: str = '',
         db_user: Optional[str] = None,
         db_name: Optional[str] = None,
+        public_domain: str = None,
     ) -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
         # Derive service-specific user/db from alias (e.g. "postgres-myapp")
