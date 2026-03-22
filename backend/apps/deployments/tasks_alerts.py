@@ -293,6 +293,66 @@ def _dispatch_failure_alert(deployment, error_message: str) -> Dict[str, Any]:
     }
 
 
+@shared_task
+def scan_running_containers_logs_task():
+    """
+    Periodically scans logs of all active containers for crashing errors.
+    If an error is found, dispatches an alert.
+    """
+    import docker
+    from apps.deployments.models import Deployment
+    from apps.deployments.services.error_resolver import diagnose_runtime_logs
+    from django.core.cache import cache
+
+    try:
+        client = docker.from_env()
+    except Exception as exc:
+        logger.warning("Docker client unavailable for log scanning: %s", exc)
+        return
+
+    active_deployments = Deployment.objects.filter(status='ACTIVE').select_related('service')
+    for deployment in active_deployments:
+        if not deployment.container_id:
+            continue
+
+        try:
+            container = client.containers.get(deployment.container_id)
+            # Only check if container is running or recently died
+            if container.status not in ['running', 'exited', 'dead', 'restarting']:
+                continue
+
+            # Fetch logs for the last 5 minutes to avoid alerting on old errors
+            # 300 seconds = 5 minutes
+            import time
+            since_ts = int(time.time()) - 300
+
+            logs_bytes = container.logs(since=since_ts, tail=500)
+            logs_str = logs_bytes.decode('utf-8', errors='replace')
+
+            if not logs_str.strip():
+                continue
+
+            # Use error resolver to find patterns
+            results = diagnose_runtime_logs(logs_str, service=deployment.service, deployment=deployment, auto_apply=False)
+
+            # Check if we have critical errors
+            critical_errors = [r for r in results if r.get('severity') == 'critical']
+
+            if critical_errors:
+                # Rate limit alerts so we don't spam the user every 5 minutes for the same error
+                cache_key = f"alert_sent_crash_{deployment.id}"
+                if not cache.get(cache_key):
+                    error_msg = critical_errors[0].get('diagnosis', 'Unknown critical error')
+                    alert_user_task.delay(str(deployment.id), f"Runtime Crash/Error detected: {error_msg}")
+                    # Silence this specific deployment's crash alerts for 1 hour
+                    cache.set(cache_key, True, timeout=3600)
+
+        except docker.errors.NotFound:
+            pass
+        except Exception as exc:
+            logger.warning("Error scanning logs for deployment %s: %s", deployment.id, exc)
+
+
 @shared_task(bind=True, max_retries=3)
 def alert_user_task(self, deployment_id: str, error_message: str):
     """
