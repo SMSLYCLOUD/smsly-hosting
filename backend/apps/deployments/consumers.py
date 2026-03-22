@@ -160,7 +160,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
-        timeout_seconds = 420.0  # 7 minutes total idle timeout
+        timeout_seconds = 600.0  # 10 minutes total idle timeout
 
         try:
             while True:
@@ -312,15 +312,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 socket=True,
                 tty=True,
             )
-
-            # Prevent the socket from aggressively timing out during idle periods
-            # The docker-py client uses a wrapped socket.
-            try:
-                # The underlying python socket
-                if hasattr(self.exec_socket, '_sock'):
-                    self.exec_socket._sock.settimeout(15.0)
-            except Exception as e:
-                logger.debug("Could not set timeout on exec_socket: %s", e)
 
             return True
         except Exception as e:
