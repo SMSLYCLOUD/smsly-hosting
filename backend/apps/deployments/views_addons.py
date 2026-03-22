@@ -3,6 +3,7 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+import re
 from django.db.models import Q
 from .models_addons import Addon
 from .models import Service, EnvironmentVariable
@@ -75,6 +76,26 @@ class AddonViewSet(viewsets.ModelViewSet):
         if 'public_domain' in serializer.validated_data:
             from .tasks import provision_addon_task
             provision_addon_task.delay(str(addon.id))
+
+    @action(detail=True, methods=['post'])
+    def expose(self, request, pk=None):
+        """Auto-generate and assign a public domain for this addon."""
+        addon = self.get_object()
+        from .models_core import Service
+        base_domain = Service.default_public_base_domain()
+
+        # Format: minio-uuid.domain.com
+        short_id = str(addon.id).split('-')[0]
+        slug = re.sub(r'[^a-z0-9]+', '-', addon.addon_type.lower()).strip('-')
+        generated_domain = f"addon-{slug}-{short_id}.{base_domain}"
+
+        addon.public_domain = generated_domain
+        addon.save(update_fields=['public_domain'])
+
+        from .tasks import provision_addon_task
+        provision_addon_task.delay(str(addon.id))
+
+        return Response({'public_domain': generated_domain})
 
     @action(detail=True, methods=['post'])
     def deprovision(self, request, pk=None):
