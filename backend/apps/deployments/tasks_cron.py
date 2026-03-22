@@ -25,7 +25,7 @@ def check_cron_jobs():
         # Simplification: Assume all jobs run every minute for demo
         # Real logic: if croniter(job.schedule).is_due(now): ...
 
-        trigger_cron_job.delay(str(job.id))
+        trigger_cron_job.delay(job_id=str(job.id))
 
 
 @shared_task

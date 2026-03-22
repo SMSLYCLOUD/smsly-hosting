@@ -519,7 +519,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             commit_message='Service restart (full rebuild)',
         )
 
-        smart_deploy_task.delay(str(deployment.id), str(provider.id),
+        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id),
                                skip_review=True)
 
         AuditLog(
@@ -608,7 +608,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         )
 
         try:
-            smart_deploy_task.delay(str(deployment.id), str(provider.id))
+            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
         except Exception as exc:  # pragma: no cover - broker/runtime failure
             logger.exception(
                 "Failed to enqueue deploy task for service=%s deployment=%s",
@@ -731,7 +731,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 provider = _resolve_provider_for_service(preview)
                 if provider:
                     smart_deploy_task.delay(
-                        str(deployment.id), str(provider.id))
+                        deployment_id=str(deployment.id), provider_id=str(provider.id))
 
         except (IntegrityError, ValidationError) as exc:
             return Response(
@@ -880,7 +880,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     commit_message=f"Multi-deploy: {ref}",
                 )
                 try:
-                    smart_deploy_task.delay(str(deployment.id), str(provider.id))
+                    smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
                     results['local'] = {
                         'status': 'queued',
                         'deployment': DeploymentSerializer(deployment).data,
@@ -1114,7 +1114,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         provider = _resolve_provider_for_service(service)
         if provider:
             smart_deploy_task.delay(
-                str(rollback_deployment.id), str(provider.id))
+                deployment_id=str(rollback_deployment.id), provider_id=str(provider.id))
 
         return Response({
             'deployment': DeploymentSerializer(rollback_deployment).data,
@@ -1786,7 +1786,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         provider = _resolve_provider_for_service(service)
         if provider:
-            smart_deploy_task.delay(str(new_deployment.id), str(provider.id))
+            smart_deploy_task.delay(deployment_id=str(new_deployment.id), provider_id=str(provider.id))
             return Response(DeploymentSerializer(
                 new_deployment).data, status=status.HTTP_201_CREATED)
 
@@ -1958,7 +1958,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         'commit_hash', 'latest')
                 )
 
-                smart_deploy_task.delay(str(deployment.id), str(provider.id))
+                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
 
                 return Response({
                     'message': 'Deployment triggered successfully',
@@ -2154,7 +2154,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         deployment.save(update_fields=['status', 'started_at'])
 
         resume_deploy_task.delay(
-            str(deployment.id), str(provider.id)
+            deployment_id=str(deployment.id), provider_id=str(provider.id)
         )
 
         return Response({
@@ -2187,7 +2187,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         from apps.deployments.tasks import promote_deployment_task
         promote_deployment_task.delay(
-            str(deployment.id), str(provider.id)
+            deployment_id=str(deployment.id), provider_id=str(provider.id)
         )
 
         return Response({
@@ -2392,7 +2392,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         # Trigger analysis asynchronously
         try:
-            analyze_failure_task.delay(str(deployment.id))
+            analyze_failure_task.delay(deployment_id=str(deployment.id))
         except Exception as exc:
             # Avoid hard-failing the API when the broker is unavailable.
             try:
@@ -2486,7 +2486,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            smart_deploy_task.delay(str(deployment.id), provider_id)
+            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id)
 
             return Response({
                 'message': 'Source uploaded and deployment triggered',
@@ -2627,13 +2627,13 @@ class SystemConfigView(GenericAPIView):
         from .tasks import run_maintenance_task
 
         if action == 'clear':
-            run_maintenance_task.delay('--clear')
+            run_maintenance_task.delay(command_flag='--clear')
             return Response({"status": "queued", "message": "System cache and stale container clearance initiated."})
         elif action == 'update':
-            run_maintenance_task.delay('--update')
+            run_maintenance_task.delay(command_flag='--update')
             return Response({"status": "queued", "message": "Platform update initiated."})
         elif action == 'refresh':
-            run_maintenance_task.delay('--refresh')
+            run_maintenance_task.delay(command_flag='--refresh')
             return Response({"status": "queued", "message": "Proxy routing refresh initiated."})
 
         return Response({"error": "Invalid maintenance action specified. Use clear, update, or refresh."}, status=status.HTTP_400_BAD_REQUEST)
@@ -2999,7 +2999,7 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')
-        create_service_backup_task.delay(str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
+        create_service_backup_task.delay(service_id=str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
@@ -3017,9 +3017,9 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
                 )
 
         restore_service_backup_task.delay(
-            str(backup.id),
-            str(target_service_id) if target_service_id else None,
-            request.user.id,
+            backup_id=str(backup.id),
+            target_service_id=str(target_service_id) if target_service_id else None,
+            requesting_user_id=request.user.id,
         )
         return Response({'status': 'restore_started'})
 
@@ -3083,7 +3083,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         backup = serializer.save(status='PENDING')
-        create_server_backup_task.delay(str(backup.id))
+        create_server_backup_task.delay(backup_id=str(backup.id))
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
