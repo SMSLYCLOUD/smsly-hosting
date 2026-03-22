@@ -128,6 +128,29 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 seen.add(value)
                 target_host = public_domain or value
                 blocks.append(_build_service_domain_block(value, target_host))
+        from apps.deployments.models_addons import Addon
+        for addon in Addon.objects.exclude(public_domain__isnull=True).exclude(public_domain=""):
+            public_domain = ""
+            try:
+                public_domain = normalize_domain(addon.public_domain.strip())
+            except ValueError:
+                continue
+
+            if public_domain and public_domain not in seen:
+                if wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
+                    logger.debug(
+                        "Skipping addon %s — covered by wildcard *.%s",
+                        public_domain,
+                        wildcard_domain,
+                    )
+                else:
+                    blocks.append(
+                        f"""{public_domain} {{
+    reverse_proxy localhost:8081
+}}"""
+                    )
+                    seen.add(public_domain)
+
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not load service domains for Caddyfile: %s", exc)
     return blocks
@@ -146,6 +169,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
 
     try:
         from apps.deployments.models import Service
+        from apps.deployments.models_addons import Addon
 
         suffix = f".{wildcard_domain}"
         for service in Service.objects.all().only("id", "public_domain", "custom_domains", "public_domain_hidden"):
