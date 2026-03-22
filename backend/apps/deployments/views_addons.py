@@ -60,14 +60,14 @@ class AddonViewSet(viewsets.ModelViewSet):
         # Trigger async provisioning via Celery (uses Docker-native
         # provisioner)
         from .tasks import provision_addon_task
-        provision_addon_task.delay(str(addon.id))
+        provision_addon_task.delay(addon_id=str(addon.id))
 
     @action(detail=True, methods=['post'])
     def deprovision(self, request, pk=None):
         """Delete addon container and remove from service."""
         addon = self.get_object()
         from .tasks import deprovision_addon_task
-        deprovision_addon_task.delay(str(addon.id))
+        deprovision_addon_task.delay(addon_id=str(addon.id))
         return Response({'status': 'deprovisioning'},
                         status=status.HTTP_202_ACCEPTED)
 
@@ -116,7 +116,7 @@ class AddonViewSet(viewsets.ModelViewSet):
         """Trigger a backup for this addon."""
         addon = self.get_object()
         from .tasks import backup_addon_task
-        task = backup_addon_task.delay(str(addon.id))
+        task = backup_addon_task.delay(addon_id=str(addon.id))
         return Response({'status': 'backup_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'])
@@ -133,7 +133,7 @@ class AddonViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Backup not found for this addon'}, status=status.HTTP_404_NOT_FOUND)
 
         from .tasks import restore_addon_task
-        task = restore_addon_task.delay(backup_id)
+        task = restore_addon_task.delay(backup_id=backup_id)
         return Response({'status': 'restore_started', 'task_id': task.id}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['get'])
