@@ -268,7 +268,7 @@ class Service(TimeStampedModel):
 
     # Resource Limits (Simulated for now)
     cpu_cores = models.DecimalField(
-        max_digits=4, decimal_places=2, default=1.0)
+        max_digits=6, decimal_places=2, default=1.0)
     memory_mb = models.IntegerField(default=2048)
 
     # Auto-Scaling
