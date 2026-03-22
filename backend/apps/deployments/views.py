@@ -2211,7 +2211,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'duration_seconds': deployment.duration_seconds,
         })
 
-    @action(detail=True, methods=['get'], url_path='files/browse')
+    @action(detail=True, methods=['get'], url_path='file-browse')
     def file_browse(self, request, pk=None):
         """List files in a directory inside the running container."""
         service = self.get_object()
@@ -2250,7 +2250,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=True, methods=['get'], url_path='files/read')
+    @action(detail=True, methods=['get'], url_path='file-read')
     def file_read(self, request, pk=None):
         """Read a file's contents from the running container."""
         service = self.get_object()
@@ -2276,7 +2276,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    @action(detail=True, methods=['post'], url_path='files/write')
+    @action(detail=True, methods=['post'], url_path='file-write')
     def file_write(self, request, pk=None):
         """Write contents to a file in the running container."""
         service = self.get_object()

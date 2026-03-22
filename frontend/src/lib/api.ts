@@ -575,15 +575,15 @@ export const servicesApi = {
 
   // File Manager
   browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
-      const response = await api.get(`/services/${serviceId}/files/browse/`, { params: { path } });
+      const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
       return response.data;
   },
   readFile: async (serviceId: string, path: string): Promise<{ path: string; content: string }> => {
-      const response = await api.get(`/services/${serviceId}/files/read/`, { params: { path } });
+      const response = await api.get(`/services/${serviceId}/file-read/`, { params: { path } });
       return response.data;
   },
   writeFile: async (serviceId: string, path: string, content: string): Promise<{ message: string; path: string }> => {
-      const response = await api.post(`/services/${serviceId}/files/write/`, { path, content });
+      const response = await api.post(`/services/${serviceId}/file-write/`, { path, content });
       return response.data;
   }
 };
