@@ -131,6 +131,11 @@ app.conf.beat_schedule = {
         'task': 'apps.intelligence.tasks.daily_intelligence_report_task',
         'schedule': crontab(hour=6, minute=0),
     },
+    # Scan running containers for errors every 5 minutes
+    'scan-running-containers-logs-every-5m': {
+        'task': 'apps.deployments.tasks_alerts.scan_running_containers_logs_task',
+        'schedule': 300.0,
+    },
     # Proactive health scan every 5 minutes
     'proactive-health-scan-every-5m': {
         'task': 'apps.intelligence.tasks.proactive_health_scan_task',
