@@ -1366,6 +1366,10 @@ export const addonsApi = {
     delete: async (id: string): Promise<void> => {
         await api.delete(`/addons/${id}/`);
     },
+    expose: async (id: string): Promise<any> => {
+        const res = await api.post(`/addons/${id}/expose/`);
+        return res.data;
+    },
     deprovision: async (id: string): Promise<any> => {
         const res = await api.post(`/addons/${id}/deprovision/`);
         return res.data;

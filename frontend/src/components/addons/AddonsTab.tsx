@@ -146,8 +146,30 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     };
 
+    const handleClear = async (addonId: string) => {
+        if (!await confirm({ title: 'Clear addon?', message: 'This will completely remove the addon record from the database. Continue?', variant: 'destructive', confirmText: 'Clear' })) return;
+        try {
+            await addonsApi.delete(addonId);
+            fetchAddons();
+        } catch (e) {
+            console.error('Failed to clear addon:', e);
+        }
+    };
+
     const handleUpdatePublicDomain = async (addonId: string, currentDomain: string | null | undefined) => {
-        const domain = window.prompt("Enter public domain for this addon (leave empty to remove):", currentDomain || "");
+        if (!currentDomain) {
+            if (!await confirm({ title: 'Expose Addon?', message: 'This will generate a public domain and expose this addon\'s UI to the public internet securely using its generated credentials. Continue?' })) return;
+            try {
+                await addonsApi.expose(addonId);
+                fetchAddons();
+            } catch (e) {
+                console.error('Failed to expose addon:', e);
+                alert("Failed to expose addon");
+            }
+            return;
+        }
+
+        const domain = window.prompt("Enter custom public domain (or leave empty to disable public access):", currentDomain);
         if (domain === null) return; // Cancelled
 
         try {
@@ -352,12 +374,21 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                             >
                                                 <Globe size={12} /> {addon.public_domain ? addon.public_domain : 'Expose Publicly'}
                                             </button>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); handleDeprovision(addon.id); }}
-                                                className="flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors ml-auto"
-                                            >
-                                                <Trash2 size={12} /> Delete
-                                            </button>
+                                            {addon.status === 'FAILED' || addon.status === 'DELETED' ? (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleClear(addon.id); }}
+                                                    className="flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors ml-auto"
+                                                >
+                                                    <Trash2 size={12} /> Clear Record
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDeprovision(addon.id); }}
+                                                    className="flex items-center gap-2 px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium hover:bg-red-500/20 transition-colors ml-auto"
+                                                >
+                                                    <Trash2 size={12} /> Delete
+                                                </button>
+                                            )}
                                         </div>
 
                                         {/* Credentials */}
