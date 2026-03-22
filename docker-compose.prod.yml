@@ -1,5 +1,3 @@
-# SMSLY Hosting Production Stack
-
 services:
   db:
     image: postgres:16-alpine
@@ -7,19 +5,19 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-smsly_admin}
-      # SECURITY: No default password - crash if not set
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+    - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U smsly_admin -d smsly_hosting"]
+      test:
+      - CMD-SHELL
+      - pg_isready -U smsly_admin -d smsly_hosting
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
     networks:
-      - smsly-net
-
+    - smsly-net
   pgbouncer:
     build:
       context: ./infrastructure/pgbouncer
@@ -45,62 +43,52 @@ services:
         condition: service_healthy
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}",
-        ]
+      - CMD-SHELL
+      - pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
     networks:
-      - smsly-net
-
+    - smsly-net
   redis:
     image: redis:7-alpine
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
     volumes:
-      - redis_data:/data
+    - redis_data:/data
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG",
-        ]
+      - CMD-SHELL
+      - redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
     networks:
-      - smsly-net
-
+    - smsly-net
   registry:
     image: registry:2
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5000:5000"
+    - 127.0.0.1:5000:5000
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     volumes:
-      - registry_data:/var/lib/registry
+    - registry_data:/var/lib/registry
     networks:
-      - smsly-net
-
-  # NOTE: backend-init removed - migrations run by install script
-  # This avoids blocking issues with containers that don't exit properly
-
+    - smsly-net
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Use ASGI so Django Channels WebSockets (`/ws/...`) work in production.
-    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 600
+    command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class
+      uvicorn.workers.UvicornWorker --timeout 600
     restart: unless-stopped
     env_file: .env
     environment:
       CONTAINER_REGISTRY_URL: registry:5000
-      DOCKER_HOST: tcp://socket-proxy:2375 # Connect via restricted proxy
+      DOCKER_HOST: tcp://socket-proxy:2375
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -108,25 +96,26 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     volumes:
-      - static_volume:/app/staticfiles
-      - media_volume:/app/media
-      - caddy_config:/caddy-config
-      - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
-      - /opt/smsly-cache:/opt/smsly-cache
-      - backups_data:/app/backups
-      # SECURITY: Use socket-proxy instead of direct socket mount
-      # - /var/run/docker.sock:/var/run/docker.sock  # REMOVED - security risk
+    - static_volume:/app/staticfiles
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - ./install.sh:/app/install.sh:ro
+    - ./:/platform-src:ro
+    - /opt/smsly-cache:/opt/smsly-cache
+    - backups_data:/app/backups
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test:
+      - CMD-SHELL
+      - curl -f http://localhost:8000/health || exit 1
       interval: 15s
       timeout: 10s
       retries: 10
       start_period: 180s
     networks:
-      - smsly-net
-
+    - smsly-net
   celery:
     build:
       context: ./backend
@@ -148,26 +137,26 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     volumes:
-      - media_volume:/app/media
-      - caddy_config:/caddy-config
-      - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
-      - /opt/smsly-cache:/opt/smsly-cache
-      - backups_data:/app/backups
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - ./install.sh:/app/install.sh:ro
+    - ./:/platform-src:ro
+    - /opt/smsly-cache:/opt/smsly-cache
+    - backups_data:/app/backups
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
-        ]
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit
+        1
       interval: 30s
       timeout: 20s
       retries: 5
       start_period: 60s
     networks:
-      - smsly-net
-
+    - smsly-net
   celery-beat:
     build:
       context: ./backend
@@ -184,24 +173,24 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     volumes:
-      - media_volume:/app/media
-      - caddy_config:/caddy-config
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
     tmpfs:
-      - /tmp
+    - /tmp
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
-        ]
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit
+        1
       interval: 60s
       timeout: 20s
       retries: 5
       start_period: 60s
     networks:
-      - smsly-net
-
+    - smsly-net
   frontend:
     build:
       context: ./frontend
@@ -214,15 +203,14 @@ services:
     env_file: .env
     healthcheck:
       test:
-        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
     networks:
-      - smsly-net
-
-  # Fast worker (Heartbeats, Metrics) - Low latency, high frequency
+    - smsly-net
   celery-fast:
     build:
       context: ./backend
@@ -244,33 +232,31 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     volumes:
-      - media_volume:/app/media
-      - caddy_config:/caddy-config
-      - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
-      - /opt/smsly-cache:/opt/smsly-cache
-      - backups_data:/app/backups
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - ./install.sh:/app/install.sh:ro
+    - ./:/platform-src:ro
+    - /opt/smsly-cache:/opt/smsly-cache
+    - backups_data:/app/backups
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
-        ]
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit
+        1
       interval: 30s
       timeout: 20s
       retries: 5
       start_period: 60s
     networks:
-      - smsly-net
-      - socket-proxy
-
-  # Deploy worker (Builds, Cleanup) - High latency, low frequency
+    - smsly-net
+    - socket-proxy
   celery-deploy:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Queue 'deploy' matches routing in settings.py / celery.py
     command: celery -A config worker -l info --concurrency=32 -Q deploy
     restart: unless-stopped
     env_file: .env
@@ -288,58 +274,53 @@ services:
         condition: service_healthy
       socket-proxy:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     volumes:
-      - media_volume:/app/media
-      - caddy_config:/caddy-config
-      - ./install.sh:/app/install.sh:ro
-      - ./:/platform-src:ro
-      - /opt/smsly-cache:/opt/smsly-cache
-      - backups_data:/app/backups
+    - media_volume:/app/media
+    - caddy_config:/caddy-config
+    - ./install.sh:/app/install.sh:ro
+    - ./:/platform-src:ro
+    - /opt/smsly-cache:/opt/smsly-cache
+    - backups_data:/app/backups
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1",
-        ]
+      - CMD-SHELL
+      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit
+        1
       interval: 30s
       timeout: 20s
       retries: 5
       start_period: 60s
     networks:
-      - smsly-net
-      - socket-proxy
-
+    - smsly-net
+    - socket-proxy
   nginx:
     image: nginx:1.25-alpine
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8090:80" # Security: Bind to localhost only
+    - 127.0.0.1:8090:80
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - static_volume:/app/staticfiles:ro
-      - media_volume:/app/media:ro
+    - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    - static_volume:/app/staticfiles:ro
+    - media_volume:/app/media:ro
     depends_on:
-      - backend
-      - frontend
+    - backend
+    - frontend
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "wget -q -O /dev/null http://127.0.0.1:80/nginx-health || exit 1",
-        ]
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:80/nginx-health || exit 1
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
     networks:
-      - smsly-net
-
-  # Docker Socket Proxy - Restricted access to Docker daemon
+    - smsly-net
   socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
     restart: unless-stopped
     environment:
-      # Only allow specific Docker API calls (least privilege)
       CONTAINERS: 1
       IMAGES: 1
       NETWORKS: 1
@@ -348,80 +329,65 @@ services:
       VERSION: 1
       EVENTS: 1
       BUILD: 1
-      # Required for provisioning/deployments (create/start containers, create networks/volumes, etc.)
       POST: 1
       PUT: 1
       DELETE: 1
       EXEC: 1
-      # Deny dangerous operations
       SERVICES: 0
       SWARM: 0
       NODES: 0
       CONFIGS: 0
       SECRETS: 0
-      COMMIT: 1  # Required for backup service to snapshot container state
+      COMMIT: 1
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Read-only mount
+    - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1",
-        ]
+      - CMD-SHELL
+      - wget -q -O /dev/null http://127.0.0.1:2375/version || exit 1
       interval: 5s
       timeout: 3s
       retries: 5
       start_period: 5s
     networks:
-      - smsly-net
-      - socket-proxy
-
-  # Traefik - Dynamic reverse proxy for deployed containers
-  # Reads Docker labels from deployed containers and routes traffic to them.
-  # Caddy handles SSL and proxies *.cloud.smsly.cloud → Traefik:8081
+    - smsly-net
+    - socket-proxy
   route-fallback:
     image: nginx:1.25-alpine
     restart: unless-stopped
     volumes:
-      - ./infrastructure/route-fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./infrastructure/route-fallback/index.html:/usr/share/nginx/html/index.html:ro
+    - ./infrastructure/route-fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    - ./infrastructure/route-fallback/index.html:/usr/share/nginx/html/index.html:ro
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.route-fallback.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.route-fallback.entrypoints=web"
-      - "traefik.http.routers.route-fallback.priority=1"
-      - "traefik.http.services.route-fallback.loadbalancer.server.port=80"
+    - traefik.enable=true
+    - traefik.http.routers.route-fallback.rule=PathPrefix(`/`)
+    - traefik.http.routers.route-fallback.entrypoints=web
+    - traefik.http.routers.route-fallback.priority=1
+    - traefik.http.services.route-fallback.loadbalancer.server.port=80
     networks:
-      - smsly-net
-
+    - smsly-net
   traefik:
-    image: traefik:v3.6 # v3.6.1+ required for Docker 29 API compatibility
+    image: traefik:v3.6
     restart: unless-stopped
     command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=smsly-net"
-      # Read Docker metadata via restricted socket-proxy
-      - "--providers.docker.endpoint=tcp://socket-proxy:2375"
-      - "--entrypoints.web.address=:80"
-      # Trust X-Forwarded-* headers from Caddy (localhost).
-      # Without this, Traefik overrides X-Forwarded-Proto to 'http'
-      # causing redirect loops in apps that check the proto header.
-      - "--entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8"
-      - "--log.level=WARN"
+    - --providers.docker=true
+    - --providers.docker.exposedbydefault=false
+    - --providers.docker.network=smsly-net
+    - --providers.docker.endpoint=tcp://socket-proxy:2375
+    - --entrypoints.web.address=:80
+    - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --log.level=WARN
     ports:
-      - "127.0.0.1:8081:80" # Deployed apps (Caddy proxies *.cloud.smsly.cloud here)
-      - "127.0.0.1:8082:8080" # Traefik dashboard (optional debug)
+    - 127.0.0.1:8081:80
+    - 127.0.0.1:8082:8080
     depends_on:
       socket-proxy:
         condition: service_healthy
     security_opt:
-      - no-new-privileges:true
+    - no-new-privileges:true
     networks:
-      - smsly-net
-      - socket-proxy
-
-  # FRP Tunnel Relay — exposes local dev servers via *.tunnel.{domain}
+    - smsly-net
+    - socket-proxy
   frps:
     image: snowdreamtech/frps:latest
     restart: unless-stopped
@@ -430,22 +396,44 @@ services:
       FRP_AUTH_TOKEN: ${FRP_AUTH_TOKEN:?FRP_AUTH_TOKEN must be set in .env}
       TUNNEL_DOMAIN: ${TUNNEL_DOMAIN:-tunnel.localhost}
     volumes:
-      - ./infrastructure/frps/frps.toml:/etc/frp/frps.toml:ro
+    - ./infrastructure/frps/frps.toml:/etc/frp/frps.toml:ro
     ports:
-      - "7000:7000"   # Client control connections
-      - "127.0.0.1:7080:7080"  # vhost HTTP (Caddy → here)
-      - "127.0.0.1:7500:7500"  # Admin dashboard (internal)
-    command: ["-c", "/etc/frp/frps.toml"]
-    entrypoint: ["frps"]
+    - 7000:7000
+    - 127.0.0.1:7080:7080
+    - 127.0.0.1:7500:7500
+    command:
+    - -c
+    - /etc/frp/frps.toml
+    entrypoint:
+    - frps
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 7000 || exit 1"]
+      test:
+      - CMD-SHELL
+      - nc -z 127.0.0.1 7000 || exit 1
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
     networks:
-      - smsly-net
-
+    - smsly-net
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: smsly_user
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+    - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+    - smsly-net
 networks:
   smsly-net:
     external: true
@@ -453,17 +441,17 @@ networks:
   socket-proxy:
     driver: bridge
     internal: true
-
 volumes:
-  postgres_data:
-  redis_data:
-  registry_data:
-  static_volume:
-  media_volume:
+  postgres_data: null
+  redis_data: null
+  registry_data: null
+  static_volume: null
+  media_volume: null
   caddy_config:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: /opt/smsly-hosting/caddy-config
-  backups_data:
+  backups_data: null
+  rabbitmq_data: null
