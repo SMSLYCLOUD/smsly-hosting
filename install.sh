@@ -569,6 +569,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
     postgres_password="$(env_get_value "$env_file" "POSTGRES_PASSWORD")"
     current_domain="$(env_get_value "$env_file" "DOMAIN")"
     current_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
@@ -602,17 +603,23 @@ ensure_env_runtime_defaults() {
         fi
 
         env_ensure_var "$env_file" "REDIS_URL" "$expected_redis_url" "Redis connection string"
-        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_redis_url" "Celery broker (Redis with auth)"
 
         if [[ "$current_redis_url" =~ ^redis://:.*@redis:6379/0$ ]] && [ "$current_redis_url" != "$expected_redis_url" ]; then
             echo -e "${BLUE}  -> Syncing REDIS_URL with REDIS_PASSWORD${NC}"
             env_set_value "$env_file" "REDIS_URL" "$expected_redis_url"
             echo -e "${GREEN}  OK REDIS_URL synced${NC}"
         fi
+    fi
 
-        if [[ "$current_celery_broker_url" =~ ^redis://:.*@redis:6379/0$ ]] && [ "$current_celery_broker_url" != "$expected_redis_url" ]; then
-            echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with REDIS_PASSWORD${NC}"
-            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_redis_url"
+    if [ -n "$rabbitmq_password" ]; then
+        expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+        current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
+
+        env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
+
+        if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
+            echo -e "${BLUE}  -> Syncing CELERY_BROKER_URL with RABBITMQ_PASSWORD${NC}"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
             echo -e "${GREEN}  OK CELERY_BROKER_URL synced${NC}"
         fi
     fi
@@ -652,6 +659,7 @@ validate_env_file() {
         "DATABASE_URL"
         "REDIS_PASSWORD"
         "REDIS_URL"
+        "RABBITMQ_PASSWORD"
         "CELERY_BROKER_URL"
         "GATEWAY_SECRET"
         "GITHUB_WEBHOOK_SECRET"
@@ -701,8 +709,8 @@ validate_env_file() {
     fi
 
     celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
-    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^redis:// ]]; then
-        invalid_vars+=("CELERY_BROKER_URL (must start with redis://)")
+    if [ -n "$celery_broker_url" ] && [[ ! "$celery_broker_url" =~ ^amqp:// ]]; then
+        invalid_vars+=("CELERY_BROKER_URL (must start with amqp://)")
     fi
 
     var_value="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
@@ -2600,6 +2608,7 @@ secret_key = ''.join(secrets.choice(chars) for _ in range(50))
 fernet_key = Fernet.generate_key().decode()
 pg_pass = secrets.token_hex(16)
 redis_pass = secrets.token_hex(16)
+rabbitmq_pass = secrets.token_hex(16)
 gateway_secret = secrets.token_hex(32)
 webhook_secret = secrets.token_hex(32)
 autoscaler_token = secrets.token_hex(32)
@@ -2612,6 +2621,7 @@ print(f'SECRET_KEY={secret_key}')
 print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
 print(f'POSTGRES_PASSWORD={pg_pass}')
 print(f'REDIS_PASSWORD={redis_pass}')
+print(f'RABBITMQ_PASSWORD={rabbitmq_pass}')
 print(f'GATEWAY_SECRET={gateway_secret}')
 print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
 print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
@@ -2643,8 +2653,9 @@ POSTGRES_DB=smsly_hosting
 DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgbouncer:5432/smsly_hosting
 
 REDIS_PASSWORD=$REDIS_PASSWORD
+RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
-CELERY_BROKER_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
 DOMAIN=$DOMAIN
 ACME_EMAIL=${ACME_EMAIL:-}

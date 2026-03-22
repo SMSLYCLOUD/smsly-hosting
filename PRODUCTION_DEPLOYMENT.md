@@ -79,9 +79,9 @@ CORS_ALLOWED_ORIGINS=https://cloud.smsly.cloud
 # Database
 DATABASE_URL=postgres://smsly_admin:<POSTGRES_PASSWORD>@db:5432/smsly_hosting
 
-# Redis / Celery (password required in production)
+# Redis / Celery Broker (passwords required in production)
 REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
-CELERY_BROKER_URL=redis://:<REDIS_PASSWORD>@redis:6379/0
+CELERY_BROKER_URL=amqp://smsly_user:<RABBITMQ_PASSWORD>@rabbitmq:5672//
 
 # Production mode
 DEBUG=False
