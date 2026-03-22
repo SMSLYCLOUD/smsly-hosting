@@ -23,6 +23,7 @@ class AddonSerializer(serializers.ModelSerializer):
             'addon_type',
             'status',
             'server',
+            'public_domain',
             'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
 
@@ -61,6 +62,19 @@ class AddonViewSet(viewsets.ModelViewSet):
         # provisioner)
         from .tasks import provision_addon_task
         provision_addon_task.delay(addon_id=str(addon.id))
+
+    def perform_update(self, serializer):
+        # Allow updating properties like public_domain
+        service = serializer.instance.service
+        if service and service.owner and service.owner != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Access denied to this service.")
+
+        addon = serializer.save()
+        # If public_domain changed, re-provision to update proxy labels
+        if 'public_domain' in serializer.validated_data:
+            from .tasks import provision_addon_task
+            provision_addon_task.delay(str(addon.id))
 
     @action(detail=True, methods=['post'])
     def deprovision(self, request, pk=None):
