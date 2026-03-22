@@ -99,8 +99,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # Sleep slightly before starting the blocking read so the WS can settle
         await asyncio.sleep(0.1)
         self._read_task = asyncio.create_task(self._read_output())
+        self._ping_task = asyncio.create_task(self._ping_loop())
 
     async def disconnect(self, close_code):
+        if hasattr(self, '_ping_task') and self._ping_task:
+            self._ping_task.cancel()
         if self._read_task:
             self._read_task.cancel()
             try:
@@ -151,6 +154,38 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             except Exception:
                 pass
 
+    async def _ping_loop(self):
+        """Background task to send regular keepalive pings over the WebSocket."""
+        import time
+        timeout_seconds = 420.0  # 7 minutes total idle timeout
+        try:
+            while True:
+                await asyncio.sleep(15.0)
+                if not hasattr(self, '_last_activity'):
+                    continue
+
+                # Enforce the manual idle timeout
+                if time.time() - self._last_activity > timeout_seconds:
+                    logger.info("Terminal idle timeout reached for deployment %s", self.deployment_id)
+                    try:
+                        await self.send(text_data=json.dumps({
+                            'message': '\r\n\x1b[31m[idle timeout reached]\x1b[0m\r\n'
+                        }))
+                        await self.close(code=4000)
+                    except Exception:
+                        pass
+                    break
+
+                # Send an application-level keepalive ping
+                try:
+                    await self.send(text_data=json.dumps({'message': ''}))
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug("Terminal ping loop error for %s: %s", self.deployment_id, e)
+
     async def _read_output(self):
         """Background task: read from exec socket and send to WebSocket."""
         loop = asyncio.get_event_loop()
@@ -159,8 +194,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # Initialize instance level last activity if not already present
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
-
-        timeout_seconds = 420.0  # 7 minutes total idle timeout
 
         try:
             while True:
@@ -180,21 +213,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if data == b'':
                     # If we got exactly b'' from a socket timeout, just sleep briefly and retry
                     # to prevent busy looping but keep connection alive.
-                    # Send a ping-like keepalive message to prevent the proxy from dropping the idle WS
-                    if time.time() - self._last_activity > timeout_seconds:
-                        logger.info("Terminal idle timeout reached for deployment %s", self.deployment_id)
-                        try:
-                            await self.send(text_data=json.dumps({
-                                'message': '\r\n\x1b[31m[idle timeout reached]\x1b[0m\r\n'
-                            }))
-                        except Exception:
-                            pass
-                        break
-
-                    try:
-                        await self.send(text_data=json.dumps({'message': ''}))
-                    except Exception:
-                        pass
                     await asyncio.sleep(0.5)
                     continue
 
@@ -316,11 +334,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             try:
                 # The underlying python socket
                 if hasattr(self.exec_socket, '_sock'):
-                    # A short timeout ensures _blocking_read wakes up frequently
-                    # to send keepalive pings over the WebSocket connection,
-                    # preventing proxy disconnects, while we handle overall
-                    # idle timeout logic elsewhere if needed.
-                    self.exec_socket._sock.settimeout(15.0)
+                    # Using a 300s timeout as standard for docker-py to prevent
+                    # the underlying urllib3 connection from breaking prematurely
+                    # which can cause ChunkedEncodingError on active sessions.
+                    self.exec_socket._sock.settimeout(300.0)
             except Exception as e:
                 logger.debug("Could not set timeout on exec_socket: %s", e)
 

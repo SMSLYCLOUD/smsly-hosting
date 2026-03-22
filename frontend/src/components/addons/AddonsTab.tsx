@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check } from 'lucide-react';
+import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon } from '@/lib/api';
 
@@ -143,6 +143,19 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             fetchAddons();
         } catch (e) {
             console.error('Failed to deprovision:', e);
+        }
+    };
+
+    const handleUpdatePublicDomain = async (addonId: string, currentDomain: string | null | undefined) => {
+        const domain = window.prompt("Enter public domain for this addon (leave empty to remove):", currentDomain || "");
+        if (domain === null) return; // Cancelled
+
+        try {
+            await addonsApi.update(addonId, { public_domain: domain.trim() || null });
+            fetchAddons();
+        } catch (e) {
+            console.error('Failed to update public domain:', e);
+            alert("Failed to update public domain");
         }
     };
 
@@ -332,6 +345,12 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 className="flex items-center gap-2 px-3 py-2 bg-muted text-muted-foreground rounded-lg text-xs font-medium hover:bg-muted/80 transition-colors"
                                             >
                                                 <RefreshCw size={12} /> Refresh
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
+                                                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${addon.public_domain ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                                            >
+                                                <Globe size={12} /> {addon.public_domain ? addon.public_domain : 'Expose Publicly'}
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); handleDeprovision(addon.id); }}
