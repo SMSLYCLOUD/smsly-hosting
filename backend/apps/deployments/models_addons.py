@@ -104,6 +104,10 @@ class Addon(TimeStampedModel):
     coolify_uuid = models.CharField(max_length=64, blank=True, null=True,
                                     help_text="UUID of the database in Coolify")
 
+    # Public Routing
+    public_domain = models.CharField(max_length=255, blank=True, null=True, unique=True,
+                                     help_text="Public domain assigned to expose this addon externally via proxy")
+
     @property
     def parsed_credentials(self) -> dict:
         """Parse connection_url into individual credential components."""
