@@ -566,7 +566,7 @@ export default function AutoscalerPage() {
                             </div>
                             <Slider
                               value={[localConfig.total_system_mb]}
-                              min={4096} max={32768} step={512}
+                              min={1024} max={131072} step={512}
                               onValueChange={([v]) => setLocalConfig({...localConfig, total_system_mb: v})}
                             />
                           </div>
@@ -577,7 +577,7 @@ export default function AutoscalerPage() {
                             </div>
                             <Slider
                               value={[localConfig.infra_reserve_mb]}
-                              min={512} max={8192} step={128}
+                              min={512} max={32768} step={128}
                               onValueChange={([v]) => setLocalConfig({...localConfig, infra_reserve_mb: v})}
                             />
                           </div>

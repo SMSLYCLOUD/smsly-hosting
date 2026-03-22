@@ -68,8 +68,8 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading resources...</div>;
 
-    const cpuPresets = [0.25, 0.5, 1, 2, 4];
-    const memPresets = [256, 512, 1024, 2048, 4096];
+    const cpuPresets = [0.25, 0.5, 1, 2, 4, 8, 16];
+    const memPresets = [256, 512, 1024, 2048, 4096, 8192, 16384];
     const monthlyEstimate = (cpu * 0.04 + (memory / 1024) * 0.02) * 730;
 
     return (
@@ -106,7 +106,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                             ))}
                         </div>
                         <input
-                            type="range" min="0.25" max="8" step="0.25"
+                            type="range" min="0.25" max="64" step="0.25"
                             value={cpu} onChange={e => setCpu(parseFloat(e.target.value))}
                             className="w-full mt-3 accent-blue-500"
                         />
@@ -133,7 +133,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                             ))}
                         </div>
                         <input
-                            type="range" min="128" max="8192" step="128"
+                            type="range" min="128" max="131072" step="128"
                             value={memory} onChange={e => setMemory(parseInt(e.target.value))}
                             className="w-full mt-3 accent-purple-500"
                         />
