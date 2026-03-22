@@ -128,6 +128,20 @@ class AddonProvisioner:
             if addon not in self.ENV_KEY_MAP and 'env_url' in addon_cfg:
                 self.ENV_KEY_MAP[addon] = addon_cfg['env_url']
 
+    def _append_traefik_labels(self, cmd_list: list, router_name: str, domain: str, target_port: int):
+        """Append standard Traefik labels to expose an addon container publicly."""
+        import os
+        enable_tls = (str(os.getenv("TRAEFIK_ENABLE_WEBSECURE", "false")).strip().lower() in {"1", "true", "yes", "on"})
+        cmd_list.extend(['-l', 'traefik.enable=true'])
+        cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.rule=Host(`{domain}`)'])
+        cmd_list.extend(['-l', f'traefik.http.services.{router_name}.loadbalancer.server.port={target_port}'])
+        cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.priority=100'])
+        if enable_tls:
+            cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.entrypoints=web,websecure'])
+            cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.tls.certresolver=letsencrypt'])
+        else:
+            cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.entrypoints=web'])
+
     def _container_status(self, container_name: str) -> Tuple[Optional[str], bool]:
         """
         Return (container_id, is_running) for a given docker container name.
@@ -235,6 +249,7 @@ class AddonProvisioner:
 
         if not image:
             raise ValueError(f"Unknown addon type: {addon_type}")
+
 
         logger.info(f"Provisioning {addon_type} addon for service {service_name}")
 
@@ -371,6 +386,8 @@ class AddonProvisioner:
 
             raise RuntimeError(f"Addon container exists but connection_url is missing: {container_name}")
 
+        public_domain = getattr(addon, 'public_domain', None)
+
         # If the URL exists but container is missing, re-create the container using the same credentials.
         # This avoids password drift when persistent volumes are re-used.
         if existing_url:
@@ -386,11 +403,11 @@ class AddonProvisioner:
             if generic_config:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
-                container_id, _ = self._provision_generic(addon_type, container_name, password, port, hostname, generic_config, username=username, db_name=db_name)
+                container_id, _ = self._provision_generic(addon_type, container_name, password, port, hostname, generic_config, username=username, db_name=db_name, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'MINIO':
-                container_id, _ = self._provision_minio(container_name, password, port, hostname, username=username)
+                container_id, _ = self._provision_minio(container_name, password, port, hostname, username=username, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'POSTGRES':
@@ -401,31 +418,32 @@ class AddonProvisioner:
                     hostname,
                     db_user=username or None,
                     db_name=db_name or None,
+                    public_domain=public_domain,
                 )
                 return container_id, existing_url
 
             if addon_type == 'REDIS':
-                container_id, _ = self._provision_redis(container_name, password, port, hostname)
+                container_id, _ = self._provision_redis(container_name, password, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'MYSQL':
-                container_id, _ = self._provision_mysql(container_name, password, port, hostname)
+                container_id, _ = self._provision_mysql(container_name, password, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'MONGODB':
-                container_id, _ = self._provision_mongodb(container_name, password, port, hostname)
+                container_id, _ = self._provision_mongodb(container_name, password, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'QDRANT':
-                container_id, _ = self._provision_qdrant(container_name, port, hostname)
+                container_id, _ = self._provision_qdrant(container_name, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'ELASTICSEARCH':
-                container_id, _ = self._provision_elasticsearch(container_name, port, hostname)
+                container_id, _ = self._provision_elasticsearch(container_name, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             if addon_type == 'RABBITMQ':
-                container_id, _ = self._provision_rabbitmq(container_name, password, port, hostname)
+                container_id, _ = self._provision_rabbitmq(container_name, password, port, hostname, public_domain=public_domain)
                 return container_id, existing_url
 
             raise ValueError(f"Unsupported addon type: {addon_type}")
@@ -440,25 +458,25 @@ class AddonProvisioner:
         password = secrets.token_urlsafe(24) if is_passworded else ''
 
         if generic_config:
-            container_id, connection_url = self._provision_generic(addon_type, container_name, password, port, alias_name, generic_config)
+            container_id, connection_url = self._provision_generic(addon_type, container_name, password, port, alias_name, generic_config, public_domain=public_domain)
         elif addon_type == 'MINIO':
             # Minio needs a username too, we can auto-generate one or use a default like 'admin'
             username = secrets.token_hex(8)
-            container_id, connection_url = self._provision_minio(container_name, password, port, alias_name, username=username)
+            container_id, connection_url = self._provision_minio(container_name, password, port, alias_name, username=username, public_domain=public_domain)
         elif addon_type == 'POSTGRES':
-            container_id, connection_url = self._provision_postgres(container_name, password, port, alias_name)
+            container_id, connection_url = self._provision_postgres(container_name, password, port, alias_name, public_domain=public_domain)
         elif addon_type == 'REDIS':
-            container_id, connection_url = self._provision_redis(container_name, password, port, alias_name)
+            container_id, connection_url = self._provision_redis(container_name, password, port, alias_name, public_domain=public_domain)
         elif addon_type == 'MYSQL':
-            container_id, connection_url = self._provision_mysql(container_name, password, port, alias_name)
+            container_id, connection_url = self._provision_mysql(container_name, password, port, alias_name, public_domain=public_domain)
         elif addon_type == 'MONGODB':
-            container_id, connection_url = self._provision_mongodb(container_name, password, port, alias_name)
+            container_id, connection_url = self._provision_mongodb(container_name, password, port, alias_name, public_domain=public_domain)
         elif addon_type == 'QDRANT':
-            container_id, connection_url = self._provision_qdrant(container_name, port, alias_name)
+            container_id, connection_url = self._provision_qdrant(container_name, port, alias_name, public_domain=public_domain)
         elif addon_type == 'ELASTICSEARCH':
-            container_id, connection_url = self._provision_elasticsearch(container_name, port, alias_name)
+            container_id, connection_url = self._provision_elasticsearch(container_name, port, alias_name, public_domain=public_domain)
         elif addon_type == 'RABBITMQ':
-            container_id, connection_url = self._provision_rabbitmq(container_name, password, port, alias_name)
+            container_id, connection_url = self._provision_rabbitmq(container_name, password, port, alias_name, public_domain=public_domain)
         else:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
@@ -467,7 +485,7 @@ class AddonProvisioner:
 
     def _provision_rabbitmq(self, container_name: str,
                             password: str, port: int,
-                            alias_name: str = '') -> Tuple[str, str]:
+                            alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a RabbitMQ container with management plugin enabled."""
         user = "appuser"
         vhost = "/"
@@ -481,6 +499,9 @@ class AddonProvisioner:
             '-e', f'RABBITMQ_DEFAULT_VHOST={vhost}',
             '-v', f'{container_name}-data:/var/lib/rabbitmq',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace('.', '-').replace('_', '-'), public_domain, 15672) # Expose Management port, not AMQP
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['RABBITMQ'])
@@ -496,7 +517,7 @@ class AddonProvisioner:
 
     def _provision_minio(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', username: str = 'admin') -> Tuple[str, str]:
+                         alias_name: str = '', username: str = 'admin', public_domain: str = None) -> Tuple[str, str]:
         """Provision a MinIO container."""
         cmd = [
             'docker', 'run', '-d',
@@ -507,6 +528,9 @@ class AddonProvisioner:
             '-e', f'MINIO_ROOT_PASSWORD={password}',
             '-v', f'{container_name}-data:/data',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, 9001) # Expose Web Console, not API
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.extend([
@@ -552,7 +576,7 @@ class AddonProvisioner:
 
     def _provision_generic(self, addon_type: str, container_name: str,
                            password: str, port: int, alias_name: str, config: dict,
-                           username: str = '', db_name: str = '') -> Tuple[str, str]:
+                           username: str = '', db_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a generic addon from GENERIC_ADDONS_CONFIG."""
         cmd = [
             'docker', 'run', '-d',
@@ -561,6 +585,9 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             '-v', f'{container_name}-data:/data'
         ]
+
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
@@ -644,6 +671,10 @@ class AddonProvisioner:
             '-e', f'POSTGRES_DB={db_name}',
             '-v', f'{container_name}-data:/var/lib/postgresql/data',
         ]
+
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['POSTGRES'])
@@ -681,7 +712,7 @@ class AddonProvisioner:
 
     def _provision_redis(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '') -> Tuple[str, str]:
+                         alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a Redis container with authentication."""
         cmd = [
             'docker', 'run', '-d',
@@ -690,6 +721,9 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             '-v', f'{container_name}-data:/data',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.extend([
@@ -712,7 +746,7 @@ class AddonProvisioner:
 
     def _provision_mysql(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '') -> Tuple[str, str]:
+                         alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a MySQL container."""
         db_name = "app_db"
         db_user = "app_user"
@@ -728,6 +762,9 @@ class AddonProvisioner:
             '-e', f'MYSQL_PASSWORD={password}',
             '-v', f'{container_name}-data:/var/lib/mysql',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['MYSQL'])
@@ -749,7 +786,7 @@ class AddonProvisioner:
 
     def _provision_mongodb(self, container_name: str,
                            password: str, port: int,
-                           alias_name: str = '') -> Tuple[str, str]:
+                           alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a MongoDB container."""
         db_user = "app_user"
         db_name = "app_db"
@@ -763,6 +800,9 @@ class AddonProvisioner:
             '-e', f'MONGO_INITDB_ROOT_PASSWORD={password}',
             '-v', f'{container_name}-data:/data/db',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['MONGODB'])
@@ -781,7 +821,7 @@ class AddonProvisioner:
 
     def _provision_qdrant(self, container_name: str,
                           port: int,
-                          alias_name: str = '') -> Tuple[str, str]:
+                          alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a Qdrant vector database container."""
         cmd = [
             'docker', 'run', '-d',
@@ -791,6 +831,9 @@ class AddonProvisioner:
             '-e', 'QDRANT__SERVICE__GRPC_PORT=6334',
             '-v', f'{container_name}-data:/qdrant/storage',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['QDRANT'])
@@ -810,7 +853,7 @@ class AddonProvisioner:
 
     def _provision_elasticsearch(self, container_name: str,
                                  port: int,
-                                 alias_name: str = '') -> Tuple[str, str]:
+                                 alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
         """Provision a single-node Elasticsearch container."""
         cmd = [
             'docker', 'run', '-d',
@@ -822,6 +865,9 @@ class AddonProvisioner:
             '-e', 'ES_JAVA_OPTS=-Xms256m -Xmx256m',
             '-v', f'{container_name}-data:/usr/share/elasticsearch/data',
         ]
+        if public_domain:
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
         cmd.append(self.ADDON_IMAGES['ELASTICSEARCH'])
