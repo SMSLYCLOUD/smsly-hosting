@@ -82,7 +82,7 @@ class ClusterViewSet(viewsets.ReadOnlyModelViewSet):
         from .tasks_election import force_election_task
 
         mesh_id = str(cluster.mesh.id) if cluster.mesh else None
-        force_election_task.delay(mesh_id)
+        force_election_task.delay(mesh_id=mesh_id)
 
         return Response({
             "status": "Election started",

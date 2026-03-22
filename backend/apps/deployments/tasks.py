@@ -1263,8 +1263,8 @@ def _deploy_container(deployment, provider, image_name):
             )
 
             _post_deploy_monitor.delay(
-                str(deployment.id), str(provider.id),
-                container_name, image_name,
+                deployment_id=str(deployment.id), provider_id=str(provider.id),
+                container_id=container_name, image_name=image_name,
             )
             return
 
@@ -1371,10 +1371,10 @@ def _deploy_container(deployment, provider, image_name):
 
         # Post-deploy runtime monitor (watches for crashes)
         _post_deploy_monitor.delay(
-            str(deployment.id),
-            str(provider.id),
-            resource.resource_id,
-            image_name,
+            deployment_id=str(deployment.id),
+            provider_id=str(provider.id),
+            container_id=resource.resource_id,
+            image_name=image_name,
         )
 
     except Exception as e:
@@ -1586,8 +1586,8 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     try:
         from apps.deployments.tasks_alerts import alert_user_task
         alert_user_task.delay(
-            str(deployment.id),
-            "Runtime crash detected during post-deploy monitoring",
+            deployment_id=str(deployment.id),
+            error_message="Runtime crash detected during post-deploy monitoring",
         )
     except Exception as alert_err:  # pylint: disable=broad-exception-caught
         logger.warning("Failed to queue runtime crash alert: %s", alert_err)
@@ -1656,7 +1656,7 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
         )
         provider = CloudProvider.objects.get(id=provider_id)
         smart_deploy_task.delay(
-            str(new_deployment.id), str(provider.id), skip_review=True
+            deployment_id=str(new_deployment.id), provider_id=str(provider.id), skip_review=True
         )
         return
 
@@ -1773,7 +1773,7 @@ def _handle_failure(task, deployment, error_msg, reason):
 
             try:
                 from apps.deployments.tasks_alerts import alert_user_task
-                alert_user_task.delay(str(deployment.id), f"{reason}: {error_msg}")
+                alert_user_task.delay(deployment_id=str(deployment.id), error_message=f"{reason}: {error_msg}")
             except Exception as alert_err:  # pylint: disable=broad-exception-caught
                 logger.warning("Failed to queue deployment failure alert: %s", alert_err)
 
@@ -1794,7 +1794,7 @@ def _handle_failure(task, deployment, error_msg, reason):
             # Step 2: AI diagnosis (async)
             try:
                 from apps.deployments.tasks_ai import analyze_failure_task
-                analyze_failure_task.delay(str(deployment.id))
+                analyze_failure_task.delay(deployment_id=str(deployment.id))
             except ImportError:
                 pass  # Ignore if module cannot be imported
             except Exception as e: # pylint: disable=broad-exception-caught
@@ -2152,7 +2152,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 commit_hash='template',
                 commit_message=f"Auto-companion Template: {c_template_id}"
             )
-            smart_deploy_task.delay(str(c_deployment.id), str(provider.id))
+            smart_deploy_task.delay(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
 
         # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS on the router before deploying it
         if companion_service_ids:
@@ -2177,7 +2177,7 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             commit_hash='template',
             commit_message=f"Template: {template_id}"
         )
-        smart_deploy_task.delay(str(deployment.id), str(provider.id))
+        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
 
         # Post-deploy hook: if prisma migrate requested, annotate deployment for follow-up
         if any(ev.key == "RUN_PRISMA_MIGRATE" and ev.value.lower() in {"1", "true", "yes"} for ev in service.env_vars.all()):
