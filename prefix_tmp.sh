@@ -372,7 +372,16 @@ validate_env_file() {
     for var_name in "${required_vars[@]}"; do
         var_value="$(env_get_value "$env_file" "$var_name")"
         if [ -z "$var_value" ]; then
-            missing_vars+=("$var_name")
+            if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
+                local new_rabbitmq_pass
+                new_rabbitmq_pass=$(generate_password 32)
+                echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
+                echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
+                # Update celery broker URL immediately to use this new password
+                env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+            else
+                missing_vars+=("$var_name")
+            fi
         fi
     done
 
