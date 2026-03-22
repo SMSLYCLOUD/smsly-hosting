@@ -130,6 +130,21 @@ class Addon(TimeStampedModel):
         if parsed.path and parsed.path != '/':
             result[f'{slug}_DATABASE'] = parsed.path.lstrip('/')
 
+        # Check if generic config has an implicit username not in the URL (like admin or root)
+        try:
+            from services.addon_provisioner import AddonProvisioner
+            generic_config = AddonProvisioner.GENERIC_ADDONS_CONFIG.get(self.addon_type)
+            if generic_config and generic_config.get('auth'):
+                # Many generic configs set the password but default the user to 'admin' internally
+                # or don't put it in the URL if user_env is absent.
+                if not parsed.username:
+                    if self.addon_type in ('GRAFANA', 'N8N', 'KEYCLOAK', 'INFLUXDB', 'ACTIVEMQ'):
+                        result[f'{slug}_USER'] = 'admin'
+                    elif self.addon_type in ('SURREALDB', 'ARANGODB'):
+                        result[f'{slug}_USER'] = 'root'
+        except Exception:
+            pass
+
         # Addon specific custom mappings
         if self.addon_type == self.Type.MINIO:
             if parsed.hostname and parsed.port:
