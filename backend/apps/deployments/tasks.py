@@ -2195,6 +2195,17 @@ def provision_addon_task(self, addon_id: str):
         addon.coolify_uuid = cid
         addon.save()
 
+        # If public domain is assigned, regenerate Caddy configuration
+        if addon.public_domain:
+            try:
+                from .models import PlatformConfig
+                from services.caddy_manager import generate_caddyfile, apply_caddyfile
+                cfg = PlatformConfig.load()
+                caddy_content = generate_caddyfile(cfg)
+                apply_caddyfile(caddy_content)
+            except Exception as ce:
+                logger.warning("Failed to sync Caddy configuration for addon %s: %s", addon.id, ce)
+
         # Auto-inject addon credentials as env vars
         creds = addon.parsed_credentials
         for key, value in creds.items():
