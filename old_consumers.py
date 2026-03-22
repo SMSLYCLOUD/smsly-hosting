@@ -131,10 +131,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not self.exec_socket:
             return
 
-        # Update activity timestamp on input
-        import time
-        self._last_activity = time.time()
-
         # Forward raw input to the container's exec stdin
         try:
             # We use character-by-character forwarding for true interactive terminal support.
@@ -154,14 +150,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     async def _read_output(self):
         """Background task: read from exec socket and send to WebSocket."""
         loop = asyncio.get_event_loop()
-        import time
-
-        # Initialize instance level last activity if not already present
-        if not hasattr(self, '_last_activity'):
-            self._last_activity = time.time()
-
-        timeout_seconds = 420.0  # 7 minutes total idle timeout
-
         try:
             while True:
                 data = await loop.run_in_executor(None, self._blocking_read)
@@ -173,7 +161,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         await self.send(text_data=json.dumps({
                             'message': '\r\n\x1b[31m[session ended]\x1b[0m\r\n'
                         }))
-                        await self.close(code=4000)
                     except Exception:
                         pass
                     break
@@ -182,17 +169,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     # If we got exactly b'' from a socket timeout, just sleep briefly and retry
                     # to prevent busy looping but keep connection alive.
                     # Send a ping-like keepalive message to prevent the proxy from dropping the idle WS
-                    if time.time() - self._last_activity > timeout_seconds:
-                        logger.info("Terminal idle timeout reached for deployment %s", self.deployment_id)
-                        try:
-                            await self.send(text_data=json.dumps({
-                                'message': '\r\n\x1b[31m[idle timeout reached]\x1b[0m\r\n'
-                            }))
-                            await self.close(code=4000)
-                        except Exception:
-                            pass
-                        break
-
                     try:
                         await self.send(text_data=json.dumps({'message': ''}))
                     except Exception:
@@ -200,7 +176,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     await asyncio.sleep(0.5)
                     continue
 
-                self._last_activity = time.time()
                 text = data.decode('utf-8', errors='replace')
                 await self.send(text_data=json.dumps({'message': text}))
         except asyncio.CancelledError:
@@ -234,7 +209,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return b''  # Signal that it was just a timeout, not a disconnect
         # Catch ChunkedEncodingError which happens when the connection is prematurely closed
         except requests.exceptions.ChunkedEncodingError:
-            return b''  # Prevent Docker-py urllib3 ChunkedEncodingError from dropping the session on timeout resets
+            return None
         except Exception as e:
             # Catch urllib3 ReadTimeoutError via string matching to avoid ModuleNotFoundError
             if e.__class__.__name__ == 'ReadTimeoutError':
@@ -244,7 +219,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return b''
             # 'Connection broken' might happen if the proxy kills it
             if 'connection broken' in str(e).lower():
-                return b''  # Also treat broken HTTP chunks as idle retries rather than full aborts
+                return None
             logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
             return None
 
@@ -318,7 +293,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             try:
                 # The underlying python socket
                 if hasattr(self.exec_socket, '_sock'):
-                    self.exec_socket._sock.settimeout(15.0)
+                    self.exec_socket._sock.settimeout(300.0)
             except Exception as e:
                 logger.debug("Could not set timeout on exec_socket: %s", e)
 
