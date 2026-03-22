@@ -68,12 +68,12 @@ class AddonProvisioner:
 
     GENERIC_ADDONS_CONFIG = {
         'MARIADB': {"image": "mariadb:10.11", "port": 3306, "env_url": "MARIADB_URL", "auth": True, "user_env": "MARIADB_USER", "pass_env": "MARIADB_PASSWORD", "db_env": "MARIADB_DATABASE", "root_pass_env": "MARIADB_ROOT_PASSWORD"},
-        'COCKROACHDB': {"image": "cockroachdb/cockroach:v23.1.10", "port": 26257, "env_url": "COCKROACHDB_URL", "command": ["start-single-node", "--insecure"], "auth": False},
+        'COCKROACHDB': {"image": "cockroachdb/cockroach:v23.1.10", "port": 26257, "dashboard_port": 8080, "env_url": "COCKROACHDB_URL", "command": ["start-single-node", "--insecure"], "auth": False},
         'TIMESCALEDB': {"image": "timescale/timescaledb:latest-pg15", "port": 5432, "env_url": "DATABASE_URL", "auth": True, "user_env": "POSTGRES_USER", "pass_env": "POSTGRES_PASSWORD", "db_env": "POSTGRES_DB"},
         'PERCONA': {"image": "percona:8.0", "port": 3306, "env_url": "MYSQL_URL", "auth": True, "user_env": "MYSQL_USER", "pass_env": "MYSQL_PASSWORD", "db_env": "MYSQL_DATABASE", "root_pass_env": "MYSQL_ROOT_PASSWORD"},
-        'VITESS': {"image": "vitess/lite:latest", "port": 15306, "env_url": "VITESS_URL", "auth": False},
+        'VITESS': {"image": "vitess/lite:latest", "port": 15306, "dashboard_port": 15000, "env_url": "VITESS_URL", "auth": False},
         'COUCHDB': {"image": "couchdb:3.3.3", "port": 5984, "env_url": "COUCHDB_URL", "auth": True, "user_env": "COUCHDB_USER", "pass_env": "COUCHDB_PASSWORD"},
-        'RETHINKDB': {"image": "rethinkdb:2.4", "port": 28015, "env_url": "RETHINKDB_URL", "auth": False},
+        'RETHINKDB': {"image": "rethinkdb:2.4", "port": 28015, "dashboard_port": 8080, "env_url": "RETHINKDB_URL", "auth": False},
         'ARANGODB': {"image": "arangodb:3.11", "port": 8529, "env_url": "ARANGODB_URL", "auth": True, "root_pass_env": "ARANGO_ROOT_PASSWORD"},
         'FERRETDB': {"image": "ghcr.io/ferretdb/ferretdb:latest", "port": 27017, "env_url": "MONGODB_URI", "auth": False},
         'SURREALDB': {"image": "surrealdb/surrealdb:latest", "port": 8000, "env_url": "SURREALDB_URL", "command": ["start", "--user", "root", "--pass", "{password}"], "auth": True},
