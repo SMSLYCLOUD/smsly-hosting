@@ -85,7 +85,7 @@ class AddonProvisioner:
         'CLICKHOUSE': {"image": "clickhouse/clickhouse-server:23.8", "port": 8123, "env_url": "CLICKHOUSE_URL", "auth": True, "user_env": "CLICKHOUSE_USER", "pass_env": "CLICKHOUSE_PASSWORD"},
         'CASSANDRA': {"image": "cassandra:4.1", "port": 9042, "env_url": "CASSANDRA_URL", "auth": False},
         'SCYLLADB': {"image": "scylladb/scylla:5.2.0", "port": 9042, "env_url": "SCYLLADB_URL", "auth": False},
-        'NEO4J': {"image": "neo4j:5.12.0", "port": 7687, "env_url": "NEO4J_URL", "auth": True, "env": {"NEO4J_AUTH": "neo4j/{password}"}},
+        'NEO4J': {"image": "neo4j:5.12.0", "port": 7687, "dashboard_port": 7474, "env_url": "NEO4J_URL", "auth": True, "env": {"NEO4J_AUTH": "neo4j/{password}"}},
         'DGRAPH': {"image": "dgraph/standalone:v23.0.0", "port": 8080, "env_url": "DGRAPH_URL", "auth": False},
         'WEAVIATE': {"image": "semitechnologies/weaviate:1.21.2", "port": 8080, "env_url": "WEAVIATE_URL", "auth": False, "env": {"AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true", "PERSISTENCE_DATA_PATH": "/var/lib/weaviate"}},
         'MILVUS': {"image": "milvusdb/milvus:v2.3.1", "port": 19530, "env_url": "MILVUS_URL", "auth": False, "command": ["milvus", "run", "standalone"]},
@@ -98,7 +98,7 @@ class AddonProvisioner:
         'NATS': {"image": "nats:2.9.22-alpine", "port": 4222, "env_url": "NATS_URL", "auth": False},
         'REDPANDA': {"image": "redpandadata/redpanda:v23.2.14", "port": 9092, "env_url": "REDPANDA_URL", "auth": False, "command": ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "1G", "--reserve-memory", "0M", "--node-id", "0", "--check=false"]},
         'PULSAR': {"image": "apachepulsar/pulsar:3.1.0", "port": 6650, "env_url": "PULSAR_URL", "auth": False, "command": ["bin/pulsar", "standalone"]},
-        'ACTIVEMQ': {"image": "apache/activemq-classic:5.18.3", "port": 61616, "env_url": "ACTIVEMQ_URL", "auth": True, "env": {"ACTIVEMQ_ADMIN_LOGIN": "admin", "ACTIVEMQ_ADMIN_PASSWORD": "{password}"}},
+        'ACTIVEMQ': {"image": "apache/activemq-classic:5.18.3", "port": 61616, "dashboard_port": 8161, "env_url": "ACTIVEMQ_URL", "auth": True, "env": {"ACTIVEMQ_ADMIN_LOGIN": "admin", "ACTIVEMQ_ADMIN_PASSWORD": "{password}"}},
         'SEAWEEDFS': {"image": "chrislusf/seaweedfs:3.59", "port": 8888, "env_url": "SEAWEEDFS_URL", "auth": False, "command": ["server", "-dir=/data", "-s3"]},
         'INFLUXDB': {"image": "influxdb:2.7-alpine", "port": 8086, "env_url": "INFLUXDB_URL", "auth": True, "env": {"DOCKER_INFLUXDB_INIT_MODE": "setup", "DOCKER_INFLUXDB_INIT_USERNAME": "admin", "DOCKER_INFLUXDB_INIT_PASSWORD": "{password}", "DOCKER_INFLUXDB_INIT_ORG": "myorg", "DOCKER_INFLUXDB_INIT_BUCKET": "mybucket"}},
         'QUESTDB': {"image": "questdb/questdb:7.3.1", "port": 9000, "env_url": "QUESTDB_URL", "auth": False},
@@ -107,7 +107,7 @@ class AddonProvisioner:
         'GRAFANA': {"image": "grafana/grafana:10.1.5", "port": 3000, "env_url": "GRAFANA_URL", "auth": True, "env": {"GF_SECURITY_ADMIN_PASSWORD": "{password}"}},
         'JAEGER': {"image": "jaegertracing/all-in-one:1.49", "port": 16686, "env_url": "JAEGER_URL", "auth": False},
         'N8N': {"image": "n8nio/n8n:1.8.0", "port": 5678, "env_url": "N8N_URL", "auth": True, "env": {"N8N_BASIC_AUTH_ACTIVE": "true", "N8N_BASIC_AUTH_USER": "admin", "N8N_BASIC_AUTH_PASSWORD": "{password}"}},
-        'TEMPORAL': {"image": "temporalio/auto-setup:1.22.1", "port": 7233, "env_url": "TEMPORAL_URL", "auth": False},
+        'TEMPORAL': {"image": "temporalio/auto-setup:1.22.1", "port": 7233, "dashboard_port": 8080, "env_url": "TEMPORAL_URL", "auth": False},
         'VAULT': {"image": "hashicorp/vault:1.15", "port": 8200, "env_url": "VAULT_URL", "auth": True, "env": {"VAULT_DEV_ROOT_TOKEN_ID": "{password}", "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200"}},
         'CONSUL': {"image": "hashicorp/consul:1.16", "port": 8500, "env_url": "CONSUL_URL", "auth": False, "command": ["agent", "-dev", "-client", "0.0.0.0"]},
         'KEYCLOAK': {"image": "quay.io/keycloak/keycloak:22.0.4", "port": 8080, "env_url": "KEYCLOAK_URL", "auth": True, "env": {"KEYCLOAK_ADMIN": "admin", "KEYCLOAK_ADMIN_PASSWORD": "{password}"}, "command": ["start-dev"]},
@@ -587,7 +587,9 @@ class AddonProvisioner:
         ]
 
         if public_domain:
-            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
+            # Use dashboard port if explicitly defined for this addon, otherwise default API port
+            target_port = config.get('dashboard_port', port)
+            self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, target_port)
 
         if alias_name:
             cmd.extend(['--network-alias', alias_name])
