@@ -1732,32 +1732,31 @@ if [ -n "$UPDATE_MODE" ]; then
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
             CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat nginx traefik socket-proxy route-fallback"
-            echo -e "${BLUE}    ↳ Stopping core services...${NC}"
-            docker compose -f "$COMPOSE_FILE" stop $CORE_SERVICES 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" rm -f $CORE_SERVICES 2>/dev/null || true
 
-            # 2. Remove old PaaS images (NOT addon images)
-            echo -e "${BLUE}    ↳ Removing old core images...${NC}"
+            # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
+            # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
+            echo -e "${BLUE}    ↳ Untagging old core images...${NC}"
             for svc in $CORE_SERVICES; do
                 img=$(docker compose -f "$COMPOSE_FILE" config --images 2>/dev/null | grep -i "$svc" || true)
                 if [ -n "$img" ]; then
-                    docker rmi -f "$img" 2>/dev/null || true
+                    docker rmi "$img" 2>/dev/null || true
                 fi
             done
 
-            # 3. Prune dangling images and build cache
-            echo -e "${BLUE}    ↳ Pruning dangling images and build cache...${NC}"
+            # 3. Prune dangling build cache
+            echo -e "${BLUE}    ↳ Pruning build cache...${NC}"
             docker builder prune -af 2>/dev/null || true
 
             # 4. Ensure shared networks exist (create if missing, don't destroy)
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             ensure_update_networks
 
-            # 5. Rebuild core images from scratch
+            # 5. Rebuild core images from scratch while OLD containers are still running
             echo -e "${BLUE}    ↳ Rebuilding core images (no cache)...${NC}"
             docker compose -f "$COMPOSE_FILE" build --no-cache $CORE_SERVICES
 
             # 6. Start everything (addons stay running, core gets fresh containers)
+            # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
 
