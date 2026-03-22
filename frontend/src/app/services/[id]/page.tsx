@@ -20,6 +20,7 @@ import { AddonsTab } from '@/components/addons/AddonsTab';
 import { ResourcesTab } from '@/components/settings/ResourcesTab';
 import { HealthTab } from '@/components/settings/HealthTab';
 import { BuildTab } from '@/components/settings/BuildTab';
+import { FilesTab } from '@/components/settings/FilesTab';
 import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
 import { toast } from '@/components/ui/use-toast';
@@ -398,6 +399,7 @@ export default function ServiceDetailPage() {
                             <div className="flex justify-between items-center border-b border-border pb-3">
                                 <div>
                                     <span className="text-muted-foreground font-medium">Visibility</span>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">Toggle whether Traefik routes public traffic to this service.</p>
                                 </div>
                                 <button
                                     onClick={async () => {
@@ -426,6 +428,41 @@ export default function ServiceDetailPage() {
                                         <><Globe className="w-3.5 h-3.5" /> Public</>
                                     ) : (
                                         <><Shield className="w-3.5 h-3.5" /> Private</>
+                                    )}
+                                </button>
+                            </div>
+                            <div className="flex justify-between items-center border-b border-border pb-3">
+                                <div>
+                                    <span className="text-muted-foreground font-medium">Public Domain Routing</span>
+                                    <p className="text-[10px] text-muted-foreground mt-1 max-w-[200px]">When hidden, the default cloud.smsly.cloud domain will return 404.</p>
+                                </div>
+                                <button
+                                    onClick={async () => {
+                                        const newVal = !service.public_domain_hidden;
+                                        try {
+                                            const updated = await servicesApi.update(service.id, { public_domain_hidden: newVal });
+                                            setService(updated);
+                                            toast({
+                                                title: newVal ? 'Public Domain Hidden' : 'Public Domain Visible',
+                                                description: newVal
+                                                    ? 'Traffic is now only routed via custom domains.'
+                                                    : 'The default public domain is now active.',
+                                            });
+                                        } catch (err) {
+                                            console.error(err);
+                                            toast({ title: 'Failed to update public domain routing', variant: 'destructive' });
+                                        }
+                                    }}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                                        !service.public_domain_hidden
+                                            ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20'
+                                            : 'bg-amber-500/10 text-amber-500 hover:bg-amber-500/20'
+                                    }`}
+                                >
+                                    {!service.public_domain_hidden ? (
+                                        <><Globe className="w-3.5 h-3.5" /> Active</>
+                                    ) : (
+                                        <><Shield className="w-3.5 h-3.5" /> Hidden</>
                                     )}
                                 </button>
                             </div>
@@ -509,6 +546,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'logs' && <LogsTab deployment={deployment} />}
 
             {activeTab === 'build' && <BuildTab service={service} />}
+
+            {activeTab === 'files' && <FilesTab serviceId={service.id} />}
 
             {activeTab === 'env' && <EnvVarsTab serviceId={service.id} />}
 

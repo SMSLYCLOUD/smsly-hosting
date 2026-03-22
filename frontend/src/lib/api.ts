@@ -571,6 +571,20 @@ export const servicesApi = {
   verifyDomain: async (serviceId: string, domain: string): Promise<{ domain: string; verified: boolean; cname_target: string; message: string }> => {
       const response = await api.post(`/services/${serviceId}/verify-domain/`, { domain });
       return response.data;
+  },
+
+  // File Manager
+  browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
+      const response = await api.get(`/services/${serviceId}/files/browse/`, { params: { path } });
+      return response.data;
+  },
+  readFile: async (serviceId: string, path: string): Promise<{ path: string; content: string }> => {
+      const response = await api.get(`/services/${serviceId}/files/read/`, { params: { path } });
+      return response.data;
+  },
+  writeFile: async (serviceId: string, path: string, content: string): Promise<{ message: string; path: string }> => {
+      const response = await api.post(`/services/${serviceId}/files/write/`, { path, content });
+      return response.data;
   }
 };
 
