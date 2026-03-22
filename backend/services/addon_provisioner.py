@@ -522,9 +522,32 @@ class AddonProvisioner:
         container_id = result.stdout.strip()[:12]
 
         hostname = alias_name or container_name
-        connection_url = f"s3://{username}:{password}@{hostname}:{port}"
+        # Add a default bucket name to the connection URL path
+        bucket_name = "default-bucket"
+        connection_url = f"s3://{username}:{password}@{hostname}:{port}/{bucket_name}"
 
         self._wait_for_health(container_name, port, path="/minio/health/live", use_http=True)
+
+        # Create the default bucket automatically
+        try:
+            import time
+            time.sleep(2) # Give it a moment to fully initialize the API after healthcheck
+
+            # Use 'mc' from inside the minio container to create the bucket
+            # First, configure the alias
+            subprocess.run([
+                'docker', 'exec', container_name,
+                'mc', 'alias', 'set', 'myminio', f'http://127.0.0.1:{port}', username, password
+            ], capture_output=True, check=True)
+
+            # Then, create the bucket
+            subprocess.run([
+                'docker', 'exec', container_name,
+                'mc', 'mb', f'myminio/{bucket_name}'
+            ], capture_output=True, check=False) # check=False because it might already exist on re-provision
+        except Exception as e:
+            logger.warning("Failed to auto-create default MinIO bucket %s: %s", bucket_name, e)
+
         return container_id, connection_url
 
     def _provision_generic(self, addon_type: str, container_name: str,

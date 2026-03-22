@@ -125,6 +125,60 @@ class Addon(TimeStampedModel):
             result[f'{slug}_PASSWORD'] = parsed.password
         if parsed.path and parsed.path != '/':
             result[f'{slug}_DATABASE'] = parsed.path.lstrip('/')
+
+        # Addon specific custom mappings
+        if self.addon_type == self.Type.MINIO:
+            if parsed.hostname and parsed.port:
+                result['MINIO_ENDPOINT'] = f"{parsed.hostname}:{parsed.port}"
+                result['MINIO_URL'] = f"http://{parsed.hostname}:{parsed.port}"
+            if parsed.username:
+                result['MINIO_ACCESS_KEY'] = parsed.username
+            if parsed.password:
+                result['MINIO_SECRET_KEY'] = parsed.password
+            if parsed.path and parsed.path != '/':
+                result['MINIO_BUCKET'] = parsed.path.lstrip('/')
+
+        elif self.addon_type == self.Type.POSTGRES:
+            result['POSTGRES_URL'] = self.connection_url
+            if parsed.username: result['POSTGRES_USER'] = parsed.username
+            if parsed.password: result['POSTGRES_PASSWORD'] = parsed.password
+            if parsed.path and parsed.path != '/': result['POSTGRES_DB'] = parsed.path.lstrip('/')
+            if parsed.hostname: result['POSTGRES_HOST'] = parsed.hostname
+            if parsed.port: result['POSTGRES_PORT'] = str(parsed.port)
+
+        elif self.addon_type == self.Type.MYSQL:
+            result['MYSQL_URL'] = self.connection_url
+            if parsed.username: result['MYSQL_USER'] = parsed.username
+            if parsed.password: result['MYSQL_PASSWORD'] = parsed.password
+            if parsed.path and parsed.path != '/': result['MYSQL_DATABASE'] = parsed.path.lstrip('/')
+            if parsed.hostname: result['MYSQL_HOST'] = parsed.hostname
+            if parsed.port: result['MYSQL_PORT'] = str(parsed.port)
+
+        elif self.addon_type == self.Type.REDIS:
+            result['REDIS_URL'] = self.connection_url
+            if parsed.password: result['REDIS_PASSWORD'] = parsed.password
+            if parsed.hostname: result['REDIS_HOST'] = parsed.hostname
+            if parsed.port: result['REDIS_PORT'] = str(parsed.port)
+
+        elif self.addon_type == self.Type.MONGODB:
+            result['MONGODB_URI'] = self.connection_url
+            if parsed.username: result['MONGO_INITDB_ROOT_USERNAME'] = parsed.username
+            if parsed.password: result['MONGO_INITDB_ROOT_PASSWORD'] = parsed.password
+
+        elif self.addon_type == self.Type.RABBITMQ:
+            result['RABBITMQ_URL'] = self.connection_url
+            if parsed.username: result['RABBITMQ_DEFAULT_USER'] = parsed.username
+            if parsed.password: result['RABBITMQ_DEFAULT_PASS'] = parsed.password
+
+        elif self.addon_type == self.Type.ELASTICSEARCH:
+            result['ELASTICSEARCH_URL'] = self.connection_url
+            if parsed.password: result['ELASTIC_PASSWORD'] = parsed.password
+
+        elif self.addon_type == self.Type.QDRANT:
+            result['QDRANT_URL'] = self.connection_url
+            if parsed.hostname: result['QDRANT_HOST'] = parsed.hostname
+            if parsed.port: result['QDRANT_PORT'] = str(parsed.port)
+
         return result
 
     def __str__(self):
