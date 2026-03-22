@@ -446,7 +446,7 @@ else:
     _REDIS_BASE_URL = f"{REDIS_SCHEME}://{REDIS_HOST}:{REDIS_PORT}"
 
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
-CELERY_BROKER_URL = config('REDIS_URL', default=f"{_REDIS_BASE_URL}/0")
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default="amqp://guest:guest@rabbitmq:5672//")
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
     'CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP',
     default=True,
@@ -478,7 +478,7 @@ else:
     }
 
 # Channels (WebSockets) - use Redis so Celery tasks can broadcast logs/status to live UIs.
-CHANNEL_REDIS_URL = CELERY_BROKER_URL
+CHANNEL_REDIS_URL = config('REDIS_URL', default=f"{_REDIS_BASE_URL}/1")
 if isinstance(CHANNEL_REDIS_URL, str) and CHANNEL_REDIS_URL.endswith('/0'):
     CHANNEL_REDIS_URL = CHANNEL_REDIS_URL[:-2] + '/1'
 

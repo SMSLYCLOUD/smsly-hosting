@@ -63,7 +63,7 @@ POSTGRES_PASSWORD=smsly_dev
 
 # Redis Configuration
 REDIS_URL=redis://localhost:6379/0
-CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=amqp://guest:guest@localhost:5672//
 
 # CORS & CSRF
 CSRF_TRUSTED_ORIGINS=https://*.github.dev,https://*.app.github.dev
