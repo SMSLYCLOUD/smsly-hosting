@@ -1342,6 +1342,7 @@ export interface Addon {
     status: 'PROVISIONING' | 'ACTIVE' | 'RUNNING' | 'FAILED' | 'STOPPED' | 'DELETED';
     created_at: string;
     connection_url?: string;
+    public_domain?: string | null;
     config: Record<string, any>;
 }
 
@@ -1356,6 +1357,10 @@ export const addonsApi = {
     },
     create: async (data: Partial<Addon>): Promise<Addon> => {
         const res = await api.post('/addons/', data);
+        return res.data;
+    },
+    update: async (id: string, data: Partial<Addon>): Promise<Addon> => {
+        const res = await api.patch(`/addons/${id}/`, data);
         return res.data;
     },
     delete: async (id: string): Promise<void> => {
