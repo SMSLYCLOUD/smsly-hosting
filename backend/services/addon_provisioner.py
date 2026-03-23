@@ -117,6 +117,9 @@ class AddonProvisioner:
         self.network_name = config(
             'DOCKER_NETWORK',
             default='smsly-net')
+        self.proxy_network_name = config(
+            'DOCKER_PROXY_NETWORK',
+            default='smsly-proxy')
         self._network_checked = False
 
         # Register generic addons so they are recognized across the platform
@@ -136,12 +139,41 @@ class AddonProvisioner:
         cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.rule=Host(`{domain}`)'])
         cmd_list.extend(['-l', f'traefik.http.services.{router_name}.loadbalancer.server.port={target_port}'])
         cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.priority=100'])
-        cmd_list.extend(['-l', f'traefik.docker.network={self.network_name}'])
+        cmd_list.extend(['-l', f'traefik.docker.network={self.proxy_network_name}'])
         if enable_tls:
             cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.entrypoints=web,websecure'])
             cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.tls.certresolver=letsencrypt'])
         else:
             cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.entrypoints=web'])
+
+    def _connect_to_proxy_network(self, container_name: str):
+        """Ensure the container is connected to the proxy network for Traefik access."""
+        try:
+            # Check if already connected
+            inspect_proc = subprocess.run(
+                ['docker', 'inspect', '-f', '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}', container_name],
+                capture_output=True,
+                text=True
+            )
+            
+            # Get the network ID of the proxy network
+            network_id_proc = subprocess.run(
+                ['docker', 'network', 'inspect', '-f', '{{.Id}}', self.proxy_network_name],
+                capture_output=True,
+                text=True
+            )
+            
+            if network_id_proc.returncode == 0:
+                network_id = network_id_proc.stdout.strip()
+                if network_id not in inspect_proc.stdout:
+                    subprocess.run(
+                        ['docker', 'network', 'connect', self.proxy_network_name, container_name],
+                        capture_output=True,
+                        check=False
+                    )
+                    logger.debug(f"Connected {container_name} to {self.proxy_network_name}")
+        except Exception as e:
+            logger.warning(f"Could not connect {container_name} to proxy network: {e}")
 
     def _container_status(self, container_name: str) -> Tuple[Optional[str], bool]:
         """
@@ -210,6 +242,20 @@ class AddonProvisioner:
                     check=True
                 )
                 logger.info(f"Created Docker network: {self.network_name}")
+
+            # Also ensure proxy network exists
+            proxy_result = subprocess.run(
+                ['docker', 'network', 'inspect', self.proxy_network_name],
+                capture_output=True,
+                text=True
+            )
+            if proxy_result.returncode != 0:
+                subprocess.run(
+                    ['docker', 'network', 'create', self.proxy_network_name],
+                    check=False
+                )
+                logger.info(f"Created Docker proxy network: {self.proxy_network_name}")
+
             self._network_checked = True
         except Exception as e:
             logger.warning(f"Could not create/verify network: {e}")
@@ -291,6 +337,9 @@ class AddonProvisioner:
                         capture_output=True,
                         check=False
                     )
+
+                # Ensure proxy network connection as well
+                self._connect_to_proxy_network(container_name)
             except Exception as e:
                 logger.debug("Network reconnect failed/ignored for %s: %s", container_name, e)
 
@@ -405,13 +454,9 @@ class AddonProvisioner:
                 if generic_config.get('auth') and not password:
                     raise ValueError(f"Existing connection_url is missing a password for {addon_type}; refusing to reprovision.")
                 container_id, _ = self._provision_generic(addon_type, container_name, password, port, hostname, generic_config, username=username, db_name=db_name, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'MINIO':
+            elif addon_type == 'MINIO':
                 container_id, _ = self._provision_minio(container_name, password, port, hostname, username=username, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'POSTGRES':
+            elif addon_type == 'POSTGRES':
                 container_id, _ = self._provision_postgres(
                     container_name,
                     password,
@@ -421,33 +466,23 @@ class AddonProvisioner:
                     db_name=db_name or None,
                     public_domain=public_domain,
                 )
-                return container_id, existing_url
-
-            if addon_type == 'REDIS':
+            elif addon_type == 'REDIS':
                 container_id, _ = self._provision_redis(container_name, password, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'MYSQL':
+            elif addon_type == 'MYSQL':
                 container_id, _ = self._provision_mysql(container_name, password, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'MONGODB':
+            elif addon_type == 'MONGODB':
                 container_id, _ = self._provision_mongodb(container_name, password, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'QDRANT':
+            elif addon_type == 'QDRANT':
                 container_id, _ = self._provision_qdrant(container_name, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'ELASTICSEARCH':
+            elif addon_type == 'ELASTICSEARCH':
                 container_id, _ = self._provision_elasticsearch(container_name, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
-
-            if addon_type == 'RABBITMQ':
+            elif addon_type == 'RABBITMQ':
                 container_id, _ = self._provision_rabbitmq(container_name, password, port, hostname, public_domain=public_domain)
-                return container_id, existing_url
+            else:
+                raise ValueError(f"Unsupported addon type: {addon_type}")
 
-            raise ValueError(f"Unsupported addon type: {addon_type}")
+            self._connect_to_proxy_network(container_name)
+            return container_id, existing_url
 
         # First-time provisioning: generate fresh credentials for passworded addons.
         is_passworded = addon_type in (
@@ -482,6 +517,10 @@ class AddonProvisioner:
             raise ValueError(f"Unsupported addon type: {addon_type}")
 
         logger.info(f"Addon {addon_type} provisioned: {container_name} (alias: {alias_name})")
+        
+        # Final bridge connection for new/missing containers
+        self._connect_to_proxy_network(container_name)
+        
         return container_id, connection_url
 
     def _provision_rabbitmq(self, container_name: str,

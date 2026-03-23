@@ -98,6 +98,14 @@ class AddonViewSet(viewsets.ModelViewSet):
         return Response({'public_domain': generated_domain})
 
     @action(detail=True, methods=['post'])
+    def reprovision(self, request, pk=None):
+        """Manually trigger re-provisioning to update labels or network configuration."""
+        addon = self.get_object()
+        from .tasks import provision_addon_task
+        provision_addon_task.delay(str(addon.id))
+        return Response({'status': 'reprovision_started'})
+
+    @action(detail=True, methods=['post'])
     def deprovision(self, request, pk=None):
         """Delete addon container and remove from service."""
         addon = self.get_object()

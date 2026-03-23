@@ -1374,6 +1374,10 @@ export const addonsApi = {
         const res = await api.post(`/addons/${id}/deprovision/`);
         return res.data;
     },
+    reprovision: async (id: string): Promise<any> => {
+        const res = await api.post(`/addons/${id}/reprovision/`);
+        return res.data;
+    },
     rotateCredentials: async (id: string): Promise<{ connection_url: string }> => {
         const res = await api.post(`/addons/${id}/rotate-credentials/`);
         return res.data;
