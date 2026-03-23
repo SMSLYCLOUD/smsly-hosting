@@ -363,6 +363,22 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 <Shield size={12} /> Create Backup
                                             </button>
                                             <button
+                                                onClick={async (e) => { 
+                                                    e.stopPropagation(); 
+                                                    if (!await confirm({ title: 'Rebuild Addon?', message: 'This will restart and re-provision the container to apply network and label updates. Existing data will be preserved. Continue?' })) return;
+                                                    try {
+                                                        await addonsApi.reprovision(addon.id);
+                                                        fetchAddons();
+                                                    } catch (err) {
+                                                        console.error('Failed to rebuild addon:', err);
+                                                        alert('Failed to trigger rebuild');
+                                                    }
+                                                }}
+                                                className="flex items-center gap-2 px-3 py-2 bg-indigo-500/10 text-indigo-400 rounded-lg text-xs font-medium hover:bg-indigo-500/20 transition-colors"
+                                            >
+                                                <RefreshCw size={12} /> Rebuild
+                                            </button>
+                                            <button
                                                 onClick={(e) => { e.stopPropagation(); fetchBackups(addon.id); }}
                                                 className="flex items-center gap-2 px-3 py-2 bg-muted text-muted-foreground rounded-lg text-xs font-medium hover:bg-muted/80 transition-colors"
                                             >
