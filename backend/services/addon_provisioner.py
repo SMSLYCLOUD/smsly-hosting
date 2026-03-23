@@ -136,6 +136,7 @@ class AddonProvisioner:
         cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.rule=Host(`{domain}`)'])
         cmd_list.extend(['-l', f'traefik.http.services.{router_name}.loadbalancer.server.port={target_port}'])
         cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.priority=100'])
+        cmd_list.extend(['-l', f'traefik.docker.network={self.network_name}'])
         if enable_tls:
             cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.entrypoints=web,websecure'])
             cmd_list.extend(['-l', f'traefik.http.routers.{router_name}.tls.certresolver=letsencrypt'])
