@@ -70,6 +70,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
       ws.current = socket;
       inputBuffer.current = '';
+      let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
       socket.onopen = () => {
         terminal.writeln('\x1b[32m[connected]\x1b[0m');
@@ -81,6 +82,13 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
         stabilityTimer = setTimeout(() => {
           reconnectAttemptsRef.current = 0;
         }, 5000);
+
+        // Start heartbeat to keep connection alive through proxies
+        heartbeatInterval = setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 25000);
       };
 
       socket.onmessage = (event) => {
@@ -99,6 +107,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       };
 
       socket.onclose = () => {
+        if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (disposed) return;
         // Cancel stability timer — connection wasn't stable
         if (stabilityTimer) {

@@ -24,6 +24,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.container_id = None
         self.exec_id = None
         self.exec_socket = None
+        self._raw_sock = None  # The actual OS-level socket for recv/send
         self._read_task = None
 
     async def connect(self):
@@ -104,23 +105,27 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if self._read_task:
             self._read_task.cancel()
             try:
-                # Give it a moment to cancel gracefully
                 await asyncio.wait_for(self._read_task, timeout=1.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
-        if self.exec_socket:
-            try:
-                # Use a short timeout so we don't hang the worker
-                await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(None, self.exec_socket.close),
-                    timeout=2.0
-                )
-            except Exception:
-                pass
+        self._close_exec_socket()
         if self.user:
             logger.info(
                 "WebSocket disconnected: User %s from "
                 "deployment %s", self.user.id, self.deployment_id)
+
+    def _close_exec_socket(self):
+        """Safely close the exec socket and raw socket."""
+        for sock in (self._raw_sock, self.exec_socket):
+            if sock is None:
+                continue
+            try:
+                sock.close()
+            except Exception:
+                pass
+        self._raw_sock = None
+        self.exec_socket = None
+        self.exec_id = None
 
     async def receive(self, text_data):
         # SECURITY: Re-check authentication on each message
@@ -128,7 +133,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        if not self.exec_socket:
+        # Handle structured messages (e.g. heartbeat)
+        try:
+            data = json.loads(text_data)
+            if data.get('type') == 'ping':
+                return
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            pass
+
+        raw = self._raw_sock or self.exec_socket
+        if not raw:
             return
 
         # Update activity timestamp on input
@@ -137,11 +151,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         # Forward raw input to the container's exec stdin
         try:
-            # We use character-by-character forwarding for true interactive terminal support.
-            # No manual newline appending here — let the client send what it needs.
-            # Docker socket wrapper lacks .send(), use underlying _sock.send()
-            await asyncio.get_event_loop().run_in_executor(
-                None, self.exec_socket._sock.send, text_data.encode('utf-8'))
+            if hasattr(raw, 'send'):
+                await asyncio.get_event_loop().run_in_executor(
+                    None, raw.send, text_data.encode('utf-8'))
+            elif hasattr(raw, 'write'):
+                await asyncio.get_event_loop().run_in_executor(
+                    None, raw.write, text_data.encode('utf-8'))
         except Exception as e:
             logger.error("Terminal exec send error for %s: %s", self.deployment_id, e)
             try:
@@ -152,100 +167,163 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 pass
 
     async def _read_output(self):
-        """Background task: read from exec socket and send to WebSocket."""
+        """Background task: read from exec socket and send to WebSocket.
+
+        If the exec socket dies, attempts server-side reconnection up to
+        3 times before giving up and closing the WebSocket.
+        """
         loop = asyncio.get_event_loop()
         import time
 
-        # Initialize instance level last activity if not already present
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
         timeout_seconds = 600.0  # 10 minutes total idle timeout
+        max_exec_reconnects = 3
+        exec_reconnect_count = 0
 
         try:
             while True:
                 data = await loop.run_in_executor(None, self._blocking_read)
 
                 if data is None:
-                    # None means a real error or disconnect occurred
-                    logger.info("Terminal session ended for deployment %s", self.deployment_id)
-                    try:
-                        await self.send(text_data=json.dumps({
-                            'message': '\r\n\x1b[31m[session ended]\x1b[0m\r\n'
-                        }))
-                        await self.close(code=4000)
-                    except Exception:
-                        pass
-                    break
-
-                if data == b'':
-                    # If we got exactly b'' from a socket timeout, just sleep briefly and retry
-                    # to prevent busy looping but keep connection alive.
-                    # Send a ping-like keepalive message to prevent the proxy from dropping the idle WS
-                    if time.time() - self._last_activity > timeout_seconds:
-                        logger.info("Terminal idle timeout reached for deployment %s", self.deployment_id)
+                    # Exec socket died — try server-side reconnection
+                    exec_reconnect_count += 1
+                    if exec_reconnect_count > max_exec_reconnects:
+                        logger.info(
+                            "Terminal exec reconnect limit reached for %s",
+                            self.deployment_id)
                         try:
                             await self.send(text_data=json.dumps({
-                                'message': '\r\n\x1b[31m[idle timeout reached]\x1b[0m\r\n'
+                                'message': '\r\n\x1b[31m[session ended — '
+                                           'exec reconnect limit reached]\x1b[0m\r\n'
                             }))
                             await self.close(code=4000)
                         except Exception:
                             pass
                         break
 
+                    logger.info(
+                        "Terminal exec socket died for %s, reconnecting "
+                        "(%d/%d)", self.deployment_id,
+                        exec_reconnect_count, max_exec_reconnects)
                     try:
-                        await self.send(text_data=json.dumps({'message': ''}))
+                        await self.send(text_data=json.dumps({
+                            'message': f'\r\n\x1b[33m[exec disconnected — '
+                                       f'reconnecting {exec_reconnect_count}/'
+                                       f'{max_exec_reconnects}]\x1b[0m\r\n'
+                        }))
                     except Exception:
                         pass
-                    await asyncio.sleep(0.5)
+
+                    # Clean up old socket and try again
+                    self._close_exec_socket()
+                    await asyncio.sleep(1.0)
+
+                    # Re-find container (may have restarted)
+                    self.container_id = await self._find_container()
+                    if not self.container_id:
+                        continue
+                    success = await self._start_exec()
+                    if not success:
+                        continue
+
+                    try:
+                        await self.send(text_data=json.dumps({
+                            'message': '\x1b[32m[reconnected to container]'
+                                       '\x1b[0m\r\n'
+                        }))
+                    except Exception:
+                        pass
                     continue
 
+                if data == b'':
+                    # Socket timeout (not EOF) — check idle timeout, send keepalive
+                    if time.time() - self._last_activity > timeout_seconds:
+                        logger.info(
+                            "Terminal idle timeout for %s",
+                            self.deployment_id)
+                        try:
+                            await self.send(text_data=json.dumps({
+                                'type': 'error',
+                                'message': '\r\n\x1b[31m[idle timeout]\x1b[0m\r\n'
+                            }))
+                            await self.close(code=4000)
+                        except Exception:
+                            pass
+                        break
+
+                    # Send a structured keepalive to prevent proxy idle timeout
+                    try:
+                        await self.send(text_data=json.dumps({'type': 'nop'}))
+                    except Exception:
+                        pass
+                    continue
+
+                # Got real data — reset activity and exec reconnect counters
                 self._last_activity = time.time()
+                exec_reconnect_count = 0
                 text = data.decode('utf-8', errors='replace')
                 await self.send(text_data=json.dumps({'message': text}))
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error("Terminal output read error for %s: %s", self.deployment_id, e)
+            logger.error(
+                "Terminal output read error for %s: %s",
+                self.deployment_id, e)
+            try:
+                await self.close()
+            except Exception:
+                pass
 
     def _blocking_read(self):
-        """Blocking read from the exec socket. Runs in executor."""
+        """Blocking read from the exec socket. Runs in executor.
+
+        Uses select.select to implement a reliable timeout that works
+        on both raw sockets and docker-py wrappers.
+        """
+        import select
         import socket
-        import requests.exceptions
+
+        sock = self._raw_sock or self.exec_socket
+        if sock is None:
+            return None
+
         try:
-            # The docker-py exec_start(socket=True) returns a SocketIO-like object.
-            # Upstream recommends .read() instead of .recv() to avoid AttributeError.
-            # Depending on the docker-py version and connection type, it might
-            # use .read(), .recv() or expose the underlying _sock.
-            if hasattr(self.exec_socket, 'read'):
-                data = self.exec_socket.read(4096)
-            elif hasattr(self.exec_socket, 'recv'):
-                data = self.exec_socket.recv(4096)
-            elif hasattr(self.exec_socket, '_sock') and hasattr(self.exec_socket._sock, 'recv'):
-                data = self.exec_socket._sock.recv(4096)
+            # Wait for data with a timeout (20s)
+            # select() works on anything with a .fileno()
+            r, _, _ = select.select([sock], [], [], 20.0)
+            if not r:
+                return b''  # Timeout — return empty to trigger keepalive
+
+            # Data available — try to read it
+            # We check both recv and read for maximum compatibility with wrappers
+            if hasattr(sock, 'recv'):
+                data = sock.recv(4096)
+            elif hasattr(sock, 'read'):
+                data = sock.read(4096)
             else:
-                raise AttributeError("exec_socket has no read or recv method")
+                logger.error("Exec socket has no read or recv method")
+                return None
 
             if not data:
-                # Actual EOF (connection closed by remote docker side)
+                # True EOF — connection closed
                 return None
             return data
-        except (socket.timeout, requests.exceptions.ReadTimeout, TimeoutError):
-            return b''  # Signal that it was just a timeout, not a disconnect
-        # Catch ChunkedEncodingError which happens when the connection is prematurely closed
-        except requests.exceptions.ChunkedEncodingError:
-            return b''  # Prevent Docker-py urllib3 ChunkedEncodingError from dropping the session on timeout resets
+
+        except (socket.timeout, select.error):
+            return b''
         except Exception as e:
-            # Catch urllib3 ReadTimeoutError via string matching to avoid ModuleNotFoundError
-            if e.__class__.__name__ == 'ReadTimeoutError':
+            err_name = e.__class__.__name__
+            err_str = str(e).lower()
+            # urllib3/requests timeout variants
+            if err_name == 'ReadTimeoutError' or 'timed out' in err_str or 'timeout' in err_str:
                 return b''
-            # Check if this exception is functionally a timeout disguised as a generic error
-            if 'timed out' in str(e).lower() or 'timeout' in str(e).lower():
+            if 'connection broken' in err_str or 'chunkedencodingerror' in err_name.lower():
                 return b''
-            # 'Connection broken' might happen if the proxy kills it
-            if 'connection broken' in str(e).lower():
-                return b''  # Also treat broken HTTP chunks as idle retries rather than full aborts
-            logger.error("Terminal _blocking_read exception (disconnecting): %s - %s", type(e), e)
+            logger.error(
+                "Terminal _blocking_read exception for %s: %s - %s",
+                self.deployment_id, type(e), e)
             return None
 
     @database_sync_to_async
@@ -279,7 +357,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _start_exec(self):
-        """Create a docker exec instance and attach to it."""
+        """Create a docker exec instance and attach to it.
+
+        Extracts the raw OS socket from docker-py's wrapper so that
+        _blocking_read() can use recv() for reliable timeout behavior.
+        """
         from apps.cloud.docker_client import get_docker_exec_client
         import socket as _socket
         try:
@@ -307,22 +389,28 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             )
             self.exec_id = exec_instance['Id']
 
-            # Attach to the exec instance (returns a socket-like object)
+            # Attach to the exec instance (returns a socket-like wrapper)
             self.exec_socket = client.api.exec_start(
                 self.exec_id,
                 socket=True,
                 tty=True,
             )
 
-            # ── CRITICAL FIX: Set a recv timeout on the exec socket ──
-            # Without this, _blocking_read() blocks forever waiting for data.
-            # A 30s timeout lets the read loop cycle, send keepalives,
-            # and check idle timeouts without appearing hung.
+            # ── CRITICAL: Extract the raw OS socket ──
+            # docker-py returns a SocketIO/HTTPResponse wrapper whose read()
+            # method returns b'' on BOTH timeout AND EOF, making them
+            # indistinguishable. The raw socket's recv() properly raises
+            # socket.timeout, so we always use that.
+            raw = getattr(self.exec_socket, '_sock', None)
+            if raw is None:
+                # Some docker-py versions expose the socket differently
+                raw = self.exec_socket
+            self._raw_sock = raw
+
+            # Set recv timeout so _blocking_read cycles every 30s
+            # instead of blocking forever
             try:
-                raw_sock = getattr(self.exec_socket, '_sock', None)
-                if raw_sock is None:
-                    raw_sock = self.exec_socket
-                raw_sock.settimeout(30.0)
+                self._raw_sock.settimeout(30.0)
             except (AttributeError, _socket.error) as e:
                 logger.warning("Could not set exec socket timeout: %s", e)
 
