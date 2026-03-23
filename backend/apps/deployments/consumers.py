@@ -251,14 +251,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _find_container(self):
         """Find the Docker container ID for this deployment's service."""
-        from apps.cloud.docker_client import get_docker_client
+        from apps.cloud.docker_client import get_docker_exec_client
         from apps.deployments.models import Deployment
         try:
             dep = Deployment.objects.select_related('service').get(
                 id=self.deployment_id)
             service_name = dep.service.name
 
-            client = get_docker_client()
+            client = get_docker_exec_client()
             # Look for a running container matching the service name
             containers = client.containers.list(
                 filters={'name': service_name, 'status': 'running'})
@@ -280,9 +280,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _start_exec(self):
         """Create a docker exec instance and attach to it."""
-        from apps.cloud.docker_client import get_docker_client
+        from apps.cloud.docker_client import get_docker_exec_client
+        import socket as _socket
         try:
-            client = get_docker_client()
+            client = get_docker_exec_client()
             container = client.containers.get(self.container_id)
 
             # Try bash first, fall back to sh
@@ -312,6 +313,18 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 socket=True,
                 tty=True,
             )
+
+            # ── CRITICAL FIX: Set a recv timeout on the exec socket ──
+            # Without this, _blocking_read() blocks forever waiting for data.
+            # A 30s timeout lets the read loop cycle, send keepalives,
+            # and check idle timeouts without appearing hung.
+            try:
+                raw_sock = getattr(self.exec_socket, '_sock', None)
+                if raw_sock is None:
+                    raw_sock = self.exec_socket
+                raw_sock.settimeout(30.0)
+            except (AttributeError, _socket.error) as e:
+                logger.warning("Could not set exec socket timeout: %s", e)
 
             return True
         except Exception as e:

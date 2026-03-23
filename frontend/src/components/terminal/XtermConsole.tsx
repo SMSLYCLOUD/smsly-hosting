@@ -53,8 +53,9 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
-    const maxReconnectAttempts = 5;
+    const maxReconnectAttempts = 10;
 
     const connectWebSocket = () => {
       if (disposed) return;
@@ -71,8 +72,15 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       inputBuffer.current = '';
 
       socket.onopen = () => {
-        reconnectAttemptsRef.current = 0;
         terminal.writeln('\x1b[32m[connected]\x1b[0m');
+
+        // Don't reset reconnect counter immediately — wait for a stable
+        // connection (5s without disconnect) to prevent rapid connect/
+        // disconnect loops from resetting the counter every cycle.
+        if (stabilityTimer) clearTimeout(stabilityTimer);
+        stabilityTimer = setTimeout(() => {
+          reconnectAttemptsRef.current = 0;
+        }, 5000);
       };
 
       socket.onmessage = (event) => {
@@ -92,13 +100,21 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
       socket.onclose = () => {
         if (disposed) return;
+        // Cancel stability timer — connection wasn't stable
+        if (stabilityTimer) {
+          clearTimeout(stabilityTimer);
+          stabilityTimer = null;
+        }
         terminal.writeln('\r\n\x1b[31m[disconnected]\x1b[0m');
         if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          terminal.writeln('\x1b[31m[reconnect limit reached]\x1b[0m');
+          terminal.writeln('\x1b[31m[reconnect limit reached — refresh page to retry]\x1b[0m');
           return;
         }
         reconnectAttemptsRef.current += 1;
-        const delayMs = Math.min(1500 * reconnectAttemptsRef.current, 5000);
+        // Exponential backoff with jitter: 2s base, max 10s
+        const baseDelay = Math.min(2000 * Math.pow(1.5, reconnectAttemptsRef.current - 1), 10000);
+        const jitter = Math.random() * 1000;
+        const delayMs = baseDelay + jitter;
         terminal.writeln(
           `\x1b[33m[reconnecting in ${Math.round(delayMs / 1000)}s `
           + `${reconnectAttemptsRef.current}/${maxReconnectAttempts}]\x1b[0m`,
@@ -120,6 +136,9 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       reconnectAttemptsRef.current = 0;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
+      }
+      if (stabilityTimer) {
+        clearTimeout(stabilityTimer);
       }
       onDataDisposable.dispose();
       terminal.dispose();
