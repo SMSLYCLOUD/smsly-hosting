@@ -59,6 +59,16 @@ class AddonViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Access denied to this service.")
 
         addon = serializer.save()
+
+        # Auto-expose new addons by default
+        if not addon.public_domain:
+            from .models_core import Service
+            base_domain = Service.default_public_base_domain()
+            short_id = str(addon.id).split('-')[0]
+            slug = re.sub(r'[^a-z0-9]+', '-', addon.addon_type.lower()).strip('-')
+            addon.public_domain = f"addon-{slug}-{short_id}.{base_domain}"
+            addon.save(update_fields=['public_domain'])
+
         # Trigger async provisioning via Celery (uses Docker-native
         # provisioner)
         from .tasks import provision_addon_task
