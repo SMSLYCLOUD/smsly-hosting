@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { DbExplorer } from "@/components/addons/DbExplorer";
 import { useToast } from "@/components/ui/use-toast";
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { DASHBOARD_ADDONS } from "@/lib/addonConstants";
 
 export default function AddonDetailsPage() {
     const { id } = useParams();
@@ -92,11 +93,17 @@ export default function AddonDetailsPage() {
                     </div>
                     <div className="flex gap-2">
                         {addon.public_domain && (
-                            <Button variant="outline" className="border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500" asChild>
-                                <a href={`https://${addon.public_domain}`} target="_blank" rel="noreferrer">
-                                    <Globe className="w-4 h-4 mr-2" /> View Dashboard
-                                </a>
-                            </Button>
+                            DASHBOARD_ADDONS.includes(addon.addon_type) ? (
+                                <Button variant="outline" className="border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500" asChild>
+                                    <a href={`https://${addon.public_domain}`} target="_blank" rel="noreferrer">
+                                        <Globe className="w-4 h-4 mr-2" /> View Dashboard
+                                    </a>
+                                </Button>
+                            ) : (
+                                <Button variant="outline" className="border-zinc-500/20 text-zinc-500 hover:bg-zinc-500/10 hover:text-zinc-500 cursor-not-allowed" title="This addon type does not have an HTTP dashboard. Use TCP clients to connect.">
+                                    <Server className="w-4 h-4 mr-2" /> TCP Service
+                                </Button>
+                            )
                         )}
                         <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
                             {deleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
