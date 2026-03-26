@@ -9,6 +9,7 @@ import { Plus, Database, Server, RefreshCw, Globe, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
+import { DASHBOARD_ADDONS } from "@/lib/addonConstants";
 
 export default function AddonsPage() {
     const [addons, setAddons] = useState<Addon[]>([]);
@@ -76,15 +77,21 @@ export default function AddonsPage() {
                                                     <Globe size={12} className="shrink-0" />
                                                     <span className="truncate">{addon.public_domain}</span>
                                                 </div>
-                                                <a
-                                                    href={`https://${addon.public_domain}`}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
-                                                >
-                                                    <Eye size={12} /> View Dashboard
-                                                </a>
+                                                {DASHBOARD_ADDONS.includes(addon.addon_type) ? (
+                                                    <a
+                                                        href={`https://${addon.public_domain}`}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+                                                    >
+                                                        <Eye size={12} /> View Dashboard
+                                                    </a>
+                                                ) : (
+                                                    <span className="flex items-center justify-center gap-2 px-3 py-2 bg-zinc-500/10 text-zinc-400 rounded-lg text-xs font-medium cursor-not-allowed" title="This addon type does not have an HTTP dashboard. Use TCP clients to connect.">
+                                                        <Server size={12} /> TCP Service
+                                                    </span>
+                                                )}
                                             </div>
                                         )}
                                     </CardContent>
