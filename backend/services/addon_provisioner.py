@@ -119,7 +119,7 @@ class AddonProvisioner:
             default='smsly-net')
         self.proxy_network_name = config(
             'DOCKER_PROXY_NETWORK',
-            default='smsly-proxy')
+            default='smsly-net')
         self._network_checked = False
 
         # Register generic addons so they are recognized across the platform
