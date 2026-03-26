@@ -178,7 +178,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
-        timeout_seconds = 600.0  # 10 minutes total idle timeout
+        timeout_seconds = 420.0  # 7 minutes total idle timeout
         max_exec_reconnects = 3
         exec_reconnect_count = 0
 
@@ -255,7 +255,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
                     # Send a structured keepalive to prevent proxy idle timeout
                     try:
-                        await self.send(text_data=json.dumps({'type': 'nop'}))
+                        await self.send(text_data=json.dumps({'message': ''}))
                     except Exception:
                         pass
                     continue
@@ -290,14 +290,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return None
 
         try:
-            # Wait for data with a timeout (20s)
-            # select() works on anything with a .fileno()
-            r, _, _ = select.select([sock], [], [], 20.0)
-            if not r:
-                return b''  # Timeout — return empty to trigger keepalive
+            if hasattr(sock, 'settimeout'):
+                sock.settimeout(15.0)
 
-            # Data available — try to read it
-            # We check both recv and read for maximum compatibility with wrappers
             if hasattr(sock, 'recv'):
                 data = sock.recv(4096)
             elif hasattr(sock, 'read'):
@@ -311,7 +306,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return None
             return data
 
-        except (socket.timeout, select.error):
+        except socket.timeout:
+            return b''
+        except select.error:
             return b''
         except Exception as e:
             err_name = e.__class__.__name__
@@ -407,10 +404,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 raw = self.exec_socket
             self._raw_sock = raw
 
-            # Set recv timeout so _blocking_read cycles every 30s
+            # Set recv timeout so _blocking_read cycles every 15s
             # instead of blocking forever
             try:
-                self._raw_sock.settimeout(30.0)
+                self._raw_sock.settimeout(15.0)
             except (AttributeError, _socket.error) as e:
                 logger.warning("Could not set exec socket timeout: %s", e)
 
