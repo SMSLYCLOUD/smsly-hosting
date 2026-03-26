@@ -385,23 +385,30 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 <RefreshCw size={12} /> Refresh
                                             </button>
                                             {addon.public_domain ? (
-                                                <div className="flex items-center rounded-lg overflow-hidden border border-emerald-500/20">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex items-center rounded-lg overflow-hidden border border-emerald-500/20">
+                                                        <span
+                                                            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs font-medium h-full"
+                                                        >
+                                                            <Globe size={12} /> {addon.public_domain}
+                                                        </span>
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
+                                                            className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors h-full"
+                                                            title="Edit Domain"
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                    </div>
                                                     <a
                                                         href={`https://${addon.public_domain}`}
                                                         target="_blank"
                                                         rel="noreferrer"
                                                         onClick={(e) => e.stopPropagation()}
-                                                        className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-colors h-full"
+                                                        className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors h-full"
                                                     >
-                                                        <Globe size={12} /> {addon.public_domain}
+                                                        <Eye size={12} /> View Dashboard
                                                     </a>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleUpdatePublicDomain(addon.id, addon.public_domain); }}
-                                                        className="flex items-center px-2 py-2 bg-emerald-500/10 border-l border-emerald-500/20 text-emerald-400 text-xs font-medium hover:bg-emerald-500/30 transition-colors h-full"
-                                                        title="Edit Domain"
-                                                    >
-                                                        Edit
-                                                    </button>
                                                 </div>
                                             ) : (
                                                 <button

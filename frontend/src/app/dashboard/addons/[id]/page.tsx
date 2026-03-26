@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { RefreshCw, Database, Server, Key, Eye, EyeOff, Trash2, ArrowLeft } from "lucide-react";
+import { RefreshCw, Database, Server, Key, Eye, EyeOff, Trash2, ArrowLeft, Globe } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -91,6 +91,13 @@ export default function AddonDetailsPage() {
                         <p className="text-muted-foreground mt-2">{addon.addon_type} Instance • Created {new Date(addon.created_at).toLocaleDateString()}</p>
                     </div>
                     <div className="flex gap-2">
+                        {addon.public_domain && (
+                            <Button variant="outline" className="border-emerald-500/20 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-500" asChild>
+                                <a href={`https://${addon.public_domain}`} target="_blank" rel="noreferrer">
+                                    <Globe className="w-4 h-4 mr-2" /> View Dashboard
+                                </a>
+                            </Button>
+                        )}
                         <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
                             {deleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
                             Delete Addon

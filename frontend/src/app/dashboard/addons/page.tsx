@@ -5,7 +5,7 @@ import Link from "next/link";
 import { addonsApi, Addon } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Plus, Database, Server, RefreshCw } from "lucide-react";
+import { Plus, Database, Server, RefreshCw, Globe, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -70,6 +70,23 @@ export default function AddonsPage() {
                                                 {new Date(addon.created_at).toLocaleDateString()}
                                             </span>
                                         </div>
+                                        {addon.public_domain && (
+                                            <div className="mt-4 flex flex-col gap-2">
+                                                <div className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-500/20">
+                                                    <Globe size={12} className="shrink-0" />
+                                                    <span className="truncate">{addon.public_domain}</span>
+                                                </div>
+                                                <a
+                                                    href={`https://${addon.public_domain}`}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+                                                >
+                                                    <Eye size={12} /> View Dashboard
+                                                </a>
+                                            </div>
+                                        )}
                                     </CardContent>
                                 </Card>
                             </Link>
