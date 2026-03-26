@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon } from '@/lib/api';
-
+import { ADDON_TYPES } from '@/lib/addonConstants';
 
 
 interface Backup {
@@ -17,74 +17,6 @@ interface Backup {
     completed_at?: string;
     error_message?: string;
 }
-
-const ADDON_TYPES = [
-    // ── Relational Databases ──
-    { value: 'POSTGRES', label: 'PostgreSQL', logo: '/logos/addons/postgres.svg', color: 'text-blue-400', description: 'Relational database' },
-    { value: 'MYSQL', label: 'MySQL', logo: '/logos/addons/mysql.svg', color: 'text-cyan-400', description: 'Relational database' },
-    { value: 'MARIADB', label: 'MariaDB', icon: '🦭', color: 'text-teal-400', description: 'MySQL-compatible DB' },
-    { value: 'COCKROACHDB', label: 'CockroachDB', icon: '🪳', color: 'text-indigo-400', description: 'Distributed SQL' },
-    { value: 'TIMESCALEDB', label: 'TimescaleDB', icon: '⏱️', color: 'text-amber-500', description: 'Time-series SQL' },
-    { value: 'PERCONA', label: 'Percona', icon: '🔷', color: 'text-sky-400', description: 'MySQL/MongoDB server' },
-    { value: 'VITESS', label: 'Vitess', icon: '🌐', color: 'text-lime-400', description: 'MySQL sharding' },
-    // ── Document Databases ──
-    { value: 'MONGODB', label: 'MongoDB', logo: '/logos/addons/mongodb.svg', color: 'text-green-400', description: 'Document database' },
-    { value: 'COUCHDB', label: 'CouchDB', icon: '🛋️', color: 'text-red-300', description: 'Document database' },
-    { value: 'RETHINKDB', label: 'RethinkDB', icon: '💭', color: 'text-green-300', description: 'Realtime document DB' },
-    { value: 'ARANGODB', label: 'ArangoDB', icon: '🥑', color: 'text-emerald-400', description: 'Multi-model database' },
-    { value: 'FERRETDB', label: 'FerretDB', icon: '🦦', color: 'text-orange-300', description: 'MongoDB alternative' },
-    { value: 'SURREALDB', label: 'SurrealDB', icon: '🌀', color: 'text-fuchsia-400', description: 'Multi-model cloud DB' },
-    // ── Key-Value Stores ──
-    { value: 'REDIS', label: 'Redis', logo: '/logos/addons/redis.svg', color: 'text-red-400', description: 'In-memory cache & store' },
-    { value: 'MEMCACHED', label: 'Memcached', icon: '⚡', color: 'text-purple-400', description: 'Distributed cache' },
-    { value: 'KEYDB', label: 'KeyDB', icon: '🔑', color: 'text-yellow-300', description: 'Multi-threaded Redis fork' },
-    { value: 'VALKEY', label: 'Valkey', icon: '🔓', color: 'text-blue-300', description: 'Redis-compatible store' },
-    { value: 'DRAGONFLYDB', label: 'DragonflyDB', icon: '🐉', color: 'text-red-500', description: 'Ultra-fast cache' },
-    { value: 'ETCD', label: 'etcd', icon: '🗂️', color: 'text-cyan-300', description: 'Distributed KV store' },
-    // ── Column / Wide-Column ──
-    { value: 'CLICKHOUSE', label: 'ClickHouse', icon: '📊', color: 'text-amber-400', description: 'Analytics database' },
-    { value: 'CASSANDRA', label: 'Cassandra', icon: '👁️', color: 'text-sky-300', description: 'Wide-column store' },
-    { value: 'SCYLLADB', label: 'ScyllaDB', icon: '🐙', color: 'text-violet-500', description: 'High-perf Cassandra' },
-    // ── Graph Databases ──
-    { value: 'NEO4J', label: 'Neo4j', icon: '🕸️', color: 'text-blue-500', description: 'Graph database' },
-    { value: 'DGRAPH', label: 'Dgraph', icon: '📐', color: 'text-rose-400', description: 'Distributed graph DB' },
-    // ── Vector Databases (AI) ──
-    { value: 'QDRANT', label: 'Qdrant', logo: '/logos/addons/qdrant.svg', color: 'text-violet-400', description: 'Vector database (AI)' },
-    { value: 'WEAVIATE', label: 'Weaviate', icon: '🧬', color: 'text-green-500', description: 'Vector search engine' },
-    { value: 'MILVUS', label: 'Milvus', icon: '🧮', color: 'text-blue-400', description: 'Vector similarity DB' },
-    { value: 'CHROMADB', label: 'ChromaDB', icon: '🎨', color: 'text-pink-400', description: 'AI embedding store' },
-    // ── Search Engines ──
-    { value: 'ELASTICSEARCH', label: 'Elasticsearch', logo: '/logos/addons/elasticsearch.svg', color: 'text-yellow-400', description: 'Search & analytics' },
-    { value: 'OPENSEARCH', label: 'OpenSearch', icon: '🔍', color: 'text-blue-400', description: 'Open-source search' },
-    { value: 'MEILISEARCH', label: 'MeiliSearch', icon: '🔎', color: 'text-purple-500', description: 'Instant search engine' },
-    { value: 'TYPESENSE', label: 'Typesense', icon: '⌨️', color: 'text-cyan-400', description: 'Typo-tolerant search' },
-    { value: 'SOLR', label: 'Apache Solr', icon: '☀️', color: 'text-orange-400', description: 'Enterprise search' },
-    // ── Message Queues / Streaming ──
-    { value: 'RABBITMQ', label: 'RabbitMQ', icon: '🐇', color: 'text-orange-400', description: 'Message broker' },
-    { value: 'KAFKA', label: 'Apache Kafka', icon: '📨', color: 'text-slate-300', description: 'Event streaming' },
-    { value: 'NATS', label: 'NATS', icon: '📡', color: 'text-green-400', description: 'Cloud messaging' },
-    { value: 'REDPANDA', label: 'Redpanda', icon: '🐼', color: 'text-red-400', description: 'Kafka-compatible' },
-    { value: 'PULSAR', label: 'Apache Pulsar', icon: '💫', color: 'text-indigo-400', description: 'Pub-sub messaging' },
-    { value: 'ACTIVEMQ', label: 'ActiveMQ', icon: '📬', color: 'text-rose-300', description: 'Java message broker' },
-    // ── Object Storage ──
-    { value: 'MINIO', label: 'MinIO', logo: '/logos/addons/minio.svg', color: 'text-pink-400', description: 'S3-compatible storage' },
-    { value: 'SEAWEEDFS', label: 'SeaweedFS', icon: '🌊', color: 'text-teal-300', description: 'Distributed storage' },
-    // ── Time-Series ──
-    { value: 'INFLUXDB', label: 'InfluxDB', icon: '📈', color: 'text-purple-400', description: 'Time-series database' },
-    { value: 'QUESTDB', label: 'QuestDB', icon: '⏳', color: 'text-amber-300', description: 'Fast time-series DB' },
-    { value: 'VICTORIAMETRICS', label: 'VictoriaMetrics', icon: '📉', color: 'text-sky-400', description: 'Metrics storage' },
-    // ── Monitoring / Observability ──
-    { value: 'PROMETHEUS', label: 'Prometheus', icon: '🔥', color: 'text-orange-500', description: 'Metrics & alerting' },
-    { value: 'GRAFANA', label: 'Grafana', icon: '📊', color: 'text-orange-300', description: 'Dashboards & viz' },
-    { value: 'JAEGER', label: 'Jaeger', icon: '🔭', color: 'text-cyan-400', description: 'Distributed tracing' },
-    // ── Workflow / Infrastructure ──
-    { value: 'N8N', label: 'n8n', icon: '🔄', color: 'text-rose-400', description: 'Workflow automation' },
-    { value: 'TEMPORAL', label: 'Temporal', icon: '⏰', color: 'text-indigo-300', description: 'Workflow orchestration' },
-    { value: 'VAULT', label: 'HashiCorp Vault', icon: '🔐', color: 'text-yellow-400', description: 'Secrets management' },
-    { value: 'CONSUL', label: 'Consul', icon: '🏛️', color: 'text-pink-500', description: 'Service discovery' },
-    { value: 'KEYCLOAK', label: 'Keycloak', icon: '🛡️', color: 'text-blue-500', description: 'Identity & access' },
-];
-
 
 
 export function AddonsTab({ serviceId }: { serviceId?: string }) {
@@ -400,15 +332,21 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                             Edit
                                                         </button>
                                                     </div>
-                                                    <a
-                                                        href={`https://${addon.public_domain}`}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors h-full"
-                                                    >
-                                                        <Eye size={12} /> View Dashboard
-                                                    </a>
+                                                    {(meta as any).has_dashboard ? (
+                                                        <a
+                                                            href={`https://${addon.public_domain}`}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 text-emerald-400 rounded-lg text-xs font-medium hover:bg-emerald-500/20 transition-colors h-full"
+                                                        >
+                                                            <Eye size={12} /> View Dashboard
+                                                        </a>
+                                                    ) : (
+                                                        <span className="flex items-center gap-2 px-3 py-2 bg-zinc-500/10 text-zinc-400 rounded-lg text-xs font-medium h-full cursor-not-allowed" title="This addon type does not have an HTTP dashboard. Use TCP clients to connect.">
+                                                            <Server size={12} /> TCP Service
+                                                        </span>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <button
