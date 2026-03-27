@@ -73,25 +73,29 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self.user.id, self.deployment_id)
         await self.accept()
 
-        # ======================================================================
         # Find the container and start docker exec
-        # ======================================================================
         self.container_id = await self._find_container()
         if not self.container_id:
+            logger.error("Terminal connect: No container found for deployment %s", self.deployment_id)
             await self.send(text_data=json.dumps({
                 'message': '\x1b[31m[error] No running container found for '
                            'this deployment.\x1b[0m\r\n'
             }))
             return
 
+        logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
+
         # Start the exec session
         success = await self._start_exec()
         if not success:
+            logger.error("Terminal connect: Failed to start exec in %s", self.container_id)
             await self.send(text_data=json.dumps({
                 'message': '\x1b[31m[error] Failed to start shell in '
                            'container.\x1b[0m\r\n'
             }))
             return
+
+        logger.info("Terminal connect: Shell started in %s", self.container_id)
 
         await self.send(text_data=json.dumps({
             'message': '\x1b[32m[connected to container]\x1b[0m\r\n'
@@ -393,6 +397,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 tty=True,
             )
             self.exec_id = exec_instance['Id']
+            logger.info("Exec instance created: %s (shell: %s)", self.exec_id, shell)
 
             # Attach to the exec instance (returns a socket-like wrapper)
             self.exec_socket = client.api.exec_start(
@@ -400,6 +405,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 socket=True,
                 tty=True,
             )
+            logger.info("Exec session attached for %s", self.exec_id)
 
             # ── CRITICAL: Extract the raw OS socket ──
             # docker-py returns a SocketIO/HTTPResponse wrapper whose read()

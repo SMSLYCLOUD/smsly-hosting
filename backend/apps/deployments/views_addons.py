@@ -248,7 +248,18 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         try:
             client = get_docker_client()
-            container = client.containers.get(container_name)
+            # Robust container lookup (handles platform/compose prefixes)
+            try:
+                container = client.containers.get(container_name)
+            except Exception:
+                # Fallback: search for containers containing the addon name
+                possible = client.containers.list(filters={"name": container_name})
+                if possible:
+                    container = possible[0]
+                else:
+                    return Response({
+                        'error': f'MinIO container not found: {container_name}'
+                    }, status=status.HTTP_404_NOT_FOUND)
             
             # Execute the mc command inside the container
             cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
