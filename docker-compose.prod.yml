@@ -83,7 +83,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 2 --worker-class
-      uvicorn.workers.UvicornWorker --timeout 600
+      uvicorn.workers.UvicornWorker --timeout 600 --ws-ping-interval 20 --ws-ping-timeout 20
     restart: unless-stopped
     env_file: .env
     environment:
