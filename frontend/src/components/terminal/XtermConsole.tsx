@@ -75,6 +75,11 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
       socket.onopen = () => {
         terminal.writeln('\x1b[32m[connected]\x1b[0m');
 
+        // Complete the backend handshake
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'ready' }));
+        }
+
         // Don't reset reconnect counter immediately — wait for a stable
         // connection (5s without disconnect) to prevent rapid connect/
         // disconnect loops from resetting the counter every cycle.
