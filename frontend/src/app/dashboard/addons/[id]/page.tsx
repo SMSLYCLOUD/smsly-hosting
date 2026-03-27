@@ -27,6 +27,7 @@ export default function AddonDetailsPage() {
     const [showCreds, setShowCreds] = useState(false);
     const [rotating, setRotating] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [updatingBucket, setUpdatingBucket] = useState(false);
 
     useEffect(() => {
         async function load() {
@@ -70,6 +71,18 @@ export default function AddonDetailsPage() {
         } catch (err) {
             toast({ title: "Error", description: "Failed to delete addon.", variant: "destructive" });
             setDeleting(false);
+        }
+    };
+
+    const handleToggleBucketPublic = async (isPublic: boolean) => {
+        setUpdatingBucket(true);
+        try {
+            await addonsApi.toggleBucketPublic(id as string, isPublic);
+            toast({ title: "Bucket Access Updated", description: `Bucket is now ${isPublic ? 'public' : 'private'}.` });
+        } catch (err) {
+            toast({ title: "Error", description: "Failed to update bucket access policy.", variant: "destructive" });
+        } finally {
+            setUpdatingBucket(false);
         }
     };
 
@@ -133,7 +146,25 @@ export default function AddonDetailsPage() {
                                     {showCreds ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                 </Button>
                             </div>
-                            <div className="flex justify-end">
+                            <div className="flex justify-end items-center gap-2">
+                                {addon.addon_type === 'MINIO' && (
+                                    <div className="mr-auto flex items-center gap-2 text-sm text-muted-foreground">
+                                        <span>Bucket Access:</span>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={updatingBucket}
+                                            onClick={() => {
+                                                const makePublic = window.confirm("Make bucket public? Anyone will be able to read objects from the bucket. Ensure you do not store sensitive data if enabling this.");
+                                                if (makePublic !== null) handleToggleBucketPublic(makePublic);
+                                            }}
+                                            className="text-xs"
+                                        >
+                                            {updatingBucket ? <RefreshCw className="w-3 h-3 animate-spin mr-2" /> : null}
+                                            Set Public/Private
+                                        </Button>
+                                    </div>
+                                )}
                                 <Button variant="outline" size="sm" onClick={handleRotate} disabled={rotating}>
                                     {rotating ? <RefreshCw className="w-3 h-3 animate-spin mr-2" /> : <RefreshCw className="w-3 h-3 mr-2" />}
                                     Rotate Credentials

@@ -217,3 +217,38 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         response = FileResponse(open(backup.file_path, 'rb'), as_attachment=True, filename=os.path.basename(backup.file_path))
         return response
+
+    @action(detail=True, methods=['post'])
+    def toggle_bucket_public(self, request, pk=None):
+        """Toggle MinIO bucket public read access policy."""
+        addon = self.get_object()
+
+        if addon.addon_type != 'MINIO':
+            return Response({'error': 'Only MinIO addons support public bucket toggling.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_public = request.data.get('is_public', False)
+
+        container_name = f"smsly-addon-minio-{addon.id}"
+        bucket_name = "default-bucket"
+
+        policy = "public" if is_public else "none"
+
+        import subprocess
+        try:
+            # Set the anonymous policy on the bucket using the MinIO client (`mc`) inside the container
+            subprocess.run([
+                'docker', 'exec', container_name,
+                'mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}'
+            ], capture_output=True, text=True, check=True)
+
+            return Response({
+                'status': 'success',
+                'is_public': is_public,
+                'message': f"Bucket access set to {'public' if is_public else 'private'}."
+            })
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to toggle MinIO public access for {addon.id}: {e.stderr}")
+            return Response({'error': f"Failed to apply bucket policy: {e.stderr}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            logger.error(f"Error toggling MinIO public access for {addon.id}: {e}")
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
