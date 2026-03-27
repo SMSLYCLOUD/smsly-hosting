@@ -1410,6 +1410,10 @@ export const addonsApi = {
       const res = await api.get(`/addons/${addonId}/backups/`);
       return Array.isArray(res.data) ? res.data : [];
     },
+    toggleBucketPublic: async (addonId: string, isPublic: boolean): Promise<any> => {
+      const res = await api.post(`/addons/${addonId}/toggle_bucket_public/`, { is_public: isPublic });
+      return res.data;
+    },
 };
 
 export default api;
