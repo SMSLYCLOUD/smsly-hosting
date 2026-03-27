@@ -122,6 +122,16 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
         }
     };
 
+    const handleToggleBucketPublic = async (addonId: string, isPublic: boolean) => {
+        try {
+            await addonsApi.toggleBucketPublic(addonId, isPublic);
+            setAddons(prev => prev.map(a => a.id === addonId ? { ...a, is_bucket_public: isPublic } : a));
+        } catch (e) {
+            console.error('Failed to toggle bucket access:', e);
+            alert("Failed to change bucket access policy");
+        }
+    };
+
     const fetchBackups = async (addonId: string) => {
         try {
             const data = await addonsApi.backups(addonId);
@@ -372,6 +382,38 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
                                                 </button>
                                             )}
                                         </div>
+
+                                        {/* MinIO Bucket Access */}
+                                        {addon.addon_type === 'MINIO' && (
+                                            <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-4 flex items-center justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`p-2 rounded-full ${addon.is_bucket_public ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                                                        <Shield size={18} />
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-foreground">Bucket Access Control</p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {addon.is_bucket_public 
+                                                                ? 'Public: Files can be accessed via direct S3 URLs without authentication.' 
+                                                                : 'Private: Files require signed URLs or AWS credentials to access.'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[10px] font-bold uppercase text-muted-foreground">
+                                                        {addon.is_bucket_public ? 'Public' : 'Private'}
+                                                    </span>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleToggleBucketPublic(addon.id, !addon.is_bucket_public); }}
+                                                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${addon.is_bucket_public ? 'bg-emerald-500' : 'bg-zinc-700'}`}
+                                                    >
+                                                        <span
+                                                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${addon.is_bucket_public ? 'translate-x-6' : 'translate-x-1'}`}
+                                                        />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
 
                                         {/* Credentials */}
                                         {addon.status === 'ACTIVE' && credentials[addon.id] && (

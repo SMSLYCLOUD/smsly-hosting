@@ -1,7 +1,8 @@
-"""Views Storage module."""
+import os
 import posixpath
 import uuid
-
+import mimetypes
+from django.http import StreamingHttpResponse
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets, permissions, serializers, status
 from rest_framework.decorators import action
@@ -118,3 +119,96 @@ class VolumeViewSet(viewsets.ModelViewSet):
                                 status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({'files': []})  # Mock if no docker
+
+    @action(detail=True, methods=['post'], url_path='delete-file')
+    def delete_file(self, request, pk=None, service_pk=None):
+        """Delete a file or directory in the volume."""
+        volume = self.get_object()
+        path = request.data.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security normalization
+        path = posixpath.normpath(path)
+        mount = posixpath.normpath(volume.mount_path)
+        if not path.startswith(mount + "/"):
+            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+
+        latest_deploy = volume.service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+        try:
+            container = client.containers.get(latest_deploy.container_id)
+            exit_code, output = container.exec_run(["rm", "-rf", path], user="root")
+            if exit_code != 0:
+                return Response({'error': 'Delete failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'message': 'Deleted successfully'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'], url_path='download-file')
+    def download_file(self, request, pk=None, service_pk=None):
+        """Download a file from the volume."""
+        volume = self.get_object()
+        path = request.query_params.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Security normalization
+        path = posixpath.normpath(path)
+        mount = posixpath.normpath(volume.mount_path)
+        if not path.startswith(mount + "/"):
+            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+
+        latest_deploy = volume.service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+        try:
+            container = client.containers.get(latest_deploy.container_id)
+            # Use get_archive for streaming
+            bits, stat = container.get_archive(path)
+            
+            # Note: get_archive returns a tar stream. For simple downloads we might want a single file.
+            # However, for simplicity and supporting directories, tar is fine.
+            # If it's a single file, the user might expect the raw bytes.
+            
+            response = StreamingHttpResponse(bits, content_type='application/x-tar')
+            filename = os.path.basename(path) + ".tar"
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='mkdir')
+    def mkdir(self, request, pk=None, service_pk=None):
+        """Create a directory in the volume."""
+        volume = self.get_object()
+        path = request.data.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        path = posixpath.normpath(path)
+        mount = posixpath.normpath(volume.mount_path)
+        if not (path == mount or path.startswith(mount + "/")):
+            return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
+
+        latest_deploy = volume.service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        from apps.cloud.docker_client import get_docker_client
+        client = get_docker_client()
+        try:
+            container = client.containers.get(latest_deploy.container_id)
+            exit_code, output = container.exec_run(["mkdir", "-p", path], user="root")
+            if exit_code != 0:
+                return Response({'error': 'Mkdir failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'message': 'Created successfully'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

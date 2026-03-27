@@ -562,10 +562,6 @@ export const servicesApi = {
   deleteVolume: async (serviceId: string, volId: string): Promise<void> => {
       await api.delete(`/services/${serviceId}/volumes/${volId}/`);
   },
-  browseVolume: async (serviceId: string, volId: string, path: string): Promise<any> => {
-      const response = await api.get(`/services/${serviceId}/volumes/${volId}/browse/`, { params: { path } });
-      return response.data;
-  },
 
   // Domain verification
   verifyDomain: async (serviceId: string, domain: string): Promise<{ domain: string; verified: boolean; cname_target: string; message: string }> => {
@@ -573,7 +569,22 @@ export const servicesApi = {
       return response.data;
   },
 
-  // File Manager
+  // Volume Browser
+  browseVolume: async (serviceId: string, volumeId: string, path?: string): Promise<{ path: string; files: any[] }> => {
+      const res = await api.get(`/services/${serviceId}/volumes/${volumeId}/browse/`, { params: { path } });
+      return res.data;
+  },
+  deleteVolumeFile: async (serviceId: string, volumeId: string, path: string): Promise<void> => {
+      await api.post(`/services/${serviceId}/volumes/${volumeId}/delete-file/`, { path });
+  },
+  createVolumeFolder: async (serviceId: string, volumeId: string, path: string): Promise<void> => {
+      await api.post(`/services/${serviceId}/volumes/${volumeId}/mkdir/`, { path });
+  },
+  downloadVolumeFile: (serviceId: string, volumeId: string, path: string) => {
+      const token = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie()) : null;
+      const url = `${getApiUrl()}/services/${serviceId}/volumes/${volumeId}/download-file/?path=${encodeURIComponent(path)}&token=${token}`;
+      window.open(url, '_blank');
+  },
   browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
       const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
       return response.data;
@@ -585,6 +596,17 @@ export const servicesApi = {
   writeFile: async (serviceId: string, path: string, content: string): Promise<{ message: string; path: string }> => {
       const response = await api.post(`/services/${serviceId}/file-write/`, { path, content });
       return response.data;
+  },
+  deleteFile: async (serviceId: string, path: string): Promise<void> => {
+      await api.post(`/services/${serviceId}/file-delete/`, { path });
+  },
+  createFolder: async (serviceId: string, path: string): Promise<void> => {
+      await api.post(`/services/${serviceId}/file-mkdir/`, { path });
+  },
+  downloadFile: (serviceId: string, path: string) => {
+      const token = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie()) : null;
+      const url = `${getApiUrl()}/services/${serviceId}/file-download/?path=${encodeURIComponent(path)}&token=${token}`;
+      window.open(url, '_blank');
   }
 };
 
@@ -1343,6 +1365,7 @@ export interface Addon {
     created_at: string;
     connection_url?: string;
     public_domain?: string | null;
+    is_bucket_public?: boolean;
     config: Record<string, any>;
 }
 

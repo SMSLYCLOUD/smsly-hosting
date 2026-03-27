@@ -93,6 +93,10 @@ class Addon(TimeStampedModel):
         related_name='addons')
     name = models.CharField(max_length=255)
     addon_type = models.CharField(max_length=20, choices=Type.choices)
+    is_bucket_public = models.BooleanField(
+        default=False,
+        help_text="Whether the default bucket is public read-only."
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
