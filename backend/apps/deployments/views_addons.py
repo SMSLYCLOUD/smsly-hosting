@@ -280,8 +280,56 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'message': f"Bucket access set to {'public' if is_public else 'private'}."
             })
         except Exception as e:
-            logger.error(f"Failed to toggle MinIO public access for {addon.id}: {str(e)}")
-            return Response({'error': f"Internal error during bucket policy application: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except Exception as e:
             logger.error(f"Error toggling MinIO public access for {addon.id}: {e}")
             return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def toggle_bucket_public_api(request, pk):
+    """Standalone API function to bypass DRF router shadowing."""
+    try:
+        addon = Addon.objects.get(pk=pk)
+        viewset = AddonViewSet()
+        viewset.request = request
+        viewset.format_kwarg = None
+        # Manually invoke the logic
+        # We can't easily call get_object() without a full DRF context, 
+        # so we'll just check the type and call toggle_bucket_public
+        if addon.addon_type != 'MINIO':
+            return Response({'error': 'Not a MinIO addon'}, status=400)
+        
+        # Reuse the existing ViewSet method logic by passing the addon directly 
+        # or just reimplementing the core logic here for absolute safety
+        from apps.cloud.docker_client import get_docker_client
+        is_public = request.data.get('is_public', False)
+        container_name = addon.name
+        bucket_name = "default-bucket"
+        policy = "public" if is_public else "none"
+
+        client = get_docker_client()
+        try:
+            container = client.containers.get(container_name)
+        except Exception:
+            possible = client.containers.list(filters={"name": container_name})
+            if possible:
+                container = possible[0]
+            else:
+                return Response({'error': f'Container not found: {container_name}'}, status=404)
+
+        cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
+        exit_code, output = container.exec_run(cmd)
+        if exit_code != 0:
+            return Response({'error': output.decode().strip()}, status=500)
+
+        addon.is_bucket_public = is_public
+        addon.save(update_fields=['is_bucket_public'])
+        return Response({'status': 'success', 'is_public': is_public})
+    except Addon.DoesNotExist:
+        return Response({'error': 'Addon not found'}, status=404)
+    except Exception as e:
+        logger.error(f"Standalone toggle failed: {e}")
+        return Response({'error': str(e)}, status=500)

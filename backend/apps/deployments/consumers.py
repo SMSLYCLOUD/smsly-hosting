@@ -74,6 +74,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             "WebSocket connected: User %s to deployment %s",
             self.user.id, self.deployment_id)
         await self.accept()
+        
+        # ── STATUS UPDATE: Keep proxy alive during discovery ──
+        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] initializing connection...\x1b[0m\r\n'}))
 
         # Find the container and start docker exec
         self.container_id = await self._find_container()
@@ -86,6 +89,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
+        
+        # ── STATUS UPDATE: Keep proxy alive during exec creation ──
+        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] attaching to container shell...\x1b[0m\r\n'}))
 
         # Start the exec session
         success = await self._start_exec()
