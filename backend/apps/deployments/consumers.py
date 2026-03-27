@@ -97,13 +97,19 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         logger.info("Terminal connect: Shell started in %s", self.container_id)
 
-        await self.send(text_data=json.dumps({
-            'message': '\x1b[32m[connected to container]\x1b[0m\r\n'
-        }))
+        # ── PRIME THE PIPE: Send a full banner to keep proxies alive ──
+        banner = (
+            "\x1b[32m[connected to container]\x1b[0m\r\n"
+            "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
+            f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
+            f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
+            "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
+        )
+        await self.send(text_data=json.dumps({'message': banner}))
 
         # Start background task to read container output
         # Sleep slightly before starting the blocking read so the WS can settle
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         self._read_task = asyncio.create_task(self._read_output())
 
     async def disconnect(self, close_code):
