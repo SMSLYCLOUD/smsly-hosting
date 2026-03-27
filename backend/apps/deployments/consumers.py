@@ -86,53 +86,47 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.container_id = await self._find_container()
         if not self.container_id:
             logger.error("Terminal connect: No container found for deployment %s", self.deployment_id)
-            await self.send(text_data=json.dumps({
+            await self._out_queue.put({
                 'message': '\x1b[31m[error] No running container found for '
                            'this deployment.\x1b[0m\r\n'
-            }))
+            })
             return
 
         logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
-        # ── AGGRESSIVE TRAFFIC SMOOTHING ──
-        # We start pulsing IMMEDIATELY to keep proxy alive, but at a lower freq
-        # to avoid buffer choking on high-load VPS.
-        await self.send(text_data=json.dumps({"type": "terminal", "data": "\r\n[status] initializing stable tunnel...\r\n"}))
         
-        # Give the proxy 500ms to settle the websocket handshake before the first big burst
-        await asyncio.sleep(0.5)
-
-        pulse_delay = 2.0  # Slowed down to 2s to avoid overwhelming the buffer
+        # ── AGGRESSIVE TRAFFIC SMOOTHING ──
+        pulse_delay = 2.0
         self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
         
-        # ── STATUS UPDATE: Keep proxy alive during exec creation ──
-        # await self.send(text_data=json.dumps({'message': '\x1b[90m[status] attaching to container shell...\x1b[0m\r\n'}))
+        # Give the proxy a moment to settle
+        await asyncio.sleep(0.5)
 
         # Start the exec session
         success = await self._start_exec()
         if not success:
             logger.error("Terminal connect: Failed to start exec in %s", self.container_id)
-            await self.send(text_data=json.dumps({
+            await self._out_queue.put({
                 'message': '\x1b[31m[error] Failed to start shell in '
                            'container.\x1b[0m\r\n'
-            }))
+            })
             return
 
         logger.info("Terminal connect: Shell started in %s", self.container_id)
 
         # ── PRIME THE PIPE: Send a full banner to keep proxies alive ──
         banner = (
-            "\x1b[32m[connected to container]\x1b[0m\r\n"
+            "\r\n\x1b[32m[connected to container]\x1b[0m\r\n"
             "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
             f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
             f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
             "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
         )
-        await self.send(text_data=json.dumps({'message': banner}))
+        await self._out_queue.put({'message': banner})
 
         # Start background tasks
         # Decouple reading (blocking) from sending (async) via a queue
         self._read_task = asyncio.create_task(self._read_output())
-        self._send_task = asyncio.create_task(self._send_loop())
+        # self._send_task is already running from line 80
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
@@ -363,7 +357,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if not self.is_disconnected:
                     try:
                         # A minimal pulse to keep the pipe hot
-                        await self.send(text_data=json.dumps({"type": "pulse"}))
+                        await self._out_queue.put({"type": "pulse"})
                     except Exception:
                         # If pulsing fails, the connection is gone
                         break
@@ -448,13 +442,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.error("Error finding container: %s", e)
             return None
 
-    @database_sync_to_async
-    def _start_exec(self):
+    async def _start_exec(self):
         """Create a docker exec instance and attach to it.
 
         Extracts the raw OS socket from docker-py's wrapper so that
         _blocking_read() can use recv() for reliable timeout behavior.
         """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_start_exec)
+
+    def _sync_start_exec(self):
+        """Blocking part of exec start."""
         from apps.cloud.docker_client import get_docker_exec_client
         import socket as _socket
         try:
@@ -464,8 +462,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Try bash first, fall back to sh
             shell = '/bin/bash'
             try:
-                exit_code, _ = container.exec_run(
-                    'which bash', demux=True)
+                exit_code, _ = container.exec_run('which bash', demux=True)
                 if exit_code != 0:
                     shell = '/bin/sh'
             except Exception:
@@ -491,19 +488,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             )
             logger.info("Exec session attached for %s", self.exec_id)
 
-            # ── CRITICAL: Extract the raw OS socket ──
-            # docker-py returns a SocketIO/HTTPResponse wrapper whose read()
-            # method returns b'' on BOTH timeout AND EOF, making them
-            # indistinguishable. The raw socket's recv() properly raises
-            # socket.timeout, so we always use that.
             raw = getattr(self.exec_socket, '_sock', None)
             if raw is None:
-                # Some docker-py versions expose the socket differently
                 raw = self.exec_socket
             self._raw_sock = raw
 
-            # Set recv timeout so _blocking_read cycles every 15s
-            # instead of blocking forever
             try:
                 self._raw_sock.settimeout(15.0)
             except (AttributeError, _socket.error) as e:
