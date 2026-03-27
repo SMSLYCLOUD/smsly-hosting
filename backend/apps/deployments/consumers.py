@@ -26,6 +26,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.exec_socket = None
         self._raw_sock = None  # The actual OS-level socket for recv/send
         self._read_task = None
+        self.is_disconnected = False
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -102,6 +103,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._read_task = asyncio.create_task(self._read_output())
 
     async def disconnect(self, close_code):
+        self.is_disconnected = True
         if self._read_task:
             self._read_task.cancel()
             try:
@@ -137,6 +139,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         try:
             data = json.loads(text_data)
             if data.get('type') == 'ping':
+                # Respond with pong to keep connection alive through proxies
+                await self.send(text_data=json.dumps({'type': 'pong'}))
                 return
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
@@ -261,6 +265,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     continue
 
                 # Got real data — reset activity and exec reconnect counters
+                if self.is_disconnected:
+                    break
+
                 self._last_activity = time.time()
                 exec_reconnect_count = 0
                 text = data.decode('utf-8', errors='replace')
@@ -268,9 +275,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(
-                "Terminal output read error for %s: %s",
-                self.deployment_id, e)
+            if not self.is_disconnected:
+                logger.error(
+                    "Terminal output read error for %s: %s",
+                    self.deployment_id, e, exc_info=True)
             try:
                 await self.close()
             except Exception:
