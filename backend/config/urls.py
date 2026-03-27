@@ -3,9 +3,12 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from config.health import health_check, liveness_check, readiness_check
+from apps.deployments.views_addons import AddonViewSet
 
 
 urlpatterns = [
+    # ─── CRITICAL: Direct Addon Actions (must be before router.urls to avoid 404 shadowing) ───
+    path('api/v1/addons/<uuid:pk>/toggle_bucket_public/', AddonViewSet.as_view({'post': 'toggle_bucket_public'}), name='addon-toggle-bucket-public-root'),
     path('admin/', admin.site.urls),
 
     # Health probes
