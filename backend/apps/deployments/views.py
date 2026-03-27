@@ -1714,6 +1714,198 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'message': f'{domain} removed. No redeploy required.',
         })
 
+    @action(detail=True, methods=['get'], url_path='file-browse')
+    def file_browse(self, request, pk=None):
+        """List files in a directory inside the running container."""
+        service = self.get_object()
+        path = request.query_params.get('path', '/app')
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+
+            # ZH-012 FIX: Use a more robust listing command if ls -la behaves unexpectedly.
+            # We also try to handle cases where /app might not exist by falling back to /.
+            exit_code, output = container.exec_run(["ls", "-la", path])
+            if exit_code != 0 and path == '/app':
+                # Fallback to root if /app fails
+                path = '/'
+                exit_code, output = container.exec_run(["ls", "-la", path])
+
+            if exit_code != 0:
+                return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+
+            files = []
+            lines = output.decode('utf-8', errors='replace').splitlines()
+            if lines and lines[0].startswith('total'):
+                lines = lines[1:]
+
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 9:
+                    files.append({
+                        'permissions': parts[0],
+                        'user': parts[2],
+                        'size': parts[4],
+                        'date': f"{parts[5]} {parts[6]} {parts[7]}",
+                        'name': " ".join(parts[8:])
+                    })
+
+            return Response({'path': path, 'files': files})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'], url_path='file-download')
+    def file_download(self, request, pk=None):
+        """Download a file from the container."""
+        service = self.get_object()
+        path = request.query_params.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+            bits, stat = container.get_archive(path)
+            
+            from django.http import StreamingHttpResponse
+            response = StreamingHttpResponse(bits, content_type='application/x-tar')
+            filename = os.path.basename(path) + ".tar"
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='file-delete')
+    def file_delete(self, request, pk=None):
+        """Delete a file or directory in the container."""
+        service = self.get_object()
+        path = request.data.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+            exit_code, output = container.exec_run(["rm", "-rf", path])
+            if exit_code != 0:
+                return Response({'error': 'Delete failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'message': 'Deleted successfully'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='file-mkdir')
+    def file_mkdir(self, request, pk=None):
+        """Create a directory in the container."""
+        service = self.get_object()
+        path = request.data.get('path')
+        if not path:
+            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+            exit_code, output = container.exec_run(["mkdir", "-p", path])
+            if exit_code != 0:
+                return Response({'error': 'Mkdir failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'message': 'Created successfully'})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['get'], url_path='file-read')
+    def file_read(self, request, pk=None):
+        """Read a file's contents from the running container."""
+        service = self.get_object()
+        path = request.query_params.get('path')
+
+        if not path:
+            return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+
+            exit_code, output = container.exec_run(["cat", path])
+            if exit_code != 0:
+                return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({'path': path, 'content': output.decode('utf-8')})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=True, methods=['post'], url_path='file-write')
+    def file_write(self, request, pk=None):
+        """Write contents to a file in the running container."""
+        service = self.get_object()
+        path = request.data.get('path')
+        content = request.data.get('content')
+
+        if not path or content is None:
+            return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy or not latest_deploy.container_id:
+            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            import tarfile
+            import io
+            import time
+
+            client = get_docker_client()
+            container = client.containers.get(latest_deploy.container_id)
+
+            # Create a tar archive in memory containing the file
+            tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
+                file_data = content.encode('utf-8')
+                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
+                tarinfo.size = len(file_data)
+                tarinfo.mtime = int(time.time())
+                tar.addfile(tarinfo, io.BytesIO(file_data))
+
+            tar_stream.seek(0)
+
+            # Put the archive into the container's directory
+            dir_name = os.path.dirname(path)
+            # Ensure the directory exists
+            container.exec_run(["mkdir", "-p", dir_name])
+
+            success = container.put_archive(dir_name, tar_stream)
+
+            if not success:
+                return Response({'error': 'Failed to write file via put_archive'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            return Response({'message': 'File written successfully', 'path': path})
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class DeploymentViewSet(viewsets.ModelViewSet):
     """
@@ -2211,197 +2403,6 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             'duration_seconds': deployment.duration_seconds,
         })
 
-    @action(detail=True, methods=['get'], url_path='file-browse')
-    def file_browse(self, request, pk=None):
-        """List files in a directory inside the running container."""
-        service = self.get_object()
-        path = request.query_params.get('path', '/app')
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
-
-            # ZH-012 FIX: Use a more robust listing command if ls -la behaves unexpectedly.
-            # We also try to handle cases where /app might not exist by falling back to /.
-            exit_code, output = container.exec_run(["ls", "-la", path])
-            if exit_code != 0 and path == '/app':
-                # Fallback to root if /app fails
-                path = '/'
-                exit_code, output = container.exec_run(["ls", "-la", path])
-
-            if exit_code != 0:
-                return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
-
-            files = []
-            lines = output.decode('utf-8', errors='replace').splitlines()
-            if lines and lines[0].startswith('total'):
-                lines = lines[1:]
-
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 9:
-                    files.append({
-                        'permissions': parts[0],
-                        'user': parts[2],
-                        'size': parts[4],
-                        'date': f"{parts[5]} {parts[6]} {parts[7]}",
-                        'name': " ".join(parts[8:])
-                    })
-
-            return Response({'path': path, 'files': files})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['get'], url_path='file-download')
-    def file_download(self, request, pk=None):
-        """Download a file from the container."""
-        service = self.get_object()
-        path = request.query_params.get('path')
-        if not path:
-            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
-            bits, stat = container.get_archive(path)
-            
-            from django.http import StreamingHttpResponse
-            response = StreamingHttpResponse(bits, content_type='application/x-tar')
-            filename = os.path.basename(path) + ".tar"
-            response['Content-Disposition'] = f'attachment; filename="{filename}"'
-            return response
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['post'], url_path='file-delete')
-    def file_delete(self, request, pk=None):
-        """Delete a file or directory in the container."""
-        service = self.get_object()
-        path = request.data.get('path')
-        if not path:
-            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
-            exit_code, output = container.exec_run(["rm", "-rf", path])
-            if exit_code != 0:
-                return Response({'error': 'Delete failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
-            return Response({'message': 'Deleted successfully'})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['post'], url_path='file-mkdir')
-    def file_mkdir(self, request, pk=None):
-        """Create a directory in the container."""
-        service = self.get_object()
-        path = request.data.get('path')
-        if not path:
-            return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
-            exit_code, output = container.exec_run(["mkdir", "-p", path])
-            if exit_code != 0:
-                return Response({'error': 'Mkdir failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
-            return Response({'message': 'Created successfully'})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['get'], url_path='file-read')
-    def file_read(self, request, pk=None):
-        """Read a file's contents from the running container."""
-        service = self.get_object()
-        path = request.query_params.get('path')
-
-        if not path:
-            return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            import docker
-            client = docker.from_env()
-            container = client.containers.get(latest_deploy.container_id)
-
-            exit_code, output = container.exec_run(["cat", path])
-            if exit_code != 0:
-                return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
-
-            return Response({'path': path, 'content': output.decode('utf-8')})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    @action(detail=True, methods=['post'], url_path='file-write')
-    def file_write(self, request, pk=None):
-        """Write contents to a file in the running container."""
-        service = self.get_object()
-        path = request.data.get('path')
-        content = request.data.get('content')
-
-        if not path or content is None:
-            return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            import docker
-            import tarfile
-            import io
-            import time
-
-            client = docker.from_env()
-            container = client.containers.get(latest_deploy.container_id)
-
-            # Create a tar archive in memory containing the file
-            tar_stream = io.BytesIO()
-            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                file_data = content.encode('utf-8')
-                tarinfo = tarfile.TarInfo(name=os.path.basename(path))
-                tarinfo.size = len(file_data)
-                tarinfo.mtime = int(time.time())
-                tar.addfile(tarinfo, io.BytesIO(file_data))
-
-            tar_stream.seek(0)
-
-            # Put the archive into the container's directory
-            dir_name = os.path.dirname(path)
-            # Ensure the directory exists
-            container.exec_run(["mkdir", "-p", dir_name])
-
-            success = container.put_archive(dir_name, tar_stream)
-
-            if not success:
-                return Response({'error': 'Failed to write file via put_archive'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            return Response({'message': 'File written successfully', 'path': path})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['get'], url_path='runtime-logs')
     def runtime_logs(self, request, pk=None):

@@ -237,19 +237,27 @@ class AddonViewSet(viewsets.ModelViewSet):
         if addon.addon_type != 'MINIO':
             return Response({'error': 'Only MinIO addons support public bucket toggling.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        from apps.cloud.docker_client import get_docker_client
         is_public = request.data.get('is_public', False)
 
-        container_name = f"smsly-addon-minio-{addon.id}"
+        # The container name for an addon is its name
+        container_name = addon.name
         bucket_name = "default-bucket"
 
         policy = "public" if is_public else "none"
 
         try:
-            # Set the anonymous policy on the bucket using the MinIO client (`mc`) inside the container
-            subprocess.run([
-                'docker', 'exec', container_name,
-                'mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}'
-            ], capture_output=True, text=True, check=True)
+            client = get_docker_client()
+            container = client.containers.get(container_name)
+            
+            # Execute the mc command inside the container
+            cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
+            exit_code, output = container.exec_run(cmd)
+
+            if exit_code != 0:
+                return Response({
+                    'error': f"Failed to apply bucket policy: {output.decode().strip()}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # Persist the state in the database
             addon.is_bucket_public = is_public
@@ -260,9 +268,9 @@ class AddonViewSet(viewsets.ModelViewSet):
                 'is_public': is_public,
                 'message': f"Bucket access set to {'public' if is_public else 'private'}."
             })
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to toggle MinIO public access for {addon.id}: {e.stderr}")
-            return Response({'error': f"Failed to apply bucket policy: {e.stderr}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as e:
+            logger.error(f"Failed to toggle MinIO public access for {addon.id}: {str(e)}")
+            return Response({'error': f"Internal error during bucket policy application: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         except Exception as e:
             logger.error(f"Error toggling MinIO public access for {addon.id}: {e}")
             return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

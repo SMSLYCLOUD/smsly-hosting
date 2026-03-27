@@ -88,7 +88,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
           if (socket?.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ping' }));
           }
-        }, 25000);
+        }, 15000);
       };
 
       socket.onmessage = (event) => {
