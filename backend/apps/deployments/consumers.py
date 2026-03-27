@@ -29,7 +29,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._send_task = None
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
-        self._is_ready = asyncio.Event()
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -76,18 +75,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self.user.id, os.getpid(), self.deployment_id)
         await self.accept()
         
-        # ── STATUS UPDATE: Notify frontend we are waiting for handshake ──
-        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] handshaking with browser...\x1b[0m\r\n'}))
-
-        # ── WAIT FOR HANDSHAKE: Ensure the proxy/browser is fully synced ──
-        try:
-            await asyncio.wait_for(self._is_ready.wait(), timeout=5.0)
-            logger.info("[CONSOLE_DEBUG] Handshake complete for deployment %s", self.deployment_id)
-        except asyncio.TimeoutError:
-            logger.warning("[CONSOLE_DEBUG] Handshake timeout for %s, proceeding anyway...", self.deployment_id)
+        # ── START SENDER IMMEDIATELY: Prevent any silent window ──
+        self._send_task = asyncio.create_task(self._send_loop())
         
-        # ── STATUS UPDATE: Handshake done, start container discovery ──
-        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] initializing connection...\x1b[0m\r\n'}))
+        # ── STATUS UPDATE: Immediate traffic for the proxy ──
+        await self._out_queue.put({'message': '\x1b[90m[status] initializing stable tunnel...\x1b[0m\r\n'})
 
         # Find the container and start docker exec
         self.container_id = await self._find_container()
@@ -173,10 +165,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # Handle structured messages (e.g. heartbeat)
         try:
             data = json.loads(text_data)
-            if data.get('type') == 'ready':
-                # Complete the backend handshake
-                self._is_ready.set()
-                return
             if data.get('type') == 'ping':
                 # Respond with pong to keep connection alive through proxies
                 await self.send(text_data=json.dumps({'type': 'pong'}))
@@ -347,6 +335,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         except Exception:
                             # If pulse fails, the socket is dead
                             break
+                except asyncio.QueueEmpty:
+                    # ── HIGH-FREQ PULSE: Keep proxy alive during long attachment ──
+                    # Use 1s pulse until shell is ready, then 10s
+                    pulse_delay = 1.0 if not self.exec_id else 10.0
+                    await asyncio.sleep(pulse_delay)
+                    try:
+                        await self.send(text_data=json.dumps({'type': 'pulse'}))
+                    except Exception:
+                        # If pulse fails, the socket is dead
+                        break
         except asyncio.CancelledError:
             logger.info("[CONSOLE_DEBUG] _send_loop task CANCELLED")
         except Exception as e:
