@@ -314,28 +314,31 @@ def toggle_bucket_public_api(request, pk):
 
         client = get_docker_client()
         container = None
+        addon_uuid = str(addon.id)
         
-        # ── NUCLEAR DISCOVERY: Manual Scan of all containers (No filtering to fail) ──
+        # ── UUID DISCOVERY: Search for the Addon ID in the container names ──
         all_containers = client.containers.list()
-        logger.info(f"[MINIO_DEBUG] Scanning {len(all_containers)} containers for match: {container_name}")
+        logger.info(f"[MINIO_DEBUG] Scanning {len(all_containers)} containers for ID: {addon_uuid}")
         
         for c in all_containers:
-            # Match by name (case-insensitive substring) or label
-            if container_name.lower() in c.name.lower():
+            # Match by UUID (case-insensitive substring)
+            if addon_uuid.lower() in c.name.lower():
                 container = c
-                logger.info(f"[MINIO_DEBUG] Found match by name: {c.name}")
-                break
-            
-            # Match by compose service label
-            service_label = c.labels.get('com.docker.compose.service')
-            if service_label == container_name:
-                container = c
-                logger.info(f"[MINIO_DEBUG] Found match by label: {c.name}")
+                logger.info(f"[MINIO_DEBUG] Found match by UUID in name: {c.name}")
                 break
 
         if not container:
-            logger.error(f"[MINIO_DEBUG] FAILED: Could not find container for {container_name} after full scan")
-            return Response({'error': f'MinIO container not found: {container_name}'}, status=404)
+            # Fallback to name scan if UUID fails (legacy or different prefix)
+            container_name = addon.name
+            for c in all_containers:
+                if container_name.lower() in c.name.lower():
+                    container = c
+                    logger.info(f"[MINIO_DEBUG] Found match by legacy name fallback: {c.name}")
+                    break
+
+        if not container:
+            logger.error(f"[MINIO_DEBUG] FAILED: Could not find container for Addon {addon_uuid} after full scan")
+            return Response({'error': 'MinIO container not found for this addon'}, status=404)
 
         cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
         exit_code, output = container.exec_run(cmd)
