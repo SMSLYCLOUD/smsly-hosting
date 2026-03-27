@@ -29,6 +29,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._send_task = None
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
+        self._pulse_task = None
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -135,6 +136,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
+        if self._pulse_task:
+            self._pulse_task.cancel()
         if self._read_task:
             self._read_task.cancel()
         if self._send_task:
@@ -345,22 +348,29 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         except Exception:
                             # If pulse fails, the socket is dead
                             break
-                except asyncio.QueueEmpty:
-                    # ── HIGH-FREQ PULSE: Keep proxy alive during long attachment ──
-                    # Use 1s pulse until shell is ready, then 10s
-                    pulse_delay = 1.0 if not self.exec_id else 10.0
-                    await asyncio.sleep(pulse_delay)
-                    try:
-                        await self.send(text_data=json.dumps({'type': 'pulse'}))
-                    except Exception:
-                        # If pulse fails, the socket is dead
-                        break
         except asyncio.CancelledError:
             logger.info("[CONSOLE_DEBUG] _send_loop task CANCELLED")
         except Exception as e:
             logger.error("[CONSOLE_DEBUG] _send_loop error (PID %s): %s", os.getpid(), e)
         finally:
             logger.info("[CONSOLE_DEBUG] _send_loop task TERMINATED")
+
+    async def _aggressive_pulse(self, interval):
+        """Background heartbeat task: Keep proxy connection active during idle."""
+        try:
+            while not self.is_disconnected:
+                await asyncio.sleep(interval)
+                if not self.is_disconnected:
+                    try:
+                        # A minimal pulse to keep the pipe hot
+                        await self.send(text_data=json.dumps({"type": "pulse"}))
+                    except Exception:
+                        # If pulsing fails, the connection is gone
+                        break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("[CONSOLE_DEBUG] _aggressive_pulse error: %s", e)
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor.
