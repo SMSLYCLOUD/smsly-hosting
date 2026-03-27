@@ -203,6 +203,21 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
                     continue
                 if value.endswith(suffix):
                     hosts.add(value)
+
+        for addon in Addon.objects.exclude(public_domain__isnull=True).exclude(public_domain=""):
+            public_domain = ""
+            try:
+                public_domain = normalize_domain(addon.public_domain.strip())
+            except ValueError:
+                logger.warning(
+                    "Skipping invalid public domain %r for addon %s",
+                    addon.public_domain,
+                    addon.id,
+                )
+                continue
+            if public_domain.endswith(suffix):
+                hosts.add(public_domain)
+
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not load wildcard known hosts: %s", exc)
         return []

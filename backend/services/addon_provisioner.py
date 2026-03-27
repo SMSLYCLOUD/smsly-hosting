@@ -300,8 +300,38 @@ class AddonProvisioner:
 
         logger.info(f"Provisioning {addon_type} addon for service {service_name}")
 
+        public_domain = getattr(addon, 'public_domain', None)
+        router_name = container_name.replace(".", "-").replace("_", "-")
+
         # If the container already exists, never "re-provision" (which would rotate passwords).
         existing_cid, is_running = self._container_status(container_name)
+
+        if existing_cid:
+            # Check if Traefik routing labels match the current public_domain
+            try:
+                inspect_proc = subprocess.run(
+                    ['docker', 'inspect', '-f', '{{json .Config.Labels}}', container_name],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if inspect_proc.returncode == 0 and inspect_proc.stdout:
+                    import json
+                    labels = json.loads(inspect_proc.stdout)
+
+                    expected_rule_key = f"traefik.http.routers.{router_name}.rule"
+                    expected_rule_val = f"Host(`{public_domain}`)" if public_domain else None
+                    current_rule_val = labels.get(expected_rule_key)
+
+                    # If public domain changed, or was added/removed, we must recreate the container to update labels.
+                    # Volumes, passwords, and data will persist.
+                    if current_rule_val != expected_rule_val:
+                        logger.info(f"Public domain changed for {container_name}. Recreating container to update Traefik labels.")
+                        subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True, check=False)
+                        existing_cid = None
+            except Exception as e:
+                logger.warning(f"Failed to inspect labels for {container_name}: {e}")
+
         if existing_cid:
             if not is_running:
                 logger.info("Starting existing addon container: %s", container_name)
@@ -435,8 +465,6 @@ class AddonProvisioner:
                 logger.warning("Failed to reconstruct addon URL for %s: %s", container_name, exc)
 
             raise RuntimeError(f"Addon container exists but connection_url is missing: {container_name}")
-
-        public_domain = getattr(addon, 'public_domain', None)
 
         # If the URL exists but container is missing, re-create the container using the same credentials.
         # This avoids password drift when persistent volumes are re-used.
