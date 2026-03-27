@@ -92,9 +92,19 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
+        # ── AGGRESSIVE TRAFFIC SMOOTHING ──
+        # We start pulsing IMMEDIATELY to keep proxy alive, but at a lower freq
+        # to avoid buffer choking on high-load VPS.
+        await self.send(text_data=json.dumps({"type": "terminal", "data": "\r\n[status] initializing stable tunnel...\r\n"}))
+        
+        # Give the proxy 500ms to settle the websocket handshake before the first big burst
+        await asyncio.sleep(0.5)
+
+        pulse_delay = 2.0  # Slowed down to 2s to avoid overwhelming the buffer
+        self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
         
         # ── STATUS UPDATE: Keep proxy alive during exec creation ──
-        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] attaching to container shell...\x1b[0m\r\n'}))
+        # await self.send(text_data=json.dumps({'message': '\x1b[90m[status] attaching to container shell...\x1b[0m\r\n'}))
 
         # Start the exec session
         success = await self._start_exec()
