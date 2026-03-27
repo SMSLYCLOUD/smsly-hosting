@@ -71,8 +71,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         logger.info(
-            "WebSocket connected: User %s to deployment %s",
-            self.user.id, self.deployment_id)
+            "[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
+            self.user.id, os.getpid(), self.deployment_id)
         await self.accept()
         
         # ── STATUS UPDATE: Keep proxy alive during discovery ──
@@ -299,16 +299,18 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 text = data.decode('utf-8', errors='replace')
                 await self._out_queue.put({'message': text})
         except asyncio.CancelledError:
-            pass
+            logger.info("[CONSOLE_DEBUG] _read_output task CANCELLED")
         except Exception as e:
             if not self.is_disconnected:
                 logger.error(
-                    "Terminal output read error for %s: %s",
-                    self.deployment_id, e, exc_info=True)
+                    "[CONSOLE_DEBUG] _read_output error (PID %s): %s",
+                    os.getpid(), e, exc_info=True)
             try:
                 await self.close()
             except Exception:
                 pass
+        finally:
+            logger.info("[CONSOLE_DEBUG] _read_output task TERMINATED")
 
     async def _send_loop(self):
         """Dedicated task to drain the output queue to the WebSocket with heartbeat."""
@@ -328,11 +330,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         try:
                             await self.send(text_data=json.dumps({'type': 'pulse'}))
                         except Exception:
+                            # If pulse fails, the socket is dead
                             break
         except asyncio.CancelledError:
-            pass
+            logger.info("[CONSOLE_DEBUG] _send_loop task CANCELLED")
         except Exception as e:
-            logger.error("Terminal send loop error: %s", e)
+            logger.error("[CONSOLE_DEBUG] _send_loop error (PID %s): %s", os.getpid(), e)
+        finally:
+            logger.info("[CONSOLE_DEBUG] _send_loop task TERMINATED")
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor.

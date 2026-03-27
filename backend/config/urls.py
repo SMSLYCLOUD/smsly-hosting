@@ -1,14 +1,14 @@
 """Urls module."""
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
 from config.health import health_check, liveness_check, readiness_check
 from apps.deployments.views_addons import toggle_bucket_public_api
 
 
 urlpatterns = [
-    # ─── CRITICAL: Direct Addon Actions (Function-based bypass for router shadowing) ───
-    path('api/v1/addons/<uuid:pk>/toggle_bucket_public/', toggle_bucket_public_api, name='addon-toggle-bucket-public-root'),
+    # ─── CRITICAL: Direct Addon Actions (Greedy Regex bypass for router shadowing) ───
+    re_path(r'^api/v1/addons/(?P<pk>[^/.]+)/toggle_bucket_public/?$', toggle_bucket_public_api, name='addon-toggle-bucket-public-root'),
     path('admin/', admin.site.urls),
 
     # Health probes
