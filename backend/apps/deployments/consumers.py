@@ -94,12 +94,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
         
-        # ── AGGRESSIVE TRAFFIC SMOOTHING ──
-        pulse_delay = 2.0
-        self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
-        
         # Give the proxy a moment to settle
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.8)
 
         # Start the exec session
         success = await self._start_exec()
@@ -124,9 +120,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         await self._out_queue.put({'message': banner})
 
         # Start background tasks
-        # Decouple reading (blocking) from sending (async) via a queue
+        # Decouple reading (blocking) from sending        # Start background tasks
         self._read_task = asyncio.create_task(self._read_output())
-        # self._send_task is already running from line 80
+        
+        # ── START HEARTBEAT LAST: Ensuring zero-noise during attachment ──
+        pulse_delay = 5.0  # Increased to 5s to be less aggressive now that tunnel is open
+        self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
@@ -357,7 +356,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if not self.is_disconnected:
                     try:
                         # A minimal pulse to keep the pipe hot
-                        await self._out_queue.put({"type": "pulse"})
+                        # Using empty message to match established protocol
+                        await self._out_queue.put({"message": ""})
                     except Exception:
                         # If pulsing fails, the connection is gone
                         break
