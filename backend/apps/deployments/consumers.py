@@ -305,16 +305,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 pass
 
     async def _send_loop(self):
-        """Dedicated task to drain the output queue to the WebSocket."""
+        """Dedicated task to drain the output queue to the WebSocket with heartbeat."""
         try:
             while not self.is_disconnected:
-                msg = await self._out_queue.get()
                 try:
-                    await self.send(text_data=json.dumps(msg))
-                except Exception as e:
-                    logger.warning("Terminal WebSocket send failed: %s", e)
-                    # If send fails, the socket is likely dead
-                    break
+                    # Wait for message with a 10s pulse timeout
+                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=10.0)
+                    try:
+                        await self.send(text_data=json.dumps(msg))
+                    except Exception as e:
+                        logger.warning("Terminal WebSocket send failed: %s", e)
+                        break
+                except asyncio.TimeoutError:
+                    # No data for 10s — send a server-side pulse to keep proxies awake
+                    if not self.is_disconnected:
+                        try:
+                            await self.send(text_data=json.dumps({'type': 'pulse'}))
+                        except Exception:
+                            break
         except asyncio.CancelledError:
             pass
         except Exception as e:
