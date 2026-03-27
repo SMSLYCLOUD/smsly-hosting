@@ -290,17 +290,19 @@ from rest_framework.permissions import IsAuthenticated
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def toggle_bucket_public_api(request, pk):
-    """Standalone API function to bypass DRF router shadowing."""
+    """Standalone API function with maximal diagnostic logging."""
+    logger.info(f"[MINIO_DEBUG] toggle_bucket_public_api entered for pk={pk}, method={request.method}")
     try:
-        addon = Addon.objects.get(pk=pk)
-        viewset = AddonViewSet()
-        viewset.request = request
-        viewset.format_kwarg = None
-        # Manually invoke the logic
-        # We can't easily call get_object() without a full DRF context, 
-        # so we'll just check the type and call toggle_bucket_public
+        from apps.deployments.models_addons import Addon
+        try:
+            addon = Addon.objects.get(pk=pk)
+        except Exception as db_err:
+            logger.warning(f"[MINIO_DEBUG] Addon {pk} not found in DB: {db_err}")
+            return Response({'error': f'Addon {pk} not found in database'}, status=404)
+        
+        logger.info(f"[MINIO_DEBUG] Found addon {addon.name} ({addon.addon_type})")
         if addon.addon_type != 'MINIO':
-            return Response({'error': 'Not a MinIO addon'}, status=400)
+            return Response({'error': f'Addon type {addon.addon_type} does not support bucket toggling'}, status=400)
         
         # Reuse the existing ViewSet method logic by passing the addon directly 
         # or just reimplementing the core logic here for absolute safety
