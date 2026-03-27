@@ -26,6 +26,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.exec_socket = None
         self._raw_sock = None  # The actual OS-level socket for recv/send
         self._read_task = None
+        self._send_task = None
+        self._out_queue = asyncio.Queue()
         self.is_disconnected = False
 
     async def connect(self):
@@ -107,19 +109,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         )
         await self.send(text_data=json.dumps({'message': banner}))
 
-        # Start background task to read container output
-        # Sleep slightly before starting the blocking read so the WS can settle
-        await asyncio.sleep(0.05)
+        # Start background tasks
+        # Decouple reading (blocking) from sending (async) via a queue
         self._read_task = asyncio.create_task(self._read_output())
+        self._send_task = asyncio.create_task(self._send_loop())
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
         if self._read_task:
             self._read_task.cancel()
-            try:
-                await asyncio.wait_for(self._read_task, timeout=1.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
+        if self._send_task:
+            self._send_task.cancel()
+        
+        try:
+            if self._read_task:
+                await asyncio.wait_for(self._read_task, timeout=0.5)
+            if self._send_task:
+                await asyncio.wait_for(self._send_task, timeout=0.5)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
         self._close_exec_socket()
         if self.user:
             logger.info(
@@ -208,10 +216,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             "Terminal exec reconnect limit reached for %s",
                             self.deployment_id)
                         try:
-                            await self.send(text_data=json.dumps({
+                            await self._out_queue.put({
                                 'message': '\r\n\x1b[31m[session ended — '
                                            'exec reconnect limit reached]\x1b[0m\r\n'
-                            }))
+                            })
+                            # Wait slightly for the queue to drain
+                            await asyncio.sleep(0.5)
                             await self.close(code=4000)
                         except Exception:
                             pass
@@ -222,11 +232,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         "(%d/%d)", self.deployment_id,
                         exec_reconnect_count, max_exec_reconnects)
                     try:
-                        await self.send(text_data=json.dumps({
+                        await self._out_queue.put({
                             'message': f'\r\n\x1b[33m[exec disconnected — '
                                        f'reconnecting {exec_reconnect_count}/'
                                        f'{max_exec_reconnects}]\x1b[0m\r\n'
-                        }))
+                        })
                     except Exception:
                         pass
 
@@ -243,10 +253,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         continue
 
                     try:
-                        await self.send(text_data=json.dumps({
+                        await self._out_queue.put({
                             'message': '\x1b[32m[reconnected to container]'
                                        '\x1b[0m\r\n'
-                        }))
+                        })
                     except Exception:
                         pass
                     continue
@@ -269,7 +279,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
                     # Send a structured keepalive to prevent proxy idle timeout
                     try:
-                        await self.send(text_data=json.dumps({'message': ''}))
+                        await self._out_queue.put({'message': ''})
                     except Exception:
                         pass
                     continue
@@ -281,7 +291,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 self._last_activity = time.time()
                 exec_reconnect_count = 0
                 text = data.decode('utf-8', errors='replace')
-                await self.send(text_data=json.dumps({'message': text}))
+                await self._out_queue.put({'message': text})
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -293,6 +303,22 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 await self.close()
             except Exception:
                 pass
+
+    async def _send_loop(self):
+        """Dedicated task to drain the output queue to the WebSocket."""
+        try:
+            while not self.is_disconnected:
+                msg = await self._out_queue.get()
+                try:
+                    await self.send(text_data=json.dumps(msg))
+                except Exception as e:
+                    logger.warning("Terminal WebSocket send failed: %s", e)
+                    # If send fails, the socket is likely dead
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Terminal send loop error: %s", e)
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor.
