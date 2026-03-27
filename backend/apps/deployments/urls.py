@@ -72,9 +72,9 @@ services_router.register(r'cron', CronJobViewSet, basename='service-cron')
 services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 services_router.register(r'backups', ServiceBackupViewSet, basename='service-backup')
 
-# Register the MinIO toggle action explicitly to ensure it's not missed by the router
+# ── CRITICAL: Explicit Addon Actions (must be before router.urls to avoid 404 shadowing)
 urlpatterns = [
-    path('addons/<uuid:pk>/toggle_bucket_public/', AddonViewSet.as_view({'post': 'toggle_bucket_public'}), name='addon-toggle-bucket-public'),
+    path('addons/<uuid:pk>/toggle_bucket_public/', AddonViewSet.as_view({'post': 'toggle_bucket_public'}), name='addon-toggle-bucket-public-direct'),
 ] + router.urls + [
     path('templates/', TemplateViewSet.as_view({'get': 'list'}), name='template-list'),
     path('templates/<str:pk>/', TemplateViewSet.as_view({'get': 'retrieve'}), name='template-detail'),
