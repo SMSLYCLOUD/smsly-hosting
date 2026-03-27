@@ -313,14 +313,29 @@ def toggle_bucket_public_api(request, pk):
         policy = "public" if is_public else "none"
 
         client = get_docker_client()
+        container = None
+        
+        # ── TIERED DISCOVERY: Find the container even with prefixes ──
         try:
+            # 1. Exact Match
             container = client.containers.get(container_name)
+            logger.info(f"[MINIO_DEBUG] Container EXACT match found: {container_name}")
         except Exception:
+            # 2. Pattern Match (Search for name containing the addon name)
             possible = client.containers.list(filters={"name": container_name})
             if possible:
                 container = possible[0]
+                logger.info(f"[MINIO_DEBUG] Container PATTERN match found: {container.name}")
             else:
-                return Response({'error': f'Container not found: {container_name}'}, status=404)
+                # 3. Label Match (Look for compose service name)
+                # Some platforms name the container by its service ID
+                possible_by_label = client.containers.list(filters={"label": f"com.docker.compose.service={container_name}"})
+                if possible_by_label:
+                    container = possible_by_label[0]
+                    logger.info(f"[MINIO_DEBUG] Container LABEL match found: {container.name}")
+                else:
+                    logger.error(f"[MINIO_DEBUG] FAILED to resolve container for: {container_name}")
+                    return Response({'error': f'MinIO container not found: {container_name}'}, status=404)
 
         cmd = ['mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}']
         exit_code, output = container.exec_run(cmd)

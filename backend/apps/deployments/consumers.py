@@ -29,6 +29,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._send_task = None
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
+        self._is_ready = asyncio.Event()
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -75,7 +76,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self.user.id, os.getpid(), self.deployment_id)
         await self.accept()
         
-        # ── STATUS UPDATE: Keep proxy alive during discovery ──
+        # ── STATUS UPDATE: Notify frontend we are waiting for handshake ──
+        await self.send(text_data=json.dumps({'message': '\x1b[90m[status] handshaking with browser...\x1b[0m\r\n'}))
+
+        # ── WAIT FOR HANDSHAKE: Ensure the proxy/browser is fully synced ──
+        try:
+            await asyncio.wait_for(self._is_ready.wait(), timeout=5.0)
+            logger.info("[CONSOLE_DEBUG] Handshake complete for deployment %s", self.deployment_id)
+        except asyncio.TimeoutError:
+            logger.warning("[CONSOLE_DEBUG] Handshake timeout for %s, proceeding anyway...", self.deployment_id)
+        
+        # ── STATUS UPDATE: Handshake done, start container discovery ──
         await self.send(text_data=json.dumps({'message': '\x1b[90m[status] initializing connection...\x1b[0m\r\n'}))
 
         # Find the container and start docker exec
@@ -162,6 +173,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # Handle structured messages (e.g. heartbeat)
         try:
             data = json.loads(text_data)
+            if data.get('type') == 'ready':
+                # Complete the backend handshake
+                self._is_ready.set()
+                return
             if data.get('type') == 'ping':
                 # Respond with pong to keep connection alive through proxies
                 await self.send(text_data=json.dumps({'type': 'pong'}))
