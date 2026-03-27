@@ -686,7 +686,7 @@ validate_env_file() {
         if [ -z "$var_value" ]; then
             if [ "$var_name" = "RABBITMQ_PASSWORD" ]; then
                 local new_rabbitmq_pass
-                new_rabbitmq_pass=$(generate_password 32)
+                new_rabbitmq_pass=$(gen_hex_secret 16)
                 echo -e "${BLUE}  -> Generating missing RABBITMQ_PASSWORD for upgrade...${NC}"
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
                 # Update celery broker URL immediately to use this new password
@@ -1131,10 +1131,6 @@ restart_edge_stack() {
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
 
-    # Restart core app entrypoints so new upstream bindings are live.
-    docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
-    docker compose -f "$COMPOSE_FILE" restart $edge_services >/dev/null 2>&1 || true
-
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
@@ -1147,7 +1143,11 @@ restart_edge_stack() {
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-        systemctl restart caddy >/dev/null 2>&1 || true
+        if systemctl is-active --quiet caddy 2>/dev/null; then
+            systemctl reload caddy >/dev/null 2>&1 || true
+        else
+            systemctl restart caddy >/dev/null 2>&1 || true
+        fi
         systemctl restart caddy-watcher >/dev/null 2>&1 || true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
@@ -1260,7 +1260,11 @@ refresh_runtime_services() {
         return 1
     fi
 
-    systemctl restart caddy >/dev/null 2>&1 || true
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy >/dev/null 2>&1 || true
+    else
+        systemctl restart caddy >/dev/null 2>&1 || true
+    fi
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
@@ -1472,7 +1476,11 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
-    systemctl restart caddy >/dev/null 2>&1 || true
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy >/dev/null 2>&1 || true
+    else
+        systemctl restart caddy >/dev/null 2>&1 || true
+    fi
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
     sleep 3
 
@@ -2062,7 +2070,11 @@ print('Stripped tls blocks')
             generate_safe_caddyfile "post-update validation"
         fi
 
-        systemctl restart caddy 2>/dev/null || true
+        if systemctl is-active --quiet caddy 2>/dev/null; then
+            systemctl reload caddy 2>/dev/null || true
+        else
+            systemctl restart caddy 2>/dev/null || true
+        fi
         systemctl restart caddy-watcher 2>/dev/null || true
 
         # Verify Caddy is running
@@ -3155,7 +3167,11 @@ for port in 80 443; do
     fi
 done
 
-systemctl restart caddy
+if systemctl is-active --quiet caddy; then
+    systemctl reload caddy
+else
+    systemctl restart caddy
+fi
 systemctl enable caddy >/dev/null 2>&1
 
 # Verify Caddy is running
