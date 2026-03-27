@@ -242,18 +242,24 @@ key = sys.argv[2]
 value = sys.argv[3]
 prefix = f"{key}="
 
-lines = env_path.read_text().splitlines() if env_path.exists() else []
+if not env_path.exists():
+    env_path.write_text(f"{key}={value}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
 updated = []
-replaced = False
+found = False
 
 for line in lines:
-    if line.startswith(prefix) and not replaced:
-        updated.append(f"{key}={value}")
-        replaced = True
-    else:
-        updated.append(line)
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={value}")
+            found = True
+        # Skip any subsequent duplicates
+        continue
+    updated.append(line)
 
-if not replaced:
+if not found:
     updated.append(f"{key}={value}")
 
 env_path.write_text("\n".join(updated) + "\n")
@@ -265,13 +271,43 @@ env_ensure_var() {
     local var_name="$2"
     local var_value="$3"
     local var_comment="${4:-}"
-    if ! grep -q "^${var_name}=" "$env_file" 2>/dev/null; then
-        echo -e "${BLUE}  -> Adding missing $var_name to .env${NC}"
-        echo "" >> "$env_file"
-        [ -n "$var_comment" ] && echo "# $var_comment" >> "$env_file"
-        echo "${var_name}=${var_value}" >> "$env_file"
-        echo -e "${GREEN}  OK $var_name added${NC}"
+    local current_val
+    current_val="$(env_get_value "$env_file" "$var_name")"
+    
+    if [ -z "$current_val" ]; then
+        echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
+        [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file" 2>/dev/null && echo "# $var_comment" >> "$env_file"
+        env_set_value "$env_file" "$var_name" "$var_value"
+        echo -e "${GREEN}  OK $var_name set${NC}"
     fi
+}
+
+dump_diagnostic_logs() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${RED}   DIAGNOSTIC LOG DUMP (FAILURE ANALYSIS)${NC}"
+    echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+    
+    echo -e "${YELLOW}  → System Resource Snapshot:${NC}"
+    free -m
+    df -h /
+    
+    echo -e "\n${YELLOW}  → Container Status:${NC}"
+    docker compose -f "$COMPOSE_FILE" ps
+    
+    echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
+    
+    echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 nginx || true
+
+    echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
+    
+    echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
+    
+    echo -e "${RED}════════════════════════════════════════════════════════════${NC}\n"
 }
 
 apply_env_platform_overrides() {
@@ -3395,23 +3431,28 @@ fi
 # ─── Check 2: Health check ─────────────────────────────────────────────────
 echo -e "${BLUE}  → [2/5] Running health check...${NC}"
 HEALTH_OK=false
-for attempt in {1..12}; do
+# ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
+MAX_ATTEMPTS=36
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
     if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
-    echo -e "${YELLOW}  → Health check attempt $attempt/12 — waiting...${NC}"
-    if [ "$attempt" -eq 2 ]; then
+    echo -ne "\r${YELLOW}  → Health check attempt $attempt/$MAX_ATTEMPTS — waiting...${NC}"
+    if [ "$attempt" -eq 5 ]; then
+        echo -e "\n${BLUE}  → Restarting Nginx to ensure upstream binding...${NC}"
         docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
     fi
     sleep 5
 done
+echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
-    echo -e "${YELLOW}  ⚠ Health check did not respond — services may still be starting.${NC}"
+    echo -e "${RED}  ✗ Health check failed after $MAX_ATTEMPTS attempts.${NC}"
+    dump_diagnostic_logs
 fi
 
 # ─── Check 3: All containers running ──────────────────────────────────────

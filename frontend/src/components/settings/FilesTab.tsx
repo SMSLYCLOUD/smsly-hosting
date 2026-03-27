@@ -4,7 +4,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { FolderOpen, FileText, ChevronRight, Save, Loader2, ArrowLeft } from 'lucide-react';
+import { FolderOpen, FileText, ChevronRight, Save, Loader2, ArrowLeft, Trash2, Download, Plus, RefreshCw } from 'lucide-react';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui/use-toast';
 import dynamic from 'next/dynamic';
 
@@ -19,6 +20,7 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
     const [originalContent, setOriginalContent] = useState<string>('');
     const [loadingFile, setLoadingFile] = useState(false);
     const [saving, setSaving] = useState(false);
+    const confirm = useConfirm();
 
     const loadDirectory = useCallback(async (path: string) => {
         try {
@@ -90,6 +92,41 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
         }
     };
 
+    const handleFileDelete = async (file: any) => {
+        const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
+        if (!await confirm({ 
+            title: `Delete ${file.permissions.startsWith('d') ? 'folder' : 'file'}?`, 
+            message: `Are you sure you want to delete ${file.name}?`, 
+            variant: 'destructive' 
+        })) return;
+        
+        try {
+            await servicesApi.deleteFile(serviceId, path);
+            toast({ title: "Deleted successfully" });
+            loadDirectory(currentPath);
+        } catch (err: any) {
+            toast({ title: "Failed to delete", description: err.response?.data?.error || 'Access denied', variant: "destructive" });
+        }
+    };
+
+    const handleFileDownload = (file: any) => {
+        const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
+        servicesApi.downloadFile(serviceId, path);
+    };
+
+    const handleMkdir = async () => {
+        const name = window.prompt("Enter folder name:");
+        if (!name) return;
+        const path = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`;
+        try {
+            await servicesApi.createFolder(serviceId, path);
+            toast({ title: "Folder created" });
+            loadDirectory(currentPath);
+        } catch (err: any) {
+            toast({ title: "Failed to create folder", description: err.response?.data?.error || 'Access denied', variant: "destructive" });
+        }
+    };
+
     const isDirty = fileContent !== originalContent;
 
     return (
@@ -98,14 +135,21 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
 
                 {/* Left Panel: File Browser */}
                 <div className={`flex flex-col border-r border-border bg-card ${selectedFile ? 'hidden md:flex w-1/3' : 'w-full md:w-1/3'}`}>
-                    <div className="p-3 border-b border-border bg-muted/20 flex items-center gap-2">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={goUp} disabled={currentPath === '/'}>
-                            <ArrowLeft className="w-4 h-4" />
-                        </Button>
-                        <span className="font-mono text-sm truncate flex-1" title={currentPath}>{currentPath}</span>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => loadDirectory(currentPath)}>
-                            <FolderOpen className="w-4 h-4" />
-                        </Button>
+                    <div className="p-3 border-b border-border bg-muted/20 flex items-center justify-between gap-1 overflow-hidden">
+                        <div className="flex items-center gap-1 overflow-hidden">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={goUp} disabled={currentPath === '/'}>
+                                <ArrowLeft className="w-4 h-4" />
+                            </Button>
+                            <span className="font-mono text-sm truncate opacity-70" title={currentPath}>{currentPath}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-400" onClick={handleMkdir}>
+                                <Plus className="w-4 h-4" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => loadDirectory(currentPath)}>
+                                <RefreshCw className="w-4 h-4" />
+                            </Button>
+                        </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-2">
@@ -114,10 +158,18 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
                                 <Loader2 className="w-6 h-6 animate-spin" />
                             </div>
                         ) : files.length === 0 ? (
-                            <div className="p-8 text-center text-muted-foreground text-sm">Empty directory</div>
+                            <div className="p-8 text-center text-muted-foreground text-sm flex flex-col items-center gap-2">
+                                <FolderOpen className="w-8 h-8 opacity-20" />
+                                <span>Empty directory</span>
+                                {currentPath === '/app' && (
+                                    <Button variant="link" size="sm" onClick={() => loadDirectory('/')}>
+                                        Try root directory (/)
+                                    </Button>
+                                )}
+                            </div>
                         ) : (
                             <div className="space-y-1">
-                                {files.map((file, i) => {
+                                {files.filter(f => f.name !== '.' && f.name !== '..').map((file, i) => {
                                     const isDir = file.permissions.startsWith('d');
                                     const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
                                     const isSelected = selectedFile === path;
@@ -132,7 +184,27 @@ export function FilesTab({ serviceId }: { serviceId: string }) {
                                                 {isDir ? <FolderOpen className="w-4 h-4 text-blue-400 shrink-0" /> : <FileText className="w-4 h-4 text-zinc-400 shrink-0" />}
                                                 <span className="font-mono truncate">{file.name}</span>
                                             </div>
-                                            {isDir && <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />}
+                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                                {!isDir && (
+                                                    <Button 
+                                                        variant="ghost" 
+                                                        size="icon" 
+                                                        className="h-7 w-7 text-blue-400"
+                                                        onClick={(e) => { e.stopPropagation(); handleFileDownload(file); }}
+                                                    >
+                                                        <Download className="w-3 h-3" />
+                                                    </Button>
+                                                )}
+                                                <Button 
+                                                    variant="ghost" 
+                                                    size="icon" 
+                                                    className="h-7 w-7 text-destructive"
+                                                    onClick={(e) => { e.stopPropagation(); handleFileDelete(file); }}
+                                                >
+                                                    <Trash2 className="w-3 h-3" />
+                                                </Button>
+                                                {isDir && <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                                            </div>
                                         </div>
                                     )
                                 })}

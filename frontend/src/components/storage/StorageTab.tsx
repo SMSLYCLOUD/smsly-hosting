@@ -111,6 +111,44 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
         loadFiles(browsingVolume, nextPath);
     };
 
+    const handleFileDelete = async (file: any) => {
+        if (!browsingVolume) return;
+        const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
+        if (!await confirm({ 
+            title: `Delete ${file.permissions.startsWith('d') ? 'folder' : 'file'}?`, 
+            message: `Are you sure you want to delete ${file.name}?`, 
+            variant: 'destructive' 
+        })) return;
+        
+        try {
+            await servicesApi.deleteVolumeFile(serviceId, browsingVolume.id, path);
+            toast({ title: "Deleted successfully" });
+            loadFiles(browsingVolume, currentPath);
+        } catch (err) {
+            toast({ title: "Failed to delete", variant: "destructive" });
+        }
+    };
+
+    const handleFileDownload = (file: any) => {
+        if (!browsingVolume) return;
+        const path = currentPath.endsWith('/') ? `${currentPath}${file.name}` : `${currentPath}/${file.name}`;
+        servicesApi.downloadVolumeFile(serviceId, browsingVolume.id, path);
+    };
+
+    const handleMkdir = async () => {
+        if (!browsingVolume) return;
+        const name = window.prompt("Enter folder name:");
+        if (!name) return;
+        const path = currentPath.endsWith('/') ? `${currentPath}${name}` : `${currentPath}/${name}`;
+        try {
+            await servicesApi.createVolumeFolder(serviceId, browsingVolume.id, path);
+            toast({ title: "Folder created" });
+            loadFiles(browsingVolume, currentPath);
+        } catch (err) {
+            toast({ title: "Failed to create folder", variant: "destructive" });
+        }
+    };
+
     if (loading) return <div className="p-4 text-center">Loading storage...</div>;
 
     return (
@@ -191,7 +229,10 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
                                                     >
                                                         ..
                                                     </Button>
-                                                    <span className="font-mono text-sm px-2 truncate flex-1">{currentPath}</span>
+                                                    <span className="font-mono text-sm px-2 truncate flex-1 opacity-70">{currentPath}</span>
+                                                    <Button variant="ghost" size="sm" onClick={handleMkdir} className="text-blue-400 font-medium">
+                                                        <Plus className="w-4 h-4 mr-1" /> New Folder
+                                                    </Button>
                                                 </div>
 
                                                 {/* File List */}
@@ -212,8 +253,25 @@ export function StorageTab({ serviceId }: { serviceId: string }) {
                                                                         <FileText className="w-4 h-4 text-zinc-400" />
                                                                     )}
                                                                     <span className="flex-1 font-mono text-sm truncate">{file.name}</span>
-                                                                    <span className="text-xs text-muted-foreground w-20 text-right">{file.size}</span>
-                                                                    <span className="text-xs text-muted-foreground w-32 text-right hidden sm:block">{file.date}</span>
+                                                                    <span className="text-xs text-muted-foreground w-16 text-right">{file.size}</span>
+                                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                        <Button 
+                                                                            variant="ghost" 
+                                                                            size="icon" 
+                                                                            className="h-7 w-7 text-blue-400"
+                                                                            onClick={(e) => { e.stopPropagation(); handleFileDownload(file); }}
+                                                                        >
+                                                                            <Download className="w-3 h-3" />
+                                                                        </Button>
+                                                                        <Button 
+                                                                            variant="ghost" 
+                                                                            size="icon" 
+                                                                            className="h-7 w-7 text-destructive"
+                                                                            onClick={(e) => { e.stopPropagation(); handleFileDelete(file); }}
+                                                                        >
+                                                                            <Trash2 className="w-3 h-3" />
+                                                                        </Button>
+                                                                    </div>
                                                                 </div>
                                                             ))}
                                                             {files.length === 0 && (

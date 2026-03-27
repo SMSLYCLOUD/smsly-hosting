@@ -25,6 +25,7 @@ class AddonSerializer(serializers.ModelSerializer):
             'status',
             'server',
             'public_domain',
+            'is_bucket_public',
             'created_at']
         read_only_fields = ['status', 'connection_url', 'created_at']
 
@@ -243,13 +244,16 @@ class AddonViewSet(viewsets.ModelViewSet):
 
         policy = "public" if is_public else "none"
 
-        import subprocess
         try:
             # Set the anonymous policy on the bucket using the MinIO client (`mc`) inside the container
             subprocess.run([
                 'docker', 'exec', container_name,
                 'mc', 'anonymous', 'set', policy, f'myminio/{bucket_name}'
             ], capture_output=True, text=True, check=True)
+
+            # Persist the state in the database
+            addon.is_bucket_public = is_public
+            addon.save(update_fields=['is_bucket_public'])
 
             return Response({
                 'status': 'success',
