@@ -120,9 +120,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.info("Terminal connect: Shell started in %s", self.container_id)
 
             # ── PRIME THE PIPE ──
+            banner = (
+                "\r\n\x1b[32m[connected to container]\x1b[0m\r\n"
+                "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
+                f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
+                f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
+                "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
+            )
             await self._out_queue.put({'message': banner})
 
             # Force-trigger a prompt by sending a newline to the shell
+            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._send_to_shell, "\n")
             
             # Start reading output
