@@ -5,7 +5,6 @@ from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
-from rest_framework.authtoken.models import Token
 from django.db import close_old_connections
 
 @database_sync_to_async
@@ -15,6 +14,7 @@ def get_user_from_token(token_key: str):
     Includes close_old_connections to prevent DB stalling in long-lived WS connections.
     """
     try:
+        from rest_framework.authtoken.models import Token
         # 1. Try standard DRF Token
         token = Token.objects.select_related('user').get(key=token_key)
         if token.user.is_active:
