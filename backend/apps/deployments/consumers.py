@@ -129,6 +129,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             )
             await self._out_queue.put({'message': banner})
 
+            # Handshake ACK: Finalize the protocol upgrade for the proxy
+            await self._out_queue.put({'type': 'pong'})
+
             # Force-trigger a prompt by sending a newline to the shell
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._send_to_shell, "\n")
@@ -306,7 +309,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     continue
 
                 if data == b'':
-                    # Socket timeout (not EOF) — check idle timeout, send keepalive
+                    # Socket timeout or non-blocking empty return — check idle timeout
                     if time.time() - self._last_activity > timeout_seconds:
                         logger.info(
                             "Terminal idle timeout for %s",
@@ -321,11 +324,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             pass
                         break
 
-                    # Send a structured keepalive to prevent proxy idle timeout
-                    try:
-                        await self._out_queue.put({'message': ''})
-                    except Exception:
-                        pass
+                    # Wait and yield back to event loop to prevent CPU/Proxy flooding
+                    await asyncio.sleep(0.1)
                     continue
 
                 # Got real data — reset activity and exec reconnect counters
@@ -353,24 +353,28 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     async def _send_loop(self):
         """Consumes the output queue and sends it to the client. Uses timeout to prevent idle-drops."""
         logger.info("[CONSOLE_DEBUG] _send_loop task STARTED")
+        import time
+        start_time = time.time()
+        
         try:
             while not self.is_disconnected:
                 try:
-                    # Wait for a message with a timeout to keep the connection "hot"
-                    # Proxies like Traefik/Caddy/Cloudflare often drop idle WebSockets.
-                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=2.5)
+                    # In the first 10 seconds, be very aggressive with heartbeats (1.0s)
+                    # to satisfy strict proxy/Cloudflare handshake-finalization timeouts.
+                    current_duration = time.time() - start_time
+                    wait_timeout = 1.0 if current_duration < 10.0 else 2.5
+                    
+                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
                     
                     if not self.is_disconnected:
                         await self.send(text_data=json.dumps(msg))
-                        # Minimal sleep to prevent buffer saturation on bursts
                         await asyncio.sleep(0.01)
                 
                 except asyncio.TimeoutError:
-                    # No data for 2.5s? Send a tiny invisible heartbeat to keep the tunnel open
+                    # No data? Send a protocol-level 'pong' to keep the tunnel "hot"
                     if not self.is_disconnected:
                         try:
-                            # Use neutral pulse to keep proxies happy
-                            await self.send(text_data=json.dumps({'message': ''}))
+                            await self.send(text_data=json.dumps({'type': 'pong'}))
                         except Exception:
                             break
                 
@@ -395,25 +399,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return None
 
         try:
-            if hasattr(sock, 'settimeout'):
-                sock.settimeout(15.0)
-
-            if hasattr(sock, 'recv'):
-                data = sock.recv(4096)
-            elif hasattr(sock, 'read'):
-                data = sock.read(4096)
-            else:
-                logger.error("Exec socket has no read or recv method")
-                return None
-
-            if not data:
-                # True EOF — connection closed
-                return None
-            return data
-
-        except socket.timeout:
+            # Use select to reliably implement a timeout for the blocking read.
+            # This ensures we don't hang the thread pool if the container goes rogue.
+            r, _, _ = select.select([sock], [], [], 15.0)
+            if r:
+                if hasattr(sock, 'recv'):
+                    data = sock.recv(4096)
+                elif hasattr(sock, 'read'):
+                    data = sock.read(4096)
+                else:
+                    return None
+                
+                if not data:
+                    # True EOF
+                    return None
+                return data
+            
+            # Timeout case - return empty heartbeat-equivalent
             return b''
-        except select.error:
+        except (socket.error, select.error):
             return b''
         except Exception as e:
             err_name = e.__class__.__name__
