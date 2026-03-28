@@ -77,9 +77,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         await self.accept()
         
         # ── START SENDER IMMEDIATELY: Prevent any silent window ──
-        
-        # ── STATUS UPDATE: Immediate traffic for the proxy ──
-        await self._out_queue.put({'message': '\x1b[90m[status] initializing stable tunnel...\x1b[0m\r\n'})
+        try:
+            # Tell client we are initializing
+            msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
+            import base64
+            enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+            await self._out_queue.put({'message': enc})
+        except Exception:
+            pass
 
         # ── TASK PIPELINE ──
         # Start background tasks
@@ -127,7 +132,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
                 "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
             )
-            await self._out_queue.put({'message': banner})
+            import base64
+            encoded_banner = base64.b64encode(banner.encode('utf-8')).decode('utf-8')
+            await self._out_queue.put({'message': encoded_banner})
 
             # Handshake ACK: Finalize the protocol upgrade for the proxy
             await self._out_queue.put({'type': 'pong'})
@@ -142,8 +149,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
         except Exception as e:
-            logger.exception("Error during terminal setup: %s", e)
-            await self._out_queue.put({'message': f'\r\n\x1b[31m[critical error] {str(e)}\x1b[0m\r\n'})
+            logger.error("Error during terminal setup: %s", e, exc_info=True)
+            msg = '\r\n\x1b[31m[error] internal proxy error\x1b[0m\r\n'
+            import base64
+            enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+            await self._out_queue.put({'message': enc})
+            await self.close()
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
@@ -192,20 +203,27 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        # 1. Handle structured JSON messages (like heartbeats)
+        # 1. Handle structured JSON messages
+        import base64
         try:
             data = json.loads(text_data)
             if data.get('type') == 'ping':
                 # Queue a pong response
                 await self._out_queue.put({'type': 'pong'})
                 return
-            # If it's any other JSON (like a pulse we sent or client sent), 
-            # drop it instead of forwarding it to the shell stdin.
-            if isinstance(data, dict):
+            if data.get('type') == 'input' and data.get('payload'):
+                # Base64 decode the payload representing raw client keys
+                try:
+                    text_data = base64.b64decode(data['payload']).decode('utf-8')
+                except Exception:
+                    # Ignore malformed packets gracefully
+                    return
+            elif isinstance(data, dict):
+                # If it's any other JSON (like a pulse we sent or client sent 'ready'), drop it.
                 logger.debug("Discarding non-input JSON message: %s", data)
                 return
         except (json.JSONDecodeError, AttributeError, TypeError):
-            # Not JSON? Treat as raw terminal input (this is what we WANT)
+            # Fallback for old pure-text clients
             pass
 
         raw = self._raw_sock or self.exec_socket
@@ -263,10 +281,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             "Terminal exec reconnect limit reached for %s",
                             self.deployment_id)
                         try:
-                            await self._out_queue.put({
-                                'message': '\r\n\x1b[31m[session ended — '
-                                           'exec reconnect limit reached]\x1b[0m\r\n'
-                            })
+                            msg = '\r\n\x1b[31m[session ended — exec reconnect limit reached]\x1b[0m\r\n'
+                            enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+                            await self._out_queue.put({'message': enc_msg})
                             # Wait slightly for the queue to drain
                             await asyncio.sleep(0.5)
                             await self.close(code=4000)
@@ -279,11 +296,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         "(%d/%d)", self.deployment_id,
                         exec_reconnect_count, max_exec_reconnects)
                     try:
-                        await self._out_queue.put({
-                            'message': f'\r\n\x1b[33m[exec disconnected — '
-                                       f'reconnecting {exec_reconnect_count}/'
-                                       f'{max_exec_reconnects}]\x1b[0m\r\n'
-                        })
+                        msg = f'\r\n\x1b[33m[exec disconnected — reconnecting {exec_reconnect_count}/{max_exec_reconnects}]\x1b[0m\r\n'
+                        enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+                        await self._out_queue.put({'message': enc_msg})
                     except Exception:
                         pass
 
@@ -300,10 +315,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                         continue
 
                     try:
-                        await self._out_queue.put({
-                            'message': '\x1b[32m[reconnected to container]'
-                                       '\x1b[0m\r\n'
-                        })
+                        msg = '\x1b[32m[reconnected to container]\x1b[0m\r\n'
+                        enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+                        await self._out_queue.put({'message': enc_msg})
                     except Exception:
                         pass
                     continue
@@ -315,9 +329,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             "Terminal idle timeout for %s",
                             self.deployment_id)
                         try:
+                            msg = '\r\n\x1b[31m[idle timeout]\x1b[0m\r\n'
+                            enc_msg = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
                             await self.send(text_data=json.dumps({
                                 'type': 'error',
-                                'message': '\r\n\x1b[31m[idle timeout]\x1b[0m\r\n'
+                                'message': enc_msg
                             }))
                             await self.close(code=4000)
                         except Exception:
@@ -335,7 +351,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 self._last_activity = time.time()
                 exec_reconnect_count = 0
                 text = data.decode('utf-8', errors='replace')
-                await self._out_queue.put({'message': text})
+                enc_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+                await self._out_queue.put({'message': enc_text})
         except asyncio.CancelledError:
             logger.info("[CONSOLE_DEBUG] _read_output task CANCELLED")
         except Exception as e:
