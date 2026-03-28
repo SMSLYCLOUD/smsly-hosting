@@ -120,15 +120,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.info("Terminal connect: Shell started in %s", self.container_id)
 
             # ── PRIME THE PIPE ──
-            banner = (
-                "\r\n\x1b[32m[connected to container]\x1b[0m\r\n"
-                "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
-                f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
-                f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
-                "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
-            )
             await self._out_queue.put({'message': banner})
 
+            # Force-trigger a prompt by sending a newline to the shell
+            await loop.run_in_executor(None, self._send_to_shell, "\n")
+            
             # Start reading output
             self._read_task = asyncio.create_task(self._read_output())
             
@@ -204,27 +200,29 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         raw = self._raw_sock or self.exec_socket
         if not raw:
             return
-
         # Update activity timestamp on input
         import time
         self._last_activity = time.time()
 
-        # Forward raw input to the container's exec stdin
+        # Forward raw input to the container's exec stdin (via executor)
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._send_to_shell, text_data)
+        except Exception as e:
+            logger.error("Error forwarding input to container: %s", e)
+
+    def _send_to_shell(self, data):
+        """Blocking helper to send data to the container's raw socket."""
+        raw = self._raw_sock or self.exec_socket
+        if not raw:
+            return
         try:
             if hasattr(raw, 'send'):
-                await asyncio.get_event_loop().run_in_executor(
-                    None, raw.send, text_data.encode('utf-8'))
+                raw.send(data.encode('utf-8'))
             elif hasattr(raw, 'write'):
-                await asyncio.get_event_loop().run_in_executor(
-                    None, raw.write, text_data.encode('utf-8'))
-        except Exception as e:
-            logger.error("Terminal exec send error for %s: %s", self.deployment_id, e)
-            try:
-                await self.send(text_data=json.dumps({
-                    'message': f'\r\n\x1b[31m[send-error] {str(e)}\x1b[0m\r\n'
-                }))
-            except Exception:
-                pass
+                raw.write(data.encode('utf-8'))
+        except Exception:
+            pass
 
     async def _read_output(self):
         """Background task: read from exec socket and send to WebSocket.
@@ -345,49 +343,35 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.info("[CONSOLE_DEBUG] _read_output task TERMINATED")
 
     async def _send_loop(self):
-        """Dedicated task to drain the output queue to the WebSocket with heartbeat."""
+        """Consumes the output queue and sends it to the client. Uses timeout to prevent idle-drops."""
+        logger.info("[CONSOLE_DEBUG] _send_loop task STARTED")
         try:
             while not self.is_disconnected:
                 try:
-                    # Wait for message with a 10s pulse timeout
-                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=10.0)
-                    try:
+                    # Wait for a message with a timeout to keep the connection "hot"
+                    # Proxies like Traefik/Caddy/Cloudflare often drop idle WebSockets.
+                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=2.5)
+                    
+                    if not self.is_disconnected:
                         await self.send(text_data=json.dumps(msg))
-                    except Exception as e:
-                        logger.warning("Terminal WebSocket send failed: %s", e)
-                        break
+                        # Minimal sleep to prevent buffer saturation on bursts
+                        await asyncio.sleep(0.01)
+                
                 except asyncio.TimeoutError:
-                    # No data for 10s — send a server-side pulse to keep proxies awake
+                    # No data for 2.5s? Send a tiny invisible heartbeat to keep the tunnel open
                     if not self.is_disconnected:
                         try:
-                            await self.send(text_data=json.dumps({'type': 'pulse'}))
+                            # Use neutral pulse to keep proxies happy
+                            await self.send(text_data=json.dumps({'message': ''}))
                         except Exception:
-                            # If pulse fails, the socket is dead
                             break
+                
         except asyncio.CancelledError:
             logger.info("[CONSOLE_DEBUG] _send_loop task CANCELLED")
         except Exception as e:
             logger.error("[CONSOLE_DEBUG] _send_loop error (PID %s): %s", os.getpid(), e)
         finally:
             logger.info("[CONSOLE_DEBUG] _send_loop task TERMINATED")
-
-    async def _aggressive_pulse(self, interval):
-        """Background heartbeat task: Keep proxy connection active during idle."""
-        try:
-            while not self.is_disconnected:
-                await asyncio.sleep(interval)
-                if not self.is_disconnected:
-                    try:
-                        # A minimal pulse to keep the pipe hot
-                        # Using empty message to match established protocol
-                        await self._out_queue.put({"message": ""})
-                    except Exception:
-                        # If pulsing fails, the connection is gone
-                        break
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("[CONSOLE_DEBUG] _aggressive_pulse error: %s", e)
 
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor.
