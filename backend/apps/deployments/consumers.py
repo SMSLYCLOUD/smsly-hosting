@@ -31,6 +31,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
         self._pulse_task = None
+        self._accepted = False
+        self._last_activity = time.time()
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -72,12 +74,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4003)
             return
 
+        # ── ACCEPT IMMEDIATELY: Lockdown the handshake ──
+        await self.accept()
+        self._accepted = True
+
         # ── INITIALIZE ──
         user = self.scope.get('user', 'Anonymous')
         logger.info("[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
                     user, os.getpid(), self.deployment_id)
         
-        # ── STATUS UPDATE: Immediate traffic for the proxy ──
+        # ── STATUS UPDATE: Immediate traffic after accept ──
         try:
             # Tell client we are initializing
             msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
@@ -150,7 +156,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error("Error during terminal setup: %s", e, exc_info=True)
             msg = '\r\n\x1b[31m[error] internal proxy error\x1b[0m\r\n'
-            import base64
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
             await self.close()
@@ -203,7 +208,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         # 1. Handle structured JSON messages
-        import base64
         try:
             data = json.loads(text_data)
             if data.get('type') == 'ping':
@@ -229,7 +233,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not raw:
             return
         # Update activity timestamp on input
-        import time
         self._last_activity = time.time()
 
         # Forward raw input to the container's exec stdin (via executor)
@@ -259,7 +262,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         3 times before giving up and closing the WebSocket.
         """
         loop = asyncio.get_event_loop()
-        import time
 
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
@@ -367,12 +369,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.info("[CONSOLE_DEBUG] _read_output task TERMINATED")
 
     async def _send_loop(self):
-        """Consumes the output queue and sends it to the client. Uses timeout to prevent idle-drops."""
+        """Drains the output queue and sends it to the WebSocket."""
         logger.info("[CONSOLE_DEBUG] _send_loop task STARTED")
-        import time
-        start_time = time.time()
-        
         try:
+            # SECURITY: Wait for handshake to propagate before sending first frame
+            while not self._accepted and not self.is_disconnected:
+                await asyncio.sleep(0.1)
+            
+            # Aggressive heartbeats for the first 10 seconds (handshake window)
+            start_time = time.time()
             while not self.is_disconnected:
                 try:
                     # In the first 10 seconds, be very aggressive with heartbeats (1.0s)
