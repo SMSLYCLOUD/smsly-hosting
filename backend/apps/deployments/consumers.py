@@ -72,16 +72,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4003)
             return
 
-        logger.info(
-            "[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
-            self.user.id, os.getpid(), self.deployment_id)
-        await self.accept()
+        # ── INITIALIZE ──
+        user = self.scope.get('user', 'Anonymous')
+        logger.info("[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
+                    user, os.getpid(), self.deployment_id)
         
-        # ── START SENDER IMMEDIATELY: Prevent any silent window ──
+        # ── STATUS UPDATE: Immediate traffic for the proxy ──
         try:
             # Tell client we are initializing
             msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
-            import base64
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
         except Exception:
@@ -133,7 +132,6 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
                 "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
             )
-            import base64
             encoded_banner = base64.b64encode(banner.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': encoded_banner})
 
