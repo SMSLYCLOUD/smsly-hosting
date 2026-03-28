@@ -17,12 +17,10 @@ import apps.deployments.routing
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": AllowedHostsOriginValidator(
-        AuthMiddlewareStack(
-            QueryStringAuthMiddleware(
-                URLRouter(
-                    apps.deployments.routing.websocket_urlpatterns
-                )
+    "websocket": AuthMiddlewareStack(
+        QueryStringAuthMiddleware(
+            URLRouter(
+                apps.deployments.routing.websocket_urlpatterns
             )
         )
     ),
