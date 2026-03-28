@@ -100,7 +100,14 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
         try {
           const data = JSON.parse(event.data);
           if (data && typeof data.message === 'string') {
-            terminal.write(data.message);
+            // Decode Base64 string back to raw terminal output (UTF-8 safe)
+            const binString = atob(data.message);
+            const bytes = new Uint8Array(binString.length);
+            for (let i = 0; i < binString.length; i++) {
+                bytes[i] = binString.charCodeAt(i);
+            }
+            const decoded = new TextDecoder().decode(bytes);
+            terminal.write(decoded);
           }
         } catch {
           // Ignore non-JSON payloads
@@ -139,10 +146,21 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
 
     connectWebSocket();
 
-    // Forward raw data immediately to support interactive terminal (arrows, shortcuts, etc.)
+    // Forward raw data immediately to support interactive terminal
     const onDataDisposable: IDisposable = terminal.onData((data) => {
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(data);
+      // Base64 encode the input (UTF-8 safe) to bypass frontend proxy WAFs (like Cloudflare)
+      try {
+        const encoder = new TextEncoder();
+        const encodedBytes = encoder.encode(data);
+        const binString = Array.from(encodedBytes).map(b => String.fromCharCode(b)).join('');
+        const base64Payload = btoa(binString);
+        socket.send(JSON.stringify({ type: 'input', payload: base64Payload }));
+      } catch (err) {
+        // Fallback for extremely long paste payloads avoiding call-stack limits
+        const encodedUri = encodeURIComponent(data).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode(parseInt(p1, 16)));
+        socket.send(JSON.stringify({ type: 'input', payload: btoa(encodedUri) }));
+      }
     });
 
     return () => {
