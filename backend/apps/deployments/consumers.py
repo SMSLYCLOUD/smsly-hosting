@@ -132,10 +132,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Start reading output
             self._read_task = asyncio.create_task(self._read_output())
             
-            # Start heartbeats
-            pulse_delay = 5.0
-            self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
-            
+        except asyncio.CancelledError:
+            logger.info("Terminal setup task cancelled")
         except Exception as e:
             logger.exception("Error during terminal setup: %s", e)
             await self._out_queue.put({'message': f'\r\n\x1b[31m[critical error] {str(e)}\x1b[0m\r\n'})
@@ -163,6 +161,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     logger.debug("[CONSOLE_DEBUG] %s task CANCELLED", name)
                 except Exception as e:
                     logger.debug("Error cancelling %s task: %s", name, e)
+                finally:
+                    setattr(self, attr, None)
 
         self._close_exec_socket()
 
@@ -185,14 +185,20 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        # Handle structured messages (e.g. heartbeat)
+        # 1. Handle structured JSON messages (like heartbeats)
         try:
             data = json.loads(text_data)
             if data.get('type') == 'ping':
-                # Respond with pong to keep connection alive through proxies
-                await self.send(text_data=json.dumps({'type': 'pong'}))
+                # Queue a pong response
+                await self._out_queue.put({'type': 'pong'})
+                return
+            # If it's any other JSON (like a pulse we sent or client sent), 
+            # drop it instead of forwarding it to the shell stdin.
+            if isinstance(data, dict):
+                logger.debug("Discarding non-input JSON message: %s", data)
                 return
         except (json.JSONDecodeError, AttributeError, TypeError):
+            # Not JSON? Treat as raw terminal input (this is what we WANT)
             pass
 
         raw = self._raw_sock or self.exec_socket
