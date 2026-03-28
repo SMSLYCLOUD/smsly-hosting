@@ -77,77 +77,94 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         await self.accept()
         
         # ── START SENDER IMMEDIATELY: Prevent any silent window ──
-        self._send_task = asyncio.create_task(self._send_loop())
         
         # ── STATUS UPDATE: Immediate traffic for the proxy ──
         await self._out_queue.put({'message': '\x1b[90m[status] initializing stable tunnel...\x1b[0m\r\n'})
 
-        # Find the container and start docker exec
-        self.container_id = await self._find_container()
-        if not self.container_id:
-            logger.error("Terminal connect: No container found for deployment %s", self.deployment_id)
-            await self._out_queue.put({
-                'message': '\x1b[31m[error] No running container found for '
-                           'this deployment.\x1b[0m\r\n'
-            })
-            return
-
-        logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
-        
-        # Give the proxy a moment to settle
-        await asyncio.sleep(0.8)
-
-        # Start the exec session
-        success = await self._start_exec()
-        if not success:
-            logger.error("Terminal connect: Failed to start exec in %s", self.container_id)
-            await self._out_queue.put({
-                'message': '\x1b[31m[error] Failed to start shell in '
-                           'container.\x1b[0m\r\n'
-            })
-            return
-
-        logger.info("Terminal connect: Shell started in %s", self.container_id)
-
-        # ── PRIME THE PIPE: Send a full banner to keep proxies alive ──
-        banner = (
-            "\r\n\x1b[32m[connected to container]\x1b[0m\r\n"
-            "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
-            f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
-            f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
-            "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
-        )
-        await self._out_queue.put({'message': banner})
-
+        # ── TASK PIPELINE ──
         # Start background tasks
-        # Decouple reading (blocking) from sending        # Start background tasks
-        self._read_task = asyncio.create_task(self._read_output())
+        self._send_task = asyncio.create_task(self._send_loop())
         
-        # ── START HEARTBEAT LAST: Ensuring zero-noise during attachment ──
-        pulse_delay = 5.0  # Increased to 5s to be less aggressive now that tunnel is open
-        self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
+        # Move discovery and exec into background task so connect() returns 
+        # immediately, satisfying proxy handshake timeouts.
+        self._setup_task = asyncio.create_task(self._async_setup())
+
+    async def _async_setup(self):
+        """Background task to handle discovery and attachment without blocking handshake."""
+        try:
+            # Find the container
+            self.container_id = await self._find_container()
+            if not self.container_id:
+                logger.error("Terminal connect: No container found for deployment %s", self.deployment_id)
+                await self._out_queue.put({
+                    'message': '\r\n\x1b[31m[error] No running container found for '
+                               'this deployment.\x1b[0m\r\n'
+                })
+                return
+
+            logger.info("Terminal connect: Found container %s for deployment %s", self.container_id, self.deployment_id)
+            
+            # Give the proxy a moment to settle the state
+            await asyncio.sleep(0.5)
+
+            # Start the exec session
+            success = await self._start_exec()
+            if not success:
+                logger.error("Terminal connect: Failed to start exec in %s", self.container_id)
+                await self._out_queue.put({
+                    'message': '\r\n\x1b[31m[error] Failed to start shell in '
+                               'container.\x1b[0m\r\n'
+                })
+                return
+
+            logger.info("Terminal connect: Shell started in %s", self.container_id)
+
+            # ── PRIME THE PIPE ──
+            banner = (
+                "\r\n\x1b[32m[connected to container]\x1b[0m\r\n"
+                "\x1b[90m--------------------------------------------------\x1b[0m\r\n"
+                f"\x1b[90mDeployment ID: {self.deployment_id}\x1b[0m\r\n"
+                f"\x1b[90mContainer ID:  {self.container_id[:12]}\x1b[0m\r\n"
+                "\x1b[90m--------------------------------------------------\x1b[0m\r\n\r\n"
+            )
+            await self._out_queue.put({'message': banner})
+
+            # Start reading output
+            self._read_task = asyncio.create_task(self._read_output())
+            
+            # Start heartbeats
+            pulse_delay = 5.0
+            self._pulse_task = asyncio.create_task(self._aggressive_pulse(pulse_delay))
+            
+        except Exception as e:
+            logger.exception("Error during terminal setup: %s", e)
+            await self._out_queue.put({'message': f'\r\n\x1b[31m[critical error] {str(e)}\x1b[0m\r\n'})
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
-        if self._pulse_task:
-            self._pulse_task.cancel()
-        if self._read_task:
-            self._read_task.cancel()
-        if self._send_task:
-            self._send_task.cancel()
-        
-        try:
-            if self._read_task:
-                await asyncio.wait_for(self._read_task, timeout=0.5)
-            if self._send_task:
-                await asyncio.wait_for(self._send_task, timeout=0.5)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
+        logger.info("WebSocket disconnected: User %s from deployment %s", getattr(self.user, 'id', 'Unknown'), self.deployment_id)
+
+        # ── CANCEL ALL TASKS ──
+        tasks_to_cancel = [
+            ('_setup_task', "setup"),
+            ('_read_task', "read_output"),
+            ('_send_task', "send_loop"),
+            ('_pulse_task', "pulse")
+        ]
+
+        for attr, name in tasks_to_cancel:
+            task = getattr(self, attr, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    # Brief wait for cancellation to propagate
+                    await asyncio.wait_for(task, timeout=0.2)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    logger.debug("[CONSOLE_DEBUG] %s task CANCELLED", name)
+                except Exception as e:
+                    logger.debug("Error cancelling %s task: %s", name, e)
+
         self._close_exec_socket()
-        if self.user:
-            logger.info(
-                "WebSocket disconnected: User %s from "
-                "deployment %s", self.user.id, self.deployment_id)
 
     def _close_exec_socket(self):
         """Safely close the exec socket and raw socket."""
