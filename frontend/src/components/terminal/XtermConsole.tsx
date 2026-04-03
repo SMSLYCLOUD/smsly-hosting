@@ -55,7 +55,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let stabilityTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
-    const maxReconnectAttempts = 10;
+    const maxReconnectAttempts = 15;
 
     const connectWebSocket = () => {
       if (disposed) return;
@@ -93,7 +93,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
           if (socket?.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ping' }));
           }
-        }, 15000);
+        }, 30000);
       };
 
       socket.onmessage = (event) => {
@@ -132,8 +132,8 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
           return;
         }
         reconnectAttemptsRef.current += 1;
-        // Exponential backoff with jitter: 2s base, max 10s
-        const baseDelay = Math.min(2000 * Math.pow(1.5, reconnectAttemptsRef.current - 1), 10000);
+        // Exponential backoff with jitter: 2s base, max 30s
+        const baseDelay = Math.min(2000 * Math.pow(1.5, reconnectAttemptsRef.current - 1), 30000);
         const jitter = Math.random() * 1000;
         const delayMs = baseDelay + jitter;
         terminal.writeln(
