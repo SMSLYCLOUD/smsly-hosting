@@ -32,6 +32,14 @@
 
 set -euo pipefail
 
+# ─── Parse flags early ───────────────────────────────────────────────────────
+NON_INTERACTIVE=false
+for arg in "$@"; do
+  case "$arg" in
+    --non-interactive) NON_INTERACTIVE=true ;;
+  esac
+done
+
 # ─── Resolve script path BEFORE any cd (screen guard needs absolute path) ────
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"

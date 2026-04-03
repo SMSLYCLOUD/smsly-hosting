@@ -87,8 +87,8 @@ wait_for_endpoint() {
 }
 
 echo "[4/9] Waiting for db/redis health..."
-wait_for_healthy db 60
-wait_for_healthy redis 30
+wait_for_healthy db 60 || { echo "FATAL: Database failed to start. Aborting."; exit 1; }
+wait_for_healthy redis 30 || { echo "FATAL: Redis failed to start. Aborting."; exit 1; }
 
 echo ""
 echo "[5/9] Starting backend..."
