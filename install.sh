@@ -2570,10 +2570,23 @@ else
     echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
     echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
 
-    # If env vars are pre-seeded, skip prompting even in interactive shells.
-    if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-        echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
-        MODE_CHOICE=2
+    # If any mode was pre-selected (even IP mode), skip prompting even in interactive shells.
+    if [ -n "${PRESET_USE_SSL}" ]; then
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
+            MODE_CHOICE=2
+        elif [ "${PRESET_USE_SSL}" = "false" ]; then
+            echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
+            MODE_CHOICE=1
+        else
+            # Pre-seeded but incomplete? Ask anyway.
+            if [ -e /dev/tty ]; then
+                read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
+                MODE_CHOICE=${MODE_CHOICE:-1}
+            else
+                MODE_CHOICE=1
+            fi
+        fi
     elif [ -e /dev/tty ]; then
         read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
         MODE_CHOICE=${MODE_CHOICE:-1}
@@ -2914,8 +2927,16 @@ else
     # Production hardening: never ship with a default admin password.
     # Use a shell-safe hex password (avoids quoting issues in manage.py shell).
     ADMIN_PASS="$(gen_hex_secret 16)"
-    echo "from django.contrib.auth import get_user_model; User = get_user_model(); User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS'); print('CREATED')" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
-    echo -e "${GREEN}  ✓ Admin user created${NC}"
+    echo "
+from django.contrib.auth import get_user_model
+from rest_framework.authtoken.models import Token
+User = get_user_model()
+admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS')
+token = Token.objects.create(user=admin)
+print(token.key)
+" | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
+    echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
+    chmod 600 "$INSTALL_DIR/.token"
 
     # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
     cat > "$CREDENTIALS_FILE" <<CREDS
@@ -3537,6 +3558,45 @@ systemctl enable smsly-autoscaler 2>/dev/null || true
 systemctl restart smsly-autoscaler 2>/dev/null || true
 echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 
+# -----------------------------------------------------------------------------
+# 10. CLI Integration
+# -----------------------------------------------------------------------------
+echo -e "\n${YELLOW}[10/10] Integrating SMSLY CLI...${NC}"
+
+if [ -d "$INSTALL_DIR/cli" ]; then
+    echo -e "${BLUE}  → Installing 'smsly' CLI command globally...${NC}"
+    # Use --break-system-packages for modern Python (Ubuntu 24.04+)
+    pip3 install -q --break-system-packages "$INSTALL_DIR/cli" 2>/dev/null || \
+        pip3 install -q "$INSTALL_DIR/cli" 2>/dev/null || true
+    
+    # Ensure binary is in path (pip usually puts it in /usr/local/bin)
+    if command -v smsly &> /dev/null; then
+        echo -e "${GREEN}  ✓ CLI installed: run 'smsly login' or 'smsly --help'${NC}"
+        
+        # Auto-configuration for local host
+        if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
+            URL_SCHEME="https" && [ "$USE_SSL" != "true" ] && URL_SCHEME="http"
+            API_URL="${URL_SCHEME}://${DOMAIN}"
+        else
+            API_URL="http://127.0.0.1:8090"
+        fi
+        
+        # Best effort: don't auto-login yet (token is in creds file), 
+        # but let the user know their URL is pre-linked.
+        echo -e "${BLUE}  → Your local API URL: $API_URL${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ CLI installation partially failed (could not find 'smsly' in PATH).${NC}"
+    fi
+else
+    echo -e "${YELLOW}  ⚠ CLI directory not found — skipping integration.${NC}"
+fi
+
+# ─── Final Verification Sync ──────────────────────────────────────────────────
+if command -v smsly &> /dev/null; then
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+    VERIFY_TOTAL=$((VERIFY_TOTAL + 1))
+fi
+
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
 
@@ -3558,6 +3618,7 @@ echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
+echo -e "   CLI:         'smsly services list'${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"

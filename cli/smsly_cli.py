@@ -56,12 +56,49 @@ def save_config(url, token):
 
 
 def load_config():
-    """Load saved config, or exit with error."""
-    if not os.path.exists(CONFIG_FILE):
-        print("✗ Not logged in. Run: smsly login <url> <token>")
-        sys.exit(1)
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
+    """Load saved config, or auto-discover if running on host."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+
+    # Auto-discovery for local installation
+    LOCAL_INSTALL_DIR = "/opt/smsly-hosting"
+    ENV_FILE = os.path.join(LOCAL_INSTALL_DIR, ".env")
+    TOKEN_FILE = os.path.join(LOCAL_INSTALL_DIR, ".token")
+
+    if os.path.exists(ENV_FILE) and os.path.exists(TOKEN_FILE):
+        env_vars = {}
+        with open(ENV_FILE, "r") as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    env_vars[k.strip()] = v.strip()
+        
+        with open(TOKEN_FILE, "r") as f:
+            token = f.read().strip()
+            
+        domain = env_vars.get("DOMAIN", "localhost")
+        use_ssl = env_vars.get("USE_SSL", "false").lower() == "true"
+        scheme = "https" if use_ssl and domain != "localhost" else "http"
+        
+        # If it's a raw IP, use it. If it's a domain, use it.
+        # Default to 8090 for local IP mode.
+        port = ""
+        if domain == "localhost" or domain.replace(".", "").isdigit():
+            port = ":8090"
+            
+        url = f"{scheme}://{domain}{port}"
+        
+        # Best effort: auto-save to user config for future runs
+        try:
+            save_config(url, token)
+        except Exception:
+            pass
+            
+        return {"url": url, "token": token}
+
+    print("✗ Not logged in. Run: smsly login <url> <token>")
+    sys.exit(1)
 
 
 def load_project_config():
