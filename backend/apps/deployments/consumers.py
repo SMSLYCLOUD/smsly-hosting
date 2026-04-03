@@ -266,8 +266,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
-        timeout_seconds = 420.0  # 7 minutes total idle timeout
-        max_exec_reconnects = 3
+        timeout_seconds = 1800.0  # 30 minutes total idle timeout
+        max_exec_reconnects = 10
         exec_reconnect_count = 0
 
         try:
@@ -382,8 +382,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 try:
                     # In the first 10 seconds, be very aggressive with heartbeats (1.0s)
                     # to satisfy strict proxy/Cloudflare handshake-finalization timeouts.
+                    # After that, use 1.5s timeout to ensure more frequent keepalives
                     current_duration = time.time() - start_time
-                    wait_timeout = 1.0 if current_duration < 10.0 else 2.5
+                    wait_timeout = 1.0 if current_duration < 10.0 else 1.5
                     
                     msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
                     
