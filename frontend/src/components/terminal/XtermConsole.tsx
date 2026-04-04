@@ -118,7 +118,7 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
         terminal.writeln('\r\n\x1b[31m[error] websocket connection failed\x1b[0m');
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (heartbeatInterval) clearInterval(heartbeatInterval);
         if (disposed) return;
         // Cancel stability timer — connection wasn't stable
@@ -126,7 +126,17 @@ export default function XtermConsole({ wsUrl }: XtermConsoleProps) {
           clearTimeout(stabilityTimer);
           stabilityTimer = null;
         }
-        terminal.writeln('\r\n\x1b[31m[disconnected]\x1b[0m');
+        console.warn('[terminal] websocket closed', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+        });
+        terminal.writeln(
+          `\r\n\x1b[31m[disconnected code=${event.code}]\x1b[0m`,
+        );
+        if (event.reason) {
+          terminal.writeln(`\x1b[31m[reason] ${event.reason}\x1b[0m`);
+        }
         if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
           terminal.writeln('\x1b[31m[reconnect limit reached — refresh page to retry]\x1b[0m');
           return;

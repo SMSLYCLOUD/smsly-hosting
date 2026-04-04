@@ -163,7 +163,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         self.is_disconnected = True
-        logger.info("WebSocket disconnected: User %s from deployment %s", getattr(self.user, 'id', 'Unknown'), self.deployment_id)
+        logger.info(
+            "WebSocket disconnected: User %s from deployment %s (code=%s)",
+            getattr(self.user, 'id', 'Unknown'),
+            self.deployment_id,
+            close_code,
+        )
 
         # ── CANCEL ALL TASKS ──
         tasks_to_cancel = [
