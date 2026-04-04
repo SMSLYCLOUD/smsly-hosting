@@ -1111,7 +1111,7 @@ export default function SettingsPage() {
                     </div>
                     <Button variant="destructive" onClick={() => {
                       toast({ title: "Initiating Clear", description: "Cleaning up system caches and docker containers..." });
-                      systemApi.post('/system/config/', { action: 'clear' })
+                      api.post('/system/config/', { action: 'clear' })
                         .then(() => toast({ title: "Clear Triggered", description: "Task queued successfully." }))
                         .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
                     }}>Clear System</Button>
@@ -1123,7 +1123,7 @@ export default function SettingsPage() {
                     </div>
                     <Button variant="outline" onClick={() => {
                       toast({ title: "Syncing Proxy", description: "Restarting Caddy and proxy watchers..." });
-                      systemApi.post('/system/config/', { action: 'refresh' })
+                      api.post('/system/config/', { action: 'refresh' })
                         .then(() => toast({ title: "Proxy Synced", description: "Task queued successfully." }))
                         .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
                     }}>Sync Proxy</Button>
@@ -1135,7 +1135,7 @@ export default function SettingsPage() {
                     </div>
                     <Button variant="default" onClick={() => {
                       toast({ title: "Initiating Update", description: "Pulling latest code..." });
-                      systemApi.post('/system/config/', { action: 'update' })
+                      api.post('/system/config/', { action: 'update' })
                         .then(() => toast({ title: "Update Triggered", description: "Task queued successfully." }))
                         .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
                     }}>Update Platform</Button>

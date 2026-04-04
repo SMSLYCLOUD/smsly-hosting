@@ -1,4 +1,5 @@
 import ipaddress
+import socket
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -75,18 +76,31 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 {'error': 'Target server IP is required (local node IP not set).'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        resolved_target_ip = None
         try:
             ipaddress.ip_address(target_server_ip)
+            resolved_target_ip = target_server_ip
         except ValueError:
-            return Response(
-                {
-                    'error': (
-                        'Target server host must be an IP address for transfer SSH. '
-                        'Use an IP-based connected server or pass target_server_ip.'
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            try:
+                for family, _, _, _, sockaddr in socket.getaddrinfo(target_server_ip, None):
+                    if family in (socket.AF_INET, socket.AF_INET6):
+                        resolved_target_ip = sockaddr[0]
+                        break
+            except socket.gaierror:
+                resolved_target_ip = None
+
+            if not resolved_target_ip:
+                return Response(
+                    {
+                        'error': (
+                            'Target server host must resolve to an IP address for transfer SSH. '
+                            'Use an IP-based connected server or pass target_server_ip.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        target_server_ip = resolved_target_ip
 
         target_ssh_key = str(payload.get('target_ssh_key') or '').strip()
         target_ssh_password = str(payload.get('target_ssh_password') or '').strip()
