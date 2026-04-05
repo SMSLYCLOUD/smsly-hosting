@@ -357,7 +357,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
                 self._last_activity = time.time()
                 exec_reconnect_count = 0
-                text = data.decode('utf-8', errors='replace')
+                # Sanitize: strip NUL bytes for client/proxy compatibility
+                text = data.decode('utf-8', errors='replace').replace('\x00', '')
                 enc_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
                 await self._out_queue.put({'message': enc_text})
         except asyncio.CancelledError:
@@ -705,8 +706,10 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         from apps.deployments.models import Deployment
         try:
             d = Deployment.objects.get(id=self.deployment_id)
+            # Sanitize existing logs for the initial state broadcast
+            safe_logs = (d.build_logs or "").replace('\x00', '')
             return {
-                'build_logs': d.build_logs,
+                'build_logs': safe_logs,
                 'status': d.status,
                 'started_at': d.started_at.isoformat() if d.started_at else None,
                 'finished_at': d.finished_at.isoformat() if d.finished_at else None,

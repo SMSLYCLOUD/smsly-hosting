@@ -528,8 +528,8 @@ class PipelineManager:
 
             response, provider = ask_with_fallback(prompt)
 
-            # Store the raw AI response
-            self.deployment.ai_diagnosis = response
+            # Store the raw AI response, sanitized for Postgres
+            self.deployment.ai_diagnosis = (response or "").replace('\x00', '')
             self.deployment.save(update_fields=['ai_diagnosis'])
             append_log(
                 self.deployment,

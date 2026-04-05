@@ -197,6 +197,19 @@ class RepoScanner:
 
         return ", ".join(dict.fromkeys(markers))  # Deduplicate preserving order
 
+    def _safe_read(self, filepath: str, max_read: int = 50000) -> str:
+        """Read a file safely, stripping NUL bytes for Postgres compatibility."""
+        try:
+            with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
+                content = fh.read(max_read)
+                sanitized = content.replace('\x00', '')
+                if len(content) == max_read:
+                    sanitized += "\n... (truncated)"
+                return sanitized
+        except Exception as e:
+            logger.debug("Failed to read %s: %s", filepath, e)
+            return ""
+
     # -----------------------------------------------------------------------
     # Config File Reading
     # -----------------------------------------------------------------------
@@ -225,11 +238,8 @@ class RepoScanner:
                     max_read = MAX_LOCK_READ if is_lock else MAX_FILE_READ
 
                     try:
-                        with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
-                            content = fh.read(max_read)
-                            if len(content) == max_read:
-                                content += "\n... (truncated)"
-                            configs[rel_path] = content
+                        content = self._safe_read(filepath, max_read)
+                        configs[rel_path] = content
                     except Exception as e: # pylint: disable=broad-exception-caught
                         configs[rel_path] = f"(unreadable: {e})"
 
@@ -260,16 +270,16 @@ class RepoScanner:
                 if f in ENV_FILES or f.startswith('.env'):
                     filepath = os.path.join(root, f)
                     try:
-                        with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
-                            for line in fh:
-                                line = line.strip()
-                                if line and not line.startswith('#') and '=' in line:
-                                    # pylint: disable=superfluous-parens
-                                    key = line.split('=', 1)[0].strip()
-                                    # Strip export prefix
-                                    key = re.sub(r'^export\s+', '', key)
-                                    if key and re.match(r'^[A-Z_][A-Z0-9_]*$', key):
-                                        env_vars.add(key)
+                        content = self._safe_read(filepath)
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if line and not line.startswith('#') and '=' in line:
+                                # pylint: disable=superfluous-parens
+                                key = line.split('=', 1)[0].strip()
+                                # Strip export prefix
+                                key = re.sub(r'^export\s+', '', key)
+                                if key and re.match(r'^[A-Z_][A-Z0-9_]*$', key):
+                                    env_vars.add(key)
                     except Exception: # pylint: disable=broad-exception-caught
                         pass
 
@@ -435,22 +445,19 @@ class RepoScanner:
                         if f in cfg_names:
                             filepath = os.path.join(root, f)
                             try:
-                                with open(filepath, 'r', errors='ignore',
-                                          encoding='utf-8') as fh:
-                                    content = fh.read(50000)
-                                    for match in cfg_pattern.finditer(content):
-                                        env_vars.add(match.group(1))
+                                content = self._safe_read(filepath, 50000)
+                                for match in cfg_pattern.finditer(content):
+                                    env_vars.add(match.group(1))
                             except Exception:
                                 pass
                     continue
 
                 filepath = os.path.join(root, f)
                 try:
-                    with open(filepath, 'r', errors='ignore', encoding='utf-8') as fh:
-                        content = fh.read(50000)  # Read first 50KB of code files
-                        for pattern in code_patterns:
-                            for match in pattern.finditer(content):
-                                env_vars.add(match.group(1))
+                    content = self._safe_read(filepath, 50000)
+                    for pattern in code_patterns:
+                        for match in pattern.finditer(content):
+                            env_vars.add(match.group(1))
                 except Exception: # pylint: disable=broad-exception-caught
                     pass
 
@@ -472,11 +479,9 @@ class RepoScanner:
 
                 filepath = os.path.join(root, f)
                 try:
-                    with open(filepath, 'r', errors='ignore',
-                              encoding='utf-8') as fh:
-                        content = fh.read(MAX_FILE_READ)
-                        for match in compose_pattern.finditer(content):
-                            env_vars.add(match.group(1))
+                    content = self._safe_read(filepath, MAX_FILE_READ)
+                    for match in compose_pattern.finditer(content):
+                        env_vars.add(match.group(1))
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass
 
