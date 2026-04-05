@@ -310,14 +310,19 @@ def update_stage(deployment, name, status, duration=None):
 def append_log(deployment, log_line):
     """
     Append logs safely using refresh and update_fields.
+    Strips NUL (\x00) characters to prevent PostgreSQL text field errors.
     """
     if not log_line:
         return
-    # Refresh logs to avoid overwrite race conditions
+
+    # 1. Sanitize for PostgreSQL (NUL bytes are not allowed in text/varchar)
+    sanitized_log = str(log_line).replace('\x00', '')
+
+    # 2. Refresh logs to avoid overwrite race conditions
     deployment.refresh_from_db(fields=['build_logs'])
-    deployment.build_logs += log_line
+    deployment.build_logs += sanitized_log
     deployment.save(update_fields=['build_logs'])
-    broadcast_log(deployment, log_line)
+    broadcast_log(deployment, sanitized_log)
 
 
 def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tuple[str | None, bool]:
