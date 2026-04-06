@@ -457,7 +457,11 @@ class PipelineManager:
                             if SKIP_PATTERNS.match(key):
                                 continue
 
-                            collected[key] = value
+                            # Sanitize for PostgreSQL
+                            safe_key = key.replace('\x00', '')
+                            safe_value = value.replace('\x00', '')
+
+                            collected[safe_key] = safe_value
                 except Exception:
                     continue
 
