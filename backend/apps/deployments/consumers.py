@@ -272,7 +272,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         if not hasattr(self, '_last_activity'):
             self._last_activity = time.time()
 
-        timeout_seconds = 1800.0  # 30 minutes total idle timeout
+        timeout_seconds = 420.0  # 7 minutes total idle timeout
         max_exec_reconnects = 10
         exec_reconnect_count = 0
 
@@ -347,6 +347,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             pass
                         break
 
+                    # Send an empty message to keep Cloudflare/proxies alive during idle
+                    if not self.is_disconnected:
+                        await self._out_queue.put({'message': ''})
+
                     # Wait and yield back to event loop to prevent CPU/Proxy flooding
                     await asyncio.sleep(0.1)
                     continue
@@ -417,10 +421,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
     def _blocking_read(self):
         """Blocking read from the exec socket. Runs in executor.
 
-        Uses select.select to implement a reliable timeout that works
-        on both raw sockets and docker-py wrappers.
+        Relies on the underlying docker-py socket timeout.
         """
-        import select
         import socket
 
         sock = self._raw_sock or self.exec_socket
@@ -428,30 +430,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return None
 
         try:
-            # Use select to reliably implement a timeout for the blocking read.
-            # This ensures we don't hang the thread pool if the container goes rogue.
-            r, _, _ = select.select([sock], [], [], 15.0)
-            if r:
-                if hasattr(sock, 'recv'):
-                    data = sock.recv(4096)
-                elif hasattr(sock, 'read'):
-                    data = sock.read(4096)
-                else:
-                    return None
-                
-                if not data:
-                    # True EOF
-                    return None
-                return data
+            if hasattr(sock, 'recv'):
+                data = sock.recv(4096)
+            elif hasattr(sock, 'read'):
+                data = sock.read(4096)
+            else:
+                return None
             
+            if not data:
+                # True EOF
+                return None
+            return data
+        except socket.timeout:
             # Timeout case - return empty heartbeat-equivalent
-            return b''
-        except (socket.error, select.error):
             return b''
         except Exception as e:
             err_name = e.__class__.__name__
             err_str = str(e).lower()
-            # urllib3/requests timeout variants
+            # docker-py/urllib3/requests timeout variants
             if err_name == 'ReadTimeoutError' or 'timed out' in err_str or 'timeout' in err_str:
                 return b''
             if 'connection broken' in err_str or 'chunkedencodingerror' in err_name.lower():
