@@ -1744,7 +1744,12 @@ def _handle_failure(task, deployment, error_msg, reason):
         if deployment.status != 'CANCELLED':
             deployment.status = 'FAILED'
             deployment.finished_at = timezone.now()
-            deployment.build_logs += f"\n✗ {reason}: {error_msg}\n"
+            
+            # Sanitize inputs for PostgreSQL
+            safe_reason = str(reason).replace('\x00', '')
+            safe_msg = str(error_msg).replace('\x00', '')
+            
+            deployment.build_logs += f"\n✗ {safe_reason}: {safe_msg}\n"
             deployment.save()
             broadcast_status(deployment)
 
