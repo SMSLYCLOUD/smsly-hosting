@@ -731,18 +731,21 @@ class PipelineManager:
                 )
                 continue
 
-            if default_val and default_val.strip():
+            if default_val and str(default_val).strip():
+                # Sanitize for PostgreSQL
+                safe_val = str(default_val).strip().replace('\x00', '')
+                
                 # Has a sensible default → inject it
                 EnvironmentVariable.objects.create(
                     service=self.service,
                     key=key,
-                    value=default_val.strip(),
+                    value=safe_val,
                     is_secret=False
                 )
                 injected += 1
                 append_log(
                     self.deployment,
-                    f"  🔧 Auto-set {key}={default_val}\n"
+                    f"  🔧 Auto-set {key}={safe_val[:50]}\n"
                 )
             else:
                 # Empty value = secret the user must provide
