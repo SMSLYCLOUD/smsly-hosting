@@ -29,6 +29,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._raw_sock = None  # The actual OS-level socket for recv/send
         self._read_task = None
         self._send_task = None
+        self._setup_task = None
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
         self._pulse_task = None
@@ -161,13 +162,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self._out_queue.put({'message': enc})
             await self.close()
 
-    async def disconnect(self, close_code):
+    async def disconnect(self, code):
         self.is_disconnected = True
         logger.info(
             "WebSocket disconnected: User %s from deployment %s (code=%s)",
             getattr(self.user, 'id', 'Unknown'),
             self.deployment_id,
-            close_code,
+            code,
         )
 
         # ── CANCEL ALL TASKS ──
@@ -640,7 +641,7 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
             **initial
         }))
 
-    async def disconnect(self, close_code):
+    async def disconnect(self, code):
         if self.group_name:
             await self.channel_layer.group_discard(
                 self.group_name,
