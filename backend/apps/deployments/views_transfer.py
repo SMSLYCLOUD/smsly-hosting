@@ -129,7 +129,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             service=service,
         )
 
-        execute_server_transfer_task.delay(transfer_id=str(transfer.id))
+        execute_server_transfer_task.delay(str(transfer.id))
 
         return Response(ServerTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
 
