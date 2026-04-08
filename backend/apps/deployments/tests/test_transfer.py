@@ -1,6 +1,7 @@
 # pylint: disable=invalid-name
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
+import os
 from django.utils import timezone
 from apps.deployments.models import Service, PlatformConfig
 from apps.deployments.models_transfer import ServerTransfer
@@ -103,3 +104,30 @@ class ServerTransferServiceTest(TestCase):
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.status, 'FAILED')
         self.assertIn("Connection refused", self.transfer.error_message)
+
+    @patch('apps.deployments.services.transfer_service.BackupService.decrypt_backup')
+    @patch('apps.deployments.services.transfer_service.os.path.exists', return_value=False)
+    def test_restore_uses_uploaded_filename_when_backup_is_encrypted(
+        self, _exists_mock, decrypt_mock
+    ):
+        """Encrypted backups upload a decrypted tarball; restore must use that uploaded path."""
+        self.transfer.source_backup = ServiceBackup.objects.create(
+            service=self.service,
+            file_path='/tmp/source-backup.tar.gz.enc',
+            metadata={},
+            status='COMPLETED',
+        )
+        self.transfer.save(update_fields=['source_backup'])
+
+        decrypt_mock.return_value = '/tmp/source-backup.tar.gz'
+        os.environ['BACKUP_ENCRYPTION_KEY'] = 'test-key'
+
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.transfer.transfer_type = 'SERVICE'
+
+        with patch.object(svc, '_restore_single_service') as restore_single:
+            svc._upload()
+            svc._restore()
+
+        restore_single.assert_called_once_with('/tmp/source-backup.tar.gz')

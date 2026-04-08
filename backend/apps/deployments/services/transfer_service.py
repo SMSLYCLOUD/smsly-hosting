@@ -24,6 +24,7 @@ class ServerTransferService:
     def __init__(self, transfer):
         self.transfer = transfer
         self.ssh = None
+        self._uploaded_remote_backup_path = None
 
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
@@ -139,6 +140,7 @@ class ServerTransferService:
             local_path = temp_decrypted
 
         remote_path = f"/tmp/{os.path.basename(local_path)}"
+        self._uploaded_remote_backup_path = remote_path
 
         self.ssh.upload_file(local_path, remote_path)
 
@@ -165,7 +167,10 @@ class ServerTransferService:
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
         backup_filename = os.path.basename(backup.file_path)
-        remote_backup_path = f"/tmp/{backup_filename}"
+        remote_backup_path = (
+            self._uploaded_remote_backup_path
+            or f"/tmp/{backup_filename}"
+        )
 
         if self.transfer.transfer_type == 'SERVICE':
             self._restore_single_service(remote_backup_path)
