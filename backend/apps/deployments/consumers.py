@@ -399,10 +399,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             while not self._accepted and not self.is_disconnected:
                 await asyncio.sleep(0.1)
 
-            # Keepalive cadence tuned for Cloudflare/edge proxies:
-            # - frequent enough to stay below common idle limits (e.g. 100s)
-            # - sparse enough to avoid excessive frame churn that can trigger
-            #   unnecessary reconnect loops on unstable links.
+            # Aggressive heartbeats for the first 10 seconds (handshake window)
+            start_time = time.time()
             while not self.is_disconnected:
                 try:
                     msg = await asyncio.wait_for(
