@@ -387,7 +387,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # SECURITY: Wait for handshake to propagate before sending first frame
             while not self._accepted and not self.is_disconnected:
                 await asyncio.sleep(0.1)
-            
+
             # Aggressive heartbeats for the first 10 seconds (handshake window)
             start_time = time.time()
             while not self.is_disconnected:
