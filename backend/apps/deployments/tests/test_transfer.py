@@ -2,11 +2,13 @@
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
 import os
+from datetime import timedelta
 from django.utils import timezone
 from apps.deployments.models import Service, PlatformConfig
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
+from apps.deployments.models_core import ManagedServer
 
 class ServerTransferServiceTest(TestCase):
     def setUp(self):
@@ -152,3 +154,39 @@ class ServerTransferServiceTest(TestCase):
 
         with self.assertRaises(RuntimeError):
             svc._verify_between_servers()
+
+    def test_rollback_resets_service_server_to_source(self):
+        source_server = ManagedServer.objects.create(
+            name='source',
+            host='1.2.3.4',
+            owner=self.user,
+        )
+        target_server = ManagedServer.objects.create(
+            name='target',
+            host='5.6.7.8',
+            owner=self.user,
+        )
+        self.service.server = target_server
+        self.service.save(update_fields=['server'])
+
+        self.transfer.status = 'COMPLETED'
+        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=1)
+        self.transfer.save(update_fields=['status', 'rollback_deadline'])
+
+        svc = ServerTransferService(self.transfer)
+        with patch.object(svc, '_update_cloudflare_dns'):
+            svc.rollback()
+
+        self.service.refresh_from_db()
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.service.server_id, source_server.id)
+        self.assertEqual(self.transfer.status, 'ROLLED_BACK')
+        self.assertFalse(self.transfer.can_rollback)
+
+    def test_rollback_rejects_non_completed_transfer(self):
+        self.transfer.status = 'FAILED'
+        self.transfer.save(update_fields=['status'])
+        svc = ServerTransferService(self.transfer)
+
+        with self.assertRaises(ValueError):
+            svc.rollback()
