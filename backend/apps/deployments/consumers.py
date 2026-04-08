@@ -35,6 +35,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._pulse_task = None
         self._accepted = False
         self._last_activity = time.time()
+        self._keepalive_timeout_seconds = self._resolve_keepalive_timeout()
+
+    def _resolve_keepalive_timeout(self) -> float:
+        """Resolve WS keepalive interval from env with safe bounds."""
+        raw_value = os.getenv("TERMINAL_WS_KEEPALIVE_SECONDS", "20")
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            parsed = 20.0
+        # Keep the value practical for proxy idle limits and avoid noisy churn.
+        return max(5.0, min(parsed, 60.0))
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
@@ -392,13 +403,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             start_time = time.time()
             while not self.is_disconnected:
                 try:
-                    # In the first 10 seconds, be very aggressive with heartbeats (1.0s)
-                    # to satisfy strict proxy/Cloudflare handshake-finalization timeouts.
-                    # After that, use 1.5s timeout to ensure more frequent keepalives
-                    current_duration = time.time() - start_time
-                    wait_timeout = 1.0 if current_duration < 10.0 else 1.5
-                    
-                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
+                    msg = await asyncio.wait_for(
+                        self._out_queue.get(),
+                        timeout=self._keepalive_timeout_seconds
+                    )
                     
                     if not self.is_disconnected:
                         await self.send(text_data=json.dumps(msg))
