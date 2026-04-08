@@ -131,3 +131,24 @@ class ServerTransferServiceTest(TestCase):
             svc._restore()
 
         restore_single.assert_called_once_with('/tmp/source-backup.tar.gz')
+
+    @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    def test_verify_between_servers_passes_when_remote_tcp_check_succeeds(self, create_connection_mock):
+        create_connection_mock.return_value.__enter__.return_value = None
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.ssh.exec_command.return_value = 'TRANSFER_TCP_OK'
+
+        svc._verify_between_servers()
+
+        svc.ssh.exec_command.assert_called_once()
+
+    @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    def test_verify_between_servers_fails_when_remote_tcp_check_fails(self, create_connection_mock):
+        create_connection_mock.side_effect = OSError("blocked")
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.ssh.exec_command.return_value = 'TRANSFER_TCP_FAIL'
+
+        with self.assertRaises(RuntimeError):
+            svc._verify_between_servers()

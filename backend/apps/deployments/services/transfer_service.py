@@ -6,6 +6,7 @@ import tempfile
 import requests
 import shlex
 import glob
+import socket
 from datetime import timedelta
 
 from django.conf import settings
@@ -445,6 +446,7 @@ if os.path.exists(services_dir):
 
         # Interconnect old and new servers automatically so they can communicate
         self._interconnect_servers()
+        self._verify_between_servers()
 
         if self.transfer.transfer_type == 'FULL':
             url = f"http://{self.transfer.target_server_ip}:8090/health"
@@ -472,6 +474,43 @@ if os.path.exists(services_dir):
             except Exception as e:
                 logger.warning("Service verification failed: %s", e)
                 raise RuntimeError(f"Service verification failed: {e}") from e
+
+    def _verify_between_servers(self):
+        """
+        Verify basic TCP reachability between source and target servers.
+
+        This increases confidence that transfer-related operations and post-cutover
+        server communication can work in both directions.
+        """
+        source_ip = str(getattr(self.transfer, 'source_server_ip', '') or '').strip()
+        target_ip = str(getattr(self.transfer, 'target_server_ip', '') or '').strip()
+        if not source_ip or not target_ip or not self.ssh:
+            return
+
+        # Local controller -> target SSH reachability
+        try:
+            with socket.create_connection((target_ip, 22), timeout=5):
+                logger.info("Connectivity check passed: controller -> %s:22", target_ip)
+        except OSError as exc:
+            logger.warning("Connectivity check failed: controller -> %s:22 (%s)", target_ip, exc)
+
+        # Target -> source SSH reachability
+        tcp_check_cmd = (
+            "bash -lc "
+            + shlex.quote(
+                f"timeout 5 sh -c '</dev/tcp/{source_ip}/22' >/dev/null 2>&1 "
+                "&& echo TRANSFER_TCP_OK || echo TRANSFER_TCP_FAIL"
+            )
+        )
+        remote_result = self.ssh.exec_command(tcp_check_cmd).strip()
+        if "TRANSFER_TCP_OK" in remote_result:
+            logger.info("Connectivity check passed: target -> %s:22", source_ip)
+            return
+
+        raise RuntimeError(
+            f"Target server cannot reach source server on TCP/22 ({source_ip}). "
+            "Verify firewall/security-group rules between both servers."
+        )
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'
