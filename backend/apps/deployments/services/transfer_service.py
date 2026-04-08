@@ -533,6 +533,12 @@ if os.path.exists(services_dir):
     def rollback(self):
         if not self.transfer.can_rollback:
             raise ValueError('Rollback not allowed')
+        if self.transfer.status != 'COMPLETED':
+            raise ValueError('Rollback is only available for completed transfers')
+        if self.transfer.rollback_deadline and timezone.now() > self.transfer.rollback_deadline:
+            self.transfer.can_rollback = False
+            self.transfer.save(update_fields=['can_rollback'])
+            raise ValueError('Rollback window has expired')
 
         config = PlatformConfig.load()
         if config.cloudflare_api_token and config.domain:
@@ -541,6 +547,11 @@ if os.path.exists(services_dir):
         if self.transfer.transfer_type == 'FULL':
             config.server_ip = self.transfer.source_server_ip
             config.save()
+        elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+            from ..models_core import ManagedServer
+            source_server = ManagedServer.objects.filter(host=self.transfer.source_server_ip).first()
+            self.transfer.service.server = source_server
+            self.transfer.service.save(update_fields=['server'])
 
         self.transfer.status = 'ROLLED_BACK'
         self.transfer.can_rollback = False
