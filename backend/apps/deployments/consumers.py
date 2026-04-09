@@ -405,7 +405,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                     # During the first few seconds, keep latency lower while tunnel settles.
                     # After that, use a less chatty keepalive to avoid reconnect churn.
                     current_duration = time.time() - start_time
-                    wait_timeout = 2.0 if current_duration < 8.0 else 12.0
+                    wait_timeout = 5.0 if current_duration < 10.0 else 20.0
                     
                     msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
                     
