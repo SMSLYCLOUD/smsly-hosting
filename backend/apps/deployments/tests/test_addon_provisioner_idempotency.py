@@ -83,7 +83,8 @@ class AddonProvisionerIdempotencyTests(TestCase):
         prov = AddonProvisioner()
         kafka_cfg = prov.GENERIC_ADDONS_CONFIG['KAFKA']
 
-        with patch.object(prov, '_wait_for_health') as mock_wait:
+        with patch.object(prov, '_wait_for_health') as mock_wait, \
+             patch.object(prov, '_wait_for_ready_command') as mock_ready:
             container_id, connection_url = prov._provision_generic(
                 'KAFKA',
                 'smsly-addon-kafka-1',
@@ -98,6 +99,11 @@ class AddonProvisionerIdempotencyTests(TestCase):
         mock_wait.assert_called_once_with(
             'smsly-addon-kafka-1',
             9092,
+            timeout=120
+        )
+        mock_ready.assert_called_once_with(
+            'smsly-addon-kafka-1',
+            kafka_cfg['ready_cmd'],
             timeout=120
         )
 
@@ -115,6 +121,10 @@ class AddonProvisionerIdempotencyTests(TestCase):
             '-e ALLOW_PLAINTEXT_LISTENER=yes',
             cmd_text
         )
+        self.assertRegex(
+            cmd_text,
+            r'-e KAFKA_KRAFT_CLUSTER_ID=[A-Za-z0-9_-]{22}'
+        )
 
     @patch('services.addon_provisioner.subprocess.run')
     def test_all_generic_addons_render_docker_run_commands_and_urls(self, mock_run):
@@ -125,14 +135,15 @@ class AddonProvisionerIdempotencyTests(TestCase):
         for addon_type, cfg in prov.GENERIC_ADDONS_CONFIG.items():
             with self.subTest(addon_type=addon_type):
                 with patch.object(prov, '_wait_for_health') as mock_wait:
-                    container_id, connection_url = prov._provision_generic(
-                        addon_type=addon_type,
-                        container_name=f'smsly-addon-{addon_type.lower()}-1',
-                        password='p@ssw0rd',
-                        port=cfg['port'],
-                        alias_name=f'{addon_type.lower()}-svc',
-                        config=cfg,
-                    )
+                    with patch.object(prov, '_wait_for_ready_command') as mock_ready:
+                        container_id, connection_url = prov._provision_generic(
+                            addon_type=addon_type,
+                            container_name=f'smsly-addon-{addon_type.lower()}-1',
+                            password='p@ssw0rd',
+                            port=cfg['port'],
+                            alias_name=f'{addon_type.lower()}-svc',
+                            config=cfg,
+                        )
 
                 self.assertEqual(container_id, 'fedcba098765')
                 self.assertIn('://', connection_url)
@@ -152,3 +163,12 @@ class AddonProvisionerIdempotencyTests(TestCase):
                     cfg['port'],
                     timeout=wait_timeout
                 )
+                ready_cmd = str(cfg.get('ready_cmd') or '').strip()
+                if ready_cmd:
+                    mock_ready.assert_called_once_with(
+                        f'smsly-addon-{addon_type.lower()}-1',
+                        ready_cmd,
+                        timeout=int(cfg.get('ready_timeout', 30))
+                    )
+                else:
+                    mock_ready.assert_not_called()

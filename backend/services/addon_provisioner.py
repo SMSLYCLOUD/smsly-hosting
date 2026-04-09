@@ -14,6 +14,8 @@ import secrets
 import subprocess
 import logging
 import time
+import base64
+import uuid
 from urllib.parse import urlparse
 from typing import Dict, Optional, Tuple
 from decouple import config
@@ -94,7 +96,7 @@ class AddonProvisioner:
         'MEILISEARCH': {"image": "getmeili/meilisearch:v1.4.0", "port": 7700, "env_url": "MEILISEARCH_URL", "auth": True, "pass_env": "MEILI_MASTER_KEY"},
         'TYPESENSE': {"image": "typesense/typesense:0.25.1", "port": 8108, "env_url": "TYPESENSE_URL", "auth": True, "pass_env": "TYPESENSE_API_KEY", "command": ["--data-dir", "/data", "--api-key", "{password}"]},
         'SOLR': {"image": "solr:9.3", "port": 8983, "env_url": "SOLR_URL", "auth": False},
-        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "health_timeout": 120, "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://{hostname}:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@{hostname}:9093", "KAFKA_CFG_INTER_BROKER_LISTENER_NAME": "PLAINTEXT", "ALLOW_PLAINTEXT_LISTENER": "yes", "KAFKA_KRAFT_CLUSTER_ID": "abcdefghijklmnopqrstuv", "KAFKA_BROKER_ID": "1"}},
+        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "health_timeout": 120, "ready_timeout": 120, "ready_cmd": "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1", "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://{hostname}:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@{hostname}:9093", "KAFKA_CFG_INTER_BROKER_LISTENER_NAME": "PLAINTEXT", "ALLOW_PLAINTEXT_LISTENER": "yes", "KAFKA_KRAFT_CLUSTER_ID": "{cluster_id}", "KAFKA_BROKER_ID": "1"}},
         'NATS': {"image": "nats:2.9.22-alpine", "port": 4222, "env_url": "NATS_URL", "auth": False},
         'REDPANDA': {"image": "redpandadata/redpanda:v23.2.14", "port": 9092, "env_url": "REDPANDA_URL", "auth": False, "command": ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "1G", "--reserve-memory", "0M", "--node-id", "0", "--check=false"]},
         'PULSAR': {"image": "apachepulsar/pulsar:3.1.0", "port": 6650, "env_url": "PULSAR_URL", "auth": False, "command": ["bin/pulsar", "standalone"]},
@@ -666,6 +668,7 @@ class AddonProvisioner:
         hostname = alias_name or container_name
         user = username or 'admin'
         db = db_name or 'app_db'
+        cluster_id = self._generate_kraft_cluster_id()
 
         if config.get('user_env'):
             cmd.extend(['-e', f'{config["user_env"]}={user}'])
@@ -678,8 +681,12 @@ class AddonProvisioner:
 
         env_extra = config.get('env', {})
         for k, v in env_extra.items():
-            # Format custom variables if they need password/hostname injection
-            val = v.replace('{password}', password).replace('{hostname}', hostname)
+            # Format custom variables if they need placeholder injection
+            val = (
+                v.replace('{password}', password)
+                .replace('{hostname}', hostname)
+                .replace('{cluster_id}', cluster_id)
+            )
             cmd.extend(['-e', f'{k}={val}'])
 
         cmd.append(config['image'])
@@ -706,7 +713,35 @@ class AddonProvisioner:
             port,
             timeout=int(config.get('health_timeout', 30))
         )
+        ready_cmd = str(config.get('ready_cmd') or '').strip()
+        if ready_cmd:
+            self._wait_for_ready_command(
+                container_name,
+                ready_cmd,
+                timeout=int(config.get('ready_timeout', 30))
+            )
         return container_id, connection_url
+
+    def _generate_kraft_cluster_id(self) -> str:
+        """Generate a valid 22-char KRaft cluster id."""
+        return base64.urlsafe_b64encode(uuid.uuid4().bytes).decode('ascii').rstrip('=')
+
+    def _wait_for_ready_command(self, container_name: str, command: str, timeout: int = 30):
+        """Wait until a command succeeds inside container (readiness gate)."""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                result = subprocess.run(
+                    ['docker', 'exec', container_name, 'bash', '-lc', command],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        raise RuntimeError(f"{container_name} readiness command timed out after {timeout}s")
 
     def _provision_postgres(
         self,

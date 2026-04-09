@@ -407,7 +407,7 @@ export default function CodeMapView() {
                           Imports ({selectedNode.data.imports.length})
                         </span>
                         <div className="mt-1 space-y-1">
-                          {selectedNode.data.imports.slice(0, 15).map((imp, i) => (
+                          {(selectedNode.data.imports as string[]).slice(0, 15).map((imp: string, i: number) => (
                             <div key={i} className="flex items-center gap-1.5 text-blue-400">
                               <ArrowRight size={10} /> <span className="font-mono">{imp}</span>
                             </div>
@@ -426,7 +426,7 @@ export default function CodeMapView() {
                           Routes ({selectedNode.data.routes.length})
                         </span>
                         <div className="mt-1 space-y-1">
-                          {selectedNode.data.routes.map((r, i) => (
+                          {(selectedNode.data.routes as Array<{ method?: string; path: string }>).map((r, i: number) => (
                             <div key={i} className="flex items-center gap-1.5">
                               <span className="px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-bold">
                                 {r.method || 'ANY'}
@@ -445,7 +445,7 @@ export default function CodeMapView() {
                           Models ({selectedNode.data.models.length})
                         </span>
                         <div className="mt-1 space-y-1">
-                          {selectedNode.data.models.map((m, i) => (
+                          {(selectedNode.data.models as string[]).map((m: string, i: number) => (
                             <div key={i} className="flex items-center gap-1.5 text-amber-400">
                               <Database size={10} /> <span className="font-mono">{m}</span>
                             </div>
