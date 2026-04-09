@@ -94,7 +94,7 @@ class AddonProvisioner:
         'MEILISEARCH': {"image": "getmeili/meilisearch:v1.4.0", "port": 7700, "env_url": "MEILISEARCH_URL", "auth": True, "pass_env": "MEILI_MASTER_KEY"},
         'TYPESENSE': {"image": "typesense/typesense:0.25.1", "port": 8108, "env_url": "TYPESENSE_URL", "auth": True, "pass_env": "TYPESENSE_API_KEY", "command": ["--data-dir", "/data", "--api-key", "{password}"]},
         'SOLR': {"image": "solr:9.3", "port": 8983, "env_url": "SOLR_URL", "auth": False},
-        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://localhost:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@localhost:9093", "KAFKA_KRAFT_CLUSTER_ID": "abcdefghijklmnopqrstuv", "KAFKA_BROKER_ID": "1"}},
+        'KAFKA': {"image": "bitnami/kafka:3.5.1", "port": 9092, "env_url": "KAFKA_URL", "auth": False, "health_timeout": 120, "env": {"KAFKA_ENABLE_KRAFT": "yes", "KAFKA_CFG_PROCESS_ROLES": "broker,controller", "KAFKA_CFG_CONTROLLER_LISTENER_NAMES": "CONTROLLER", "KAFKA_CFG_LISTENERS": "PLAINTEXT://:9092,CONTROLLER://:9093", "KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP": "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT", "KAFKA_CFG_ADVERTISED_LISTENERS": "PLAINTEXT://{hostname}:9092", "KAFKA_CFG_CONTROLLER_QUORUM_VOTERS": "1@{hostname}:9093", "KAFKA_CFG_INTER_BROKER_LISTENER_NAME": "PLAINTEXT", "ALLOW_PLAINTEXT_LISTENER": "yes", "KAFKA_KRAFT_CLUSTER_ID": "abcdefghijklmnopqrstuv", "KAFKA_BROKER_ID": "1"}},
         'NATS': {"image": "nats:2.9.22-alpine", "port": 4222, "env_url": "NATS_URL", "auth": False},
         'REDPANDA': {"image": "redpandadata/redpanda:v23.2.14", "port": 9092, "env_url": "REDPANDA_URL", "auth": False, "command": ["redpanda", "start", "--overprovisioned", "--smp", "1", "--memory", "1G", "--reserve-memory", "0M", "--node-id", "0", "--check=false"]},
         'PULSAR': {"image": "apachepulsar/pulsar:3.1.0", "port": 6650, "env_url": "PULSAR_URL", "auth": False, "command": ["bin/pulsar", "standalone"]},
@@ -701,7 +701,11 @@ class AddonProvisioner:
         else:
             connection_url = f"{scheme}://{hostname}:{port}"
 
-        self._wait_for_health(container_name, port)
+        self._wait_for_health(
+            container_name,
+            port,
+            timeout=int(config.get('health_timeout', 30))
+        )
         return container_id, connection_url
 
     def _provision_postgres(
