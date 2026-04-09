@@ -359,12 +359,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             pass
                         break
 
-                    # Send an empty message to keep Cloudflare/proxies alive during idle
-                    if not self.is_disconnected:
-                        await self._out_queue.put({'message': ''})
-
-                    # Wait and yield back to event loop to prevent CPU/Proxy flooding
-                    await asyncio.sleep(0.1)
+                    # Avoid emitting empty frames on every socket timeout; the send-loop
+                    # keepalive pong handles tunnel liveness with much lower frame churn.
+                    # Yield briefly to prevent CPU spin.
+                    await asyncio.sleep(0.5)
                     continue
 
                 # Got real data — reset activity and exec reconnect counters
@@ -399,14 +397,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             while not self._accepted and not self.is_disconnected:
                 await asyncio.sleep(0.1)
 
-            # Aggressive heartbeats for the first 10 seconds (handshake window)
+            # Conservative startup heartbeat, then steady keepalive.
+            # This avoids frame flooding while still keeping proxies warm.
             start_time = time.time()
             while not self.is_disconnected:
                 try:
-                    msg = await asyncio.wait_for(
-                        self._out_queue.get(),
-                        timeout=self._keepalive_timeout_seconds
-                    )
+                    # During the first few seconds, keep latency lower while tunnel settles.
+                    # After that, use a less chatty keepalive to avoid reconnect churn.
+                    current_duration = time.time() - start_time
+                    wait_timeout = 2.0 if current_duration < 8.0 else 12.0
+                    
+                    msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
                     
                     if not self.is_disconnected:
                         await self.send(text_data=json.dumps(msg))
