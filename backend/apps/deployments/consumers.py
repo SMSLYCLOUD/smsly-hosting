@@ -348,12 +348,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                             pass
                         break
 
-                    # Send an empty message to keep Cloudflare/proxies alive during idle
-                    if not self.is_disconnected:
-                        await self._out_queue.put({'message': ''})
-
-                    # Wait and yield back to event loop to prevent CPU/Proxy flooding
-                    await asyncio.sleep(0.1)
+                    # Avoid emitting empty frames on every socket timeout; the send-loop
+                    # keepalive pong handles tunnel liveness with much lower frame churn.
+                    # Yield briefly to prevent CPU spin.
+                    await asyncio.sleep(0.5)
                     continue
 
                 # Got real data — reset activity and exec reconnect counters
@@ -387,16 +385,16 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # SECURITY: Wait for handshake to propagate before sending first frame
             while not self._accepted and not self.is_disconnected:
                 await asyncio.sleep(0.1)
-            
-            # Aggressive heartbeats for the first 10 seconds (handshake window)
+
+            # Conservative startup heartbeat, then steady keepalive.
+            # This avoids frame flooding while still keeping proxies warm.
             start_time = time.time()
             while not self.is_disconnected:
                 try:
-                    # In the first 10 seconds, be very aggressive with heartbeats (1.0s)
-                    # to satisfy strict proxy/Cloudflare handshake-finalization timeouts.
-                    # After that, use 1.5s timeout to ensure more frequent keepalives
+                    # During the first few seconds, keep latency lower while tunnel settles.
+                    # After that, use a less chatty keepalive to avoid reconnect churn.
                     current_duration = time.time() - start_time
-                    wait_timeout = 1.0 if current_duration < 10.0 else 1.5
+                    wait_timeout = 5.0 if current_duration < 10.0 else 20.0
                     
                     msg = await asyncio.wait_for(self._out_queue.get(), timeout=wait_timeout)
                     
