@@ -320,6 +320,7 @@ export interface Service {
   compose_main_service?: string;
   // Domain visibility
   is_public?: boolean;
+  public_domain_hidden?: boolean;
 }
 
 export interface AiRouterDetectedModel {
@@ -514,6 +515,17 @@ export const servicesApi = {
   patchEnvVar: async (serviceId: string, envVarId: number, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.patch(`/services/${serviceId}/env_vars/${envVarId}/`, data);
     return response.data;
+  },
+  getEnvVarValue: async (serviceId: string, envVarId: number): Promise<string> => {
+    const response = await api.get(`/services/${serviceId}/env_vars/${envVarId}/`);
+    return String(response.data?.value ?? '');
+  },
+  revealEnvVar: async (serviceId: string, key: string): Promise<{ value: string }> => {
+    const vars = await servicesApi.getEnvVars(serviceId);
+    const match = vars.find((v) => v.key === key);
+    if (!match) throw new Error(`Environment variable not found: ${key}`);
+    const value = await servicesApi.getEnvVarValue(serviceId, match.id);
+    return { value };
   },
   getAiRouterConfig: async (serviceId: string): Promise<AiRouterConfig> => {
     const response = await api.get(`/services/${serviceId}/ai-router-config/`);
@@ -1180,6 +1192,8 @@ export interface PricingPlan {
   max_cpu_cores: number;
   max_memory_mb: number;
   max_storage_gb: number;
+  max_addons?: number;
+  max_team_members?: number;
   is_active: boolean;
   features: {
     has_auto_scaling: boolean;
