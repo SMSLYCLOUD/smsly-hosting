@@ -1,11 +1,14 @@
 # pylint: disable=invalid-name
 from django.test import TestCase
 from unittest.mock import MagicMock, patch
+import os
+from datetime import timedelta
 from django.utils import timezone
 from apps.deployments.models import Service, PlatformConfig
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
+from apps.deployments.models_core import ManagedServer
 
 class ServerTransferServiceTest(TestCase):
     def setUp(self):
@@ -103,3 +106,87 @@ class ServerTransferServiceTest(TestCase):
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.status, 'FAILED')
         self.assertIn("Connection refused", self.transfer.error_message)
+
+    @patch('apps.deployments.services.transfer_service.BackupService.decrypt_backup')
+    @patch('apps.deployments.services.transfer_service.os.path.exists', return_value=False)
+    def test_restore_uses_uploaded_filename_when_backup_is_encrypted(
+        self, _exists_mock, decrypt_mock
+    ):
+        """Encrypted backups upload a decrypted tarball; restore must use that uploaded path."""
+        self.transfer.source_backup = ServiceBackup.objects.create(
+            service=self.service,
+            file_path='/tmp/source-backup.tar.gz.enc',
+            metadata={},
+            status='COMPLETED',
+        )
+        self.transfer.save(update_fields=['source_backup'])
+
+        decrypt_mock.return_value = '/tmp/source-backup.tar.gz'
+        os.environ['BACKUP_ENCRYPTION_KEY'] = 'test-key'
+
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.transfer.transfer_type = 'SERVICE'
+
+        with patch.object(svc, '_restore_single_service') as restore_single:
+            svc._upload()
+            svc._restore()
+
+        restore_single.assert_called_once_with('/tmp/source-backup.tar.gz')
+
+    @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    def test_verify_between_servers_passes_when_remote_tcp_check_succeeds(self, create_connection_mock):
+        create_connection_mock.return_value.__enter__.return_value = None
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.ssh.exec_command.return_value = 'TRANSFER_TCP_OK'
+
+        svc._verify_between_servers()
+
+        svc.ssh.exec_command.assert_called_once()
+
+    @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    def test_verify_between_servers_fails_when_remote_tcp_check_fails(self, create_connection_mock):
+        create_connection_mock.side_effect = OSError("blocked")
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.ssh.exec_command.return_value = 'TRANSFER_TCP_FAIL'
+
+        with self.assertRaises(RuntimeError):
+            svc._verify_between_servers()
+
+    def test_rollback_resets_service_server_to_source(self):
+        source_server = ManagedServer.objects.create(
+            name='source',
+            host='1.2.3.4',
+            owner=self.user,
+        )
+        target_server = ManagedServer.objects.create(
+            name='target',
+            host='5.6.7.8',
+            owner=self.user,
+        )
+        self.service.server = target_server
+        self.service.save(update_fields=['server'])
+
+        self.transfer.status = 'COMPLETED'
+        self.transfer.rollback_deadline = timezone.now() + timedelta(hours=1)
+        self.transfer.save(update_fields=['status', 'rollback_deadline'])
+
+        svc = ServerTransferService(self.transfer)
+        with patch.object(svc, '_update_cloudflare_dns'):
+            svc.rollback()
+
+        self.service.refresh_from_db()
+        self.transfer.refresh_from_db()
+        self.assertEqual(self.service.server_id, source_server.id)
+        self.assertEqual(self.transfer.status, 'ROLLED_BACK')
+        self.assertFalse(self.transfer.can_rollback)
+
+    def test_rollback_rejects_non_completed_transfer(self):
+        self.transfer.status = 'FAILED'
+        self.transfer.save(update_fields=['status'])
+        svc = ServerTransferService(self.transfer)
+
+        with self.assertRaises(ValueError):
+            svc.rollback()
