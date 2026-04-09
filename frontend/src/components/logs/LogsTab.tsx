@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { Terminal, Zap, Clock, RefreshCw, Radio } from 'lucide-react';
+import { Terminal, Zap, Clock, RefreshCw, Radio, Copy, Check } from 'lucide-react';
 import { Deployment } from '@/lib/api';
 import { PipelineVisualizer, PipelineStage } from '@/components/deployments/PipelineVisualizer';
+import { useToast } from '@/components/ui/use-toast';
 
 /**
  * Generate pseudo-timestamps for log lines based on deployment start time.
@@ -21,8 +22,26 @@ function addTimestamps(logs: string, startTime: string | null, durationSeconds: 
     });
 }
 
+type LogFilterType = 'ALL' | 'SYSTEM' | 'APP' | 'WARNING' | 'ERROR' | 'NOISE';
+
+function classifyLogLine(line: string): Exclude<LogFilterType, 'ALL'> {
+    const lower = line.toLowerCase();
+    if (/\berror\b|\bfatal\b|\bpanic\b|\btraceback\b|\bexception\b/.test(lower)) return 'ERROR';
+    if (/\bwarn\b|\bdeprecated\b|\bslow\b|\bretry\b/.test(lower)) return 'WARNING';
+    if (/\bhealth(check)?\b|\bheartbeat\b|\bping\b|\bpong\b|\bkeepalive\b|\bmetrics?\b/.test(lower)) return 'NOISE';
+    if (/\bsystemd\b|\bkernel\b|\bdocker\b|\bcontainerd\b|\btraefik\b|\bnginx\b|\bpostgres\b|\bredis\b/.test(lower)) return 'SYSTEM';
+    return 'APP';
+}
+
+function matchesFilter(line: string, filter: LogFilterType): boolean {
+    if (filter === 'ALL') return true;
+    return classifyLogLine(line) === filter;
+}
+
 export function LogsTab({ deployment }: { deployment: Deployment | null }) {
+    const { toast } = useToast();
     const [logType, setLogType] = useState<'BUILD' | 'RUNTIME'>('BUILD');
+    const [logFilter, setLogFilter] = useState<LogFilterType>('ALL');
     const [runtimeLogs, setRuntimeLogs] = useState<string>('');
     const [runtimeLoading, setRuntimeLoading] = useState(false);
     const [runtimeMessage, setRuntimeMessage] = useState('');
@@ -30,6 +49,7 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>([]);
     const [wsConnected, setWsConnected] = useState(false);
     const [isLive, setIsLive] = useState(false);
+    const [copied, setCopied] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
@@ -203,6 +223,25 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
     }, [logType, deployment?.id]);
 
     const runtimeLines = runtimeLogs ? runtimeLogs.split('\n') : [];
+    const filteredBuildLines = timestampedLogs.filter((line) => matchesFilter(line, logFilter));
+    const filteredRuntimeLines = runtimeLines.filter((line) => matchesFilter(line, logFilter));
+
+    const copyVisibleLogs = async () => {
+        const visibleLines = logType === 'BUILD' ? filteredBuildLines : filteredRuntimeLines;
+        const content = visibleLines.join('\n');
+        if (!content) {
+            toast({ title: 'No logs to copy' });
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(content);
+            setCopied(true);
+            toast({ title: 'Logs copied', description: `Copied ${visibleLines.length} filtered lines.` });
+            setTimeout(() => setCopied(false), 1200);
+        } catch {
+            toast({ title: 'Failed to copy logs', variant: 'destructive' });
+        }
+    };
 
     return (
         <div className="bg-[#09090b] border border-border rounded-xl overflow-hidden font-mono text-xs h-[700px] flex flex-col shadow-2xl">
@@ -232,6 +271,27 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                     </button>
                 </div>
                 <div className="text-zinc-500 font-sans text-xs flex items-center gap-2">
+                    <select
+                        value={logFilter}
+                        onChange={(e) => setLogFilter(e.target.value as LogFilterType)}
+                        className="bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] text-zinc-300"
+                        title="Filter logs by type"
+                    >
+                        <option value="ALL">All</option>
+                        <option value="APP">App</option>
+                        <option value="SYSTEM">System</option>
+                        <option value="WARNING">Warning</option>
+                        <option value="ERROR">Error</option>
+                        <option value="NOISE">Noise</option>
+                    </select>
+                    <button
+                        onClick={copyVisibleLogs}
+                        className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-zinc-300 hover:bg-black/60"
+                        title="Copy visible logs"
+                    >
+                        {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                        Copy
+                    </button>
                     {deployment?.created_at && (
                         <span className="flex items-center gap-1">
                             <Clock size={10} />
@@ -294,12 +354,12 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                             </div>
                         )}
                         <div className="whitespace-pre-wrap font-mono">
-                            {timestampedLogs.length > 0 ? timestampedLogs.map((line, i) => (
+                            {filteredBuildLines.length > 0 ? filteredBuildLines.map((line, i) => (
                                 <div key={i} className="hover:bg-white/[0.02] py-px">
                                     <span className="text-zinc-600 select-none">{line.substring(0, 10)}</span>
                                     <span className="text-zinc-400">{line.substring(10)}</span>
                                 </div>
-                            )) : <span className="text-zinc-600">Waiting for build logs...</span>}
+                            )) : <span className="text-zinc-600">No logs match the selected filter.</span>}
                         </div>
                         {isBuilding && (
                             <div className="flex items-center gap-2 mt-4 text-yellow-500/80">
@@ -324,14 +384,17 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
                                 <p className="text-zinc-500 font-sans text-sm">{runtimeMessage}</p>
                             </div>
                         )}
-                        {runtimeLines.length > 0 && (
+                        {filteredRuntimeLines.length > 0 && (
                             <div className="whitespace-pre-wrap font-mono">
-                                {runtimeLines.map((line, i) => (
+                                {filteredRuntimeLines.map((line, i) => (
                                     <div key={i} className="hover:bg-white/[0.02] py-px text-zinc-400">
                                         {line}
                                     </div>
                                 ))}
                             </div>
+                        )}
+                        {!runtimeLoading && runtimeLines.length > 0 && filteredRuntimeLines.length === 0 && (
+                            <span className="text-zinc-600">No logs match the selected filter.</span>
                         )}
                         <div className="flex items-center gap-2 mt-4 text-blue-500/80">
                             <RefreshCw size={12} className="animate-spin" />
