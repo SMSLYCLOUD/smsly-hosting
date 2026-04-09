@@ -1,4 +1,6 @@
 """Test Templates Unit module."""
+import ast
+from pathlib import Path
 from django.test import SimpleTestCase
 from services.app_templates import list_templates, get_template, APP_TEMPLATES
 
@@ -35,6 +37,36 @@ class TemplateRegistryTest(SimpleTestCase):
         self.assertIn('--name my-sms', cmd)
         self.assertIn('-p 8000:8000', cmd)
         self.assertIn('smslycloud/sms:latest', cmd)
+
+    def test_template_required_addons_are_supported_by_provisioner(self):
+        """Ensure every template-required addon is recognized by addon provisioner."""
+        provisioner_path = (
+            Path(__file__).resolve().parents[3] / 'services' / 'addon_provisioner.py'
+        )
+        module = ast.parse(provisioner_path.read_text(encoding='utf-8'))
+        addon_images = {}
+        generic_addons = {}
+
+        for node in module.body:
+            if isinstance(node, ast.ClassDef) and node.name == 'AddonProvisioner':
+                for class_node in node.body:
+                    if isinstance(class_node, ast.Assign):
+                        for target in class_node.targets:
+                            if isinstance(target, ast.Name) and target.id == 'ADDON_IMAGES':
+                                addon_images = ast.literal_eval(class_node.value)
+                            if isinstance(target, ast.Name) and target.id == 'GENERIC_ADDONS_CONFIG':
+                                generic_addons = ast.literal_eval(class_node.value)
+
+        supported_addons = set(addon_images.keys()) | set(generic_addons.keys())
+        self.assertTrue(supported_addons)
+
+        for template in APP_TEMPLATES.values():
+            for addon in template.required_addons:
+                self.assertIn(
+                    addon,
+                    supported_addons,
+                    msg=f"Template '{template.id}' requires unsupported addon '{addon}'",
+                )
 
 import pytest
 from unittest.mock import patch, MagicMock
