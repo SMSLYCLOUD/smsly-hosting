@@ -35,6 +35,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._pulse_task = None
         self._accepted = False
         self._last_activity = time.time()
+        self._keepalive_timeout_seconds = self._resolve_keepalive_timeout()
+
+    def _resolve_keepalive_timeout(self) -> float:
+        """Resolve WS keepalive interval from env with safe bounds."""
+        raw_value = os.getenv("TERMINAL_WS_KEEPALIVE_SECONDS", "20")
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            parsed = 20.0
+        # Keep the value practical for proxy idle limits and avoid noisy churn.
+        return max(5.0, min(parsed, 60.0))
 
     async def connect(self):
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
