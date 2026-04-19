@@ -219,7 +219,11 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.exec_socket = None
         self.exec_id = None
 
-    async def receive(self, text_data):
+    async def receive(self, text_data=None, bytes_data=None):
+        if text_data is None and bytes_data is not None:
+            # We ignore binary frames since frontend only sends text
+            return
+
         # SECURITY: Re-check authentication on each message
         if not self.user:
             await self.close(code=4001)
