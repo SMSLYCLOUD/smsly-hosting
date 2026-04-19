@@ -37,6 +37,8 @@ class ServerTransferServiceTest(TestCase):
         def _exec_side_effect(cmd, *args, **kwargs):
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
+            if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
+                return "TRANSFER_TCP_OK"
             return "mock_output"
 
         mock_ssh.exec_command.side_effect = _exec_side_effect
@@ -74,7 +76,13 @@ class ServerTransferServiceTest(TestCase):
 
         mock_ssh = MockSSH.return_value
         mock_ssh.check_docker.return_value = True
-        mock_ssh.exec_command.return_value = "mock_output"
+        def _exec_side_effect_full(cmd, *args, **kwargs):
+            if "docker inspect -f '{{.State.Running}}'" in cmd:
+                return "true"
+            if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
+                return "TRANSFER_TCP_OK"
+            return "mock_output"
+        mock_ssh.exec_command.side_effect = _exec_side_effect_full
 
         import os
         os.environ['SMSLY_INSTALL_SCRIPT_SHA256'] = 'dummy-sha256'
