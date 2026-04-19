@@ -48,6 +48,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         return max(5.0, min(parsed, 60.0))
 
     async def connect(self):
+        logger.info("[CONSOLE_DEBUG] TerminalConsumer.connect() started for deployment %s", self.scope["url_route"]["kwargs"]["deployment_id"])
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
         self.user = None
 
@@ -65,7 +66,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.warning(
                 "WebSocket connection rejected: No token provided for "
                 "deployment %s", self.deployment_id)
-            await self.close(code=4001)
+            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
             return
 
         # Validate token
@@ -74,7 +75,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.warning(
                 "WebSocket connection rejected: Invalid token for "
                 "deployment %s", self.deployment_id)
-            await self.close(code=4002)
+            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
             return
 
         # ======================================================================
@@ -84,7 +85,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.warning(
                 "WebSocket connection rejected: User %s doesn't own "
                 "deployment %s", self.user.id, self.deployment_id)
-            await self.close(code=4003)
+            logger.error("[CONSOLE_DEBUG] Closing 4003: Ownership failed"); await self.close(code=4003)
             return
 
         # ── ACCEPT IMMEDIATELY: Lockdown the handshake ──
@@ -167,7 +168,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
         except Exception as e:
-            logger.error("Error during terminal setup: %s", e, exc_info=True)
+            logger.error("[CONSOLE_DEBUG] Error during terminal setup: %s", e, exc_info=True): %s", e, exc_info=True)
             msg = '\r\n\x1b[31m[error] internal proxy error\x1b[0m\r\n'
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
@@ -220,13 +221,14 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.exec_id = None
 
     async def receive(self, text_data=None, bytes_data=None):
+        logger.info("[CONSOLE_DEBUG] receive() called: text_data=%s, bytes_data=%s", bool(text_data), bool(bytes_data))
         if text_data is None and bytes_data is not None:
             # We ignore binary frames since frontend only sends text
             return
 
         # SECURITY: Re-check authentication on each message
         if not self.user:
-            await self.close(code=4001)
+            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
             return
 
         # 1. Handle structured JSON messages
@@ -262,7 +264,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._send_to_shell, text_data)
         except Exception as e:
-            logger.error("Error forwarding input to container: %s", e)
+            logger.error("[CONSOLE_DEBUG] Error forwarding input to container: %s", e, exc_info=True): %s", e)
 
     def _send_to_shell(self, data):
         """Blocking helper to send data to the container's raw socket."""
@@ -433,6 +435,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             logger.info("[CONSOLE_DEBUG] _send_loop task TERMINATED")
 
     def _blocking_read(self):
+        logger.debug("[CONSOLE_DEBUG] _blocking_read() started")
         """Blocking read from the exec socket. Runs in executor.
 
         Relies on the underlying docker-py socket timeout.
@@ -459,6 +462,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Timeout case - return empty heartbeat-equivalent
             return b''
         except Exception as e:
+            logger.error("[CONSOLE_DEBUG] _blocking_read exception: %s", e, exc_info=True)
             err_name = e.__class__.__name__
             err_str = str(e).lower()
             # docker-py/urllib3/requests timeout variants
@@ -616,6 +620,7 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         self.user = None
 
     async def connect(self):
+        logger.info("[CONSOLE_DEBUG] TerminalConsumer.connect() started for deployment %s", self.scope["url_route"]["kwargs"]["deployment_id"])
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
 
         # Authenticate
@@ -627,16 +632,16 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
                 break
 
         if not token_key:
-            await self.close(code=4001)
+            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
             return
 
         self.user = await self._authenticate_token(token_key)
         if not self.user:
-            await self.close(code=4002)
+            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
             return
 
         if not await self._verify_ownership():
-            await self.close(code=4003)
+            logger.error("[CONSOLE_DEBUG] Closing 4003: Ownership failed"); await self.close(code=4003)
             return
 
         # Join the deployment's log group
