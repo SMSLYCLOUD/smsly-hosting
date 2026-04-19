@@ -3,6 +3,7 @@ from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.cloud.docker_client import get_docker_client
 import re
 from django.db.models import Q
 from .models_addons import Addon
@@ -74,6 +75,34 @@ class AddonViewSet(viewsets.ModelViewSet):
         # provisioner)
         from .tasks import provision_addon_task
         provision_addon_task.delay(addon_id=str(addon.id))
+
+    def perform_destroy(self, instance):
+        """Clean up Docker containers before deleting addon record."""
+        addon_id = str(instance.id)
+        addon_type = instance.addon_type.lower()
+        container_name = f"smsly-addon-{addon_type}-{addon_id}"
+        
+        try:
+            client = get_docker_client()
+            # Try exact name match
+            try:
+                c = client.containers.get(container_name)
+                c.remove(force=True)
+            except Exception:
+                pass
+            
+            # Pattern match fallback (in case prefix differs)
+            all_containers = client.containers.list(all=True)
+            for c in all_containers:
+                if addon_id in c.name:
+                    try:
+                        c.remove(force=True)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"Failed to deprovision addon container {container_name}: {e}")
+            
+        instance.delete()
 
     def perform_update(self, serializer):
         # Allow updating properties like public_domain

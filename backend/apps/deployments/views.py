@@ -307,9 +307,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         ).save()
 
         # Clean up all associated docker containers before deleting the DB record
-        import docker
         try:
-            client = docker.from_env()
+            client = get_docker_client()
             container_names_to_remove = set()
             
             # Add known container names from the service slug
@@ -327,14 +326,21 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     container_names_to_remove.add(dep.container_id)
                 if dep.green_container_id:
                     container_names_to_remove.add(dep.green_container_id)
-                    
+            
+            # Scan for all containers that might belong to this service by name pattern
+            # This catches "green" deployments and other variants
+            all_containers = client.containers.list(all=True)
+            for c in all_containers:
+                c_name = c.name.lower()
+                slug_lower = instance.slug.lower()
+                if slug_lower in c_name:
+                    container_names_to_remove.add(c.id)
+
             # 1. Remove by exact names or IDs
-            for c_name in container_names_to_remove:
+            for c_id_or_name in container_names_to_remove:
                 try:
-                    c = client.containers.get(c_name)
+                    c = client.containers.get(c_id_or_name)
                     c.remove(force=True)
-                except docker.errors.NotFound:
-                    pass
                 except Exception:
                     pass
                     
@@ -350,8 +356,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 pass
                 
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to clean up docker containers for service {instance.name}: {e}")
+            logger.error(f"Failed to clean up docker containers for service {instance.name}: {e}")
 
         instance.delete()
         self._sync_caddy()
