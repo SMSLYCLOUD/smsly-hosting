@@ -294,6 +294,15 @@ class Service(TimeStampedModel):
         blank=True,
         related_name='primary_services')
 
+    # SafeDeploy Config
+    safe_deploy_enabled = models.BooleanField(default=False)
+    preview_environments_enabled = models.BooleanField(default=False)
+    auto_create_preview_on_branch_push = models.BooleanField(default=False)
+    MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]
+    migration_auto_approval_policy = models.CharField(max_length=50, choices=MIGRATION_AUTO_APPROVAL_CHOICES, default='LOW_RISK_ONLY')
+    production_requires_backup = models.BooleanField(default=True)
+    health_check_path = models.CharField(max_length=255, default='/health')
+
     # Deployment Strategy
     DEPLOY_STRATEGY_CHOICES = [
         ('ROLLING', 'Rolling Update'),
@@ -513,12 +522,23 @@ class Deployment(TimeStampedModel):
         QUEUED = 'QUEUED', _('Queued')
         REVIEW = 'REVIEW', _('Review')
         BUILDING = 'BUILDING', _('Building')
+        BUILD_FAILED = 'BUILD_FAILED', _('Build Failed')
+        AWAITING_APPROVAL = 'AWAITING_APPROVAL', _('Awaiting Approval')
+        BACKUP_RUNNING = 'BACKUP_RUNNING', _('Backup Running')
+        BACKUP_FAILED = 'BACKUP_FAILED', _('Backup Failed')
+        MIGRATION_PLANNING = 'MIGRATION_PLANNING', _('Migration Planning')
+        MIGRATION_RUNNING = 'MIGRATION_RUNNING', _('Migration Running')
+        MIGRATION_FAILED = 'MIGRATION_FAILED', _('Migration Failed')
         DEPLOYING = 'DEPLOYING', _('Deploying')
         HEALTH_CHECK = 'HEALTH_CHECK', _('Health Check')
+        TRAFFIC_SHIFTING = 'TRAFFIC_SHIFTING', _('Traffic Shifting')
+        MONITORING = 'MONITORING', _('Monitoring')
         STAGED = 'STAGED', _('Staged')
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
+        ROLLING_BACK = 'ROLLING_BACK', _('Rolling Back')
+        ROLLED_BACK = 'ROLLED_BACK', _('Rolled Back')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service = models.ForeignKey(
