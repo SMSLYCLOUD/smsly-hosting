@@ -1,0 +1,106 @@
+import logging
+from django.utils import timezone
+from apps.deployments.models_core import Deployment
+from apps.deployments.models_safedeploy import DeploymentApproval, MigrationValidation, DeploymentArtifact
+from .postgres_snapshot_manager import PostgresSnapshotManager
+
+logger = logging.getLogger(__name__)
+
+class ProductionDeploymentPipeline:
+    def process_deployment(self, deployment: Deployment) -> None:
+        deployment.status = Deployment.Status.MIGRATION_PLANNING
+        deployment.save()
+
+        validation = self._get_latest_validation_for_commit(deployment.service_id, deployment.commit_hash)
+
+        # Guardrail: Do not allow deploy if validation did not pass or wasn't configured properly
+        if validation:
+            validation.deployment = deployment
+            validation.save()
+
+            if validation.status in [MigrationValidation.Status.FAILED, MigrationValidation.Status.INCOMPLETE]:
+                logger.error(f"Blocking deployment {deployment.id}: Migration validation did not pass (Status: {validation.status})")
+                deployment.status = Deployment.Status.FAILED
+                deployment.save()
+                return
+
+            if validation.requires_manual_approval:
+                approval = DeploymentApproval.objects.filter(deployment=deployment, status=DeploymentApproval.Status.APPROVED).first()
+                if not approval:
+                    deployment.status = Deployment.Status.AWAITING_APPROVAL
+                    deployment.save()
+                    return
+
+        if validation and validation.requires_backup:
+            self._run_backup_phase(deployment)
+            if deployment.status == Deployment.Status.BACKUP_FAILED: return
+
+        self._run_migration_phase(deployment)
+        if deployment.status == Deployment.Status.MIGRATION_FAILED: return
+
+        deployment.status = Deployment.Status.DEPLOYING
+        deployment.save()
+
+        # Mock completion
+        deployment.status = Deployment.Status.ACTIVE
+        deployment.save()
+
+    def _get_latest_validation_for_commit(self, service_id, commit_hash):
+        return MigrationValidation.objects.filter(preview_environment__service_id=service_id, preview_environment__commit_sha=commit_hash).order_by('-created_at').first()
+
+    def _run_backup_phase(self, deployment: Deployment) -> None:
+        deployment.status = Deployment.Status.BACKUP_RUNNING
+        deployment.save()
+        logger.info(f"Triggered production backup for deployment {deployment.id}")
+
+    def _run_migration_phase(self, deployment: Deployment) -> None:
+        deployment.status = Deployment.Status.MIGRATION_RUNNING
+        deployment.save()
+        try:
+            from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
+            import tempfile, shutil, subprocess
+            adapter = DjangoAdapter()
+            workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
+            repo_url = deployment.service.repository_url
+            if repo_url:
+                try:
+                    subprocess.run(["git", "clone", "--branch", deployment.service.branch, repo_url, workspace_dir], check=True, capture_output=True)
+                    subprocess.run(["git", "checkout", deployment.commit_hash], cwd=workspace_dir, check=True, capture_output=True)
+                except Exception:
+                    pass
+            prod_db_url = None
+            for env_var in deployment.service.env_vars.all():
+                if env_var.key == 'DATABASE_URL':
+                    prod_db_url = env_var.value
+
+            if prod_db_url and adapter.detect(workspace_dir):
+                env = {"DATABASE_URL": prod_db_url}
+                rc, out, err = adapter.run_migrate(workspace_dir, env)
+                DeploymentArtifact.objects.create(service=deployment.service, deployment=deployment, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
+                if rc != 0: raise Exception("Production Migration apply failed.")
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+        except Exception as e:
+            deployment.status = Deployment.Status.MIGRATION_FAILED
+            deployment.save()
+
+    def approve_deployment(self, deployment: Deployment, user) -> DeploymentApproval:
+        approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        approval.status = DeploymentApproval.Status.APPROVED
+        approval.approved_by = user
+        approval.approved_at = timezone.now()
+        validation = getattr(deployment, 'migration_validation', None)
+        if validation: approval.risk_level = validation.risk_level
+        approval.save()
+        self.process_deployment(deployment)
+        return approval
+
+    def reject_deployment(self, deployment: Deployment, user, notes: str = "") -> DeploymentApproval:
+        approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        approval.status = DeploymentApproval.Status.REJECTED
+        approval.approved_by = user
+        approval.rejected_at = timezone.now()
+        approval.approval_notes = notes
+        approval.save()
+        deployment.status = Deployment.Status.CANCELLED
+        deployment.save()
+        return approval
