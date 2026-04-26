@@ -168,7 +168,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except asyncio.CancelledError:
             logger.info("Terminal setup task cancelled")
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] Error during terminal setup: %s", e, exc_info=True): %s", e, exc_info=True)
+            logger.error("[CONSOLE_DEBUG] Error during terminal setup: %s", e, exc_info=True)
             msg = '\r\n\x1b[31m[error] internal proxy error\x1b[0m\r\n'
             enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
             await self._out_queue.put({'message': enc})
@@ -264,7 +264,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._send_to_shell, text_data)
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] Error forwarding input to container: %s", e, exc_info=True): %s", e)
+            logger.error("[CONSOLE_DEBUG] Error forwarding input to container: %s", e, exc_info=True)
 
     def _send_to_shell(self, data):
         """Blocking helper to send data to the container's raw socket."""
