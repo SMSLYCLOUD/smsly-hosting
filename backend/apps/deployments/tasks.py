@@ -43,6 +43,7 @@ from apps.deployments.models_storage import Volume
 from apps.deployments.models_transfer import ServerTransfer
 from apps.deployments.services.backup_service import BackupService
 from apps.deployments.services.pipeline import PipelineManager, PipelineError
+from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import (
     append_log,
@@ -783,6 +784,11 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         service = deployment.service
         provider = CloudProvider.objects.get(id=provider_id)
 
+        # 0. Remote Delegation
+        if service.server:
+            _handle_remote_deployment(deployment, service.server)
+            return
+
         # 1. Build Phase (Pipeline)
         if service.deploy_type == 'GIT':
             manager = PipelineManager(deployment)
@@ -838,6 +844,11 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         service = deployment.service
         provider = CloudProvider.objects.get(id=provider_id)
 
+        # 0. Remote Delegation
+        if service.server:
+            _handle_remote_deployment(deployment, service.server)
+            return
+
         # Build phase
         manager = PipelineManager(deployment)
         image_name = manager.run_build_only()
@@ -849,6 +860,62 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         _handle_failure(self, deployment, str(e), "Build Failure")
     except Exception as e:  # pylint: disable=broad-exception-caught
         _handle_failure(self, deployment, str(e), "System Failure")
+
+
+def _handle_remote_deployment(deployment, server):
+    """Delegate deployment to a remote server and poll for status."""
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+    orchestrator = RemoteOrchestrator(server)
+    service = deployment.service
+
+    append_log(deployment, f"🌐 Delegating deployment to remote server: {server.name} ({server.host})\n")
+    update_stage(deployment, 'Remote Sync', 'running')
+
+    # 1. Sync Service
+    remote_svc_id = orchestrator.sync_service(service)
+    if not remote_svc_id:
+        _handle_failure(None, deployment, "Failed to sync service to remote server", "Remote Sync Failure")
+        return
+
+    update_stage(deployment, 'Remote Sync', 'success')
+    update_stage(deployment, 'Remote Deploy', 'running')
+
+    # 2. Trigger Deploy
+    remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id)
+    if not remote_dep_id:
+        _handle_failure(None, deployment, "Failed to trigger deployment on remote server", "Remote Deploy Failure")
+        return
+
+    append_log(deployment, f"🚀 Remote deployment triggered: {remote_dep_id}\n")
+
+    # 3. Polling Loop
+    max_retries = 90  # 15 minutes (10s intervals)
+    for i in range(max_retries):
+        time.sleep(10)
+        remote_status = orchestrator.poll_deployment(remote_dep_id)
+        if not remote_status:
+            continue
+
+        status = remote_status.get("status")
+        # Update stage info with remote status if available
+        if status:
+            append_log(deployment, f"[Remote] Status: {status}\n")
+
+        if status == Deployment.Status.ACTIVE:
+            deployment.status = Deployment.Status.ACTIVE
+            deployment.finished_at = timezone.now()
+            deployment.save(update_fields=['status', 'finished_at'])
+            update_stage(deployment, 'Remote Deploy', 'success')
+            broadcast_status(deployment)
+            append_log(deployment, "✅ Remote deployment successful!\n")
+            return
+
+        if status in (Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED, Deployment.Status.CANCELLED):
+            _handle_failure(None, deployment, f"Remote deployment failed with status: {status}", "Remote Execution Failure")
+            return
+
+    _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
 
 
 def _build_function(deployment, service) -> str:

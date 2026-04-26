@@ -22,6 +22,7 @@ interface ServicePlan {
     depends_on?: string[];
     deploy_order: number;
     skip?: boolean;
+    server_id?: string;
 }
 
 interface Addon {
@@ -104,6 +105,13 @@ export default function EcosystemPage() {
     const [error, setError] = useState<string | null>(null);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
     const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
+    const [servers, setServers] = useState<any[]>([]);
+
+    useEffect(() => {
+        apiGet('/api/v1/servers/').then(data => {
+            setServers(data.results || data || []);
+        }).catch(() => {});
+    }, []);
 
     // Poll for scan task completion
     const pollTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
@@ -208,17 +216,20 @@ export default function EcosystemPage() {
     };
 
     // Update env var
-    const updateEnvVar = (serviceIndex: number, key: string, value: string) => {
+    const updateEnvVar = (idx: number, key: string, value: string) => {
         if (!plan) return;
-        const updated = { ...plan };
-        updated.services = [...updated.services];
-        const newEnv = { ...updated.services[serviceIndex].env_vars };
+        const newServices = [...plan.services];
+        const newEnv = { ...newServices[idx].env_vars };
         newEnv[key] = value;
-        updated.services[serviceIndex] = {
-            ...updated.services[serviceIndex],
-            env_vars: newEnv,
-        };
-        setPlan(updated);
+        newServices[idx] = { ...newServices[idx], env_vars: newEnv };
+        setPlan({ ...plan, services: newServices });
+    };
+
+    const updateServer = (idx: number, serverId: string) => {
+        if (!plan) return;
+        const newServices = [...plan.services];
+        newServices[idx].server_id = serverId === 'local' ? undefined : serverId;
+        setPlan({ ...plan, services: newServices });
     };
 
     // Handle paste .env
@@ -467,6 +478,19 @@ export default function EcosystemPage() {
                                                 </div>
                                             </div>
                                             <div className="flex flex-col gap-2 items-end">
+                                                <div className="flex items-center gap-2">
+                                                    <Server size={12} className="text-muted-foreground" />
+                                                    <select
+                                                        value={svc.server_id || 'local'}
+                                                        onChange={(e) => updateServer(idx, e.target.value)}
+                                                        className="text-[10px] bg-background border border-border rounded px-2 py-1 outline-none focus:border-primary transition-colors min-w-[120px]"
+                                                    >
+                                                        <option value="local">Local Server</option>
+                                                        {servers.map(s => (
+                                                            <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
                                                 <button
                                                     onClick={() => toggleSkip(idx)}
                                                     className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${svc.skip
