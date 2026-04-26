@@ -544,6 +544,16 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
         if not current_path or current_path == "/health":
             service.health_check_path = health_path if health_path.startswith("/") else f"/{health_path}"
 
+    server_id = svc_plan.get("server_id")
+    if server_id:
+        from apps.deployments.models import ManagedServer
+        try:
+            server = ManagedServer.objects.filter(id=server_id, owner=service.owner).first()
+            if server:
+                service.server = server
+        except Exception:
+            pass
+
     service.save()
 
 
@@ -810,6 +820,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             port = 3000
         port = max(1, min(65535, port))
 
+        server_id = svc_plan.get("server_id")
+        server = None
+        if server_id:
+            from apps.deployments.models import ManagedServer
+            try:
+                server = ManagedServer.objects.filter(id=server_id, owner=user).first()
+            except Exception:
+                pass
+
         try:
             service = Service.objects.filter(owner=user, name=requested_name).first()
             if service is None:
@@ -825,6 +844,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     ).strip() or "main",
                     internal_port=port,
                     provider=provider,
+                    server=server,
                 )
 
             _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
