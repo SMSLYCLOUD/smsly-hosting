@@ -1556,6 +1556,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
         Enforce billing plan limit for custom domains.
         (Disabled for self-hosted instances).
         """
+        from django.conf import settings
+        if getattr(settings, 'SMSLY_DISABLE_TIER_GATES', False):
+            return None
+        try:
+            from apps.billing.models import UserSubscription
+            sub = UserSubscription.objects.filter(user=service.owner, status='ACTIVE').first()
+            limit = sub.plan.max_custom_domains if sub and sub.plan else 1
+            if new_total > limit:
+                return Response(
+                    {'error': f'Custom domain limit reached ({limit}). Please upgrade your plan.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except ImportError:
+            pass
         return None
 
     @action(detail=True, methods=['post'], url_path='add-domain')
