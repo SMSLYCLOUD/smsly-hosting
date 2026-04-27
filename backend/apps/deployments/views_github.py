@@ -44,7 +44,9 @@ def _get_github_token(user):
                     return None
 
         return token_obj.token
-    except Exception:
+    except Exception as exc:
+        if "no such table" in str(exc) or "socialaccount_socialaccount" in str(exc):
+            return None
         logger.exception("Failed to get GitHub token")
         return None
 
