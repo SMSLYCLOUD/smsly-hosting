@@ -1970,6 +1970,14 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         Effectively triggers a new deployment using the commit hash/image
         from this one.
         """
+        # Enforce explicit confirmation for rollback operations
+        confirm = request.data.get('confirm')
+        if str(confirm).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         target_deployment = self.get_object()
         service = target_deployment.service
 
@@ -3103,6 +3111,15 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         backup = self.get_object()
+
+        # Enforce explicit confirmation for destructive actions
+        confirm = request.data.get('confirm')
+        if str(confirm).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         target_service_id = request.data.get('target_service_id')
 
         if target_service_id:
@@ -3187,6 +3204,15 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         backup = self.get_object()
+
+        # Enforce explicit confirmation for destructive actions
+        confirm = request.data.get('confirm')
+        if str(confirm).lower() != 'true':
+            return Response(
+                {'error': 'Explicit confirmation required. Send "confirm": true.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         if backup.status != 'COMPLETED':
             return Response({'error': 'Only COMPLETED backups can be restored.'}, status=status.HTTP_400_BAD_REQUEST)
         from apps.deployments.tasks import restore_server_backup_task

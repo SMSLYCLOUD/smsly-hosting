@@ -275,6 +275,14 @@ class BackupService:
 
         logger.info(f"Restoring backup {backup.id} to service {target_service.name}")
 
+        # Create a pre-restore backup snapshot to ensure we don't lose the active state in case of failure
+        logger.info(f"Creating pre-restore snapshot for service {target_service.name}")
+        try:
+            self.backup_service(target_service.id, backup_type='PRE_TRANSFER')
+        except Exception as e:
+            logger.warning(f"Failed to create pre-restore snapshot: {e}")
+            # We don't fail the restore if snapshot fails, but we log it
+
         temp_dir = os.path.join(os.path.dirname(backup.file_path), f"restore_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 

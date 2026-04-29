@@ -40,6 +40,14 @@ def check_autoscale_task():
 def _evaluate_scaling(service, ServiceMetric):
     """Evaluate whether a service needs scaling."""
     now = timezone.now()
+
+    # Cooldown enforcement
+    last_scaled = service.updated_at
+    if last_scaled:
+        time_since_scale = now - last_scaled
+        if time_since_scale < timedelta(minutes=1):
+            return  # Global 1-minute cooldown for any scaling to prevent rapid flapping
+
     target_cpu = service.autoscale_cpu_target
     current_replicas = service.min_replicas
 
@@ -75,6 +83,9 @@ def _evaluate_scaling(service, ServiceMetric):
         scale_down_threshold = target_cpu * 0.5
 
         if avg_cpu_5m < scale_down_threshold and current_replicas > 1:
+            if last_scaled and (now - last_scaled) < timedelta(minutes=5):
+                return  # 5-minute cooldown for scale down operations
+
             new_replicas = max(current_replicas - 1, 1)
             logger.info(
                 "⬇ Scaling DOWN %s: %d → %d replicas (CPU: %.1f%% < %.0f%%)",

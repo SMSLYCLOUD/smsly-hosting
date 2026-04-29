@@ -100,6 +100,16 @@ def perform_update(update_record) -> bool:
     Returns:
         True if update succeeded, False if failed/rolled back
     """
+    from apps.deployments.models_updates import PlatformUpdate
+
+    # Prevent concurrent updates
+    active_updates = PlatformUpdate.objects.filter(status__in=['BACKING_UP', 'PULLING', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK']).exclude(id=update_record.id).exists()
+    if active_updates:
+        update_record.error_message = 'Another update is currently in progress'
+        update_record.status = 'FAILED'
+        update_record.save()
+        return False
+
     try:
         # Step 1: Snapshot
         update_record.status = 'BACKING_UP'
@@ -201,6 +211,7 @@ def perform_update(update_record) -> bool:
                         f"WARNING: {svc} not healthy after "
                         f"{HEALTH_CHECK_RETRIES * HEALTH_CHECK_INTERVAL}s"
                     )
+                    raise PlatformUpdateError(f"Service {svc} failed to reach healthy state. Aborting update.")
             update_record.append_log(f'{svc} restarted')
 
         update_record.append_log('All services restarted sequentially')

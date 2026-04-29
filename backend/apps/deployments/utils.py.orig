@@ -307,8 +307,6 @@ def update_stage(deployment, name, status, duration=None):
     broadcast_pipeline(deployment)
 
 
-import re
-
 def append_log(deployment, log_line):
     """
     Append logs safely using refresh and update_fields.
@@ -319,10 +317,6 @@ def append_log(deployment, log_line):
 
     # 1. Sanitize for PostgreSQL (NUL bytes are not allowed in text/varchar)
     sanitized_log = str(log_line).replace('\x00', '')
-
-    sanitized_log = re.sub(r"(redis(?:s)?://(?:[^:]*:)?)[^@]+(@)", r"\1***\2", sanitized_log)
-    sanitized_log = re.sub(r"(postgres(?:ql)?://(?:[^:]*:)?)[^@]+(@)", r"\1***\2", sanitized_log)
-    sanitized_log = re.sub(r"(?i)(password|secret|token|api_key)=([^\s&]+)", r"\1=***", sanitized_log)
 
     # 2. Refresh logs to avoid overwrite race conditions
     deployment.refresh_from_db(fields=['build_logs'])
