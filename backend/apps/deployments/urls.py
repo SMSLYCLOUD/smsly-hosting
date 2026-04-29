@@ -5,6 +5,7 @@ from rest_framework_nested import routers
 from .views import (
     DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView,
     RouteRecheckView, ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
+    , PlatformResourcesView
 )
 from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
@@ -104,6 +105,7 @@ urlpatterns = [
     path('system/config/', SystemConfigView.as_view(), name='system-config'),
     path('system/domain-config/', DomainConfigView.as_view(), name='domain-config'),
     path('system/route-recheck/', RouteRecheckView.as_view(), name='route-recheck'),
+    path('platform/resources/', PlatformResourcesView.as_view(), name='platform-resources'),
     path('oauth/status/', oauth_providers_status, name='oauth-status'),
     path('oauth/credentials/', oauth_credentials, name='oauth-credentials'),
     path('integrations/github/', github_connection, name='github-connection'),

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { servicesApi, Service } from '@/lib/api';
+import { platformApi, servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Radar, Puzzle, Orbit, Store } from 'lucide-react';
 
@@ -42,6 +42,7 @@ export default function ServicesPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pollIntervalMs, setPollIntervalMs] = useState(5000);
+  const [resourceData, setResourceData] = useState<any>(null);
   const fingerprintRef = useRef('');
   const consecutiveFailuresRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,6 +56,8 @@ export default function ServicesPage() {
   const fetchData = useCallback(async () => {
     try {
       const nextServices = await servicesApi.list();
+      const resources = await platformApi.resources().catch(() => null);
+      if (resources) setResourceData(resources);
       const nextFingerprint = buildServiceFingerprint(nextServices);
       if (nextFingerprint !== fingerprintRef.current) {
         fingerprintRef.current = nextFingerprint;
@@ -176,6 +179,17 @@ export default function ServicesPage() {
             </Button>
           </div>
         </div>
+        {resourceData?.summary && (
+          <div className="mx-auto w-full max-w-[1440px] px-4 pb-3">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+              <div className="rounded border border-zinc-700 px-2 py-1">Nodes: {resourceData.summary.total_nodes}</div>
+              <div className="rounded border border-zinc-700 px-2 py-1">RAM: {Math.round(resourceData.summary.used_ram_mb)}/{Math.round(resourceData.summary.total_ram_mb)} MB</div>
+              <div className="rounded border border-zinc-700 px-2 py-1">Disk: {Math.round(resourceData.summary.used_disk_gb)}/{Math.round(resourceData.summary.total_disk_gb)} GB</div>
+              <div className="rounded border border-zinc-700 px-2 py-1">Healthy: {resourceData.summary.healthy_nodes}</div>
+              <div className="rounded border border-zinc-700 px-2 py-1">Est. monthly: ${services.reduce((n, s) => n + Number(s.estimated_cost?.monthly || 0), 0).toFixed(2)}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       <motion.div
