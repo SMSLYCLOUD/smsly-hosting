@@ -8,6 +8,7 @@ import { SkeletonDashboard } from "@/components/ui/skeleton";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+import { SpaceOpsLegend } from "@/components/effects/SpaceOpsLegend";
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
@@ -139,7 +140,7 @@ export default function DashboardPage() {
 
   return (
     <DashboardShell>
-      <div className="flex-1 p-8 relative z-10">
+      <div className="flex-1 p-4 pt-safe sm:p-8 relative z-10">
         <motion.div
           className="flex-1 space-y-6 max-w-7xl mx-auto"
           initial="initial"
@@ -147,7 +148,7 @@ export default function DashboardPage() {
           variants={stagger}
         >
           {/* Header */}
-          <motion.div variants={fadeInUp} className="flex items-center justify-between">
+          <motion.div variants={fadeInUp} className="flex items-center justify-between mt-2 sm:mt-0">
             <div>
               <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
               <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
@@ -308,6 +309,7 @@ export default function DashboardPage() {
           </div>
         </motion.div>
       </div>
+      <SpaceOpsLegend />
     </DashboardShell>
   );
 }

@@ -10,6 +10,7 @@ import {
 import dynamic from 'next/dynamic';
 import { codeAnalysisApi } from '@/lib/api';
 import api from '@/lib/api';
+import { useSpaceOps } from '@/context/SpaceOpsContext';
 
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), { ssr: false });
 
@@ -123,20 +124,55 @@ export default function CodeMapView() {
     return () => { active = false; };
   }, [taskId, status]);
 
+  const [analysisStage, setAnalysisStage] = useState<number>(0);
+  const { setSpaceOpsState, resetSpaceOpsState } = useSpaceOps();
+
   const startAnalysis = async () => {
     if (!selectedService) return;
     setStatus('analyzing');
+    setAnalysisStage(0);
     setError(null);
     setResult(null);
     setSelectedNode(null);
+    setSpaceOpsState({ mode: 'analyzing', intensity: 'medium' });
+
+    // Simulate progress stages for UI fallback since backend might not stream progress
+    const stages = [
+      "Cloning repository...",
+      "Walking file tree...",
+      "Extracting imports...",
+      "Detecting routes...",
+      "Detecting database models...",
+      "Building dependency graph...",
+      "Generating architecture summary..."
+    ];
+
+    let currentStage = 0;
+    const progressInterval = setInterval(() => {
+        if (currentStage < stages.length - 1) {
+            currentStage++;
+            setAnalysisStage(currentStage);
+        }
+    }, 2000); // Fake progress every 2s
+
     try {
       const res = await codeAnalysisApi.analyze(selectedService);
       setTaskId(res.task_id);
     } catch (err: any) {
-      setError(err.message || 'Failed to start analysis');
+      clearInterval(progressInterval);
+      setError(err.message || 'Analysis failed. Check repository access, branch, and service configuration.');
       setStatus('failed');
+      setSpaceOpsState({ mode: 'failed', intensity: 'low' });
+      setTimeout(() => resetSpaceOpsState(), 3000);
     }
   };
+
+  useEffect(() => {
+    if (status === 'complete') {
+        setSpaceOpsState({ mode: 'success', intensity: 'high' });
+        setTimeout(() => resetSpaceOpsState(), 3000);
+    }
+  }, [status, setSpaceOpsState, resetSpaceOpsState]);
 
   // Graph data
   const graphData = useMemo(() => {
@@ -243,8 +279,16 @@ export default function CodeMapView() {
             <div className="w-20 h-20 rounded-full border-4 border-purple-500/20 border-t-purple-500 animate-spin" />
             <Code2 className="absolute inset-0 m-auto text-purple-500" size={28} />
           </div>
-          <p className="text-muted-foreground mt-6 text-sm">
-            Cloning repository, analyzing files, extracting imports...
+          <p className="text-foreground font-semibold mt-6 text-sm">
+            { [
+              "Cloning repository...",
+              "Walking file tree...",
+              "Extracting imports...",
+              "Detecting routes...",
+              "Detecting database models...",
+              "Building dependency graph...",
+              "Generating architecture summary..."
+            ][analysisStage] }
           </p>
           <p className="text-muted-foreground/60 text-xs mt-1">
             This may take 30-60 seconds for large codebases
@@ -524,13 +568,11 @@ export default function CodeMapView() {
             <GitBranch className="text-purple-500" size={32} />
           </div>
           <h2 className="text-xl font-bold mb-2">Code Map</h2>
-          <p className="text-muted-foreground mb-1 max-w-md mx-auto">
-            Select a service and analyze its codebase to generate an interactive 3D map
-            of files, imports, routes, and database models.
+          <p className="text-foreground font-medium mb-1 max-w-md mx-auto">
+            Select a service to generate a live 3D architecture map of its files, imports, routes, database models, and service dependencies.
           </p>
-          <p className="text-muted-foreground/60 text-xs max-w-sm mx-auto">
-            The AI will clone the repo, walk the file tree, extract dependencies,
-            and generate an architecture summary.
+          <p className="text-muted-foreground/80 text-xs max-w-sm mx-auto">
+            CloudNeuron clones the repo, walks the tree, extracts dependencies, and summarizes the deployable architecture.
           </p>
         </div>
       )}

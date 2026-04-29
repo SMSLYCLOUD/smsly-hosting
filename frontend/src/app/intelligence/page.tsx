@@ -185,9 +185,9 @@ export default function IntelligencePage() {
   return (
     <DashboardShell>
       <RequiresTier tier="pro">
-      <div className="flex-1 p-8 relative z-10">
+      <div className="flex-1 p-4 pt-safe sm:p-8 relative z-10 w-full overflow-x-hidden">
         <motion.div
-          className="max-w-6xl mx-auto space-y-8"
+          className="max-w-6xl mx-auto space-y-6 sm:space-y-8"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
         >
@@ -304,13 +304,15 @@ export default function IntelligencePage() {
           </div>
 
           <Tabs defaultValue="dashboard" className="w-full">
-            <TabsList className="grid w-full grid-cols-5 bg-muted/20">
-              <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-              <TabsTrigger value="anomalies">Anomalies</TabsTrigger>
-              <TabsTrigger value="cost">Cost Intel</TabsTrigger>
-              <TabsTrigger value="codemap"><Code2 className="w-3.5 h-3.5 mr-1 inline" />Code Map</TabsTrigger>
-              <TabsTrigger value="chat">AI Chat</TabsTrigger>
-            </TabsList>
+            <div className="w-full overflow-x-auto scrollbar-hide pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+              <TabsList className="inline-flex sm:grid w-max sm:w-full sm:grid-cols-5 bg-muted/20 gap-2 sm:gap-0 p-1">
+                <TabsTrigger value="dashboard" className="rounded-full sm:rounded-sm px-4">Dashboard</TabsTrigger>
+                <TabsTrigger value="anomalies" className="rounded-full sm:rounded-sm px-4">Anomalies</TabsTrigger>
+                <TabsTrigger value="cost" className="rounded-full sm:rounded-sm px-4">Cost Intel</TabsTrigger>
+                <TabsTrigger value="codemap" className="rounded-full sm:rounded-sm px-4"><Code2 className="w-3.5 h-3.5 mr-1 inline" />Code Map</TabsTrigger>
+                <TabsTrigger value="chat" className="rounded-full sm:rounded-sm px-4">AI Chat</TabsTrigger>
+              </TabsList>
+            </div>
 
             {/* ── Dashboard Tab ──────────────────────────────────────── */}
             <TabsContent value="dashboard" className="space-y-6 mt-6">
