@@ -75,8 +75,9 @@ class GitHubWebhookHandler:
                 service.provider.id) if service.provider else None
 
             if provider_id:
+                skip = getattr(service, 'can_auto_deploy', False)
                 smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
-                                       skip_review=True)
+                                       skip_review=skip)
                 triggered_count += 1
             else:
                 logger.warning(
@@ -175,8 +176,10 @@ class GitHubWebhookHandler:
         provider_id = str(
             preview_service.provider.id) if preview_service.provider else None
         if provider_id:
+            # For previews, we also respect the parent's auto deploy setting
+            skip = getattr(preview_service.parent_service, 'can_auto_deploy', False) if preview_service.parent_service else False
             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=provider_id,
-                                   skip_review=True)
+                                   skip_review=skip)
             return 1
         return 0
 

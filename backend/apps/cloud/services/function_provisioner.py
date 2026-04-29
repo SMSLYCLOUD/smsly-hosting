@@ -109,6 +109,8 @@ COPY package.json .
 RUN npm install
 COPY . .
 ENV PORT=8000
+# Run as non-root user
+USER node
 CMD ["node", "server.js"]
 """
         with open(os.path.join(build_dir, 'Dockerfile'), 'w') as f:
@@ -161,6 +163,9 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
 ENV PORT=8000
+# Create and run as non-root user
+RUN useradd -m function_user
+USER function_user
 CMD ["gunicorn", "-b", "0.0.0.0:8000", "server:app"]
 """
         with open(os.path.join(build_dir, 'Dockerfile'), 'w') as f:

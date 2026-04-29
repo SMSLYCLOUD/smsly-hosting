@@ -8,12 +8,20 @@ logger = logging.getLogger(__name__)
 
 class CommandExecutor:
     def run(self, cmd: str, cwd: str, env: Dict[str, str] = None, timeout: int = 120) -> Tuple[int, str, str]:
+        import shlex
         run_env = os.environ.copy()
         if env:
             run_env.update(env)
         logger.info(f"Executing command in {cwd}: {cmd}")
+
+        # Security: Do not use shell=True. Use shlex to safely split the command.
+        if isinstance(cmd, str):
+            cmd_list = shlex.split(cmd)
+        else:
+            cmd_list = cmd
+
         try:
-            result = subprocess.run(cmd, shell=True, cwd=cwd, env=run_env, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(cmd_list, shell=False, cwd=cwd, env=run_env, capture_output=True, text=True, timeout=timeout)
             stdout = redact_secrets(result.stdout)
             stderr = redact_secrets(result.stderr)
             return result.returncode, stdout, stderr
