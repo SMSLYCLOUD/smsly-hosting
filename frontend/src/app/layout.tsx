@@ -1,3 +1,4 @@
+import { SpaceOpsProvider } from "@/context/SpaceOpsContext";
 import type { Metadata } from "next";
 import "./globals.css";
 
@@ -17,7 +18,7 @@ export const metadata: Metadata = {
 };
 
 import { FloatingAI } from "@/components/ai/FloatingAI";
-import { GlobalBackground } from "@/components/effects/GlobalBackground";
+import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
 
 export default function RootLayout({
@@ -37,12 +38,14 @@ export default function RootLayout({
             <AuthProvider>
               <TierProvider>
                 <ConfirmProvider>
-                  <GlobalBackground />
+                  <SpaceOpsProvider>
+                  <SpaceOpsBackground />
                   <Navbar />
                   {children}
                   <FloatingAI />
                   <PoweredByBadge />
                   <Toaster />
+                  </SpaceOpsProvider>
                 </ConfirmProvider>
               </TierProvider>
             </AuthProvider>
