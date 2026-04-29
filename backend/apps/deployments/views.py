@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.utils import timezone
 from django.http import FileResponse
+from django.db.models import Prefetch
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -45,6 +46,25 @@ import re
 from apps.cloud.docker_client import get_docker_client
 
 logger = logging.getLogger(__name__)
+
+
+def _error_response(code: str, message: str, *, details=None, user_action="", retryable=False, http_status_code=400):
+    trace_id = str(uuid.uuid4())
+    logger.error("api_error code=%s trace_id=%s details=%s", code, trace_id, details or {})
+    return Response(
+        {
+            "success": False,
+            "error": {
+                "code": code,
+                "message": message,
+                "details": details or {},
+                "user_action": user_action,
+                "retryable": retryable,
+                "trace_id": trace_id,
+            },
+        },
+        status=http_status_code,
+    )
 
 
 class CleanupFileResponse(FileResponse):
@@ -1973,9 +1993,11 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         # Enforce explicit confirmation for rollback operations
         confirm = request.data.get('confirm')
         if str(confirm).lower() != 'true':
-            return Response(
-                {'error': 'Explicit confirmation required. Send "confirm": true.'},
-                status=status.HTTP_400_BAD_REQUEST
+            return _error_response(
+                "ROLLBACK_CONFIRMATION_REQUIRED",
+                'Explicit confirmation required. Send "confirm": true.',
+                user_action="Retry rollback with confirm=true.",
+                retryable=True,
             )
 
         target_deployment = self.get_object()
@@ -1983,15 +2005,20 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         # Validate the target deployment
         if not target_deployment.commit_hash:
-            return Response(
-                {'error': 'Cannot rollback: target deployment has no commit hash.'},
-                status=status.HTTP_400_BAD_REQUEST)
+            return _error_response(
+                "ROLLBACK_ARTIFACT_MISSING",
+                "Cannot rollback: target deployment has no commit hash.",
+                details={"deployment_id": str(target_deployment.id), "service_id": str(service.id)},
+                user_action="Choose a deployment that has a valid commit hash/image artifact.",
+            )
 
         if target_deployment.status not in ('ACTIVE', 'SUCCEEDED'):
-            return Response(
-                {'error': f'Cannot rollback to a {target_deployment.status} deployment. '
-                          'Only successful deployments can be rolled back to.'},
-                status=status.HTTP_400_BAD_REQUEST)
+            return _error_response(
+                "ROLLBACK_BLOCKED",
+                f"Cannot rollback to a {target_deployment.status} deployment. Only successful deployments can be rolled back to.",
+                details={"deployment_id": str(target_deployment.id), "status": target_deployment.status},
+                user_action="Pick a previous ACTIVE/SUCCEEDED deployment.",
+            )
 
         # Create new deployment record for the rollback
         new_deployment = Deployment.objects.create(
@@ -2004,13 +2031,66 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         )
 
         provider = _resolve_provider_for_service(service)
-        if provider:
-            smart_deploy_task.delay(deployment_id=str(new_deployment.id), provider_id=str(provider.id))
-            return Response(DeploymentSerializer(
-                new_deployment).data, status=status.HTTP_201_CREATED)
+        if not provider:
+            return _error_response(
+                "ROLLBACK_PERMISSION_DENIED",
+                "No active provider available.",
+                details={"service_id": str(service.id)},
+                user_action="Attach an active provider to this service, then retry rollback.",
+            )
+        smart_deploy_task.delay(deployment_id=str(new_deployment.id), provider_id=str(provider.id))
+        payload = DeploymentSerializer(new_deployment).data
+        payload["rollback_state"] = "rollback_pending"
+        payload["rollback_target"] = str(target_deployment.id)
+        return Response(payload, status=status.HTTP_201_CREATED)
 
-        return Response({'error': 'No active provider available'},
-                        status=status.HTTP_400_BAD_REQUEST)
+
+class PlatformResourcesView(GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        import socket
+        import shutil
+        import psutil
+        from apps.deployments.models import ManagedServer, Service
+        vm = psutil.virtual_memory()
+        disk = shutil.disk_usage("/")
+        load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
+        services = Service.objects.all()
+        if not request.user.is_superuser:
+            services = services.filter(owner=request.user)
+        running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
+        failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
+        servers = ManagedServer.objects.all()
+        if not request.user.is_superuser:
+            servers = servers.filter(owner=request.user)
+        nodes = [{
+            "id": str(s.id),
+            "name": s.name,
+            "provider": "managed",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "public_ip": s.host,
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": ["High memory pressure"] if vm.percent >= 85 else [],
+        } for s in servers] or [{
+            "id": "local-node",
+            "name": socket.gethostname(),
+            "provider": "local",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": [],
+        }]
+        return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
 
     @action(detail=False, methods=['post'])
     def prune(self, request):

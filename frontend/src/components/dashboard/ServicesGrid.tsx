@@ -163,6 +163,12 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 {service.public_domain}
               </p>
             )}
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>{service.node_metadata?.name || 'Unassigned node'}</span>
+              <span title={`Estimated (${service.estimated_cost?.basis || 'fallback'})`}>
+                Est. {service.estimated_cost?.currency || 'USD'} {Number(service.estimated_cost?.monthly || 0).toFixed(2)}/mo
+              </span>
+            </div>
           </div>
 
           {/* Footer / Actions */}
