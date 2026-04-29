@@ -67,6 +67,8 @@ class ServiceSerializer(serializers.ModelSerializer):
         source='project.slug', read_only=True, default=None)
     project_emoji = serializers.CharField(
         source='project.icon_emoji', read_only=True, default=None)
+    estimated_cost = serializers.SerializerMethodField()
+    node_metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -96,6 +98,40 @@ class ServiceSerializer(serializers.ModelSerializer):
             'status': dep.status,
             'commit_hash': dep.commit_hash or '',
             'created_at': dep.created_at.isoformat() if dep.created_at else None,
+        }
+
+    def get_node_metadata(self, obj: Service) -> dict:
+        server = getattr(obj, "server", None)
+        if not server:
+            return {}
+        return {
+            "id": str(server.id),
+            "name": server.name,
+            "host": server.host,
+            "status": server.status,
+        }
+
+    def get_estimated_cost(self, obj: Service) -> dict:
+        import os
+        if str(os.getenv("PLATFORM_COST_ESTIMATION_ENABLED", "true")).lower() not in ("1", "true", "yes", "on"):
+            return {"enabled": False}
+        node_monthly_cost = float(os.getenv("PLATFORM_DEFAULT_NODE_MONTHLY_COST", "3.00"))
+        node_ram_mb = float(max(1, int(os.getenv("PLATFORM_DEFAULT_NODE_RAM_MB", "2048"))))
+        service_ram_mb = float(getattr(obj, "memory_mb", 0) or 0)
+        weight = min(1.0, max(0.01, service_ram_mb / node_ram_mb))
+        monthly = round(node_monthly_cost * weight, 2)
+        return {
+            "enabled": True,
+            "currency": os.getenv("PLATFORM_COST_CURRENCY", "USD"),
+            "monthly": monthly,
+            "basis": "ram_weighted",
+            "confidence": "medium",
+            "breakdown": {
+                "node_monthly_cost": node_monthly_cost,
+                "service_ram_mb": service_ram_mb,
+                "node_ram_mb": node_ram_mb,
+                "weight": round(weight, 4),
+            },
         }
 
     def create(self, validated_data):

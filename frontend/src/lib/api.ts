@@ -321,6 +321,15 @@ export interface Service {
   // Domain visibility
   is_public?: boolean;
   public_domain_hidden?: boolean;
+  node_metadata?: { id: string; name: string; host: string; status: string };
+  estimated_cost?: {
+    enabled: boolean;
+    currency?: string;
+    monthly?: number;
+    basis?: string;
+    confidence?: string;
+    breakdown?: Record<string, any>;
+  };
 }
 
 export interface AiRouterDetectedModel {
@@ -454,7 +463,7 @@ export const servicesApi = {
     return response.data;
   },
   rollback: async (deploymentId: string): Promise<any> => {
-    const response = await api.post(`/deployments/${deploymentId}/rollback/`);
+    const response = await api.post(`/deployments/${deploymentId}/rollback/`, { confirm: true });
     return response.data;
   },
   cancelDeployment: async (deploymentId: string): Promise<any> => {
@@ -620,6 +629,13 @@ export const servicesApi = {
       const url = `${getApiUrl()}/services/${serviceId}/file-download/?path=${encodeURIComponent(path)}&token=${token}`;
       window.open(url, '_blank');
   }
+};
+
+export const platformApi = {
+  resources: async (): Promise<any> => {
+    const response = await api.get('/platform/resources/');
+    return response.data;
+  },
 };
 
 export const templatesApi = {

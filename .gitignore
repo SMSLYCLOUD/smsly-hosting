@@ -92,3 +92,7 @@ test_db.sqlite3
 CRITICAL_FINDINGS_AND_UI_PROPOSAL.md
 PROPOSAL_UI_MATURITY.md
 target/
+*.tmp
+*.bak
+playwright-report/
+test-results/
