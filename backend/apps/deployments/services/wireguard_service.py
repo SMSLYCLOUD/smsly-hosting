@@ -7,6 +7,7 @@ of WireGuard configurations across the server fleet.
 
 import logging
 import subprocess
+import shlex
 import textwrap
 
 from django.utils import timezone
@@ -173,7 +174,7 @@ class WireGuardService:
         # Tear down WireGuard on the target server
         if server and not peer.is_local:
             try:
-                cls._ssh_run(server, f"wg-quick down {mesh.interface_name} || true")
+                cls._ssh_run(server, f"wg-quick down {shlex.quote(mesh.interface_name)} || true")
             except Exception as e:
                 logger.warning(f"Failed to tear down WG on {server}: {e}")
 
@@ -228,7 +229,12 @@ class WireGuardService:
         # Write config to a temporary file via a container
         # Since /etc/wireguard might not be mounted in the backend, we run an alpine 
         # container mounting /etc/wireguard from the host.
-        cmd = f"mkdir -p /etc/wireguard && cat > /etc/wireguard/{iface}.conf << 'EOF'\n{config}\nEOF\nchmod 600 /etc/wireguard/{iface}.conf"
+        safe_iface = shlex.quote(iface)
+        # Avoid putting the config in the command directly to avoid shell injection
+        # Instead, we will write it to a temp file, or use base64
+        import base64
+        b64_config = base64.b64encode(config.encode()).decode()
+        cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf && chmod 600 /etc/wireguard/{safe_iface}.conf"
         
         try:
             client.containers.run(
@@ -242,11 +248,12 @@ class WireGuardService:
             raise RuntimeError(f"Local config write failed: {e}")
 
         # Restart WireGuard interface
+        safe_iface = shlex.quote(iface)
         commands = [
             # Ensure it's installed (if Debian/Ubuntu host system underneath)
             "apk add wireguard-tools iptables >/dev/null 2>&1 || true",
-            f"wg-quick down {iface} >/dev/null 2>&1 || true",
-            f"wg-quick up {iface}"
+            f"wg-quick down {safe_iface} >/dev/null 2>&1 || true",
+            f"wg-quick up {safe_iface}"
         ]
         try:
             client.containers.run(
@@ -267,18 +274,21 @@ class WireGuardService:
     @classmethod
     def _deploy_remote(cls, server, config: str, iface: str):
         """Deploy WireGuard config on a remote server via SSH."""
+        safe_iface = shlex.quote(iface)
+        import base64
+        b64_config = base64.b64encode(config.encode()).decode()
         commands = [
             # Ensure WireGuard is installed
             "apt-get install -y wireguard > /dev/null 2>&1 || true",
             "mkdir -p /etc/wireguard",
-            # Write config (using heredoc)
-            f"cat > /etc/wireguard/{iface}.conf << 'WGEOF'\n{config}\nWGEOF",
-            f"chmod 600 /etc/wireguard/{iface}.conf",
+            # Write config
+            f"echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf",
+            f"chmod 600 /etc/wireguard/{safe_iface}.conf",
             # Restart interface
-            f"wg-quick down {iface} 2>/dev/null || true",
-            f"wg-quick up {iface}",
+            f"wg-quick down {safe_iface} 2>/dev/null || true",
+            f"wg-quick up {safe_iface}",
             # Enable on boot
-            f"systemctl enable wg-quick@{iface} 2>/dev/null || true",
+            f"systemctl enable wg-quick@{safe_iface} 2>/dev/null || true",
         ]
         cls._ssh_run(server, " && ".join(commands))
 
@@ -352,7 +362,7 @@ class WireGuardService:
             client = docker.from_env()
             container = client.containers.run(
                 "alpine",
-                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {iface}"],
+                command=["sh", "-c", f"apk add wireguard-tools >/dev/null 2>&1 && wg show {shlex.quote(iface)}"],
                 privileged=True,
                 network_mode="host",
                 volumes={"/lib/modules": {"bind": "/lib/modules", "mode": "ro"}},

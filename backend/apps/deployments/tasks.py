@@ -2387,8 +2387,21 @@ def cleanup_old_backups_task():
             cutoff = timezone.now() - timedelta(days=schedule.retention_days)
             old_backups = ServiceBackup.objects.filter(
                 service=schedule.service,
-                created_at__lt=cutoff
-            )
+                created_at__lt=cutoff,
+                status='COMPLETED'
+            ).order_by('-created_at')
+
+            # Keep at least the latest 1 valid backup, regardless of age
+            all_valid_backups = ServiceBackup.objects.filter(
+                service=schedule.service,
+                status='COMPLETED'
+            ).order_by('-created_at')
+
+            if all_valid_backups.count() <= 1:
+                old_backups = []
+            elif all_valid_backups.first() in old_backups:
+                old_backups = old_backups.exclude(id=all_valid_backups.first().id)
+
             for backup in old_backups:
                 # Delete file
                 if backup.file_path and os.path.exists(backup.file_path):
