@@ -5,7 +5,7 @@ import Image from 'next/image';
 
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/layout/Footer';
-import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
+import { SpaceOpsBackground } from '@/components/effects/SpaceOpsBackground';
 import {
     ArrowRight,
     Zap,
@@ -356,7 +356,7 @@ export default function Home() {
 
                 {/* Cloud Animation */}
                 <div className="absolute inset-0 z-0 opacity-60 dark:opacity-40 pointer-events-none">
-                    <CloudHeroAnimation />
+                    <SpaceOpsBackground />
                 </div>
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
@@ -390,8 +390,8 @@ export default function Home() {
                         transition={{ delay: 0.2, duration: 0.5 }}
                         className="mt-6 text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto leading-relaxed font-light"
                     >
-                        Experience <strong>zero config deployments</strong>, driven auto scaling, and true multi cloud freedom.
-                        Built for engineering teams who demand control without the complexity.
+                        Deploy like Heroku. Control like a VPS. Recover like an enterprise cloud. <br />
+                        <strong>See your infrastructure, deployments, backups, and codebase as a living system.</strong>
                     </motion.p>
 
                     <motion.div
