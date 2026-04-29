@@ -136,7 +136,7 @@ export default function DeploymentsPage() {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.05 }}
             >
-              <Link href={deploy.service ? `/services/${deploy.service}` : `/deployments`} className="block">
+              <Link href={`/deployments/${deploy.id}`} className="block">
                 <Card className="hover:border-primary/30 transition-colors cursor-pointer hover:shadow-lg hover:shadow-primary/5">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
