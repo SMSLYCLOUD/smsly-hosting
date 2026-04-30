@@ -13,6 +13,7 @@ import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
 
 import { shouldShowAllNav } from "@/lib/nav-visibility";
+import { featureFlags } from "@/lib/featureFlags";
 
 const HIDDEN_BY_FLAG = new Set<string>([
   ...(featureFlags.transfers ? [] : ['/transfers']),
