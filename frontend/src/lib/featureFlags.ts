@@ -4,14 +4,14 @@ export const featureFlags = {
   tunnels: true,
   vpnMesh: true,
   functions: true,
-  transfers: false,
+  transfers: true,
 };
 
 export const featureDisabledReason = {
-  autoscaler: "Autoscaling is currently in beta and only available for enterprise plans.",
-  replication: "Database replication is being optimized and will return soon.",
-  tunnels: "Secure tunneling is temporarily unavailable during maintenance.",
-  vpnMesh: "VPN Mesh networking requires a dedicated infrastructure node.",
-  functions: "Serverless functions are in early access.",
-  transfers: "Server transfers are currently disabled for maintenance.",
+  autoscaler: "Autoscaler is active.",
+  replication: "Replication is active.",
+  tunnels: "Tunnels are active.",
+  vpnMesh: "Mesh is active.",
+  functions: "Functions are active.",
+  transfers: "Server transfers are active.",
 };
