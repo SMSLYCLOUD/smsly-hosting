@@ -11,6 +11,10 @@ from .models_servers import ManagedServer
 from .tasks import execute_server_transfer_task, rollback_transfer_task
 
 
+def _err(message, details=None, retryable=False):
+    return {"ok": False, "error": message, "details": details or {}, "retryable": retryable}
+
+
 class ServerTransferViewSet(viewsets.ModelViewSet):
     queryset = ServerTransfer.objects.select_related('service').all()
     serializer_class = ServerTransferSerializer
@@ -21,13 +25,14 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         serializer = ServerTransferCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(_err('Transfer validation failed', serializer.errors, retryable=False), status=status.HTTP_400_BAD_REQUEST)
         payload = serializer.validated_data
 
         transfer_type = payload['transfer_type']
         if transfer_type == 'FULL':
             return Response(
-                {'error': 'FULL server transfer is not available via API yet.'},
+                _err('FULL server transfer is not available via API yet.', {'transfer_type': 'FULL'}, retryable=False),
                 status=status.HTTP_501_NOT_IMPLEMENTED,
             )
 
@@ -37,7 +42,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         ).first()
         if not service:
             return Response(
-                {'error': 'Service not found'},
+                _err('Service not found', {'service_id': payload.get('service_id')}, retryable=False),
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -63,7 +68,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             ).first()
             if not target_server:
                 return Response(
-                    {'error': 'Connected target server not found'},
+                    _err('Connected target server not found', {'target_server_id': payload.get('target_server_id')}, retryable=False),
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
@@ -73,7 +78,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         target_server_ip = str(target_server_ip or '').strip()
         if not target_server_ip:
             return Response(
-                {'error': 'Target server IP is required (local node IP not set).'},
+                _err('Target server IP is required.', {'target_server_ip': 'Local node IP is not set.'}, retryable=False),
                 status=status.HTTP_400_BAD_REQUEST,
             )
         resolved_target_ip = None
@@ -91,12 +96,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
             if not resolved_target_ip:
                 return Response(
-                    {
-                        'error': (
-                            'Target server host must resolve to an IP address for transfer SSH. '
-                            'Use an IP-based connected server or pass target_server_ip.'
-                        )
-                    },
+                    _err('Target server host must resolve to an IP address for transfer SSH.', {'target_server_ip': target_server_ip}, retryable=False),
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -110,12 +110,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         if not target_ssh_key and not target_ssh_password:
             return Response(
-                {
-                    'error': (
-                        'No SSH credentials available for target server. '
-                        'Provide password/key in the transfer form or update the connected server credentials.'
-                    )
-                },
+                _err('No SSH credentials available for target server.', {'credentials': 'Provide target_ssh_key or target_ssh_password, or set server credentials.'}, retryable=False),
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -137,7 +132,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     def rollback(self, request, pk=None):
         transfer = self.get_object()
         if not transfer.can_rollback:
-            return Response({'error': 'Rollback not available'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(_err('Rollback not available', {'transfer_id': str(transfer.id)}, retryable=False), status=status.HTTP_400_BAD_REQUEST)
 
         rollback_transfer_task.delay(transfer_id=str(transfer.id))
         return Response({'status': 'rollback_started'})
