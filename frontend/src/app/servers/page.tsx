@@ -583,7 +583,7 @@ export default function ServersPage() {
                                                         {server.name}
                                                         {server.is_primary && (
                                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-bold uppercase">
-                                                                Primary
+                                                                Control Plane
                                                             </span>
                                                         )}
                                                         {server.role === 'LEADER' && (

@@ -281,6 +281,22 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
+        # Prevent deploying a service on a primary server
+        server = serializer.validated_data.get('server')
+        if server:
+            is_control_plane = (
+                getattr(server, "is_primary", False)
+                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
+                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
+            )
+            if is_control_plane:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
+                    "message": "Primary/control-plane server cannot be used for user deployments.",
+                    "details": {"server_id": str(server.id)}
+                })
+
         deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
 
         service = serializer.save(owner=self.request.user)
@@ -294,6 +310,21 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ).start()
 
     def perform_update(self, serializer):
+        server = serializer.validated_data.get('server')
+        if server:
+            is_control_plane = (
+                getattr(server, "is_primary", False)
+                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
+                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
+            )
+            if is_control_plane:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
+                    "message": "Primary/control-plane server cannot be used for user deployments.",
+                    "details": {"server_id": str(server.id)}
+                })
+
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
         service = serializer.save()
 
@@ -580,6 +611,27 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
+
+        # Check for primary server exclusion
+        server = getattr(service, 'server', None)
+        if server:
+            is_control_plane = (
+                getattr(server, "is_primary", False)
+                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
+                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
+            )
+            if is_control_plane:
+                return Response(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
+                            "message": "Primary/control-plane server cannot be used for user deployments.",
+                            "details": {"server_id": str(server.id)},
+                        },
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Prevent rapid-fire deployment spam
         existing = _has_active_deployment(service)
@@ -2165,6 +2217,27 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             try:
                 # ZH-011 FIX: Verify service ownership before triggering deployment
                 service = Service.objects.get(id=service_id, owner=request.user)
+
+                # Check for primary server exclusion
+                server = getattr(service, 'server', None)
+                if server:
+                    is_control_plane = (
+                        getattr(server, "is_primary", False)
+                        or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
+                        or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
+                    )
+                    if is_control_plane:
+                        return Response(
+                            {
+                                "ok": False,
+                                "error": {
+                                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
+                                    "message": "Primary/control-plane server cannot be used for user deployments.",
+                                    "details": {"server_id": str(server.id)},
+                                },
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                 provider = CloudProvider.objects.get(id=provider_id)
 
                 # Prevent rapid-fire deployment spam
@@ -2610,6 +2683,54 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         except Service.DoesNotExist:
             return Response({'error': 'Service not found'},
                             status=status.HTTP_404_NOT_FOUND)
+
+class PlatformResourcesView(GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        import socket
+        import shutil
+        import psutil
+        from apps.deployments.models import ManagedServer, Service
+        vm = psutil.virtual_memory()
+        disk = shutil.disk_usage("/")
+        load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
+        services = Service.objects.all()
+        if not request.user.is_superuser:
+            services = services.filter(owner=request.user)
+        running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
+        failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
+        servers = ManagedServer.objects.all()
+        if not request.user.is_superuser:
+            servers = servers.filter(owner=request.user)
+        nodes = [{
+            "id": str(s.id),
+            "name": s.name,
+            "provider": "managed",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "public_ip": s.host,
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": ["High memory pressure"] if vm.percent >= 85 else [],
+        } for s in servers] or [{
+            "id": "local-node",
+            "name": socket.gethostname(),
+            "provider": "local",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": [],
+        }]
+        return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
+
 
 
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
