@@ -332,3 +332,21 @@
 .react-flow__controls-button:hover {
   @apply bg-accent text-accent-foreground;
 }
+
+/* Landing storm identity */
+.storm-base { position:absolute; inset:0; background: radial-gradient(1200px 600px at 20% 10%, rgba(16,65,92,.55), transparent 65%), radial-gradient(800px 500px at 80% 15%, rgba(12,84,79,.35), transparent 70%), linear-gradient(180deg,#030711 0%,#07121f 45%,#04070d 100%); }
+.storm-cloud { position:absolute; width:140%; height:40%; left:-20%; border-radius:9999px; filter: blur(50px); opacity:.28; background: radial-gradient(circle at 30% 40%, rgba(130,167,194,.35), transparent 55%), radial-gradient(circle at 60% 50%, rgba(80,102,134,.25), transparent 62%); animation: drift 34s linear infinite; }
+.cloud-a { top:8%; }
+.cloud-b { top:26%; animation-duration:46s; animation-direction:reverse; opacity:.22; }
+.cloud-c { top:46%; animation-duration:58s; opacity:.18; }
+.storm-rain { position:absolute; inset:-20% 0 0 0; opacity:.18; background-image: repeating-linear-gradient(105deg, transparent 0 14px, rgba(138,187,214,.26) 14px 15px, transparent 15px 28px); animation: rain 1s linear infinite; }
+.storm-lightning { position:absolute; inset:0; background: radial-gradient(circle at 68% 22%, rgba(186,236,255,.18), transparent 42%); opacity:0; animation: lightning 9s infinite; }
+.storm-vignette { position:absolute; inset:0; background: radial-gradient(circle at 50% 20%, transparent 0%, rgba(2,6,12,.35) 55%, rgba(2,6,12,.82) 100%); }
+@keyframes drift { from { transform: translateX(0);} to { transform: translateX(12%);} }
+@keyframes rain { from { transform: translateY(0);} to { transform: translateY(20px);} }
+@keyframes lightning { 0%, 40%, 100% { opacity:0; } 41% { opacity:.55; } 42% { opacity:.08; } 43% { opacity:.4; } 44% { opacity:0; } 73% { opacity:.45; } 74% { opacity:0; } }
+@media (prefers-reduced-motion: reduce) {
+  .storm-cloud, .storm-rain, .storm-lightning { animation: none !important; }
+  .storm-rain { opacity:.08; }
+  .storm-lightning { opacity:.06; }
+}
