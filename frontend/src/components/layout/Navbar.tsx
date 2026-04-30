@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { featureFlags } from '@/lib/featureFlags';
 import { usePathname, useRouter } from 'next/navigation';
 import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare } from 'lucide-react';
 import Image from 'next/image';
@@ -122,20 +121,9 @@ export function Navbar() {
     authLinks.push({ href: '/admin-dashboard/users', label: 'Admin', icon: Shield, tier: 'tertiary' });
   }
 
-  const hiddenByFlag = new Set<string>([
-    ...(featureFlags.autoscaler ? [] : ['/autoscaler']),
-    ...(featureFlags.replication ? [] : ['/replication']),
-    ...(featureFlags.tunnels ? [] : ['/tunnels']),
-    ...(featureFlags.vpnMesh ? [] : ['/network']),
-    ...(featureFlags.functions ? [] : ['/functions']),
-    ...(featureFlags.transfers ? [] : ['/transfers']),
-  ]);
-
-  const visibleAuthLinks = authLinks.filter((link) => !hiddenByFlag.has(link.href));
-
-  const primaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'primary');
-  const secondaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'secondary');
-  const tertiaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'tertiary');
+  const primaryAuthLinks = authLinks.filter((link) => link.tier === 'primary');
+  const secondaryAuthLinks = authLinks.filter((link) => link.tier === 'secondary');
+  const tertiaryAuthLinks = authLinks.filter((link) => link.tier === 'tertiary');
 
   return (
     <nav

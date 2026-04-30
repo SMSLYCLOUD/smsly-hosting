@@ -77,6 +77,8 @@ class Addon(TimeStampedModel):
         ACTIVE = 'ACTIVE', 'Active'
         FAILED = 'FAILED', 'Failed'
         DELETED = 'DELETED', 'Deleted'
+        DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
+        DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(

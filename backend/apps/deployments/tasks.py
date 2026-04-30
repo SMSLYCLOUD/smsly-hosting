@@ -2530,3 +2530,44 @@ def run_maintenance_task(self, command_flag: str):
     except Exception as e:
         logger.exception(f"Exception during maintenance {command_flag}: {e}")
         return {"status": "error", "reason": str(e)}
+
+@shared_task(bind=True, max_retries=3)
+def delete_service_task(self, service_id: str):
+    """Async reliable deletion of a Service"""
+    from apps.deployments.models_core import Service
+    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+    try:
+        service = Service.objects.get(id=service_id)
+    except Service.DoesNotExist:
+        return
+
+    orchestrator = DeletionOrchestrator()
+    success = orchestrator.delete_service_resources(service)
+
+    if success:
+        service.delete()
+    else:
+        service.status = Service.Status.DELETION_FAILED
+        service.deletion_error = "Failed to remove some runtime resources."
+        service.save(update_fields=['status', 'deletion_error'])
+
+
+@shared_task(bind=True, max_retries=3)
+def delete_addon_task(self, addon_id: str):
+    """Async reliable deletion of an Addon"""
+    from apps.deployments.models_addons import Addon
+    from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+    try:
+        addon = Addon.objects.get(id=addon_id)
+    except Addon.DoesNotExist:
+        return
+
+    orchestrator = DeletionOrchestrator()
+    success = orchestrator.delete_addon_resources(addon)
+
+    if success:
+        addon.delete()
+    else:
+        addon.status = Addon.Status.DELETION_FAILED
+        addon.deletion_error = "Failed to remove some runtime resources."
+        addon.save(update_fields=['status', 'deletion_error'])

@@ -44,7 +44,6 @@ import uuid
 import logging
 import re
 from apps.cloud.docker_client import get_docker_client
-from .runtime_naming import get_service_runtime_name
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +90,9 @@ class EmptySerializer(serializers.Serializer):
 
 _IN_PROGRESS_DEPLOYMENT_STATUSES = [
     Deployment.Status.QUEUED,
-    Deployment.Status.AWAITING_APPROVAL,
     Deployment.Status.BUILDING,
     Deployment.Status.DEPLOYING,
-    Deployment.Status.REVIEW,
-    Deployment.Status.HEALTH_CHECK,
-    Deployment.Status.TRAFFIC_SHIFTING,
-    Deployment.Status.STAGED,
+    'REVIEW',  # Also block if awaiting review
 ]
 
 
@@ -311,80 +306,51 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 daemon=True
             ).start()
 
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "ok": True,
+                "status": "deletion_pending",
+                "message": "Deletion has started.",
+                "resource_id": str(instance.id),
+            },
+            status=status.HTTP_202_ACCEPTED
+        )
+
     def perform_destroy(self, instance):
-        """Stop active deployments, audit-log, delete the service, and resync routing."""
-        # Cancel any active deployments
-        instance.deployments.filter(
-            status__in=[
-                Deployment.Status.ACTIVE,
-                Deployment.Status.BUILDING,
-                Deployment.Status.DEPLOYING,
-                Deployment.Status.QUEUED,
-                Deployment.Status.REVIEW,
-            ]
-        ).update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
+        """Set status to pending and queue async deletion."""
+        from .tasks import delete_service_task
+        from .models_core import Service
+
+        instance.status = Service.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
 
         AuditLog(
             actor=self.request.user.get_username(),
-            action='SERVICE_DELETE',
+            action='SERVICE_DELETE_REQUESTED',
             target=f'Service: {instance.name}',
             metadata={'service_id': str(instance.id), 'service_name': instance.name},
         ).save()
 
-        # Clean up all associated docker containers before deleting the DB record
-        try:
-            client = get_docker_client()
-            container_names_to_remove = set()
-            
-            runtime_name = get_service_runtime_name(instance)
-            # Add known container names from runtime naming convention
-            container_names_to_remove.update([
-                runtime_name,
-                f"{runtime_name}-frontend",
-                f"{runtime_name}-backend",
-                f"{runtime_name}-db",
-                f"{runtime_name}-redis",
-            ])
-            
-            # Add container IDs extracted from past deployments
-            for dep in instance.deployments.all():
-                if dep.container_id:
-                    container_names_to_remove.add(dep.container_id)
-                if dep.green_container_id:
-                    container_names_to_remove.add(dep.green_container_id)
-            
-            # Scan for all containers that might belong to this service by name pattern
-            # This catches "green" deployments and other variants
-            all_containers = client.containers.list(all=True)
-            for c in all_containers:
-                c_name = c.name.lower()
-                if runtime_name in c_name:
-                    container_names_to_remove.add(c.id)
-
-            # 1. Remove by exact names or IDs
-            for c_id_or_name in container_names_to_remove:
-                try:
-                    c = client.containers.get(c_id_or_name)
-                    c.remove(force=True)
-                except Exception:
-                    pass
-                    
-            # 2. Remove by Compose project label (for compose deployments)
-            try:
-                compose_containers = client.containers.list(all=True, filters={"label": f"com.docker.compose.project={runtime_name}"})
-                for c in compose_containers:
-                    try:
-                        c.remove(force=True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-                
-        except Exception as e:
-            logger.error(f"Failed to clean up docker containers for service {instance.name}: {e}")
-
-        instance.delete()
+        delete_service_task.delay(str(instance.id))
         self._sync_caddy()
+
+    @action(detail=True, methods=['post'], url_path='retry-delete')
+    def retry_delete(self, request, pk=None):
+        instance = self.get_object()
+        from .models_core import Service
+        if instance.status not in [Service.Status.DELETION_FAILED, Service.Status.DELETION_PENDING]:
+            return Response({"error": "Service is not in a failed or pending deletion state."}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.status = Service.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
+        from .tasks import delete_service_task
+        delete_service_task.delay(str(instance.id))
+
+        return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"], url_path="hide-public-domain")
     def hide_public_domain(self, request, pk=None):
@@ -2050,52 +2016,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         return Response(payload, status=status.HTTP_201_CREATED)
 
 
-class PlatformResourcesView(GenericAPIView):
-    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request):
-        import socket
-        import shutil
-        import psutil
-        from apps.deployments.models import ManagedServer, Service
-        vm = psutil.virtual_memory()
-        disk = shutil.disk_usage("/")
-        load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
-        services = Service.objects.all()
-        if not request.user.is_superuser:
-            services = services.filter(owner=request.user)
-        running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
-        failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
-        servers = ManagedServer.objects.all()
-        if not request.user.is_superuser:
-            servers = servers.filter(owner=request.user)
-        nodes = [{
-            "id": str(s.id),
-            "name": s.name,
-            "provider": "managed",
-            "region": "unknown",
-            "status": "healthy" if vm.percent < 80 else "warning",
-            "public_ip": s.host,
-            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
-            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
-            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
-            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
-            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
-            "warnings": ["High memory pressure"] if vm.percent >= 85 else [],
-        } for s in servers] or [{
-            "id": "local-node",
-            "name": socket.gethostname(),
-            "provider": "local",
-            "region": "unknown",
-            "status": "healthy" if vm.percent < 80 else "warning",
-            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
-            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
-            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
-            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
-            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
-            "warnings": [],
-        }]
-        return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
 
     @action(detail=False, methods=['post'])
     def prune(self, request):
@@ -2284,31 +2205,16 @@ class PlatformResourcesView(GenericAPIView):
         """
         deployment = self.get_object()
 
-        cancellable_statuses = {
+        if deployment.status not in (
             Deployment.Status.QUEUED,
-            Deployment.Status.BUILDING,
-            Deployment.Status.DEPLOYING,
             Deployment.Status.REVIEW,
-            Deployment.Status.AWAITING_APPROVAL,
-            Deployment.Status.HEALTH_CHECK,
-            Deployment.Status.TRAFFIC_SHIFTING,
-            Deployment.Status.STAGED,
-        }
-        terminal_statuses = {
-            Deployment.Status.CANCELLED,
-            Deployment.Status.FAILED,
-            Deployment.Status.ACTIVE,
-            Deployment.Status.ROLLED_BACK,
-        }
-        if deployment.status in terminal_statuses:
-            return Response({
-                "ok": True,
-                "status": deployment.status.lower(),
-                "deployment_id": str(deployment.id),
-                "message": f"Deployment already {deployment.status.lower()}.",
-            })
-        if deployment.status not in cancellable_statuses:
-            return Response({'error': f'Cannot cancel deployment in {deployment.status} status.'}, status=status.HTTP_409_CONFLICT)
+            Deployment.Status.BUILDING,
+        ):
+            return Response(
+                {'error': f'Cannot cancel deployment in {deployment.status} '
+                          f'status. Only QUEUED, REVIEW, or BUILDING '
+                          f'deployments can be cancelled.'},
+                status=status.HTTP_409_CONFLICT)
 
         deployment.status = Deployment.Status.CANCELLED
         deployment.finished_at = timezone.now()
@@ -2350,13 +2256,7 @@ class PlatformResourcesView(GenericAPIView):
             for d in glob.glob(tmp_pattern):
                 shutil.rmtree(d, ignore_errors=True)
 
-        return Response({
-            "ok": True,
-            "status": "cancelled",
-            "deployment_id": str(deployment.id),
-            "message": "Deployment cancelled.",
-            "deployment": DeploymentSerializer(deployment).data,
-        })
+        return Response(DeploymentSerializer(deployment).data)
 
     @action(detail=False, methods=['post'], url_path='bulk-cancel')
     def bulk_cancel(self, request):
@@ -2366,18 +2266,21 @@ class PlatformResourcesView(GenericAPIView):
         Body: { "deployment_ids": ["uuid1", "uuid2", ...] }
         """
         deployment_ids = request.data.get('deployment_ids', [])
-        service_id = request.data.get('service_id')
         if not deployment_ids or not isinstance(deployment_ids, list):
             return Response(
                 {'error': 'deployment_ids must be a non-empty list'},
                 status=status.HTTP_400_BAD_REQUEST)
 
         # Only allow cancelling deployments the user owns
-        qs = self.get_queryset().filter(id__in=deployment_ids)
-        if service_id:
-            qs = qs.filter(service_id=service_id)
-        qs = qs.filter(status__in=list(_IN_PROGRESS_DEPLOYMENT_STATUSES))
-        affected_ids = [str(dep_id) for dep_id in qs.values_list("id", flat=True)]
+        qs = self.get_queryset().filter(
+            id__in=deployment_ids,
+            status__in=[
+                Deployment.Status.QUEUED,
+                Deployment.Status.REVIEW,
+                Deployment.Status.BUILDING,
+                Deployment.Status.FAILED,
+            ]
+        )
         count = qs.update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
@@ -2385,7 +2288,6 @@ class PlatformResourcesView(GenericAPIView):
 
         return Response({
             'cancelled': count,
-            'deployment_ids': affected_ids,
             'message': f'{count} deployment(s) cancelled.',
         })
 
@@ -2425,11 +2327,7 @@ class PlatformResourcesView(GenericAPIView):
         """
         deployment = self.get_object()
 
-        approvable_statuses = {
-            Deployment.Status.REVIEW,
-            Deployment.Status.AWAITING_APPROVAL,
-        }
-        if deployment.status not in approvable_statuses:
+        if deployment.status != Deployment.Status.REVIEW:
             return Response(
                 {'error': f'Deployment is in {deployment.status} status, '
                           'not awaiting approval.'},
@@ -2485,11 +2383,8 @@ class PlatformResourcesView(GenericAPIView):
         )
 
         return Response({
-            "ok": True,
-            "status": deployment.status.lower(),
-            "deployment_id": str(deployment.id),
-            "message": "Deployment approved.",
-            "deployment": DeploymentSerializer(deployment).data,
+            'message': 'Deployment approved — build starting',
+            'deployment': DeploymentSerializer(deployment).data,
         })
 
     @action(detail=True, methods=['post'])
@@ -3454,3 +3349,51 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user)
 from .views_transfer import ServerTransferViewSet
+
+
+class PlatformResourcesView(GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        import socket
+        import shutil
+        import psutil
+        from apps.deployments.models import ManagedServer, Service
+        vm = psutil.virtual_memory()
+        disk = shutil.disk_usage("/")
+        load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
+        services = Service.objects.all()
+        if not request.user.is_superuser:
+            services = services.filter(owner=request.user)
+        running = services.filter(deployments__status=Deployment.Status.ACTIVE).distinct().count()
+        failed = services.filter(deployments__status=Deployment.Status.FAILED).distinct().count()
+        servers = ManagedServer.objects.all()
+        if not request.user.is_superuser:
+            servers = servers.filter(owner=request.user)
+        nodes = [{
+            "id": str(s.id),
+            "name": s.name,
+            "provider": "managed",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "public_ip": s.host,
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": ["High memory pressure"] if vm.percent >= 85 else [],
+        } for s in servers] or [{
+            "id": "local-node",
+            "name": socket.gethostname(),
+            "provider": "local",
+            "region": "unknown",
+            "status": "healthy" if vm.percent < 80 else "warning",
+            "cpu": {"cores": psutil.cpu_count() or 0, "load_average": [round(load[0], 2), round(load[1], 2), round(load[2], 2)]},
+            "memory": {"total_mb": round(vm.total / (1024 ** 2), 2), "used_mb": round(vm.used / (1024 ** 2), 2), "free_mb": round(vm.available / (1024 ** 2), 2), "usage_percent": round(vm.percent, 2)},
+            "disk": {"total_gb": round(disk.total / (1024 ** 3), 2), "used_gb": round(disk.used / (1024 ** 3), 2), "free_gb": round(disk.free / (1024 ** 3), 2), "usage_percent": round((disk.used / max(1, disk.total)) * 100, 2)},
+            "containers": {"running": running, "failed": failed, "building": services.filter(deployments__status__in=[Deployment.Status.BUILDING, Deployment.Status.DEPLOYING]).distinct().count()},
+            "uptime_seconds": int(timezone.now().timestamp() - psutil.boot_time()),
+            "warnings": [],
+        }]
+        return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
