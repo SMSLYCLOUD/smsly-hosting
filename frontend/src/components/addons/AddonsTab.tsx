@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
-import { Database, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
+import { Database, RotateCcw, Plus, Trash2, RefreshCw, Download, Shield, Loader2, Server, Search, MessageSquare, Zap, HardDrive, Layers, Eye, Copy, Check, Globe } from 'lucide-react';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { addonsApi, Addon } from '@/lib/api';
 import { ADDON_TYPES } from '@/lib/addonConstants';
@@ -75,6 +75,15 @@ export function AddonsTab({ serviceId }: { serviceId?: string }) {
             fetchAddons();
         } catch (e) {
             console.error('Failed to deprovision:', e);
+        }
+    };
+
+    const handleRetryDelete = async (addonId: string) => {
+        try {
+            await addonsApi.retryDelete(addonId);
+            fetchAddons();
+        } catch (e) {
+            console.error('Failed to retry delete:', e);
         }
     };
 

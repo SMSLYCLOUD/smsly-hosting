@@ -76,33 +76,43 @@ class AddonViewSet(viewsets.ModelViewSet):
         from .tasks import provision_addon_task
         provision_addon_task.delay(addon_id=str(addon.id))
 
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "ok": True,
+                "status": "deletion_pending",
+                "message": "Deletion has started.",
+                "resource_id": str(instance.id),
+            },
+            status=status.HTTP_202_ACCEPTED
+        )
+
     def perform_destroy(self, instance):
-        """Clean up Docker containers before deleting addon record."""
-        addon_id = str(instance.id)
-        addon_type = instance.addon_type.lower()
-        container_name = f"smsly-addon-{addon_type}-{addon_id}"
+        """Set status to pending and queue async deletion."""
+        from .tasks import delete_addon_task
+        from .models_addons import Addon
         
-        try:
-            client = get_docker_client()
-            # Try exact name match
-            try:
-                c = client.containers.get(container_name)
-                c.remove(force=True)
-            except Exception:
-                pass
-            
-            # Pattern match fallback (in case prefix differs)
-            all_containers = client.containers.list(all=True)
-            for c in all_containers:
-                if addon_id in c.name:
-                    try:
-                        c.remove(force=True)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.error(f"Failed to deprovision addon container {container_name}: {e}")
-            
-        instance.delete()
+        instance.status = Addon.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
+
+        delete_addon_task.delay(str(instance.id))
+
+    @action(detail=True, methods=['post'], url_path='retry-delete')
+    def retry_delete(self, request, pk=None):
+        instance = self.get_object()
+        from .models_addons import Addon
+        if instance.status not in [Addon.Status.DELETION_FAILED, Addon.Status.DELETION_PENDING]:
+            return Response({"error": "Addon is not in a failed or pending deletion state."}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.status = Addon.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
+        from .tasks import delete_addon_task
+        delete_addon_task.delay(str(instance.id))
+
+        return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
 
     def perform_update(self, serializer):
         # Allow updating properties like public_domain
