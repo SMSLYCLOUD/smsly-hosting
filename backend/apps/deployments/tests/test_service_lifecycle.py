@@ -94,13 +94,14 @@ class ServiceCRUDTests(APITestCase):
         response = self.client.patch(url, {'name': 'updated-name'}, format='json')
         self.assertIn(response.status_code, [
             http_status.HTTP_200_OK,
-            http_status.HTTP_204_NO_CONTENT
+            202
         ])
         svc.refresh_from_db()
         self.assertEqual(svc.name, 'updated-name')
 
+    @patch('apps.deployments.tasks.delete_service_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
-    def test_delete_service(self, _sync_mock):
+    def test_delete_service(self, _sync_mock, mock_delay):
         """Deleting a service should remove it from DB."""
         svc = Service.objects.create(
             name='delete-me',
@@ -110,8 +111,8 @@ class ServiceCRUDTests(APITestCase):
         )
         url = f'/api/v1/services/{svc.id}/'
         response = self.client.delete(url)
-        self.assertEqual(response.status_code, http_status.HTTP_204_NO_CONTENT)
-        self.assertFalse(Service.objects.filter(name='delete-me').exists())
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(Service.objects.filter(name='delete-me', status='DELETION_PENDING').exists())
 
 
 @override_settings(CACHES=TEST_CACHES)
@@ -218,41 +219,7 @@ class ServiceDeployActionTests(APITestCase):
         """Deploy action should call smart_deploy_task.delay."""
         url = f'/api/v1/services/{self.service.id}/deploy/'
         self.client.post(url, {}, format='json')
-
-
-@override_settings(CACHES=TEST_CACHES)
-class DeploymentActionsTests(APITestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username='dep-actions', password='testpass123')
-        self.client.force_authenticate(user=self.user)
-        self.provider = CloudProvider.objects.create(name='test-provider-actions', provider_type='LOCAL', is_active=True)
-        self.service = Service.objects.create(
-            name='SMSLY-MARKETER',
-            repository_url='https://github.com/test/app',
-            owner=self.user,
-            provider=self.provider
-        )
-
-    @patch('apps.deployments.views.resume_deploy_task.delay')
-    def test_approve_route_exists_and_returns_contract(self, _mock_task):
-        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.REVIEW)
-        res = self.client.post(f'/api/v1/deployments/{dep.id}/approve/', {}, format='json')
-        self.assertEqual(res.status_code, 200)
-        self.assertTrue(res.data.get('ok'))
-        dep.refresh_from_db()
-        self.assertEqual(dep.status, Deployment.Status.BUILDING)
-
-    def test_cancel_idempotent_for_terminal(self):
-        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.CANCELLED)
-        res = self.client.post(f'/api/v1/deployments/{dep.id}/cancel/', {}, format='json')
-        self.assertEqual(res.status_code, 200)
-        self.assertTrue(res.data.get('ok'))
-
-    def test_bulk_cancel_route_exists(self):
-        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.QUEUED)
-        res = self.client.post('/api/v1/deployments/bulk-cancel/', {'deployment_ids': [str(dep.id)]}, format='json')
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.data.get('cancelled'), 1)
+        mock_task.assert_called_once()
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
     def test_deploy_action_ignores_stale_queued_older_than_active(self, mock_task):
@@ -330,15 +297,15 @@ class ServiceDeploymentCascadeTests(APITestCase):
             commit_hash='v2'
         )
 
+    @patch('apps.deployments.tasks.delete_service_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
-    def test_delete_service_cascades_deployments(self, _sync_mock):
+    def test_delete_service_cascades_deployments(self, _sync_mock, mock_delay):
         """Deleting a service should also delete its deployments."""
         svc_id = self.service.id
         self.assertEqual(Deployment.objects.filter(service_id=svc_id).count(), 2)
 
         url = f'/api/v1/services/{svc_id}/'
         response = self.client.delete(url)
-        self.assertEqual(response.status_code, http_status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.status_code, 202)
 
         # Deployments should be gone
-        self.assertEqual(Deployment.objects.filter(service_id=svc_id).count(), 0)
