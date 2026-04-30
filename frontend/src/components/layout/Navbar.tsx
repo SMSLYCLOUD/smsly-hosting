@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { featureFlags } from '@/lib/featureFlags';
+import { shouldShowAllNav } from '@/lib/nav-visibility';
 import { usePathname, useRouter } from 'next/navigation';
 import { Settings, Menu, X, Home, LogOut, Rocket, CreditCard, Sparkles, Monitor, Radio, Brain, Archive, Shield, Layout, FolderKanban, Activity, Zap, Gauge, Network, FileCode, ArrowLeftRight, GitCompare } from 'lucide-react';
 import Image from 'next/image';
@@ -115,6 +116,17 @@ export function Navbar() {
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
+    { href: '/databases', label: 'Databases', icon: FileCode, tier: 'tertiary' },
+    { href: '/addons', label: 'Addons', icon: FileCode, tier: 'tertiary' },
+    { href: '/domains', label: 'Domains', icon: FileCode, tier: 'tertiary' },
+    { href: '/api-keys', label: 'API Keys', icon: Settings, tier: 'tertiary' },
+    { href: '/audit-logs', label: 'Audit Logs', icon: Settings, tier: 'tertiary' },
+    { href: '/env-vars', label: 'Env Vars', icon: Settings, tier: 'tertiary' },
+    { href: '/restore', label: 'Restore', icon: Archive, tier: 'tertiary' },
+    { href: '/rollbacks', label: 'Rollbacks', icon: Archive, tier: 'tertiary' },
+    { href: '/logs', label: 'Logs', icon: Archive, tier: 'tertiary' },
+    { href: '/monitoring', label: 'Monitoring', icon: Archive, tier: 'tertiary' },
+    { href: '/status', label: 'System Status', icon: Activity, tier: 'tertiary' },
   ];
 
   if (user?.is_staff) {
@@ -131,7 +143,8 @@ export function Navbar() {
     ...(featureFlags.transfers ? [] : ['/transfers']),
   ]);
 
-  const visibleAuthLinks = authLinks.filter((link) => !hiddenByFlag.has(link.href));
+  const showAll = shouldShowAllNav();
+  const visibleAuthLinks = authLinks.filter((link) => showAll || !hiddenByFlag.has(link.href));
 
   const primaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'primary');
   const secondaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'secondary');
