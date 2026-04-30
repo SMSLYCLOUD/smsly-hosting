@@ -2,12 +2,13 @@ import { redirect } from 'next/navigation';
 import PlatformNotice from '@/components/public/PlatformNotice';
 
 interface AccountRouteProps {
-  params: {
+  params: Promise<{
     slug?: string[];
-  };
+  }>;
 }
 
-export default function AccountsGatewayPage({ params }: AccountRouteProps) {
+export default async function AccountsGatewayPage(props: AccountRouteProps) {
+  const params = await props.params;
   const slug = (params.slug || []).map((part) => part.toLowerCase());
   const first = slug[0] || '';
   const second = slug[1] || '';
