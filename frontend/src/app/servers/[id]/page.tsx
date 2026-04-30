@@ -367,7 +367,7 @@ export default function ServerDetailPage() {
                                 )}
                                 {server.is_primary && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-bold uppercase">
-                                        Primary
+                                        Control Plane
                                     </span>
                                 )}
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${sc.bg} ${sc.color}`}>

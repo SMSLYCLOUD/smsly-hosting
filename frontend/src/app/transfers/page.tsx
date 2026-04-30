@@ -6,6 +6,9 @@ import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
+import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
+import { shouldShowAllNav } from '@/lib/nav-visibility';
+import { parseApiError } from '@/lib/apiError';
 
 export default function TransfersPage() {
     const [servers, setServers] = useState<any[]>([]);
@@ -15,6 +18,9 @@ export default function TransfersPage() {
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
+    const showAll = shouldShowAllNav();
+    const transferDisabled = !featureFlags.transfers && !showAll;
+    const transferBlockedNoTarget = servers.length === 0;
 
     useEffect(() => {
         const fetchData = async () => {

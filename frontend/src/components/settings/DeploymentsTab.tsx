@@ -85,9 +85,10 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
             await servicesApi.cancelDeployment(deployment.id);
             toast({ title: "Deployment cancelled" });
             setTimeout(() => { void loadDeployments(); }, 1000);
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            toast({ title: "Cancel failed", variant: "destructive" });
+            const msg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || "Cancel failed";
+            toast({ title: msg, variant: "destructive" });
         } finally {
             setCancellingId(null);
         }
@@ -101,7 +102,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
             setTimeout(() => { void loadDeployments(); }, 2000);
         } catch (err: any) {
             console.error(err);
-            const msg = err?.response?.data?.error || 'Approve failed';
+            const msg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || 'Approve failed';
             toast({ title: msg, variant: "destructive" });
         } finally {
             setApprovingId(null);
@@ -153,9 +154,10 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
             toast({ title: result.message || `${result.cancelled} deployment(s) cancelled.` });
             setSelectedIds(new Set());
             setTimeout(() => { void loadDeployments(); }, 1000);
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            toast({ title: "Bulk cancel failed", variant: "destructive" });
+            const msg = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message || "Bulk cancel failed";
+            toast({ title: msg, variant: "destructive" });
         } finally {
             setBulkCancelling(false);
         }

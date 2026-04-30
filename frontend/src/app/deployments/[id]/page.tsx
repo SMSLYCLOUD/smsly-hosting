@@ -184,7 +184,7 @@ export default function DeploymentWatchPage() {
                                             <Button variant="outline" className="w-full text-red-500 hover:bg-red-500/20 hover:text-red-500 border-red-500/30" onClick={async () => {
                                                 const confirmed = await confirm({
                                                     title: "Rollback to previous?",
-                                                    description: "Are you sure you want to attempt a rollback to the previous version?",
+                                                    message: "Are you sure you want to attempt a rollback to the previous version?",
                                                     confirmText: "Yes, Rollback",
                                                     variant: "destructive"
                                                 });
