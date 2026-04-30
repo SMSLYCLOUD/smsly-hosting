@@ -38,35 +38,35 @@
   }
 
   .dark {
-    /* DARK MODE: Deep Green Space */
-    --background: 160 20% 4%;         /* Very dark green-black */
-    --foreground: 150 10% 95%;        /* Near white */
+    /* DARK MODE: Deeper Obsidian & Emerald */
+    --background: 160 30% 2%;         /* Ultra dark obsidian */
+    --foreground: 150 10% 98%;        /* White */
 
-    --card: 160 15% 8%;               /* Dark green card */
-    --card-foreground: 150 10% 95%;
+    --card: 160 25% 4%;               /* Deep obsidian card */
+    --card-foreground: 150 10% 98%;
 
-    --popover: 160 15% 8%;
-    --popover-foreground: 150 10% 95%;
+    --popover: 160 25% 4%;
+    --popover-foreground: 150 10% 98%;
 
-    /* Brand Primary: Bright Emerald */
-    --primary: 160 84% 45%;           /* Emerald, slightly brighter for dark */
-    --primary-foreground: 160 20% 4%;
+    /* Brand Primary: Pure Emerald */
+    --primary: 160 84% 45%;           
+    --primary-foreground: 160 30% 2%;
 
-    --secondary: 160 15% 15%;
-    --secondary-foreground: 150 10% 95%;
+    --secondary: 160 25% 8%;
+    --secondary-foreground: 150 10% 98%;
 
-    --muted: 160 15% 15%;
-    --muted-foreground: 150 10% 60%;
+    --muted: 160 25% 8%;
+    --muted-foreground: 150 10% 65%;
 
     /* Semantic Accents */
     --accent: 160 84% 45%;
-    --accent-foreground: 160 20% 4%;
+    --accent-foreground: 160 30% 2%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 150 10% 95%;
+    --destructive: 0 84% 40%;
+    --destructive-foreground: 150 10% 98%;
 
-    --border: 160 15% 18%;
-    --input: 160 15% 18%;
+    --border: 160 25% 12%;
+    --input: 160 25% 12%;
     --ring: 160 84% 45%;
   }
 }

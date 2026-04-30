@@ -27,6 +27,14 @@ class ServerTransferService:
         self.ssh = None
         self._uploaded_remote_backup_path = None
 
+    def _log(self, message):
+        """Append a timestamped message to the transfer logs."""
+        ts = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        line = f"[{ts}] {message}\n"
+        self.transfer.logs += line
+        self.transfer.save(update_fields=['logs'])
+        logger.info(f"Transfer {self.transfer.id}: {message}")
+
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
         try:
@@ -202,6 +210,8 @@ class ServerTransferService:
         
         # 2. Generate a Python script that boots Django inside the remote container
         # and calls BackupService to properly inflate the database models and Volumes.
+        owner_email = self.transfer.service.owner.email if self.transfer.service and self.transfer.service.owner else None
+        
         restore_script = f"""import os
 import sys
 import django
@@ -218,15 +228,28 @@ logger = logging.getLogger(__name__)
 
 def run_restore():
     User = get_user_model()
-    # Assign to first superuser or first available user
-    admin_user = User.objects.filter(is_superuser=True).first() or User.objects.first()
-    if not admin_user:
+    owner_email = {repr(owner_email)}
+    
+    # Precise owner matching: find user by email, fallback to superuser
+    target_user = None
+    if owner_email:
+        target_user = User.objects.filter(email=owner_email).first()
+        if target_user:
+            print(f"Found matching owner on target: {{owner_email}}")
+            
+    if not target_user:
+        target_user = User.objects.filter(is_superuser=True).first() or User.objects.first()
+        if target_user:
+            print(f"No matching owner found. Assigning to fallback user: {{target_user.email}}")
+
+    if not target_user:
         print("ERROR: No suitable user found on target server to own the restored service.", file=sys.stderr)
         sys.exit(1)
         
     try:
         svc = BackupService()
-        svc._restore_service_from_file('/tmp/transfer_backup.tar.gz', owner=admin_user)
+        # Restore and capture result
+        svc._restore_service_from_file('/tmp/transfer_backup.tar.gz', owner=target_user)
         print("SUCCESS")
     except Exception as e:
         print(f"RESTORE_FAILED: {{str(e)}}", file=sys.stderr)
@@ -561,14 +584,15 @@ if os.path.exists(services_dir):
         self.transfer.progress_percent = percent
         self.transfer.current_step = step
         self.transfer.save(update_fields=['progress_percent', 'current_step'])
+        self._log(step)
 
     def _handle_failure(self, error):
-        logger.error('Transfer %s failed: %s', self.transfer.id, error)
         self.transfer.status = 'FAILED'
         self.transfer.error_message = str(error)
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
         self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password'])
+        self._log(f"CRITICAL FAILURE: {error}")
 
     def _generate_docker_run_command(self, service, metadata):
         name = service.name

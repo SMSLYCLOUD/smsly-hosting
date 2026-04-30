@@ -11,6 +11,22 @@ from .models_servers import ManagedServer
 from .tasks import execute_server_transfer_task, rollback_transfer_task
 
 
+def is_safe_ip(ip_str):
+    """
+    Check if an IP is safe for public transfer requests.
+    Blocks private, loopback, and reserved ranges to prevent SSRF.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        # Block private, loopback, link-local, multicast, and reserved ranges
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or
+            ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False
+        return True
+    except ValueError:
+        return False
+
+
 class ServerTransferViewSet(viewsets.ModelViewSet):
     queryset = ServerTransfer.objects.select_related('service').all()
     serializer_class = ServerTransferSerializer
@@ -101,6 +117,13 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 )
 
         target_server_ip = resolved_target_ip
+
+        # SSRF Protection
+        if not is_safe_ip(target_server_ip):
+            return Response(
+                {'error': 'Target server IP is in a forbidden range (SSRF protection).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         target_ssh_key = str(payload.get('target_ssh_key') or '').strip()
         target_ssh_password = str(payload.get('target_ssh_password') or '').strip()

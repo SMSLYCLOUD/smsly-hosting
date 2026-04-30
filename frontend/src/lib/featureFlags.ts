@@ -4,7 +4,7 @@ export const featureFlags = {
   tunnels: true,
   vpnMesh: true,
   functions: true,
-  transfers: true,
+  transfers: false,
 };
 
 export const featureDisabledReason = {
@@ -13,5 +13,5 @@ export const featureDisabledReason = {
   tunnels: "Secure tunneling is temporarily unavailable during maintenance.",
   vpnMesh: "VPN Mesh networking requires a dedicated infrastructure node.",
   functions: "Serverless functions are in early access.",
-  transfers: "Server transfers are undergoing security audits.",
+  transfers: "Server transfers are currently disabled for maintenance.",
 };
