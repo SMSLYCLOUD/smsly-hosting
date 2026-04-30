@@ -6,6 +6,8 @@ import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
+import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
+import { parseApiError } from '@/lib/apiError';
 
 export default function TransfersPage() {
     const [servers, setServers] = useState<any[]>([]);
@@ -15,6 +17,8 @@ export default function TransfersPage() {
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
+    const transferDisabled = !featureFlags.transfers;
+    const transferBlockedNoTarget = servers.length === 0;
 
     useEffect(() => {
         const fetchData = async () => {
@@ -93,6 +97,8 @@ export default function TransfersPage() {
         const sourceServerId = e.dataTransfer.getData('sourceServerId');
 
         if (!itemId || sourceServerId === targetServerId) return;
+        if (transferDisabled) { toast.error(featureDisabledReason.transfers); return; }
+        if (transferBlockedNoTarget) { toast.error('Transfer requires at least one connected target server.'); return; }
 
         if (sourceServerId !== 'local') {
             toast.error("Transfers must originate from the Local Server.");
@@ -136,7 +142,7 @@ export default function TransfersPage() {
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
         } catch (error: any) {
             console.error("Transfer failed", error);
-            toast.error(error.response?.data?.error || "Transfer request failed");
+            toast.error(parseApiError(error));
 
             // Revert UI on failure
             setGroupedServices(prev => {
@@ -170,6 +176,11 @@ export default function TransfersPage() {
                 <p className="text-gray-500 text-sm">
                     Drag and drop services between connected servers to seamlessly migrate data and traffic.
                 </p>
+                {(transferDisabled || transferBlockedNoTarget) && (
+                  <div className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    {transferDisabled ? featureDisabledReason.transfers : 'Transfers disabled: connect at least one remote server first.'}
+                  </div>
+                )}
             </div>
 
             {loading ? (
