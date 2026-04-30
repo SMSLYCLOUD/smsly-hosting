@@ -174,6 +174,16 @@ class Service(TimeStampedModel):
     """
     Represents a hosted application/service.
     """
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        DELETION_PENDING = 'DELETION_PENDING', 'Deletion Pending'
+        DELETION_FAILED = 'DELETION_FAILED', 'Deletion Failed'
+        DELETED = 'DELETED', 'Deleted'
+        UNKNOWN = 'UNKNOWN', 'Unknown'
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    deletion_error = models.TextField(blank=True, default='')
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
 

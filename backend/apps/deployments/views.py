@@ -306,80 +306,51 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 daemon=True
             ).start()
 
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "ok": True,
+                "status": "deletion_pending",
+                "message": "Deletion has started.",
+                "resource_id": str(instance.id),
+            },
+            status=status.HTTP_202_ACCEPTED
+        )
+
     def perform_destroy(self, instance):
-        """Stop active deployments, audit-log, delete the service, and resync routing."""
-        # Cancel any active deployments
-        instance.deployments.filter(
-            status__in=[
-                Deployment.Status.ACTIVE,
-                Deployment.Status.BUILDING,
-                Deployment.Status.DEPLOYING,
-                Deployment.Status.QUEUED,
-                Deployment.Status.REVIEW,
-            ]
-        ).update(status=Deployment.Status.CANCELLED, finished_at=timezone.now())
+        """Set status to pending and queue async deletion."""
+        from .tasks import delete_service_task
+        from .models_core import Service
+
+        instance.status = Service.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
 
         AuditLog(
             actor=self.request.user.get_username(),
-            action='SERVICE_DELETE',
+            action='SERVICE_DELETE_REQUESTED',
             target=f'Service: {instance.name}',
             metadata={'service_id': str(instance.id), 'service_name': instance.name},
         ).save()
 
-        # Clean up all associated docker containers before deleting the DB record
-        try:
-            client = get_docker_client()
-            container_names_to_remove = set()
-            
-            # Add known container names from the service slug
-            container_names_to_remove.update([
-                instance.slug,
-                f"{instance.slug}-frontend",
-                f"{instance.slug}-backend",
-                f"{instance.slug}-db",
-                f"{instance.slug}-redis",
-            ])
-            
-            # Add container IDs extracted from past deployments
-            for dep in instance.deployments.all():
-                if dep.container_id:
-                    container_names_to_remove.add(dep.container_id)
-                if dep.green_container_id:
-                    container_names_to_remove.add(dep.green_container_id)
-            
-            # Scan for all containers that might belong to this service by name pattern
-            # This catches "green" deployments and other variants
-            all_containers = client.containers.list(all=True)
-            for c in all_containers:
-                c_name = c.name.lower()
-                slug_lower = instance.slug.lower()
-                if slug_lower in c_name:
-                    container_names_to_remove.add(c.id)
-
-            # 1. Remove by exact names or IDs
-            for c_id_or_name in container_names_to_remove:
-                try:
-                    c = client.containers.get(c_id_or_name)
-                    c.remove(force=True)
-                except Exception:
-                    pass
-                    
-            # 2. Remove by Compose project label (for compose deployments)
-            try:
-                compose_containers = client.containers.list(all=True, filters={"label": f"com.docker.compose.project={instance.slug}"})
-                for c in compose_containers:
-                    try:
-                        c.remove(force=True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-                
-        except Exception as e:
-            logger.error(f"Failed to clean up docker containers for service {instance.name}: {e}")
-
-        instance.delete()
+        delete_service_task.delay(str(instance.id))
         self._sync_caddy()
+
+    @action(detail=True, methods=['post'], url_path='retry-delete')
+    def retry_delete(self, request, pk=None):
+        instance = self.get_object()
+        from .models_core import Service
+        if instance.status not in [Service.Status.DELETION_FAILED, Service.Status.DELETION_PENDING]:
+            return Response({"error": "Service is not in a failed or pending deletion state."}, status=status.HTTP_400_BAD_REQUEST)
+
+        instance.status = Service.Status.DELETION_PENDING
+        instance.save(update_fields=['status'])
+        from .tasks import delete_service_task
+        delete_service_task.delay(str(instance.id))
+
+        return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"], url_path="hide-public-domain")
     def hide_public_domain(self, request, pk=None):
