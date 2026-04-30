@@ -152,27 +152,25 @@ export function Navbar() {
 
   return (
     <nav
-        className={`sticky top-0 z-50 w-full transition-all duration-300 backdrop-blur-md ${
-            isScrolled
-            ? 'bg-white/30 dark:bg-slate-950/30 shadow-sm border-b border-white/20'
-            : 'bg-transparent border-b border-transparent'
-        }`}
+        className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
     >
-      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-3 px-4 sm:px-6 lg:px-8">
+      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[1440px] mx-auto">
 
         {/* Logo - Left */}
-        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
-            <Image src="/images/logo.svg" alt="CloudNeuron Logo" width={28} height={28} className="h-7 w-7 shadow-sm rounded-lg" priority />
-            {!user && <span className="font-bold text-lg tracking-tight text-slate-900 dark:text-white hidden sm:block">CloudNeuron</span>}
+        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
+            <div className="bg-emerald-500 p-1.5 rounded-lg shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
+                <Image src="/images/logo.svg" alt="S" width={22} height={22} className="h-5.5 w-5.5 brightness-0 invert" priority />
+            </div>
+            {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">CloudNeuron</span>}
         </Link>
 
-        {/* Nav Links - Center: Show public when logged out, auth when logged in */}
+        {/* Nav Links - Center */}
         <nav className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
             <div
               className={
                 user
-                  ? "grid w-full grid-flow-col auto-cols-fr gap-1 rounded-xl border border-border/60 bg-background/40 p-1 shadow-sm backdrop-blur-md"
-                  : "flex max-w-full items-center justify-center gap-0.5 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  ? "flex items-center gap-1 bg-[#12151c]/60 p-1 rounded-xl border border-white/5"
+                  : "flex items-center gap-1 overflow-x-auto"
               }
             >
             {!user && publicLinks.map((link) => {
@@ -183,10 +181,10 @@ export function Navbar() {
                          href={link.href}
                          prefetch={false}
                          className={`
-                             shrink-0 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors
+                             shrink-0 px-4 py-1.5 rounded-lg text-[13px] font-medium transition-colors
                              ${isActive
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400'}
+                                ? 'text-emerald-400 bg-emerald-500/10'
+                                : 'text-zinc-400 hover:text-white hover:bg-white/5'}
                         `}
                     >
                         {link.label}
@@ -203,22 +201,14 @@ export function Navbar() {
                          prefetch={false}
                          title={link.label}
                          className={`
-                             relative min-w-0 w-full px-2 py-1.5 rounded-lg text-[12px] lg:text-[12.5px] font-[600] tracking-[0.015em] transition-all duration-200 flex items-center justify-center gap-1.5
+                             relative min-w-0 px-4 py-2 rounded-lg text-[12.5px] font-[600] tracking-tight transition-all duration-200 flex items-center justify-center gap-2
                              ${isActive
-                                ? 'text-foreground bg-primary/10 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}
+                                ? 'text-white bg-[#1e232d] shadow-[0_0_0_1px_rgba(255,255,255,0.05)] border border-white/10'
+                                : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'}
                         `}
                     >
-                        <Icon size={14} className="hidden xl:block shrink-0" />
+                        <Icon size={14} className={isActive ? 'text-emerald-400' : 'text-zinc-600'} />
                         <span className="truncate">{link.label}</span>
-                        {isActive && (
-                            <motion.div
-                                layoutId="navbar-indicator"
-                                className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full"
-                                initial={false}
-                                transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                            />
-                        )}
                     </Link>
                 );
             })}
@@ -226,10 +216,10 @@ export function Navbar() {
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
-        <div className="hidden items-center justify-end space-x-3 md:flex">
+        <div className="hidden items-center justify-end space-x-4 md:flex">
           {user && (
            <Link href="/new" prefetch={false}>
-               <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 hover:shadow-emerald-500/30">
+               <Button size="sm" className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-5 rounded-lg shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95">
                    Deploy
                </Button>
            </Link>
@@ -309,11 +299,11 @@ export function Navbar() {
 
       {/* Row 2+3: Infrastructure & Tools — single container, divided */}
       {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
-        <div className="hidden md:block border-t border-border/50 bg-card/60 backdrop-blur-sm">
-          <div className="w-full px-4 sm:px-6 lg:px-8 py-0.5">
+        <div className="hidden md:block border-t border-white/5 bg-[#0a0c10]/80 backdrop-blur-md">
+          <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[1440px] mx-auto">
             {/* Infrastructure row */}
-            <div className="flex items-center justify-center gap-0.5 py-0.5">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40 font-semibold mr-2 shrink-0">Infra</span>
+            <div className="flex items-center justify-center gap-1 py-1">
+              <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Infra</span>
               {secondaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -322,23 +312,23 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
+                    className={`shrink-0 px-3 py-1 rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 ${
                       isActive
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                        ? 'bg-emerald-500/10 text-emerald-400'
+                        : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'
                     }`}
                   >
-                    <Icon size={12} />
+                    <Icon size={12} className={isActive ? 'text-emerald-500' : 'text-zinc-600'} />
                     {link.label}
                   </Link>
                 );
               })}
             </div>
             {/* Subtle divider */}
-            <div className="border-t border-border/30 mx-8" />
+            <div className="border-t border-white/5 mx-auto max-w-2xl" />
             {/* Tools row */}
-            <div className="flex items-center justify-center gap-0.5 py-0.5">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/40 font-semibold mr-2 shrink-0">Tools</span>
+            <div className="flex items-center justify-center gap-1 py-1">
+              <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Tools</span>
               {tertiaryAuthLinks.map((link) => {
                 const Icon = link.icon;
                 const isActive = pathname === link.href;
@@ -347,13 +337,13 @@ export function Navbar() {
                     key={link.href}
                     href={link.href}
                     prefetch={false}
-                    className={`shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
+                    className={`shrink-0 px-3 py-1 rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 ${
                       isActive
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                        ? 'bg-emerald-500/10 text-emerald-400'
+                        : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'
                     }`}
                   >
-                    <Icon size={12} />
+                    <Icon size={12} className={isActive ? 'text-emerald-500' : 'text-zinc-600'} />
                     {link.label}
                   </Link>
                 );
