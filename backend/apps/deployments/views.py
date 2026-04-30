@@ -44,6 +44,7 @@ import uuid
 import logging
 import re
 from apps.cloud.docker_client import get_docker_client
+from .runtime_naming import get_service_runtime_name
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +91,13 @@ class EmptySerializer(serializers.Serializer):
 
 _IN_PROGRESS_DEPLOYMENT_STATUSES = [
     Deployment.Status.QUEUED,
+    Deployment.Status.AWAITING_APPROVAL,
     Deployment.Status.BUILDING,
     Deployment.Status.DEPLOYING,
-    'REVIEW',  # Also block if awaiting review
+    Deployment.Status.REVIEW,
+    Deployment.Status.HEALTH_CHECK,
+    Deployment.Status.TRAFFIC_SHIFTING,
+    Deployment.Status.STAGED,
 ]
 
 
@@ -2250,16 +2255,31 @@ class PlatformResourcesView(GenericAPIView):
         """
         deployment = self.get_object()
 
-        if deployment.status not in (
+        cancellable_statuses = {
             Deployment.Status.QUEUED,
-            Deployment.Status.REVIEW,
             Deployment.Status.BUILDING,
-        ):
-            return Response(
-                {'error': f'Cannot cancel deployment in {deployment.status} '
-                          f'status. Only QUEUED, REVIEW, or BUILDING '
-                          f'deployments can be cancelled.'},
-                status=status.HTTP_409_CONFLICT)
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.REVIEW,
+            Deployment.Status.AWAITING_APPROVAL,
+            Deployment.Status.HEALTH_CHECK,
+            Deployment.Status.TRAFFIC_SHIFTING,
+            Deployment.Status.STAGED,
+        }
+        terminal_statuses = {
+            Deployment.Status.CANCELLED,
+            Deployment.Status.FAILED,
+            Deployment.Status.ACTIVE,
+            Deployment.Status.ROLLED_BACK,
+        }
+        if deployment.status in terminal_statuses:
+            return Response({
+                "ok": True,
+                "status": deployment.status.lower(),
+                "deployment_id": str(deployment.id),
+                "message": f"Deployment already {deployment.status.lower()}.",
+            })
+        if deployment.status not in cancellable_statuses:
+            return Response({'error': f'Cannot cancel deployment in {deployment.status} status.'}, status=status.HTTP_409_CONFLICT)
 
         deployment.status = Deployment.Status.CANCELLED
         deployment.finished_at = timezone.now()
@@ -2301,7 +2321,13 @@ class PlatformResourcesView(GenericAPIView):
             for d in glob.glob(tmp_pattern):
                 shutil.rmtree(d, ignore_errors=True)
 
-        return Response(DeploymentSerializer(deployment).data)
+        return Response({
+            "ok": True,
+            "status": "cancelled",
+            "deployment_id": str(deployment.id),
+            "message": "Deployment cancelled.",
+            "deployment": DeploymentSerializer(deployment).data,
+        })
 
     @action(detail=False, methods=['post'], url_path='bulk-cancel')
     def bulk_cancel(self, request):
@@ -2311,21 +2337,18 @@ class PlatformResourcesView(GenericAPIView):
         Body: { "deployment_ids": ["uuid1", "uuid2", ...] }
         """
         deployment_ids = request.data.get('deployment_ids', [])
+        service_id = request.data.get('service_id')
         if not deployment_ids or not isinstance(deployment_ids, list):
             return Response(
                 {'error': 'deployment_ids must be a non-empty list'},
                 status=status.HTTP_400_BAD_REQUEST)
 
         # Only allow cancelling deployments the user owns
-        qs = self.get_queryset().filter(
-            id__in=deployment_ids,
-            status__in=[
-                Deployment.Status.QUEUED,
-                Deployment.Status.REVIEW,
-                Deployment.Status.BUILDING,
-                Deployment.Status.FAILED,
-            ]
-        )
+        qs = self.get_queryset().filter(id__in=deployment_ids)
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        qs = qs.filter(status__in=list(_IN_PROGRESS_DEPLOYMENT_STATUSES))
+        affected_ids = [str(dep_id) for dep_id in qs.values_list("id", flat=True)]
         count = qs.update(
             status=Deployment.Status.CANCELLED,
             finished_at=timezone.now(),
@@ -2333,6 +2356,7 @@ class PlatformResourcesView(GenericAPIView):
 
         return Response({
             'cancelled': count,
+            'deployment_ids': affected_ids,
             'message': f'{count} deployment(s) cancelled.',
         })
 
@@ -2372,7 +2396,11 @@ class PlatformResourcesView(GenericAPIView):
         """
         deployment = self.get_object()
 
-        if deployment.status != Deployment.Status.REVIEW:
+        approvable_statuses = {
+            Deployment.Status.REVIEW,
+            Deployment.Status.AWAITING_APPROVAL,
+        }
+        if deployment.status not in approvable_statuses:
             return Response(
                 {'error': f'Deployment is in {deployment.status} status, '
                           'not awaiting approval.'},
@@ -2428,8 +2456,11 @@ class PlatformResourcesView(GenericAPIView):
         )
 
         return Response({
-            'message': 'Deployment approved — build starting',
-            'deployment': DeploymentSerializer(deployment).data,
+            "ok": True,
+            "status": deployment.status.lower(),
+            "deployment_id": str(deployment.id),
+            "message": "Deployment approved.",
+            "deployment": DeploymentSerializer(deployment).data,
         })
 
     @action(detail=True, methods=['post'])

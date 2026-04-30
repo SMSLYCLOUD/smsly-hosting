@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { featureFlags } from '@/lib/featureFlags';
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
@@ -11,6 +12,15 @@ import {
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
+
+const HIDDEN_BY_FLAG = new Set<string>([
+  ...(featureFlags.transfers ? [] : ['/transfers']),
+  ...(featureFlags.autoscaler ? [] : ['/autoscaler']),
+  ...(featureFlags.tunnels ? [] : ['/tunnels']),
+  ...(featureFlags.replication ? [] : ['/replication']),
+  ...(featureFlags.vpnMesh ? [] : ['/network']),
+  ...(featureFlags.functions ? [] : ['/functions']),
+]);
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -104,7 +114,7 @@ export function Sidebar() {
     href === "/dashboard" ? pathname === href : pathname?.startsWith(href);
 
   const renderLinks = (routes: typeof mainRoutes) =>
-    routes.map((route) => (
+    routes.filter((route) => !HIDDEN_BY_FLAG.has(route.href)).map((route) => (
       <Link
         key={route.href}
         href={route.href}
