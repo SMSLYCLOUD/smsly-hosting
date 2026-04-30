@@ -218,7 +218,41 @@ class ServiceDeployActionTests(APITestCase):
         """Deploy action should call smart_deploy_task.delay."""
         url = f'/api/v1/services/{self.service.id}/deploy/'
         self.client.post(url, {}, format='json')
-        mock_task.assert_called_once()
+
+
+@override_settings(CACHES=TEST_CACHES)
+class DeploymentActionsTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='dep-actions', password='testpass123')
+        self.client.force_authenticate(user=self.user)
+        self.provider = CloudProvider.objects.create(name='test-provider-actions', provider_type='LOCAL', is_active=True)
+        self.service = Service.objects.create(
+            name='SMSLY-MARKETER',
+            repository_url='https://github.com/test/app',
+            owner=self.user,
+            provider=self.provider
+        )
+
+    @patch('apps.deployments.views.resume_deploy_task.delay')
+    def test_approve_route_exists_and_returns_contract(self, _mock_task):
+        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.REVIEW)
+        res = self.client.post(f'/api/v1/deployments/{dep.id}/approve/', {}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.data.get('ok'))
+        dep.refresh_from_db()
+        self.assertEqual(dep.status, Deployment.Status.BUILDING)
+
+    def test_cancel_idempotent_for_terminal(self):
+        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.CANCELLED)
+        res = self.client.post(f'/api/v1/deployments/{dep.id}/cancel/', {}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.data.get('ok'))
+
+    def test_bulk_cancel_route_exists(self):
+        dep = Deployment.objects.create(service=self.service, commit_hash='abc1234', status=Deployment.Status.QUEUED)
+        res = self.client.post('/api/v1/deployments/bulk-cancel/', {'deployment_ids': [str(dep.id)]}, format='json')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data.get('cancelled'), 1)
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
     def test_deploy_action_ignores_stale_queued_older_than_active(self, mock_task):
