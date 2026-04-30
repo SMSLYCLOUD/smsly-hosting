@@ -5,7 +5,7 @@ import Image from 'next/image';
 
 import { Button } from '@/components/ui/button';
 import { Footer } from '@/components/layout/Footer';
-import { SpaceOpsBackground } from '@/components/effects/SpaceOpsBackground';
+import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
     ArrowRight,
     Zap,
@@ -222,8 +222,8 @@ const battleCards = [
         name: "CloudNeuron",
         logo: Cloud,
         description: "The Sovereign PaaS",
-        price: "$5/mo",
-        priceDetail: "Self hosted flat rate",
+        price: "$0",
+        priceDetail: "Open Source & Free",
         features: ["Multi Cloud Deployment", "Zero Vendor Lock in", "Observability", "100% Open Source"],
         color: "bg-emerald-500",
         textColor: "text-emerald-500",
@@ -356,7 +356,7 @@ export default function Home() {
 
                 {/* Cloud Animation */}
                 <div className="absolute inset-0 z-0 opacity-60 dark:opacity-40 pointer-events-none">
-                    <SpaceOpsBackground />
+                    <CloudHeroAnimation />
                 </div>
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
@@ -414,8 +414,8 @@ export default function Home() {
                         transition={{ delay: 0.5 }}
                         className="mt-12 flex flex-col sm:flex-row flex-wrap justify-center gap-x-8 gap-y-3 text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400"
                     >
-                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> No credit card required</span>
-                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> $100 free credit</span>
+                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Free Forever</span>
+                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> 100% Open Source</span>
                         <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> SOC2 Type II Compliant</span>
                     </motion.div>
                 </div>

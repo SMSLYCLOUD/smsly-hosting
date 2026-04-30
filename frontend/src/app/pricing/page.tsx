@@ -7,24 +7,24 @@ import { billingApi, PricingPlan } from '@/lib/api';
 
 const faqs = [
   {
-    q: 'Can I switch plans at any time?',
-    a: 'Yes. Upgrade instantly, downgrade at the end of your billing cycle. No lock-in contracts.',
+    q: 'Is CloudNeuron really free?',
+    a: 'Yes. CloudNeuron is 100% open source and free to use. You deploy it on your own infrastructure — you only pay your cloud provider for the server itself.',
   },
   {
     q: 'What counts as a "server"?',
-    a: 'A server is any VPS, dedicated server, or cloud instance where you install the SMSLY agent. Each server needs its own license.',
+    a: 'A server is any VPS, dedicated server, or cloud instance where you install CloudNeuron. There are no limits on how many servers you can manage.',
   },
   {
-    q: 'Is there a free trial for paid plans?',
-    a: 'Yes. Pro and Team plans include a 14-day free trial with full access to all features. No credit card required.',
+    q: 'Is there a catch? What about paid plans?',
+    a: 'No catch. Every feature is included for free. We may offer optional managed hosting and enterprise support in the future, but the core platform will always be free and open source.',
   },
   {
     q: 'What happens if I exceed my application limit?',
-    a: 'On the Community plan, you\'ll be prompted to upgrade. We never delete your applications — you just won\'t be able to create new ones.',
+    a: 'There are no artificial application limits. Deploy as many applications as your server hardware can handle.',
   },
   {
-    q: 'Do you offer discounts for annual billing?',
-    a: 'Yes. Annual billing saves 20% compared to monthly. Contact sales for custom enterprise pricing.',
+    q: 'Can I contribute to the project?',
+    a: 'Absolutely! CloudNeuron is open source and we welcome contributions. Check out our GitHub repository to get started.',
   },
 ];
 
@@ -72,10 +72,10 @@ export default function PricingPage() {
             Simple, transparent pricing
           </div>
           <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 dark:text-white mb-6">
-            Start Free. Scale as You Grow.
+            100% Open Source. 100% Free.
           </h1>
           <p className="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-            No surprises. No hidden fees. Every plan includes core deployment features.
+            No surprises. No hidden fees. CloudNeuron is fully open source — deploy on your own infrastructure, forever free.
           </p>
 
           {/* Billing Toggle */}

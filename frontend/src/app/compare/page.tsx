@@ -26,8 +26,8 @@ const battleCards = [
         name: "CloudNeuron",
         logo: Cloud,
         type: "Sovereign PaaS",
-        price: "$5/mo",
-        priceDetail: "Flat VPS Cost",
+        price: "$0",
+        priceDetail: "Open Source & Free",
         description: "Your infrastructure, your rules. Zero markup on compute.",
         features: [
             "Self-Hosted (AWS, Hetzner, etc.)",

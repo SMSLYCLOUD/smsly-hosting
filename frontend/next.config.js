@@ -48,11 +48,6 @@ const nextConfig = {
       },
     ]
   },
-  modularizeImports: {
-    'lucide-react': {
-      transform: 'lucide-react/icons/{{member}}',
-    },
-  },
 }
 
 module.exports = nextConfig
