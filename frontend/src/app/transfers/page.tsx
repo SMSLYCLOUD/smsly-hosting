@@ -99,8 +99,6 @@ export default function TransfersPage() {
         const sourceServerId = e.dataTransfer.getData('sourceServerId');
 
         if (!itemId || sourceServerId === targetServerId) return;
-        if (transferDisabled) { toast.error(featureDisabledReason.transfers); return; }
-        if (transferBlockedNoTarget) { toast.error('Transfer requires at least one connected target server.'); return; }
 
         if (sourceServerId !== 'local') {
             toast.error("Transfers must originate from the Local Server.");
@@ -144,7 +142,7 @@ export default function TransfersPage() {
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
         } catch (error: any) {
             console.error("Transfer failed", error);
-            toast.error(parseApiError(error));
+            toast.error(error.response?.data?.error || "Transfer request failed");
 
             // Revert UI on failure
             setGroupedServices(prev => {
@@ -178,11 +176,6 @@ export default function TransfersPage() {
                 <p className="text-gray-500 text-sm">
                     Drag and drop services between connected servers to seamlessly migrate data and traffic.
                 </p>
-                {(transferDisabled || transferBlockedNoTarget) && (
-                  <div className="mt-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                    {transferDisabled ? featureDisabledReason.transfers : 'Transfers disabled: connect at least one remote server first.'}
-                  </div>
-                )}
             </div>
 
             {loading ? (
