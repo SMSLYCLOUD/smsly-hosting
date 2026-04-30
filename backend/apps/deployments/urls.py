@@ -75,8 +75,11 @@ services_router.register(r'backups', ServiceBackupViewSet, basename='service-bac
 
 # ── CRITICAL: Explicit Addon Actions (must be before router.urls to avoid 404 shadowing)
 urlpatterns = [
+    path('deployments/trigger/', DeploymentViewSet.as_view({'post': 'trigger'}), name='deployment-trigger'),
+    path('deployments/upload/', DeploymentViewSet.as_view({'post': 'upload_source'}), name='deployment-upload'),
     path('addons/<uuid:pk>/toggle_bucket_public/', AddonViewSet.as_view({'post': 'toggle_bucket_public'}), name='addon-toggle-bucket-public-direct'),
 ] + router.urls + [
+
     path('templates/', TemplateViewSet.as_view({'get': 'list'}), name='template-list'),
     path('templates/<str:pk>/', TemplateViewSet.as_view({'get': 'retrieve'}), name='template-detail'),
     path(
