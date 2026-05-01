@@ -265,27 +265,66 @@ class TopologyViewSet(viewsets.GenericViewSet):
         except Exception as e:
             logger.debug("Tunnels not available for topology: %s", e)
 
-        # ── Inter-service dependencies from env vars ─────────────────
+        # ── Inter-service dependencies from env vars + Mesh IPs ─────────────────
+        from apps.deployments.models_mesh import WireGuardPeer
+
         for service in user_services:
             svc_id = str(service.id)
             for var in service.env_vars.all():
                 val = var.value or ''
+                if not val:
+                    continue
+
                 for other in user_services:
                     if other.id == service.id:
                         continue
-                    if re.search(
-                        rf'https?://{re.escape(other.name)}',
-                        val, re.IGNORECASE
-                    ):
+                    
+                    is_match = False
+                    match_type = "API"
+                    evidence = ""
+
+                    # 1. Match by Service Name (Standard Heuristic)
+                    if re.search(rf'https?://{re.escape(other.name)}', val, re.IGNORECASE):
+                        is_match = True
+                        match_type = "API"
+                        evidence = f"Name match: {other.name}"
+
+                    # 2. Match by Mesh IP (10.10.0.x)
+                    if not is_match:
+                        # Find other's mesh IP if exists
+                        other_peer = WireGuardPeer.objects.filter(
+                            server=other.server, is_active=True
+                        ).first()
+                        if other_peer and other_peer.wg_address in val:
+                            is_match = True
+                            match_type = "MESH"
+                            evidence = f"Mesh IP match: {other_peer.wg_address}"
+
+                    # 3. Match by Private IP (AWS Internal)
+                    if not is_match and getattr(other.server, 'private_ip', None):
+                        if other.server.private_ip in val:
+                            is_match = True
+                            match_type = "INTERNAL"
+                            evidence = f"Private IP match: {other.server.private_ip}"
+
+                    # 4. Match by Public Domain
+                    if not is_match and other.public_domain:
+                        if other.public_domain in val:
+                            is_match = True
+                            match_type = "EXTERNAL"
+                            evidence = f"Domain match: {other.public_domain}"
+
+                    if is_match:
                         edges.append({
                             'id': _edge_id(),
                             'source': svc_id,
                             'target': str(other.id),
-                            'type': 'API',
+                            'type': match_type,
                             'label': var.key,
                             'data': {
-                                'protocol': 'HTTP',
-                                'evidence': f"{var.key}={val[:50]}",
+                                'protocol': 'HTTP/Mesh',
+                                'evidence': evidence,
+                                'var_key': var.key,
                             },
                         })
 

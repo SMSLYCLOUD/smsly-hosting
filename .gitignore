@@ -89,10 +89,17 @@ celerybeat.pid
 test_db.sqlite3
 
 # Internal dev docs (not for repo)
-CRITICAL_FINDINGS_AND_UI_PROPOSAL.md
-PROPOSAL_UI_MATURITY.md
 target/
 *.tmp
 *.bak
 playwright-report/
 test-results/
+.credentials
+.instance_id
+audit_reports/
+.agent/
+.jules/
+tmp/
+*.sqlite3
+logs/
+*.log

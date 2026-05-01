@@ -359,12 +359,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
         instance.status = Service.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
 
-        AuditLog(
+        from .utils import log_event
+        log_event(
             actor=self.request.user.get_username(),
             action='SERVICE_DELETE_REQUESTED',
             target=f'Service: {instance.name}',
-            metadata={'service_id': str(instance.id), 'service_name': instance.name},
-        ).save()
+            metadata={
+                'service_id': str(instance.id),
+                'service_name': instance.name,
+                'user_id': str(self.request.user.id),
+                'ip': self.request.META.get('REMOTE_ADDR'),
+            },
+        )
 
         delete_service_task.delay(str(instance.id))
         self._sync_caddy()

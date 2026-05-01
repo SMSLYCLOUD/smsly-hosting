@@ -14,6 +14,29 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def log_event(action: str, target: str = 'none', actor: str = 'system', metadata: dict = None):
+    """
+    Exhaustive Audit Logging helper.
+    Ensures consistent detailed event capture across the platform.
+    """
+    from apps.deployments.models_audit import AuditLog
+    try:
+        # Standardise metadata with common fields if not present
+        meta = metadata or {}
+        if 'timestamp' not in meta:
+            meta['timestamp'] = timezone.now().isoformat()
+            
+        return AuditLog.objects.create(
+            actor=actor,
+            action=action,
+            target=target,
+            metadata=meta
+        )
+    except Exception as e:
+        logger.error(f"AuditLog creation failed: {e}")
+        return None
+
+
 # ── Resource size heuristics (by dependency weight) ─────────────────────
 # Maps heavy Python packages to recommended minimum resources.
 _HEAVY_DEPS = {

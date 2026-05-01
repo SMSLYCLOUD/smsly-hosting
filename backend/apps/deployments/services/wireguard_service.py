@@ -11,6 +11,7 @@ import shlex
 import textwrap
 
 from django.utils import timezone
+from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +134,25 @@ class WireGuardService:
         private_key, public_key = cls.generate_keypair()
         wg_address = mesh.next_available_ip()
 
-        # Build endpoint
+        # Build endpoint (Prefer Private IP for AWS/Internal if same VPC)
         endpoint = ""
         if server:
-            endpoint = f"{server.host}:{mesh.listen_port}"
+            # Check if we should use private_ip (e.g. same VPC or provider)
+            # Default to private_ip if available for better AWS performance
+            if server.private_ip:
+                endpoint = f"{server.private_ip}:{mesh.listen_port}"
+                log_event(
+                    action="MESH_ENDPOINT_SELECTION",
+                    target=f"Server: {server.name}",
+                    metadata={"selected": "private", "ip": server.private_ip, "reason": "AWS/Internal Optimization"}
+                )
+            else:
+                endpoint = f"{server.host}:{mesh.listen_port}"
+                log_event(
+                    action="MESH_ENDPOINT_SELECTION",
+                    target=f"Server: {server.name}",
+                    metadata={"selected": "public", "ip": server.host, "reason": "No Private IP available"}
+                )
         elif is_local:
             # For local server, try to detect public IP
             endpoint = cls._detect_local_endpoint(mesh.listen_port)
@@ -312,9 +328,19 @@ class WireGuardService:
             try:
                 cls.deploy_config(peer)
                 results["success"].append(str(peer))
+                log_event(
+                    action="MESH_DEPLOY_SUCCESS",
+                    target=f"Peer: {peer.wg_address}",
+                    metadata={"peer": str(peer), "mesh": mesh.name, "is_local": peer.is_local}
+                )
             except Exception as e:
                 logger.error(f"Failed to deploy to {peer}: {e}")
                 results["failed"].append({"peer": str(peer), "error": str(e)})
+                log_event(
+                    action="MESH_DEPLOY_FAILED",
+                    target=f"Peer: {peer.wg_address}",
+                    metadata={"peer": str(peer), "error": str(e), "mesh": mesh.name}
+                )
 
         return results
 
@@ -353,6 +379,17 @@ class WireGuardService:
                     "latency_ms": None,
                     "status": f"UNREACHABLE: {e}",
                 })
+                # Exhaustive Logging: Log the health failure
+                log_event(
+                    action="MESH_PEER_UNREACHABLE",
+                    target=f"Peer: {peer.wg_address}",
+                    metadata={
+                        "peer": str(peer),
+                        "endpoint": peer.endpoint,
+                        "error": str(e),
+                        "mesh": mesh.name
+                    }
+                )
 
         return {"peers": results}
 

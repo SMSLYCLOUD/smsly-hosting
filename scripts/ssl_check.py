@@ -1,8 +1,15 @@
+import os
 import paramiko
 
 c = paramiko.SSHClient()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-c.connect('163.245.216.249', username='root', password='agbonsalo', timeout=10)
+# Use environment variable for password
+VPS_PASSWORD = os.getenv('VPS_PASSWORD', '')
+if not VPS_PASSWORD:
+    print("Error: VPS_PASSWORD environment variable not set")
+    exit(1)
+
+c.connect('163.245.216.249', username='root', password=VPS_PASSWORD, timeout=10)
 
 cmds = [
     # Check all container status

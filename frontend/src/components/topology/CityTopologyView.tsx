@@ -459,6 +459,39 @@ export function CityTopologyView() {
     const particles = new THREE.Points(particleGeo, particleMat);
     scene.add(particles);
 
+    // Traffic System (Moving cars/swings)
+    const trafficGroup = new THREE.Group();
+    scene.add(trafficGroup);
+    
+    const trafficCount = layout.bridges.length * 3; // 3 cars per bridge
+    const trafficCars: Array<{ mesh: THREE.Mesh; curve: THREE.QuadraticBezierCurve3; speed: number; offset: number }> = [];
+    
+    const carGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    layout.bridges.forEach((bridge, bIdx) => {
+      // Recreate the curve for the traffic to follow
+      const curve = new THREE.QuadraticBezierCurve3(bridge.from, 
+        new THREE.Vector3().lerpVectors(bridge.from, bridge.to, 0.5).add(new THREE.Vector3(0, Math.max(bridge.from.y, bridge.to.y) * 0.8 + 1.5 - Math.max(bridge.from.y, bridge.to.y), 0)), 
+        bridge.to
+      );
+      
+      const color = bridge.type === 'STORAGE' ? 0xf59e0b : 0x60a5fa;
+      
+      for (let i = 0; i < 2; i++) {
+        const carMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+        const car = new THREE.Mesh(carGeo, carMat);
+        const carLight = new THREE.PointLight(color, 1, 2);
+        car.add(carLight);
+        
+        trafficGroup.add(car);
+        trafficCars.push({
+          mesh: car,
+          curve,
+          speed: 0.1 + Math.random() * 0.2,
+          offset: Math.random()
+        });
+      }
+    });
+
     // Animation loop
     let time = 0;
     const animate = () => {
@@ -476,6 +509,19 @@ export function CityTopologyView() {
             obj.material.opacity = 0.3 + Math.sin(time * 4) * 0.3;
           }
         }
+      });
+
+      // Update traffic
+      trafficCars.forEach(car => {
+        car.offset += 0.002 * car.speed * 10;
+        if (car.offset > 1) car.offset = 0;
+        
+        const pos = car.curve.getPoint(car.offset);
+        car.mesh.position.copy(pos);
+        
+        // Fading at the ends
+        const fade = Math.sin(car.offset * Math.PI);
+        (car.mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.8;
       });
 
       renderer.render(scene, camera);
