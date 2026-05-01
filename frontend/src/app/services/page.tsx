@@ -50,6 +50,7 @@ export default function ServicesPage() {
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
     { id: 'GALAXY', label: 'Galaxy', icon: Orbit },
     { id: 'RADAR', label: 'Radar', icon: Radar },
+    { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
 
   const fetchData = useCallback(async () => {
@@ -127,6 +128,8 @@ export default function ServicesPage() {
     };
   }, [fetchData, viewMode]);
 
+  const primaryServices = services.filter(s => !(s as any).isAddon);
+
   return (
     <main className="h-screen min-h-0 flex flex-col premium-bg transition-colors duration-500">
 
@@ -135,7 +138,7 @@ export default function ServicesPage() {
         <div className="mx-auto grid w-full max-w-[1440px] grid-cols-1 gap-3 px-4 py-3 md:grid-cols-[1fr_auto_1fr] md:items-center">
           <div className="flex items-center justify-center gap-2 md:justify-start">
             <span className="rounded-full border border-zinc-700/70 bg-zinc-900/70 px-3 py-1 text-[11px] font-medium text-zinc-300">
-              {services.length} service{services.length === 1 ? '' : 's'}
+               {viewMode === 'ADDONS' ? services.length - primaryServices.length : primaryServices.length} {viewMode === 'ADDONS' ? 'addon' : 'service'}{(viewMode === 'ADDONS' ? (services.length - primaryServices.length) : primaryServices.length) === 1 ? '' : 's'}
             </span>
             <span className="hidden text-[11px] text-zinc-500 lg:inline">
               Auto-refresh every {Math.max(1, Math.round(pollIntervalMs / 1000))}s
@@ -208,17 +211,22 @@ export default function ServicesPage() {
       >
         {viewMode === 'GALAXY' && (
             <div className="h-full min-h-0">
-                <ServiceCanvas services={services} />
+                <ServiceCanvas services={primaryServices} />
             </div>
         )}
         {viewMode === 'GRID' && (
             <div className="h-full overflow-y-auto">
-                <ServicesGrid services={services} />
+                <ServicesGrid services={primaryServices} />
             </div>
         )}
         {viewMode === 'RADAR' && (
             <div className="h-full min-h-0">
-                <FleetRadar services={services} />
+                <FleetRadar services={primaryServices} />
+            </div>
+        )}
+        {viewMode === 'ADDONS' && (
+            <div className="h-full overflow-y-auto scrollbar-hide">
+                <AddonsTab />
             </div>
         )}
       </motion.div>

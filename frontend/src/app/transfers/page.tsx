@@ -40,26 +40,47 @@ export default function TransfersPage() {
                 const addonsData = addonsRes;
                 setAddons(addonsData);
 
+                // Group addons by parent service ID
+                const addonsByService: Record<string, any[]> = {};
+                addonsData.forEach((addon: any) => {
+                    const sId = addon.service;
+                    if (sId) {
+                        if (!addonsByService[sId]) addonsByService[sId] = [];
+                        addonsByService[sId].push(addon);
+                    }
+                });
+
                 // Group by server
                 const grouped: Record<string, any[]> = {};
-                // Initialize with all servers including local node
-                grouped['local'] = []; // Assume local has id 'local' or we use empty for default
+                grouped['local'] = [];
                 serversData.forEach((srv: any) => {
                     grouped[srv.id] = [];
                 });
 
-                // Add services
+                const linkedAddonIds = new Set();
+
+                // Add services with their linked addons
                 servicesData.forEach((srv: any) => {
                     const serverId = srv.server || 'local';
                     if (!grouped[serverId]) grouped[serverId] = [];
-                    grouped[serverId].push({ ...srv, type: 'service' });
+                    
+                    const linkedAddons = addonsByService[srv.id] || [];
+                    linkedAddons.forEach(a => linkedAddonIds.add(a.id));
+
+                    grouped[serverId].push({ 
+                        ...srv, 
+                        type: 'service',
+                        addons: linkedAddons 
+                    });
                 });
 
-                // Add addons
+                // Add orphan addons (not linked to any service)
                 addonsData.forEach((addon: any) => {
-                    const serverId = addon.server || 'local';
-                    if (!grouped[serverId]) grouped[serverId] = [];
-                    grouped[serverId].push({ ...addon, type: 'addon' });
+                    if (!linkedAddonIds.has(addon.id)) {
+                        const serverId = addon.server || 'local';
+                        if (!grouped[serverId]) grouped[serverId] = [];
+                        grouped[serverId].push({ ...addon, type: 'addon', addons: [] });
+                    }
                 });
 
                 setGroupedServices(grouped);
@@ -142,7 +163,11 @@ export default function TransfersPage() {
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
         } catch (error: any) {
             console.error("Transfer failed", error);
-            toast.error(error.response?.data?.error || "Transfer request failed");
+            const errorMsg = error.response?.data?.error || 
+                           (error.response?.data && typeof error.response.data === 'object' 
+                                ? Object.values(error.response.data).join(', ') 
+                                : "Transfer request failed");
+            toast.error(errorMsg);
 
             // Revert UI on failure
             setGroupedServices(prev => {
@@ -364,6 +389,11 @@ function ServerColumn({
                                         }`}>
                                             {item.type}
                                         </span>
+                                        {item.addons?.length > 0 && (
+                                            <span className="text-[9px] font-bold text-blue-400 uppercase tracking-tight">
+                                                + {item.addons.length} Addons
+                                            </span>
+                                        )}
                                         {item.is_public && (
                                             <span className="text-[9px] text-zinc-500">Public</span>
                                         )}
@@ -371,8 +401,23 @@ function ServerColumn({
                                 </div>
                             </div>
                             
+                            {item.addons?.length > 0 && (
+                                <div className="flex -space-x-1.5 ml-2 overflow-hidden">
+                                    {item.addons.slice(0, 3).map((a: any) => (
+                                        <div key={a.id} className="w-5 h-5 rounded-md bg-zinc-800 border border-zinc-700 flex items-center justify-center shadow-lg" title={a.name}>
+                                            <Database className="w-2.5 h-2.5 text-blue-500" />
+                                        </div>
+                                    ))}
+                                    {item.addons.length > 3 && (
+                                        <div className="w-5 h-5 rounded-md bg-zinc-900 border border-zinc-800 flex items-center justify-center text-[8px] font-bold text-zinc-500">
+                                            +{item.addons.length - 3}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             {isLocal && (
-                                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="opacity-0 group-hover:opacity-100 transition-opacity ml-2 shrink-0">
                                     <Orbit className="w-4 h-4 text-emerald-500 animate-spin-slow" />
                                 </div>
                             )}
