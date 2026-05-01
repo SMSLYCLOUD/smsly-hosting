@@ -498,10 +498,16 @@ export default function NewServicePage() {
                         )}
                         onClick={() => setSelectedTemplate(t.slug || t.id)}
                       >
-                        <span className="text-2xl">{t.icon || '📦'}</span>
-                        <div>
-                          <p className="font-medium">{t.name}</p>
-                          <p className="text-xs text-muted-foreground">{t.description || t.framework || 'Template'}</p>
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900/50 border border-zinc-800">
+                          {t.icon?.startsWith('http') ? (
+                            <img src={t.icon} alt={t.name} className="h-6 w-6 object-contain" />
+                          ) : (
+                            <span className="text-xl">{t.icon || '📦'}</span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium truncate">{t.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{t.description || t.framework || 'Template'}</p>
                         </div>
                       </div>
                     )) : (

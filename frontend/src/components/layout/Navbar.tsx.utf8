@@ -104,44 +104,27 @@ export function Navbar() {
     { href: '/deployments', label: 'Deployments', icon: Rocket, tier: 'primary' },
     { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
     { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
+    
+    // INFRA (Secondary)
     { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
     { href: '/autoscaler', label: 'Autoscaler', icon: Gauge, tier: 'secondary' },
     { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
     { href: '/replication', label: 'Replication', icon: GitCompare, tier: 'secondary' },
     { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
     { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
+    
+    // TOOLS (Tertiary)
     { href: '/activity', label: 'Activity', icon: Activity, tier: 'tertiary' },
     { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
     { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
-    { href: '/databases', label: 'Databases', icon: FileCode, tier: 'tertiary' },
-    { href: '/addons', label: 'Addons', icon: FileCode, tier: 'tertiary' },
-    { href: '/domains', label: 'Domains', icon: FileCode, tier: 'tertiary' },
-    { href: '/api-keys', label: 'API Keys', icon: Settings, tier: 'tertiary' },
-    { href: '/audit-logs', label: 'Audit Logs', icon: Settings, tier: 'tertiary' },
-    { href: '/env-vars', label: 'Env Vars', icon: Settings, tier: 'tertiary' },
-    { href: '/restore', label: 'Restore', icon: Archive, tier: 'tertiary' },
-    { href: '/rollbacks', label: 'Rollbacks', icon: Archive, tier: 'tertiary' },
-    { href: '/logs', label: 'Logs', icon: Archive, tier: 'tertiary' },
-    { href: '/monitoring', label: 'Monitoring', icon: Archive, tier: 'tertiary' },
-    { href: '/status', label: 'System Status', icon: Activity, tier: 'tertiary' },
+    { href: '/backups', label: 'Backups', icon: Archive, tier: 'tertiary' },
+    { href: '/admin-dashboard/users', label: 'Admin', icon: Shield, tier: 'tertiary' },
   ];
 
-  if (user?.is_staff) {
-    authLinks.push({ href: '/backups', label: 'Backups', icon: Archive, tier: 'tertiary' });
-    authLinks.push({ href: '/admin-dashboard/users', label: 'Admin', icon: Shield, tier: 'tertiary' });
-  }
-
-  const hiddenByFlag = new Set<string>([
-    ...(featureFlags.autoscaler ? [] : ['/autoscaler']),
-    ...(featureFlags.replication ? [] : ['/replication']),
-    ...(featureFlags.tunnels ? [] : ['/tunnels']),
-    ...(featureFlags.vpnMesh ? [] : ['/network']),
-    ...(featureFlags.functions ? [] : ['/functions']),
-    ...(featureFlags.transfers ? [] : ['/transfers']),
-  ]);
+  const hiddenByFlag = new Set<string>([]);
 
   const showAll = shouldShowAllNav();
   const visibleAuthLinks = authLinks.filter((link) => showAll || !hiddenByFlag.has(link.href));

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare } from 'lucide-react';
+import { Database, LayoutTemplate, Box, Server, CheckCircle2, ServerCog, MessagesSquare, Orbit } from 'lucide-react';
 import { toast } from 'sonner';
 import { featureFlags, featureDisabledReason } from '@/lib/featureFlags';
 import { shouldShowAllNav } from '@/lib/nav-visibility';
@@ -161,76 +161,124 @@ export default function TransfersPage() {
     };
 
     const renderItemIcon = (type: string, itemType: string) => {
-        if (itemType === 'addon') return <Database className="w-4 h-4 text-gray-500" />;
-        if (type === 'template') return <LayoutTemplate className="w-4 h-4 text-gray-500" />;
-        return <Box className="w-4 h-4 text-gray-500" />;
+        if (itemType === 'addon') return <Database className="w-4 h-4 text-blue-500" />;
+        if (type === 'template') return <LayoutTemplate className="w-4 h-4 text-emerald-500" />;
+        return <Box className="w-4 h-4 text-emerald-500" />;
     };
 
     // ─────────────────────────────────────────────────────────────────
     // Render
     // ─────────────────────────────────────────────────────────────────
     return (
-        <div className="max-w-6xl mx-auto space-y-8 p-6">
-            <div>
-                <h1 className="text-2xl font-bold text-gray-900 mb-2">Server Transfers</h1>
-                <p className="text-gray-500 text-sm">
-                    Drag and drop services between connected servers to seamlessly migrate data and traffic.
-                </p>
+        <main className="h-screen min-h-0 flex flex-col premium-bg transition-colors duration-500 overflow-hidden">
+            {/* Top Bar */}
+            <div className="z-20 border-b border-zinc-800/60 bg-[#070a12]/85 backdrop-blur-xl">
+                <div className="mx-auto w-full max-w-[1440px] px-6 py-4 flex items-center justify-between">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                            <h1 className="text-xl font-bold tracking-tight text-white">CloudNeuron Transfer Hub</h1>
+                            <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                                Live Migration
+                            </span>
+                        </div>
+                        <p className="text-xs text-zinc-400">
+                            Orchestrate seamless workload migration between your nodes via secure P2P channels.
+                        </p>
+                    </div>
+                    
+                    <div className="flex items-center gap-3">
+                        <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900/50 border border-zinc-800">
+                            <Server className="w-3.5 h-3.5 text-zinc-500" />
+                            <span className="text-[11px] font-medium text-zinc-400">Connected Nodes: {servers.length + 1}</span>
+                        </div>
+                        <Button 
+                            variant="outline" 
+                            size="sm"
+                            className="h-8 rounded-full border-zinc-700 bg-zinc-900/80 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
+                            onClick={() => window.location.reload()}
+                        >
+                            Refresh Fleet
+                        </Button>
+                    </div>
+                </div>
             </div>
 
-            {loading ? (
-                <div className="flex justify-center items-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                </div>
-            ) : (
-                <div className="flex gap-6 relative">
-                    {/* Left/Main Column - Servers map */}
-                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Always show local server */}
-                        <ServerColumn
-                            id="local"
-                            name="Local Server (This Node)"
-                            items={groupedServices['local'] || []}
-                            isLocal={true}
-                            onDragStart={handleDragStart}
-                            onDragOver={handleDragOver}
-                            onDrop={handleDrop}
-                            renderItemIcon={renderItemIcon}
-                        />
-
-                        {/* Connected Servers */}
-                        {servers.map(server => (
-                            <ServerColumn
-                                key={server.id}
-                                id={server.id}
-                                name={server.name}
-                                items={groupedServices[server.id] || []}
-                                isLocal={false}
-                                onDragStart={handleDragStart}
-                                onDragOver={handleDragOver}
-                                onDrop={handleDrop}
-                                renderItemIcon={renderItemIcon}
-                            />
-                        ))}
+            {/* Main Content Area */}
+            <div className="relative flex-1 min-h-0 overflow-hidden bg-dot-pattern p-6">
+                {loading ? (
+                    <div className="flex flex-col items-center justify-center h-full gap-4">
+                        <div className="h-10 w-10 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent shadow-[0_0_15px_rgba(16,185,129,0.3)]"></div>
+                        <p className="text-sm font-medium text-emerald-500/80 animate-pulse">Scanning Neural Mesh...</p>
                     </div>
+                ) : (
+                    <div className="h-full flex gap-6 max-w-[1600px] mx-auto">
+                        {/* Server Grid */}
+                        <div className="flex-1 overflow-x-auto">
+                            <div className="inline-flex gap-6 h-full min-w-full pb-4">
+                                {/* Local Server */}
+                                <ServerColumn
+                                    id="local"
+                                    name="Primary Node (Local)"
+                                    items={groupedServices['local'] || []}
+                                    isLocal={true}
+                                    onDragStart={handleDragStart}
+                                    onDragOver={handleDragOver}
+                                    onDrop={handleDrop}
+                                    renderItemIcon={renderItemIcon}
+                                />
 
-                    {/* Right Sidebar - Status */}
-                    <div className="w-80 space-y-6">
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-900 mb-4">Active Transfers</h3>
-                            <div className="bg-gray-50 rounded-xl p-8 border border-gray-100 flex flex-col items-center justify-center text-center">
-                                <p className="text-sm text-gray-500">No active transfers.</p>
+                                {/* Remote Servers */}
+                                {servers.map(server => (
+                                    <ServerColumn
+                                        key={server.id}
+                                        id={server.id}
+                                        name={server.name}
+                                        items={groupedServices[server.id] || []}
+                                        isLocal={false}
+                                        onDragStart={handleDragStart}
+                                        onDragOver={handleDragOver}
+                                        onDrop={handleDrop}
+                                        renderItemIcon={renderItemIcon}
+                                    />
+                                ))}
                             </div>
                         </div>
 
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-900 mb-4">History</h3>
-                            <p className="text-sm text-gray-500">No past transfers.</p>
+                        {/* Status Sidebar */}
+                        <div className="w-80 flex flex-col gap-6 shrink-0">
+                            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-md p-5 shadow-2xl">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <MessagesSquare className="w-4 h-4 text-emerald-400" />
+                                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Active Stream</h3>
+                                </div>
+                                <div className="rounded-xl border border-dashed border-zinc-800 bg-black/20 p-8 flex flex-col items-center justify-center text-center">
+                                    <p className="text-xs text-zinc-500 italic">Static. No active neural transfers detected.</p>
+                                </div>
+                            </div>
+
+                            <div className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-md p-5 flex flex-col shadow-2xl overflow-hidden">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <ServerCog className="w-4 h-4 text-zinc-500" />
+                                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">Telemetry Log</h3>
+                                </div>
+                                <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
+                                    <div className="p-3 rounded-lg bg-black/30 border border-zinc-800/50">
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="text-[10px] font-bold text-zinc-600 uppercase">System Ready</span>
+                                            <span className="text-[9px] text-zinc-700">Just now</span>
+                                        </div>
+                                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                                            Transfer Hub initialized. Secure tunnels are open and verified.
+                                        </p>
+                                    </div>
+                                    <p className="text-center py-10 text-[10px] text-zinc-600 font-medium">End of telemetry stream.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )}
+            </div>
+        </main>
     );
 }
 
@@ -243,28 +291,50 @@ function ServerColumn({
 }: any) {
     return (
         <div
-            className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col min-h-[400px]"
+            className={`flex flex-col w-[360px] h-full rounded-2xl border backdrop-blur-md shadow-2xl transition-all duration-300 ${
+                isLocal 
+                ? "bg-emerald-950/10 border-emerald-500/20 shadow-emerald-900/5" 
+                : "bg-zinc-900/40 border-zinc-800"
+            }`}
             onDragOver={onDragOver}
             onDrop={(e) => onDrop(e, id)}
         >
             {/* Header */}
-            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                <div className="flex items-center gap-2">
-                    <Server className="w-5 h-5 text-gray-500" />
-                    <h3 className="font-semibold text-gray-900">{name}</h3>
+            <div className={`px-5 py-4 border-b flex items-center justify-between rounded-t-2xl ${
+                isLocal ? "border-emerald-500/20 bg-emerald-500/5" : "border-zinc-800 bg-zinc-900/50"
+            }`}>
+                <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${isLocal ? "bg-emerald-500/20" : "bg-zinc-800"}`}>
+                        <Server className={`w-4 h-4 ${isLocal ? "text-emerald-400" : "text-zinc-400"}`} />
+                    </div>
+                    <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-white truncate">{name}</h3>
+                        <p className="text-[10px] text-zinc-500 font-medium uppercase tracking-tighter">
+                            {isLocal ? "Authoritative Source" : "Target Node"}
+                        </p>
+                    </div>
                 </div>
                 {isLocal ? (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase bg-emerald-100 text-emerald-700">Online</span>
+                    <div className="flex items-center gap-1.5">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </span>
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Live</span>
+                    </div>
                 ) : (
-                    <span className="w-4 h-1 rounded-full bg-gray-200" />
+                    <span className="text-[10px] font-bold text-zinc-600 uppercase">Ready</span>
                 )}
             </div>
 
             {/* Body */}
-            <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-gray-50/20">
+            <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-transparent custom-scrollbar">
                 {items.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-sm text-gray-400 italic">
-                        No services
+                    <div className="h-full flex flex-col items-center justify-center text-center gap-3 opacity-40">
+                        <div className="p-4 rounded-full border-2 border-dashed border-zinc-800">
+                           <Box className="w-8 h-8 text-zinc-700" />
+                        </div>
+                        <p className="text-xs text-zinc-500 font-medium italic">Empty Node</p>
                     </div>
                 ) : (
                     items.map((item: any) => (
@@ -272,21 +342,50 @@ function ServerColumn({
                             key={item.id}
                             draggable={isLocal}
                             onDragStart={(e) => isLocal ? onDragStart(e, item.id, item.type, id) : e.preventDefault()}
-                            className={`border rounded-lg p-4 flex items-center justify-between transition-all group ${
-                                isLocal ? "bg-gray-900 border-gray-800 text-white cursor-grab active:cursor-grabbing hover:border-gray-700 hover:shadow-md" : "bg-white border-gray-200 opacity-75 cursor-not-allowed"
+                            className={`group relative border rounded-xl p-4 flex items-center justify-between transition-all duration-300 ${
+                                isLocal 
+                                ? "bg-zinc-900/60 border-zinc-800 cursor-grab active:cursor-grabbing hover:border-emerald-500/40 hover:bg-zinc-800/80 hover:shadow-[0_0_20px_rgba(16,185,129,0.1)]" 
+                                : "bg-black/20 border-zinc-800/50 opacity-60 cursor-not-allowed"
                             }`}
                         >
-                            <div className="flex items-center gap-3">
-                                <div className={`p-1.5 rounded-md transition-colors ${isLocal ? 'bg-gray-800 group-hover:bg-gray-700' : 'bg-gray-50 group-hover:bg-gray-100'}`}>
-                                    {renderItemIcon(item.source_type, item.type, isLocal)}
+                            <div className="flex items-center gap-3.5">
+                                <div className={`p-2 rounded-lg transition-colors ${
+                                    isLocal ? 'bg-zinc-800 group-hover:bg-emerald-500/20' : 'bg-zinc-900'
+                                }`}>
+                                    {renderItemIcon(item.source_type, item.type)}
                                 </div>
-                                <div>
-                                    <p className={`text-sm font-medium ${isLocal ? 'text-white' : 'text-gray-900'}`}>{item.name}</p>
+                                <div className="min-w-0">
+                                    <p className={`text-sm font-bold truncate ${isLocal ? 'text-white' : 'text-zinc-400'}`}>
+                                        {item.name}
+                                    </p>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                        <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                            item.type === 'addon' ? 'bg-blue-500/10 text-blue-400' : 'bg-emerald-500/10 text-emerald-400'
+                                        }`}>
+                                            {item.type}
+                                        </span>
+                                        {item.is_public && (
+                                            <span className="text-[9px] text-zinc-500">Public</span>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                            <ServerCog className={`w-4 h-4 ${isLocal ? 'text-gray-400 group-hover:text-gray-300' : 'text-gray-200'}`} />
+                            
+                            {isLocal && (
+                                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Orbit className="w-4 h-4 text-emerald-500 animate-spin-slow" />
+                                </div>
+                            )}
                         </div>
                     ))
+                )}
+            </div>
+            
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-zinc-800/50 bg-black/10 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase">{items.length} Workloads</span>
+                {isLocal && (
+                    <p className="text-[9px] text-zinc-600 font-medium">DRAG TO MOVE</p>
                 )}
             </div>
         </div>

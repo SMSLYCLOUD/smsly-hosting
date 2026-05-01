@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { platformApi, servicesApi, Service } from '@/lib/api';
+import { platformApi, servicesApi, addonsApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { Plus, LayoutGrid, Radar, Puzzle, Orbit, Store } from 'lucide-react';
 
@@ -50,18 +50,26 @@ export default function ServicesPage() {
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
     { id: 'GALAXY', label: 'Galaxy', icon: Orbit },
     { id: 'RADAR', label: 'Radar', icon: Radar },
-    { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
 
   const fetchData = useCallback(async () => {
     try {
       const nextServices = await servicesApi.list();
-      const resources = await platformApi.resources().catch(() => null);
-      if (resources) setResourceData(resources);
-      const nextFingerprint = buildServiceFingerprint(nextServices);
+      const addons = await addonsApi.list().catch(() => []);
+      
+      // Transform addons into service-like objects for the grid
+      const addonServices = addons.map(a => ({
+        ...a,
+        isAddon: true,
+        health_status: a.status === 'ACTIVE' || a.status === 'RUNNING' ? 'healthy' : 'unhealthy'
+      })) as any;
+
+      const combined = [...nextServices, ...addonServices];
+      const nextFingerprint = buildServiceFingerprint(combined);
+      
       if (nextFingerprint !== fingerprintRef.current) {
         fingerprintRef.current = nextFingerprint;
-        setServices(nextServices);
+        setServices(combined);
       }
       consecutiveFailuresRef.current = 0;
       setFetchError(null);
@@ -87,7 +95,7 @@ export default function ServicesPage() {
     let cancelled = false;
 
     const getBaseInterval = () => (
-      viewMode === 'GRID' || viewMode === 'ADDONS' ? 5000 : 15000
+      viewMode === 'GRID' ? 5000 : 15000
     );
 
     const getNextInterval = () => {
@@ -211,11 +219,6 @@ export default function ServicesPage() {
         {viewMode === 'RADAR' && (
             <div className="h-full min-h-0">
                 <FleetRadar services={services} />
-            </div>
-        )}
-        {viewMode === 'ADDONS' && (
-            <div className="h-full overflow-y-auto p-6">
-                <AddonsTab />
             </div>
         )}
       </motion.div>
