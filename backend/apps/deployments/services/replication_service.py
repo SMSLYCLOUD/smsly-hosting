@@ -228,13 +228,17 @@ class ReplicationService:
             # 2. SSH check and system checks
             try:
                 # Check memory (>1GB) and disk (>2GB) and docker
+                # ALSO check if port 5432 is already taken (most common cause of Patroni failure)
                 script = """
                 free -m | awk '/^Mem:/ {if ($2 < 1000) exit 1}';
                 df -m /opt | awk 'NR==2 {if ($4 < 2000) exit 1}';
                 command -v docker >/dev/null 2>&1 || exit 1;
+                ss -tulpn | grep :5432 >/dev/null 2>&1 && exit 2 || exit 0;
                 """
                 WireGuardService._ssh_run(target_peer.server, script, timeout=10)
             except Exception as e:
+                if "exit 2" in str(e):
+                    raise RuntimeError(f"Port conflict detected: Port 5432 is already in use on {target_wg_address}. Patroni requires this port to be free.")
                 raise RuntimeError(f"System requirement check failed: Ensure target has >1GB RAM, >2GB Disk, and Docker installed. ({e})")
 
         # 3. Dry run config generation to catch template errors
@@ -326,10 +330,11 @@ class ReplicationService:
         # Spin up a docker-cli container locally via socket-proxy to deploy the stack
         # This keeps the backend itself stripped down while leveraging the host's 
         # actual docker daemon. The host path for /opt/smsly needs to be mounted.
+        # Spin up a docker-cli container locally via socket-proxy to deploy the stack
         client = docker.from_env()
+        docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
         
         commands = [
-            # Ensure the host directory exists
             "mkdir -p /opt/smsly/patroni",
             f"cat > /opt/smsly/patroni/docker-compose.yml << 'COMPEOF'\n{compose_content}\nCOMPEOF",
             "cd /opt/smsly/patroni && docker compose up -d --pull always"
@@ -339,7 +344,7 @@ class ReplicationService:
             "docker:cli",
             command=["sh", "-c", " && ".join(commands)],
             remove=True,
-            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+            environment={"DOCKER_HOST": docker_host},
             network_mode="host",
         )
 
@@ -365,13 +370,9 @@ class ReplicationService:
         deploy_dir = "/opt/smsly/haproxy"
         os.makedirs(deploy_dir, exist_ok=True)
 
-        with open(f"{deploy_dir}/haproxy.cfg", "w") as f:
-            f.write(haproxy_cfg)
-
-        with open(f"{deploy_dir}/docker-compose.yml", "w") as f:
-            f.write(compose_content)
-
         client = docker.from_env()
+        docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
+
         commands = [
             "mkdir -p /opt/smsly/haproxy",
             f"cat > /opt/smsly/haproxy/haproxy.cfg << 'CFGEOF'\n{haproxy_cfg}\nCFGEOF",
@@ -383,7 +384,7 @@ class ReplicationService:
             "docker:cli",
             command=["sh", "-c", " && ".join(commands)],
             remove=True,
-            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+            environment={"DOCKER_HOST": docker_host},
             network_mode="host",
         )
 

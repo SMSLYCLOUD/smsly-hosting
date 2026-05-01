@@ -95,56 +95,32 @@ export function Navbar() {
     href: string;
     label: string;
     icon: any;
-    tier: 'primary' | 'secondary' | 'tertiary';
   }> = [
-    { href: '/client', label: 'Client Area', icon: Home, tier: 'primary' },
-    { href: '/dashboard', label: 'Dashboard', icon: Home, tier: 'primary' },
-    { href: '/projects', label: 'Projects', icon: FolderKanban, tier: 'primary' },
-    { href: '/services', label: 'Services', icon: Layout, tier: 'primary' },
-    { href: '/deployments', label: 'Deployments', icon: Rocket, tier: 'primary' },
-    { href: '/ecosystem', label: 'Ecosystem', icon: Sparkles, tier: 'primary' },
-    { href: '/intelligence', label: 'Intelligence', icon: Brain, tier: 'primary' },
-    
-    // INFRA (Secondary)
-    { href: '/servers', label: 'Servers', icon: Monitor, tier: 'secondary' },
-    { href: '/autoscaler', label: 'Autoscaler', icon: Gauge, tier: 'secondary' },
-    { href: '/topology', label: 'Topology', icon: Network, tier: 'secondary' },
-    { href: '/replication', label: 'Replication', icon: GitCompare, tier: 'secondary' },
-    { href: '/tunnels', label: 'Tunnels', icon: Radio, tier: 'secondary' },
-    { href: '/network', label: 'VPN Mesh', icon: Shield, tier: 'secondary' },
-    
-    // TOOLS (Tertiary)
-    { href: '/activity', label: 'Activity', icon: Activity, tier: 'tertiary' },
-    { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
-    { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
-    { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
-    { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
-    { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
-    { href: '/backups', label: 'Backups', icon: Archive, tier: 'tertiary' },
-    { href: '/admin-dashboard/users', label: 'Admin', icon: Shield, tier: 'tertiary' },
+    { href: '/client', label: 'Client Area', icon: Home },
+    { href: '/services', label: 'Services', icon: Layout },
+    { href: '/marketplace', label: 'Addons', icon: Sparkles },
+    { href: '/billing', label: 'Billing', icon: CreditCard },
+    { href: '/marketplace', label: 'Marketplace', icon: Sparkles },
+    { href: '/tunnels', label: 'Tunnels', icon: Radio },
+    { href: '/audit-logs', label: 'Audit Logs', icon: FileCode },
   ];
 
-  const hiddenByFlag = new Set<string>([]);
-
-  const showAll = shouldShowAllNav();
-  const visibleAuthLinks = authLinks.filter((link) => showAll || !hiddenByFlag.has(link.href));
-
-  const primaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'primary');
-  const secondaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'secondary');
-  const tertiaryAuthLinks = visibleAuthLinks.filter((link) => link.tier === 'tertiary');
+  const primaryAuthLinks = authLinks;
+  const secondaryAuthLinks: any[] = [];
+  const tertiaryAuthLinks: any[] = [];
 
   return (
     <nav
         className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
     >
-      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[1440px] mx-auto">
+      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-6 px-4 sm:px-8 lg:px-12 max-w-[1920px] mx-auto">
 
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
             <div className="bg-emerald-500 p-1.5 rounded-lg shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
                 <Image src="/images/logo.svg" alt="S" width={22} height={22} className="h-5.5 w-5.5 brightness-0 invert" priority />
             </div>
-            {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">CloudNeuron</span>}
+            <span className="font-bold text-lg tracking-tight text-white hidden sm:block">CloudNeuron</span>
         </Link>
 
         {/* Nav Links - Center */}

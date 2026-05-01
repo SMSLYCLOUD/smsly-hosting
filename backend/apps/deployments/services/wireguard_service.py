@@ -189,8 +189,6 @@ class WireGuardService:
             except Exception as e:
                 logger.warning(f"Failed to update config on {p}: {e}")
 
-    # ── SSH Deployment ───────────────────────────────────────────────────
-
     @classmethod
     def deploy_config(cls, peer):
         """
@@ -220,18 +218,16 @@ class WireGuardService:
     def _deploy_local(cls, config: str, iface: str):
         """
         Deploy WireGuard config on the local server.
-        Since the API runs unprivileged, we use the Docker socket to spin up
+        Since the API runs unprivileged, we use the Docker socket proxy to spin up
         an ephemeral privileged container to apply the config to the host network.
         """
         import docker
+        import os
         client = docker.from_env()
+        docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
 
         # Write config to a temporary file via a container
-        # Since /etc/wireguard might not be mounted in the backend, we run an alpine 
-        # container mounting /etc/wireguard from the host.
         safe_iface = shlex.quote(iface)
-        # Avoid putting the config in the command directly to avoid shell injection
-        # Instead, we will write it to a temp file, or use base64
         import base64
         b64_config = base64.b64encode(config.encode()).decode()
         cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf && chmod 600 /etc/wireguard/{safe_iface}.conf"
@@ -241,17 +237,19 @@ class WireGuardService:
                 "alpine",
                 command=["sh", "-c", cmd],
                 remove=True,
+                environment={"DOCKER_HOST": docker_host},
                 volumes={"/etc/wireguard": {"bind": "/etc/wireguard", "mode": "rw"}},
             )
         except Exception as e:
             logger.error(f"Failed to write host WG config via Docker: {e}")
-            raise RuntimeError(f"Local config write failed: {e}")
+            raise RuntimeError(f"Local config write failed: {e}. Check if socket-proxy allows volume mounts.")
 
         # Restart WireGuard interface
         safe_iface = shlex.quote(iface)
         commands = [
-            # Ensure it's installed (if Debian/Ubuntu host system underneath)
             "apk add wireguard-tools iptables >/dev/null 2>&1 || true",
+            # Check if kernel module is loaded on the host
+            "lsmod | grep -q wireguard || (echo 'WIREGUARD_MODULE_MISSING' && exit 1)",
             f"wg-quick down {safe_iface} >/dev/null 2>&1 || true",
             f"wg-quick up {safe_iface}"
         ]
@@ -262,14 +260,17 @@ class WireGuardService:
                 remove=True,
                 privileged=True,
                 network_mode="host",
+                environment={"DOCKER_HOST": docker_host},
                 volumes={
                     "/lib/modules": {"bind": "/lib/modules", "mode": "ro"},
                     "/etc/wireguard": {"bind": "/etc/wireguard", "mode": "ro"},
                 },
             )
         except Exception as e:
+            if "WIREGUARD_MODULE_MISSING" in str(e):
+                 raise RuntimeError("WireGuard kernel module is not loaded on the host VPS. Run 'sudo modprobe wireguard' on the host.")
             logger.error(f"Failed to restart host WG via Docker: {e}")
-            raise RuntimeError(f"Local wg-quick failed: {e}")
+            raise RuntimeError(f"Local wg-quick failed: {e}. Ensure socket-proxy allows privileged:true.")
 
     @classmethod
     def _deploy_remote(cls, server, config: str, iface: str):
@@ -279,11 +280,14 @@ class WireGuardService:
         b64_config = base64.b64encode(config.encode()).decode()
         commands = [
             # Ensure WireGuard is installed
-            "apt-get install -y wireguard > /dev/null 2>&1 || true",
+            "apt-get update > /dev/null 2>&1 || true",
+            "apt-get install -y wireguard iptables > /dev/null 2>&1 || true",
             "mkdir -p /etc/wireguard",
             # Write config
             f"echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf",
             f"chmod 600 /etc/wireguard/{safe_iface}.conf",
+            # Check kernel module
+            "modprobe wireguard || true",
             # Restart interface
             f"wg-quick down {safe_iface} 2>/dev/null || true",
             f"wg-quick up {safe_iface}",
@@ -385,24 +389,21 @@ class WireGuardService:
     @staticmethod
     def _ssh_run(server, command: str, timeout: int = 60) -> str:
         """Run a command on a remote server via SSH."""
-        from apps.deployments.services.provisioner import _get_ssh_client
+        from apps.deployments.services.ssh_client import SSHClient
 
-        client = _get_ssh_client(server)
+        ssh = SSHClient(
+            host=server.host,
+            port=server.ssh_port,
+            username=server.ssh_user,
+            password=server.ssh_password,
+            private_key=server.ssh_key,
+        )
         try:
-            stdin, stdout, stderr = client.exec_command(
-                command, timeout=timeout,
-            )
-            exit_code = stdout.channel.recv_exit_status()
-            output = stdout.read().decode()
-            errors = stderr.read().decode()
-
-            if exit_code != 0:
-                raise RuntimeError(
-                    f"SSH command failed (exit {exit_code}): {errors}"
-                )
+            ssh.connect()
+            output = ssh.exec_command(command, timeout=timeout)
             return output
         finally:
-            client.close()
+            ssh.close()
 
     @staticmethod
     def _ping(ip: str, count: int = 3) -> float:

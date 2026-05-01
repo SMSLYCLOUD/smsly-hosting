@@ -357,15 +357,40 @@ class BackupService:
                     vol_tar_path = os.path.join(temp_dir, vol_meta['filename'])
                     if os.path.exists(vol_tar_path):
                         logger.info(f"Restoring volume {vol_obj.name}...")
-                        # Use subprocess with Docker CLI to stream tar.gz into volume
-                        import subprocess
-                        cmd = [
-                            "docker", "run", "--rm", "-i",
-                            "-v", f"{vol_obj.name}:/dest",
-                            "alpine", "tar", "-xzf", "-", "-C", "/dest",
-                        ]
-                        with open(vol_tar_path, 'rb') as f:
-                            subprocess.run(cmd, stdin=f, check=True)
+                        
+                        # Use docker-py to restore data instead of subprocess
+                        # 1. Start a temporary helper container
+                        helper = self.docker_client.containers.run(
+                            "alpine:latest",
+                            command=["sleep", "3600"],
+                            volumes={vol_obj.name: {'bind': '/dest', 'mode': 'rw'}},
+                            detach=True,
+                            remove=True
+                        )
+                        
+                        try:
+                            # 2. Extract the tarball into the volume
+                            # Since vol_tar_path is a .tar.gz, we need to extract it first
+                            # or use a tool that can handle gz. docker-py put_archive expects a tar.
+                            with tarfile.open(vol_tar_path, "r:gz") as tar:
+                                # We extract to a temporary directory then tar it again? No.
+                                # Let's just run tar inside the container and pipe the data.
+                                with open(vol_tar_path, 'rb') as f:
+                                    # exec_run can take a socket-like object? No.
+                                    # But we can use put_archive if we have a pure tar stream.
+                                    # Since we have a .tar.gz, let's just use docker exec with sh.
+                                    # We need to pipe the stream.
+                                    
+                                    # Alternative: use the helper container to extract.
+                                    # We can't easily pipe stdin to exec_run in docker-py.
+                                    # Let's use the 'docker' CLI if available, BUT fallback to a robust method.
+                                    
+                                    # Robust method: upload the tarball to the container first, then extract.
+                                    self.docker_client.api.put_archive(helper.id, "/tmp", open(vol_tar_path, 'rb'))
+                                    helper.exec_run(["sh", "-c", f"tar -xzf /tmp/{vol_meta['filename']} -C /dest"])
+                                    helper.exec_run(["rm", f"/tmp/{vol_meta['filename']}"])
+                        finally:
+                            helper.remove(force=True)
 
             logger.info("Restore complete.")
             return True

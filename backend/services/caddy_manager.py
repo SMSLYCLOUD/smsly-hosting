@@ -1,4 +1,4 @@
-﻿"""
+"""
 Caddy configuration manager.
 
 Generates Caddyfile content from PlatformConfig and writes it
@@ -59,25 +59,25 @@ def _build_service_domain_block(domain: str, upstream_host: str) -> str:
 def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     """
     Query all services and generate Caddy blocks for routable app domains.
-
-    Includes service.custom_domains (external domains needing their own blocks)
-    but SKIPS service.public_domain entries that are subdomains of the platform
-    wildcard (e.g. *.pcloud.linadeluxe.com) because those are already covered
-    by the wildcard block.  Adding duplicate explicit blocks for them triggers
-    conflicting ACME cert provisioning that breaks Caddy during reload.
+    Uses On-Demand TLS for custom domains to minimize reloads.
     """
     blocks = []
     seen = set()
+    # Note: Caddy global 'ask' endpoint is defined in generate_caddyfile.
+    
     try:
         from apps.deployments.models import Service
 
         for service in Service.objects.all().order_by("id"):
+            raw_public = (
+                str(service.public_domain or "").strip().lower()
+                if isinstance(service.public_domain, str)
+                else ""
+            )
             public_domain = ""
-            if getattr(service, "public_domain_hidden", False):
-                public_domain = ""
-            elif isinstance(service.public_domain, str) and service.public_domain.strip():
+            if raw_public:
                 try:
-                    public_domain = normalize_domain(service.public_domain)
+                    public_domain = normalize_domain(raw_public)
                 except ValueError:
                     logger.warning(
                         "Skipping invalid public domain %r for service %s",
@@ -85,49 +85,56 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         service.id,
                     )
 
-            # Skip public_domain if it's covered by the wildcard block.
-            # e.g. "abc.pcloud.linadeluxe.com" is already routed by
-            # "*.pcloud.linadeluxe.com" — adding an explicit block would
-            # trigger a separate HTTP-01 cert and break existing SSL.
+            # Skip creating a public_domain block if it's hidden OR covered by wildcard.
+            isHidden = getattr(service, "public_domain_hidden", False)
             if public_domain and public_domain not in seen:
-                if wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
+                if isHidden:
+                    logger.debug("Skipping hidden public domain block for %s", public_domain)
+                    seen.add(public_domain)
+                elif wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
                     logger.debug(
                         "Skipping %s — covered by wildcard *.%s",
                         public_domain,
                         wildcard_domain,
                     )
+                    seen.add(public_domain)
                 else:
                     seen.add(public_domain)
                     blocks.append(
                         _build_service_domain_block(public_domain, public_domain)
                     )
 
-            for domain in (service.custom_domains or []):
-                value = domain.strip() if isinstance(domain, str) else ""
+            for domain_val in (service.custom_domains or []):
+                value = domain_val.strip() if isinstance(domain_val, str) else ""
                 if not value:
                     continue
                 try:
                     value = normalize_domain(value)
                 except ValueError:
-                    logger.warning(
-                        "Skipping invalid custom domain %r for service %s",
-                        domain,
-                        service.id,
-                    )
                     continue
                 if value in seen:
                     continue
                 # Also skip custom domains covered by the wildcard
                 if wildcard_domain and value.endswith(f".{wildcard_domain}"):
-                    logger.debug(
-                        "Skipping custom domain %s — covered by wildcard *.%s",
-                        value,
-                        wildcard_domain,
-                    )
                     continue
                 seen.add(value)
                 target_host = public_domain or value
-                blocks.append(_build_service_domain_block(value, target_host))
+                
+                # For custom domains, use On-Demand TLS
+                lines = [f"{value} {{"]
+                lines.append("    tls {")
+                lines.append("        on_demand")
+                lines.append("    }")
+                
+                if target_host and target_host != value:
+                    lines.append("    reverse_proxy localhost:8081 {")
+                    lines.append(f"        header_up Host {target_host}")
+                    lines.append("    }")
+                else:
+                    lines.append("    reverse_proxy localhost:8081")
+                lines.append("}")
+                blocks.append("\n".join(lines))
+
         from apps.deployments.models_addons import Addon
         for addon in Addon.objects.exclude(public_domain__isnull=True).exclude(public_domain=""):
             public_domain = ""
@@ -228,17 +235,22 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
 def generate_caddyfile(config) -> str:
     """
     Generate Caddyfile content from a PlatformConfig instance.
-
-    Modes:
-    - IP-only: simple :80 reverse proxy
-    - SSL (no wildcard): domain block with auto HTTPS + :80 fallback
-    - SSL + wildcard: domain block + *.domain with Cloudflare DNS challenge
-
-    Also includes per-service public and custom domain blocks.
+    Uses On-Demand TLS for custom domains.
     """
     sections = []
     domain = ""
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+    
+    # Global options for On-Demand TLS
+    # The 'ask' endpoint re-uses the existing backend server.
+    # Caddy is on the host, backend is in docker. 
+    # Usually port 8000 or 8090 on localhost is mapped to the backend.
+    sections.append("""{
+    on_demand_tls {
+        ask http://localhost:8000/api/v1/services/check-domain/
+    }
+}""")
+
     # Reject placeholder/dummy tokens
     _FAKE_TOKENS = {"fake", "changeme", "your_cloudflare_api_token", "test", ""}
     if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
