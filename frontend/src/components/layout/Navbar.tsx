@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import * as React from 'react';
 import Link from 'next/link';
@@ -116,16 +116,6 @@ export function Navbar() {
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
     { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
-    { href: '/databases', label: 'Databases', icon: FileCode, tier: 'tertiary' },
-    { href: '/addons', label: 'Addons', icon: FileCode, tier: 'tertiary' },
-    { href: '/domains', label: 'Domains', icon: FileCode, tier: 'tertiary' },
-    { href: '/api-keys', label: 'API Keys', icon: Settings, tier: 'tertiary' },
-    { href: '/audit-logs', label: 'Audit Logs', icon: Settings, tier: 'tertiary' },
-    { href: '/env-vars', label: 'Env Vars', icon: Settings, tier: 'tertiary' },
-    { href: '/restore', label: 'Restore', icon: Archive, tier: 'tertiary' },
-    { href: '/rollbacks', label: 'Rollbacks', icon: Archive, tier: 'tertiary' },
-    { href: '/logs', label: 'Logs', icon: Archive, tier: 'tertiary' },
-    { href: '/monitoring', label: 'Monitoring', icon: Archive, tier: 'tertiary' },
     { href: '/status', label: 'System Status', icon: Activity, tier: 'tertiary' },
   ];
 
