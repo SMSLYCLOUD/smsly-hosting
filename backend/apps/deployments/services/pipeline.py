@@ -1630,6 +1630,9 @@ class PipelineManager:
 
     def _build_with_docker(self, context_dir: str, dockerfile_path: str):
         """Execute Docker build."""
+        # ── Runtime Hardening: patch outdated base images ──
+        self._patch_dockerfile_for_runtime(dockerfile_path)
+
         append_log(
             self.deployment,
             f"Building with Docker ({os.path.basename(dockerfile_path)})...\n"
@@ -1661,6 +1664,42 @@ class PipelineManager:
         ]
 
         self._run_subprocess(cmd, context_dir)
+
+    def _patch_dockerfile_for_runtime(self, dockerfile_path: str):
+        """
+        Scan and patch the Dockerfile for outdated or incompatible runtimes.
+        Currently handles: Node.js 18 -> 20 (for Next.js compatibility).
+        """
+        try:
+            with open(dockerfile_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            new_content = content
+            patches = []
+
+            # 1. Node.js 18 -> 20
+            # Matches: node:18, node:18-alpine, node:18-slim, etc.
+            if re.search(r"FROM\s+node:18", content, re.IGNORECASE):
+                new_content = re.sub(
+                    r"(FROM\s+node:)18", 
+                    r"\1 20", 
+                    new_content, 
+                    flags=re.IGNORECASE
+                ).replace("node: 20", "node:20") # Cleanup any accidental space
+                patches.append("Node.js 18 → 20")
+
+            if content != new_content:
+                with open(dockerfile_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                
+                patch_list = ", ".join(patches)
+                append_log(
+                    self.deployment,
+                    f"🛡️ Runtime Hardening: Patched Dockerfile base image ({patch_list})\n"
+                )
+                logger.info("Patched Dockerfile %s: %s", dockerfile_path, patch_list)
+        except Exception as exc:
+            logger.warning("Failed to patch Dockerfile %s: %s", dockerfile_path, exc)
 
     def _detect_django_project_module(self, context_dir: str) -> str:
         """Best-effort discovery of Django project module for gunicorn startup."""

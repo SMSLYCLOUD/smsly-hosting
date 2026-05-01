@@ -73,8 +73,20 @@ class EnvironmentIntelligenceService:
             final_env = {}
             for var, val in suggestions.items():
                 var_upper = var.upper()
-                if val == "GENERATE" or any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "HASH"]):
-                    final_env[var] = secrets.token_hex(32)
+                # Expanded secret detection list: includes SALT, HEADER_VALUE, and specific POLICY tokens
+                is_secret = val == "GENERATE" or any(k in var_upper for k in [
+                    "SECRET", "KEY", "TOKEN", "PASSWORD", "HASH", "SALT", 
+                    "HEADER_VALUE", "SIGNATURE", "AUTH"
+                ])
+                
+                if is_secret:
+                    if "ENCRYPTION_KEY" in var_upper:
+                        # Fernet requires 32 url-safe base64-encoded bytes
+                        import base64
+                        final_env[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                    else:
+                        # High-entropy hex for standard secrets
+                        final_env[var] = secrets.token_hex(32)
                 elif "URL" in var_upper or "HOST" in var_upper:
                     # Sanitize URL suggestions to be internal-first
                     if "localhost" in str(val) or "127.0.0.1" in str(val):
@@ -89,10 +101,15 @@ class EnvironmentIntelligenceService:
         except Exception as e:
             logger.error("AI Senate failed to resolve environment for %s: %s", service_name, e)
             fallback = {}
+            import base64
             for var in env_context:
-                if any(k in var.upper() for k in ["SECRET", "KEY", "TOKEN"]):
-                    fallback[var] = secrets.token_hex(32)
-                elif "PORT" in var.upper():
+                var_upper = var.upper()
+                if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                    if "ENCRYPTION_KEY" in var_upper:
+                        fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
+                    else:
+                        fallback[var] = secrets.token_hex(32)
+                elif "PORT" in var_upper:
                     fallback[var] = "8000"
             return fallback
 
