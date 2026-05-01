@@ -39,6 +39,7 @@ class MeshNetworkTest(TestCase):
             "alpine",
             command=["sh", "-c", expected_cmd],
             remove=True,
+            environment={"DOCKER_HOST": "tcp://socket-proxy:2375"},
             volumes={"/etc/wireguard": {"bind": "/etc/wireguard", "mode": "rw"}},
         )
 
@@ -57,10 +58,12 @@ class MeshNetworkTest(TestCase):
 
         b64_config = base64.b64encode(config.encode()).decode()
         expected_command = " && ".join([
-            "apt-get install -y wireguard > /dev/null 2>&1 || true",
+            "apt-get update > /dev/null 2>&1 || true",
+            "apt-get install -y wireguard iptables > /dev/null 2>&1 || true",
             "mkdir -p /etc/wireguard",
             f"echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf",
             f"chmod 600 /etc/wireguard/{safe_iface}.conf",
+            "modprobe wireguard || true",
             f"wg-quick down {safe_iface} 2>/dev/null || true",
             f"wg-quick up {safe_iface}",
             f"systemctl enable wg-quick@{safe_iface} 2>/dev/null || true",

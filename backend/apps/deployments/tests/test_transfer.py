@@ -1,5 +1,5 @@
 # pylint: disable=invalid-name
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from unittest.mock import MagicMock, patch
 import os
 from datetime import timedelta
@@ -154,6 +154,7 @@ class ServerTransferServiceTest(TestCase):
         svc.ssh.exec_command.assert_called_once()
 
     @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    @override_settings(TRANSFER_REQUIRE_BIDIRECTIONAL_SSH=True)
     def test_verify_between_servers_fails_when_remote_tcp_check_fails(self, create_connection_mock):
         create_connection_mock.side_effect = OSError("blocked")
         svc = ServerTransferService(self.transfer)
@@ -162,6 +163,15 @@ class ServerTransferServiceTest(TestCase):
 
         with self.assertRaises(RuntimeError):
             svc._verify_between_servers()
+
+    @patch('apps.deployments.services.transfer_service.socket.create_connection')
+    def test_verify_between_servers_warns_by_default_when_remote_tcp_check_fails(self, create_connection_mock):
+        create_connection_mock.side_effect = OSError("blocked")
+        svc = ServerTransferService(self.transfer)
+        svc.ssh = MagicMock()
+        svc.ssh.exec_command.return_value = 'TRANSFER_TCP_FAIL'
+
+        svc._verify_between_servers()
 
     def test_rollback_resets_service_server_to_source(self):
         source_server = ManagedServer.objects.create(

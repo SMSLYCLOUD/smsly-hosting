@@ -12,6 +12,8 @@ Handles:
 """
 
 import logging
+import base64
+import shlex
 import textwrap
 
 from django.utils import timezone
@@ -72,8 +74,8 @@ class ReplicationService:
                       etcd
                       --name {etcd_name}
                       --initial-advertise-peer-urls http://{wg_ip}:2380
-                      --listen-peer-urls http://0.0.0.0:2380
-                      --listen-client-urls http://0.0.0.0:2379
+                      --listen-peer-urls http://{wg_ip}:2380
+                      --listen-client-urls http://{wg_ip}:2379
                       --advertise-client-urls http://{wg_ip}:2379
                       --initial-cluster {etcd_cluster}
                       --initial-cluster-state new
@@ -94,9 +96,9 @@ class ReplicationService:
                       ETCD3_HOSTS: "{etcd_endpoints}"
                       PATRONI_NAME: {node_name}
                       PATRONI_RESTAPI_CONNECT_ADDRESS: "{wg_ip}:8008"
-                      PATRONI_RESTAPI_LISTEN: "0.0.0.0:8008"
+                      PATRONI_RESTAPI_LISTEN: "{wg_ip}:8008"
                       PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:5432"
-                      PATRONI_POSTGRESQL_LISTEN: "0.0.0.0:5432"
+                      PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:5432"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
                       PATRONI_REPLICATION_PASSWORD: "{replication_password}"
@@ -129,6 +131,8 @@ class ReplicationService:
         Port 7000: HAProxy stats dashboard
         """
         peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
+        local_peer = next((peer for peer in peers if peer.is_local), None)
+        bind_ip = local_peer.wg_address if local_peer else "127.0.0.1"
 
         master_servers = "\n".join(
             f"    server patroni{i} {p.wg_address}:5432 "
@@ -150,7 +154,7 @@ class ReplicationService:
                 timeout server 50000ms
 
             frontend master
-                bind *:5000
+                bind {bind_ip}:5000
                 default_backend master
 
             backend master
@@ -160,7 +164,7 @@ class ReplicationService:
             {master_servers}
 
             frontend replicas
-                bind *:5001
+                bind {bind_ip}:5001
                 default_backend replicas
 
             backend replicas
@@ -170,7 +174,7 @@ class ReplicationService:
             {replica_servers}
 
             listen stats
-                bind *:7000
+                bind {bind_ip}:7000
                 mode http
                 stats enable
                 stats uri /
@@ -181,6 +185,7 @@ class ReplicationService:
     def generate_haproxy_compose(cls, mesh):
         """Generate docker-compose for HAProxy that routes to Patroni nodes."""
         haproxy_cfg = cls.generate_haproxy_config(mesh)
+        haproxy_cfg_b64 = base64.b64encode(haproxy_cfg.encode()).decode()
 
         compose = textwrap.dedent(f"""\
             version: '3.8'
@@ -191,8 +196,14 @@ class ReplicationService:
                 container_name: smsly-haproxy
                 restart: unless-stopped
                 network_mode: host
-                volumes:
-                  - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+                environment:
+                  HAPROXY_CONFIG_B64: "{haproxy_cfg_b64}"
+                command:
+                  - sh
+                  - -c
+                  - |
+                    printf '%s' "$$HAPROXY_CONFIG_B64" | base64 -d > /usr/local/etc/haproxy/haproxy.cfg
+                    exec haproxy -f /usr/local/etc/haproxy/haproxy.cfg
         """)
         return compose, haproxy_cfg
 
@@ -318,26 +329,17 @@ class ReplicationService:
     @classmethod
     def _deploy_patroni_local(cls, compose_content: str):
         """Deploy Patroni containers on the local server."""
-        import os
         import docker
-        
-        # Write compose file
-        deploy_dir = "/opt/smsly/patroni"
-        os.makedirs(deploy_dir, exist_ok=True)
-        with open(f"{deploy_dir}/docker-compose.yml", "w") as f:
-            f.write(compose_content)
 
-        # Spin up a docker-cli container locally via socket-proxy to deploy the stack
-        # This keeps the backend itself stripped down while leveraging the host's 
-        # actual docker daemon. The host path for /opt/smsly needs to be mounted.
-        # Spin up a docker-cli container locally via socket-proxy to deploy the stack
         client = docker.from_env()
+        import os
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
+        compose_b64 = base64.b64encode(compose_content.encode()).decode()
         
         commands = [
-            "mkdir -p /opt/smsly/patroni",
-            f"cat > /opt/smsly/patroni/docker-compose.yml << 'COMPEOF'\n{compose_content}\nCOMPEOF",
-            "cd /opt/smsly/patroni && docker compose up -d --pull always"
+            "mkdir -p /tmp/smsly-patroni",
+            f"printf %s {shlex.quote(compose_b64)} | base64 -d > /tmp/smsly-patroni/docker-compose.yml",
+            "cd /tmp/smsly-patroni && docker compose -p smsly-patroni up -d --pull always",
         ]
         
         client.containers.run(
@@ -353,31 +355,28 @@ class ReplicationService:
         """Deploy Patroni containers on a remote server via SSH."""
         from apps.deployments.services.wireguard_service import WireGuardService
 
+        compose_b64 = base64.b64encode(compose_content.encode()).decode()
         commands = [
             "mkdir -p /opt/smsly/patroni",
-            f"cat > /opt/smsly/patroni/docker-compose.yml << 'COMPEOF'\n"
-            f"{compose_content}\nCOMPEOF",
-            "cd /opt/smsly/patroni && docker compose up -d --pull always",
+            f"printf %s {shlex.quote(compose_b64)} | base64 -d > /opt/smsly/patroni/docker-compose.yml",
+            "cd /opt/smsly/patroni && docker compose -p smsly-patroni up -d --pull always",
         ]
         WireGuardService._ssh_run(server, " && ".join(commands), timeout=120)
 
     @classmethod
     def _deploy_haproxy_local(cls, compose_content: str, haproxy_cfg: str):
         """Deploy HAProxy on the local server via Docker container proxy."""
-        import os
         import docker
-
-        deploy_dir = "/opt/smsly/haproxy"
-        os.makedirs(deploy_dir, exist_ok=True)
+        import os
 
         client = docker.from_env()
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
+        compose_b64 = base64.b64encode(compose_content.encode()).decode()
 
         commands = [
-            "mkdir -p /opt/smsly/haproxy",
-            f"cat > /opt/smsly/haproxy/haproxy.cfg << 'CFGEOF'\n{haproxy_cfg}\nCFGEOF",
-            f"cat > /opt/smsly/haproxy/docker-compose.yml << 'COMPEOF'\n{compose_content}\nCOMPEOF",
-            "cd /opt/smsly/haproxy && docker compose up -d --pull always"
+            "mkdir -p /tmp/smsly-haproxy",
+            f"printf %s {shlex.quote(compose_b64)} | base64 -d > /tmp/smsly-haproxy/docker-compose.yml",
+            "cd /tmp/smsly-haproxy && docker compose -p smsly-haproxy up -d --pull always",
         ]
         
         client.containers.run(

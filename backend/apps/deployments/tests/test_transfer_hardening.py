@@ -1,4 +1,8 @@
 # pylint: disable=invalid-name
+import hashlib
+import hmac
+import json
+import time
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -38,7 +42,7 @@ class ServerTransferHardeningTests(APITestCase):
         payload = {
             'transfer_type': 'SERVICE',
             'service_id': str(self.service.id),
-            'target_server_ip': '203.0.113.10',
+            'target_server_ip': '8.8.8.10',
             'target_ssh_key': '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----',
         }
 
@@ -61,7 +65,7 @@ class ServerTransferHardeningTests(APITestCase):
             'transfer_type': 'SERVICE',
             'service_id': str(other_service.id),
             'source_server_ip': '10.0.0.20',
-            'target_server_ip': '203.0.113.20',
+            'target_server_ip': '8.8.8.20',
             'target_ssh_key': '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----',
         }
         response = self.client.post(self.url, payload, format='json')
@@ -74,7 +78,7 @@ class ServerTransferHardeningTests(APITestCase):
         payload = {
             'transfer_type': 'FULL',
             'source_server_ip': '10.0.0.30',
-            'target_server_ip': '203.0.113.30',
+            'target_server_ip': '8.8.8.30',
             'target_ssh_key': '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----',
         }
         response = self.client.post(self.url, payload, format='json')
@@ -91,7 +95,7 @@ class ServerTransferHardeningTests(APITestCase):
         payload = {
             'transfer_type': 'SERVICE',
             'service_id': str(self.service.id),
-            'target_server_ip': '203.0.113.40',
+            'target_server_ip': '8.8.8.40',
             'target_ssh_key': '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----',
         }
         response = self.client.post(self.url, payload, format='json')
@@ -108,7 +112,7 @@ class ServerTransferHardeningTests(APITestCase):
         payload = {
             'transfer_type': 'SERVICE',
             'service_id': str(self.service.id),
-            'target_server_ip': '203.0.113.41',
+            'target_server_ip': '8.8.8.41',
             'target_ssh_key': '',
             'target_ssh_password': 'root-password-here',
         }
@@ -129,7 +133,7 @@ class ServerTransferHardeningTests(APITestCase):
         target = ManagedServer.objects.create(
             owner=self.user,
             name='Target VPS',
-            host='203.0.113.60',
+            host='8.8.8.60',
             ssh_password='target-root-password',
         )
 
@@ -142,7 +146,7 @@ class ServerTransferHardeningTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         transfer = ServerTransfer.objects.get(id=response.data['id'])
-        self.assertEqual(transfer.target_server_ip, '203.0.113.60')
+        self.assertEqual(transfer.target_server_ip, '8.8.8.60')
         self.assertEqual(transfer.target_ssh_key, '')
         self.assertEqual(transfer.target_ssh_password, 'target-root-password')
         delay_mock.assert_called_once_with(str(transfer.id))
@@ -156,7 +160,7 @@ class ServerTransferHardeningTests(APITestCase):
         target = ManagedServer.objects.create(
             owner=self.user,
             name='Target VPS',
-            host='203.0.113.61',
+            host='8.8.8.61',
         )
 
         payload = {
@@ -185,7 +189,7 @@ class ServerTransferHardeningTests(APITestCase):
             transfer_type='SERVICE',
             service=self.service,
             source_server_ip='10.0.0.50',
-            target_server_ip='203.0.113.50',
+            target_server_ip='8.8.8.50',
             target_ssh_key='-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----',
         )
 
@@ -195,3 +199,61 @@ class ServerTransferHardeningTests(APITestCase):
         self.assertEqual(transfer.status, 'FAILED')
         self.assertEqual(transfer.target_ssh_key, '')
         self.assertNotIn('not implemented', transfer.error_message.lower())
+
+    def _signed_incoming_headers(self, url, body, secret):
+        timestamp = str(int(time.time()))
+        body_hash = hashlib.sha256(body).hexdigest()
+        payload = f"POST|{url}|{timestamp}|{body_hash}"
+        signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        return {
+            'HTTP_X_REQUEST_TIMESTAMP': timestamp,
+            'HTTP_X_GATEWAY_SIGNATURE_V2': signature,
+        }
+
+    @override_settings(GATEWAY_SECRET='shared-node-secret')
+    def test_register_incoming_requires_node_auth(self):
+        self.client.force_authenticate(user=None)
+        url = reverse('transfer-register-incoming')
+        response = self.client.post(
+            url,
+            {
+                'source_ip': '10.0.0.10',
+                'target_ip': '8.8.8.60',
+                'transfer_type': 'SERVICE',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_register_incoming_accepts_hmac_and_sets_owner(self):
+        secret = 'source-node-secret'
+        ManagedServer.objects.create(
+            owner=self.user,
+            name='Source Node',
+            host='10.0.0.10',
+            gateway_secret=secret,
+        )
+
+        self.client.force_authenticate(user=None)
+        url = reverse('transfer-register-incoming')
+        payload = {
+            'source_ip': '10.0.0.10',
+            'target_ip': '8.8.8.60',
+            'transfer_type': 'SERVICE',
+            'service_name': 'incoming-service',
+        }
+        body = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode()
+
+        response = self.client.generic(
+            'POST',
+            url,
+            body,
+            content_type='application/json',
+            **self._signed_incoming_headers(url, body, secret),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        transfer = ServerTransfer.objects.get(id=response.data['id'])
+        self.assertEqual(transfer.owner, self.user)
+        self.assertTrue(transfer.is_incoming)

@@ -7,6 +7,7 @@ class ServerTransferSerializer(serializers.ModelSerializer):
         model = ServerTransfer
         fields = [
             'id',
+            'owner',
             'status',
             'source_server_ip',
             'source_backup',
@@ -20,11 +21,14 @@ class ServerTransferSerializer(serializers.ModelSerializer):
             'created_at',
             'completed_at',
             'estimated_downtime_seconds',
+            'is_incoming',
+            'source_node_id',
             'can_rollback',
             'rollback_deadline',
         ]
         read_only_fields = [
             'id',
+            'owner',
             'status',
             'progress_percent',
             'current_step',
@@ -32,6 +36,8 @@ class ServerTransferSerializer(serializers.ModelSerializer):
             'error_message',
             'created_at',
             'completed_at',
+            'is_incoming',
+            'source_node_id',
             'can_rollback',
             'rollback_deadline',
             'source_backup',
