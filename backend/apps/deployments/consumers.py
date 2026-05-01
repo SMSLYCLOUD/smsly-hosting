@@ -5,6 +5,7 @@ import logging
 import os
 import base64
 import time
+from apps.deployments.utils import log_event
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 
@@ -30,6 +31,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._read_task = None
         self._send_task = None
         self._setup_task = None
+        self._cmd_buffer = "" # Buffer for audit logging
         self._out_queue = asyncio.Queue()
         self.is_disconnected = False
         self._pulse_task = None
@@ -93,9 +95,19 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self._accepted = True
 
         # ── INITIALIZE ──
-        user = self.scope.get('user', 'Anonymous')
+        # ── LOG SESSION START ──
+        log_event(
+            action="CONSOLE_SESSION_STARTED",
+            target=f"Deployment: {self.deployment_id}",
+            actor=self.user,
+            metadata={
+                "container_id": self.container_id,
+                "user_id": str(self.user.id),
+                "user_email": self.user.email
+            }
+        )
         logger.info("[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
-                    user, os.getpid(), self.deployment_id)
+                    self.user, os.getpid(), self.deployment_id)
         
         # ── STATUS UPDATE: Immediate traffic after accept ──
         try:
@@ -253,11 +265,26 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Fallback for old pure-text clients
             pass
 
-        raw = self._raw_sock or self.exec_socket
-        if not raw:
-            return
-        # Update activity timestamp on input
-        self._last_activity = time.time()
+        # ── COMMAND AUDIT BUFFERING ──
+        # Buffer input and log when Enter (\r or \n) is pressed
+        if text_data:
+            for char in text_data:
+                if char in ('\r', '\n'):
+                    if self._cmd_buffer.strip():
+                        log_event(
+                            action="CONSOLE_COMMAND_EXECUTED",
+                            target=f"Deployment: {self.deployment_id}",
+                            actor=self.user,
+                            metadata={
+                                "command": self._cmd_buffer.strip(),
+                                "container_id": self.container_id
+                            }
+                        )
+                    self._cmd_buffer = ""
+                elif ord(char) == 127: # Backspace
+                    self._cmd_buffer = self._cmd_buffer[:-1]
+                else:
+                    self._cmd_buffer += char
 
         # Forward raw input to the container's exec stdin (via executor)
         try:

@@ -39,6 +39,7 @@ from apps.deployments.utils import (
     parse_ai_resource_recommendation,
     estimate_resources_from_deps,
 )
+from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 from services.builders import is_buildkit_cache_error, prune_buildkit_cache
 
 logger = logging.getLogger(__name__)
@@ -495,84 +496,60 @@ class PipelineManager:
             )
 
     def _run_ai_analysis(self):
-        """Step 1.5: AI Analysis → structured resource + env var recommendations."""
+        """Step 1.5: AI Analysis → structured resource + exhaustive AI Senate env filling."""
         try:
-            # pylint: disable=import-outside-toplevel
-            from apps.intelligence.providers import ask_with_fallback
             from apps.intelligence.scanner import RepoScanner
-
             scanner = RepoScanner(self.source_dir)
+            
+            # Step A: Perform aggressive scan
+            scan_result = scanner.scan()
             ai_context = scanner.build_ai_context()
-
+            
+            # Step B: Consult the AI Senate for resource recommendations and diagnosis
+            # (Keeping the resource logic as it was but optimizing the prompt)
             prompt = (
                 f"Analyze this repo for deployment on CloudNeuron (Docker-based PaaS).\n"
                 f"Service: {self.service.name}\n"
-                f"Current resources: {self.service.cpu_cores} CPU, "
-                f"{self.service.memory_mb}MB RAM\n"
                 f"Stack Context:\n{ai_context}\n\n"
-                f"Return ONLY a JSON object (no extra text):\n"
+                f"Return ONLY a JSON object:\n"
                 f'{{\n'
-                f'  "resources": {{"cpu_cores": <float 0.25-4.0>, '
-                f'"memory_mb": <int 256-8192>}},\n'
-                f'  "required_env_vars": {{"VAR_NAME": '
-                f'"default_value_or_empty_string"}},\n'
-                f'  "issues": ["potential deployment issue 1", ...],\n'
-                f'  "diagnosis": "Brief free-text analysis"\n'
-                f'}}\n\n'
-                f"Rules:\n"
-                f"- For required_env_vars, include ALL env vars the app "
-                f"needs to start.\n"
-                f"- Set sensible defaults where possible (e.g. "
-                f"AI_PROVIDER=auto, DEBUG=false).\n"
-                f"- Leave value as empty string for secrets the user must "
-                f"provide (API keys etc).\n"
-                f"- For resources, recommend based on the dependencies "
-                f"(ML libs need more RAM).\n"
+                f'  "resources": {{"cpu_cores": <float>, "memory_mb": <int>}},\n'
+                f'  "issues": ["..."],\n'
+                f'  "diagnosis": "..."\n'
+                f'}}\n'
             )
-
+            
+            from apps.intelligence.providers import ask_with_fallback
             response, provider = ask_with_fallback(prompt)
-
-            # Store the raw AI response, sanitized for Postgres
+            
             self.deployment.ai_diagnosis = (response or "").replace('\x00', '')
             self.deployment.save(update_fields=['ai_diagnosis'])
-            append_log(
-                self.deployment,
-                f"\n🤖 AI Analysis ({provider}) complete.\n"
-            )
-
-            # Parse structured recommendations
+            
+            append_log(self.deployment, f"\n🤖 AI Senate Analysis ({provider}) complete.\n")
+            
+            # Step C: Apply resource recommendations
             recommendation = parse_ai_resource_recommendation(response)
-
             if recommendation:
-                # Apply resource upgrades
-                self._apply_resource_recommendations(
-                    recommendation.get('resources', {})
-                )
-
-                # Auto-inject AI-detected env vars
-                ai_env_vars = recommendation.get('required_env_vars', {})
-                if ai_env_vars:
-                    self._inject_ai_env_vars(ai_env_vars)
-
-                # Log issues
+                self._apply_resource_recommendations(recommendation.get('resources', {}))
                 for issue in recommendation.get('issues', []):
-                    append_log(
-                        self.deployment,
-                        f"  ⚠️ {issue}\n"
-                    )
+                    append_log(self.deployment, f"  ⚠️ {issue}\n")
+
+            # Step D: EXHAUSTIVE ENV FILLING via AI Senate
+            append_log(self.deployment, "🧠 Convening AI Senate for exhaustive environment filling...\n")
+            suggestions, injected = EnvironmentIntelligenceService.apply_intelligence_to_service(
+                self.service, scan_result
+            )
+            
+            if injected:
+                append_log(self.deployment, f"  ✅ AI Senate auto-filled {len(injected)} variables: {', '.join(injected[:10])}...\n")
             else:
-                append_log(
-                    self.deployment,
-                    "  ℹ️ AI returned unstructured response, "
-                    "using heuristic fallback.\n"
-                )
+                append_log(self.deployment, "  ℹ️ All detected variables are already configured.\n")
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as e:
             logger.warning("AI analysis failed: %s", e)
-            append_log(self.deployment, "\n🤖 AI analysis skipped.\n")
+            append_log(self.deployment, f"\n🤖 AI analysis encountered an error: {str(e)}. Falling back to heuristics.\n")
 
-        # Always run fast heuristic fallback (catches heavy deps
-        # even if AI is unavailable or returns bad JSON)
+        # Heuristic fallback for resources
         if self.source_dir:
             self._apply_heuristic_resources()
 

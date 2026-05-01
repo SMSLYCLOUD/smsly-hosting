@@ -12,7 +12,8 @@ http {
         location / {
             # Check for specific Authorization header
             set $auth_ok "0";
-            if ($http_authorization = "Bearer sk-agbonsalo") {
+            # Replace with your own secret token
+            if ($http_authorization = "Bearer YOUR_SECRET_TOKEN") {
                 set $auth_ok "1";
             }
             if ($request_method = "OPTIONS") {

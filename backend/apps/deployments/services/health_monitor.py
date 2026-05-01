@@ -16,6 +16,7 @@ import requests
 from celery import shared_task
 from django.core.cache import cache
 from django.utils import timezone
+from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -229,14 +230,32 @@ def _build_targets(service, active_deployment):
                     verify=False,
                 )
 
-    # Last-resort direct container target.
-    # Use the service name as Docker DNS hostname (container IDs don't
-    # resolve via Docker DNS; only names and network aliases do).
+    # ── Mesh & Private IP Targets (AWS/VPN Optimization) ────────────────
+    from apps.deployments.models_mesh import WireGuardPeer
+    
+    # 1. Private IP (Internal Cloud Network)
+    if getattr(service.server, 'private_ip', None):
+        p_ip = service.server.private_ip
+        for port in ports:
+            for path in paths:
+                _add(f"http://{p_ip}:{port}{path}", verify=False)
+
+    # 2. Mesh IP (WireGuard VPN Network)
+    # Find this server's mesh IP
+    if service.server:
+        mesh_peer = WireGuardPeer.objects.filter(server=service.server, is_active=True).first()
+        if mesh_peer and mesh_peer.wg_address:
+            m_ip = mesh_peer.wg_address
+            for port in ports:
+                for path in paths:
+                    _add(f"http://{m_ip}:{port}{path}", verify=False)
+
+    # ── Container-local Targets (Docker DNS) ───────────────────────────
+    # Use the service name as Docker DNS hostname
     container_id = (active_deployment.container_id or "").strip()
     if container_id:
         direct_headers = {"Host": public_domain} if public_domain else {}
 
-        # Primary: service name is the most reliable Docker DNS target
         service_name = (service.name or "").strip()
         if service_name:
             for port in ports:
@@ -246,18 +265,6 @@ def _build_targets(service, active_deployment):
                         headers=direct_headers,
                         verify=False,
                     )
-
-        # Compose deployments store container names like "app-web-1".
-        # Keep full names intact; truncation breaks Docker DNS resolution.
-        if "-" in container_id:
-            for port in ports:
-                for path in paths:
-                    _add(
-                        f"http://{container_id}:{port}{path}",
-                        headers=direct_headers,
-                        verify=False,
-                    )
-
     return targets
 
 
@@ -360,6 +367,16 @@ def _check_service_health(service, Deployment):
                     )
                     cache.delete(_restart_key(service_key))
                 if service.health_status != "healthy":
+                    log_event(
+                        action="SERVICE_HEALTHY",
+                        target=f"Service: {service.name}",
+                        metadata={
+                            "url": url,
+                            "latency_ms": response.elapsed.total_seconds() * 1000,
+                            "status_code": response.status_code,
+                            "previous_status": service.health_status
+                        }
+                    )
                     service.health_status = "healthy"
                     service.save(update_fields=["health_status", "updated_at"])
                 return
@@ -393,6 +410,16 @@ def _handle_failure(service, service_key: str, reason: str):
         return
 
     if service.health_status != "unhealthy":
+        log_event(
+            action="SERVICE_UNHEALTHY",
+            target=f"Service: {service.name}",
+            metadata={
+                "reason": reason,
+                "consecutive_failures": current_failures,
+                "threshold": retries,
+                "auto_restart": service.auto_restart
+            }
+        )
         service.health_status = "unhealthy"
         service.save(update_fields=["health_status", "updated_at"])
 

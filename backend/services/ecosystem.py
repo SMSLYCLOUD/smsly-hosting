@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from apps.intelligence.providers import ask_with_fallback
+from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 
 logger = logging.getLogger(__name__)
 
@@ -409,105 +410,108 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
-ECOSYSTEM_PROMPT = """You are an expert DevOps architect. Analyze these GitHub repositories and create a zero-config deployment plan.
+ECOSYSTEM_PROMPT = """You are the Lead DevOps Architect of the AI Senate. Your mission is to analyze an interconnected ecosystem of microservices and produce a 100% complete, zero-config deployment plan.
 
-For each repo, determine:
-1. The tech stack (django, nextjs, node, rust, go, etc.)
-2. The port it listens on
-3. Build strategy (dockerfile or nixpacks)
-4. Required addons (POSTGRES, REDIS, MONGODB, etc.)
-5. Essential environment variables it needs
-6. Which OTHER repos it depends on (e.g., a frontend that needs a backend API URL)
+For each repository, you are provided with Code Context Snippets. Use these to:
+1. Precisely determine the tech stack and entry point.
+2. Identify every required environment variable and its purpose.
+3. Map cross-service dependencies (e.g., if a frontend uses BACKEND_URL, map it to the backend service).
 
-Then determine the overall deployment order (databases/addons first, then backends, then frontends).
-
-Return ONLY valid JSON matching this exact structure:
+Return ONLY valid JSON matching this structure:
 {
   "services": [
     {
       "repo": "owner/repo-name",
       "name": "short-name",
-      "stack": "django",
+      "stack": "django|nextjs|node|python|etc",
       "port": 8000,
-      "build": "nixpacks",
-      "addons": ["POSTGRES"],
-      "env_vars": {"DATABASE_URL": "{{POSTGRES_URL}}", "SECRET_KEY": "{{GENERATE}}"},
+      "build": "dockerfile|nixpacks",
+      "addons": ["POSTGRES", "REDIS", ...],
+      "env_vars": {
+        "DATABASE_URL": "{{POSTGRES_URL}}",
+        "SECRET_KEY": "{{GENERATE}}",
+        "API_URL": "{{SERVICE:backend-repo-name}}"
+      },
       "depends_on": ["other-repo-name"],
       "deploy_order": 1
     }
   ],
   "addons": [
-    {"type": "POSTGRES", "shared_by": ["repo-name-1", "repo-name-2"]}
+    {"type": "POSTGRES", "shared_by": ["repo-a", "repo-b"]}
   ],
-  "deploy_sequence": ["addons", "repo-name-backend", "repo-name-frontend"]
+  "deploy_sequence": ["addons", "service-a", "service-b"]
 }
 
-Use {{PLACEHOLDER}} for auto-generated values:
-- {{POSTGRES_URL}} → auto-provisioned Postgres connection string
-- {{REDIS_URL}} → auto-provisioned Redis connection string
-- {{GENERATE}} → auto-generate a random secure string
-- {{SERVICE:repo-name}} → internal URL to another deployed service
+Placeholder Rules:
+- {{POSTGRES_URL}}, {{REDIS_URL}}, {{MONGODB_URL}} -> Auto-provisioned infra.
+- {{GENERATE}} -> Exhaustive AI Senate secret generation (secure hex).
+- {{SERVICE:repo-name}} -> Internal platform URL mapping.
 
-IMPORTANT:
-- Skip repos that are clearly not deployable (docs-only, config-only, forks of big projects)
-- Mark forked repos with "skip": true
-- Assign deploy_order numbers (lower = deploy first)
+Exhaustiveness Rule:
+Do NOT leave environment variables empty. If a variable is detected in the context snippets, provide a suggested production value or use a placeholder.
 """
 
 
 def analyze_ecosystem(repos_data: List[dict]) -> dict:
     """
-    Use AI to analyze all repos together and produce a deploy plan.
-
-    repos_data: list of {"repo": "owner/name", "files": [...], "description": "...", "heuristic": {...}}
+    Use AI Senate to analyze all repos together and produce an exhaustive deploy plan.
     """
-    # Build the input summary for AI
+    # 1. Enhance repo data with environment context for the Senate
+    for rd in repos_data:
+        # If we have a clone_dir, use the aggressive scanner logic
+        clone_dir = rd.get('clone_dir')
+        if clone_dir:
+            from apps.intelligence.scanner import RepoScanner
+            scanner = RepoScanner(clone_dir)
+            scan = scanner.scan()
+            rd['env_vars_context'] = scan.get('env_vars_context', {})
+            rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
+
+    # 2. Build the ecosystem brief for the AI Senate
     repo_summaries = []
     for rd in repos_data:
         summary = f"\n### {rd['repo']}\n"
         summary += f"Description: {rd.get('description', 'No description')}\n"
-        summary += f"Default branch: {rd.get('default_branch', 'main')}\n"
-        summary += f"Heuristic detection: {rd.get('heuristic', {})}\n"
-        # Show key files (limit to 50 most relevant)
-        files = rd.get("files", [])
-        key_files = [f for f in files if any(f.endswith(ext) for ext in (
-            ".json", ".toml", ".yml", ".yaml", ".py", ".js", ".ts",
-            ".rs", ".go", ".rb", ".php", "Dockerfile", "Procfile",
-            ".env.example", ".env.sample"
-        ))][:50]
-        if not key_files:
-            key_files = files[:30]
-        summary += f"Key files: {', '.join(key_files)}\n"
+        summary += f"Stack: {rd.get('stack', 'unknown')}\n"
+        
+        # Include env var context if available
+        if rd.get('env_vars_context'):
+            summary += "Required Env Vars (with Context):\n"
+            for var, ctxs in rd['env_vars_context'].items():
+                summary += f"- {var}: {' | '.join(ctxs[:1])}\n"
+        
         repo_summaries.append(summary)
 
-    full_prompt = "Here are all the repositories to analyze:\n" + "\n".join(repo_summaries)
+    full_prompt = "Here are all the repositories to analyze for a cluster deployment:\n" + "\n".join(repo_summaries)
 
+    # 3. Call the AI Senate with the exhaustive ecosystem prompt
     response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT)
 
-    # Parse JSON from response
+    # 4. Parse and structure the plan
     import json
+    import re as _re
     try:
-        # Try to extract JSON from markdown code blocks
-        if "```json" in response_text:
-            json_str = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            json_str = response_text.split("```")[1].split("```")[0].strip()
-        else:
-            json_str = response_text.strip()
-        plan = json.loads(json_str)
+        json_match = _re.search(r'\{.*\}', response_text, _re.DOTALL)
+        if not json_match:
+            raise ValueError("No JSON found in Senate response")
+        
+        plan = json.loads(json_match.group(0))
         if isinstance(plan, dict) and isinstance(plan.get("services"), list):
+            # 5. Apply the Senate's environment resolutions
             for svc in plan["services"]:
                 if isinstance(svc, dict):
                     svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
+            
             _apply_plan_repo_defaults(plan["services"], repos_data)
             _apply_smsly_core_intelligence(plan["services"])
             plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
             plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
+        
         plan["ai_provider"] = provider
         return plan
-    except (json.JSONDecodeError, IndexError) as e:
+        
+    except Exception as e:
         logger.error("Failed to parse AI ecosystem response: %s", e)
-        logger.error("Raw response: %s", response_text[:1000])
         # Fall back to heuristic-only plan
         return _build_heuristic_plan(repos_data, str(e))
 

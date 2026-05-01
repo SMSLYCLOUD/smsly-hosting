@@ -49,7 +49,15 @@ class ManagedServer(models.Model):
     )
     host = models.CharField(
         max_length=255,
-        help_text="IP address or domain, e.g. '198.51.100.5' or 'prod.example.com'",
+        help_text="Public IP address or domain, e.g. '198.51.100.5' or 'prod.example.com'",
+    )
+    private_ip = models.GenericIPAddressField(
+        protocol="IPv4", null=True, blank=True,
+        help_text="Internal/Private IP (e.g. AWS Private IP 172.31.x.x)"
+    )
+    provider_metadata = models.JSONField(
+        default=dict, blank=True,
+        help_text="Cloud provider metadata (VPC ID, Instance ID, etc.)"
     )
 
     # ── Connection credentials ──
