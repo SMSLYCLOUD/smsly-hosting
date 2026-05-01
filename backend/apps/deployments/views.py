@@ -1548,6 +1548,41 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ),
         })
 
+    @action(detail=False, methods=['get'], url_path='check-domain', permission_classes=[permissions.AllowAny])
+    def check_domain(self, request):
+        """
+        Endpoint for Caddy's on_demand_tls 'ask' directive.
+        GET /api/v1/services/check-domain/?domain=myapp.com
+        Returns 200 OK if the domain is authorized, 404 otherwise.
+        """
+        domain = request.query_params.get('domain', '').strip().lower()
+        if not domain:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        # 1. Check against PlatformConfig primary domain
+        try:
+            cfg = PlatformConfig.load()
+            if cfg.domain and domain == cfg.domain.strip().lower():
+                return Response(status=status.HTTP_200_OK)
+        except Exception:
+            pass
+
+        # 2. Check against Services (Public Domain)
+        if Service.objects.filter(public_domain=domain).exists():
+            return Response(status=status.HTTP_200_OK)
+
+        # 3. Check Custom Domains (JSONField)
+        # Optimized lookup for custom_domains JSON field
+        if Service.objects.filter(custom_domains__contains=domain).exists():
+            return Response(status=status.HTTP_200_OK)
+
+        # 4. Check against Addons
+        from .models_addons import Addon
+        if Addon.objects.filter(public_domain=domain).exists():
+            return Response(status=status.HTTP_200_OK)
+
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
     def _sync_caddy(self):
         """Regenerate Caddyfile with all custom domains and trigger reload."""
         try:

@@ -195,14 +195,36 @@ class ServerTransferService:
         backend_container = getattr(settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1")
         
         # Check if remote container exists; fallback to finding it
-        check_cmd = f"docker ps -q -f name={backend_container}"
-        b_id = self.ssh.exec_command(check_cmd).strip()
-        if not b_id:
-            # Fallback search
-            b_id = self.ssh.exec_command("docker ps -q -f name=backend").strip().split('\n')[0]
-            if not b_id:
-                raise RuntimeError("Could not locate CloudNeuron backend container on target server.")
-            backend_container = b_id
+        # We try to be more robust here: search for containers with 'backend' and 'hosting'
+        # or just 'backend' if that fails.
+        find_cmd = "docker ps -q -f name=backend --format '{{.Names}}'"
+        candidates = self.ssh.exec_command(find_cmd).strip().split('\n')
+        
+        backend_container = None
+        for name in candidates:
+            name = name.strip("'\" ")
+            if not name: continue
+            if 'hosting' in name and 'backend' in name:
+                backend_container = name
+                break
+        
+        if not backend_container and candidates:
+            # Pick the first one that looks like a backend
+            for name in candidates:
+                name = name.strip("'\" ")
+                if 'backend' in name:
+                    backend_container = name
+                    break
+                    
+        if not backend_container:
+            # Absolute fallback to the setting or default
+            backend_container = getattr(settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1")
+            check_cmd = f"docker ps -q -f name={backend_container}"
+            if not self.ssh.exec_command(check_cmd).strip():
+                 raise RuntimeError(
+                     f"Could not locate CloudNeuron backend container on target server. "
+                     f"Searched for: {candidates} and {backend_container}"
+                 )
 
         self.ssh.exec_command(f"docker cp {shlex.quote(remote_backup_path)} {backend_container}:/tmp/transfer_backup.tar.gz")
 

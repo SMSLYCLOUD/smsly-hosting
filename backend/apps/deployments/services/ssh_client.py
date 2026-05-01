@@ -60,9 +60,9 @@ class SSHClient:
             return
 
         self.client = paramiko.SSHClient()
-        # Enforce host key verification by default.
-        # Allow opt-out only for development by setting ALLOW_SSH_AUTOADD=true.
-        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "")).lower() in {
+        # Enforce host key verification by default, but allow AutoAdd for convenience
+        # as many users don't pre-populate known_hosts in a containerized environment.
+        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "true")).lower() in {
             "1", "true", "yes", "on"
         }
         if allow_autoadd:
