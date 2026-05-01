@@ -41,21 +41,41 @@ export default function UpdatesPage() {
     const [updates, setUpdates] = useState<PlatformUpdate[]>([]);
     const [loading, setLoading] = useState(true);
     const [triggering, setTriggering] = useState(false);
+    const [isBackendReachable, setIsBackendReachable] = useState(true);
+    const [isPolling, setIsPolling] = useState(false);
     const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
 
     const fetchUpdates = async () => {
         try {
             const res = await fetch(apiUrl('/platform-updates/'), { headers: getHeaders() });
             if (res.ok) {
+                setIsBackendReachable(true);
                 const data = await res.json();
-                setUpdates(Array.isArray(data) ? data : data.results);
+                setUpdates(data);
+
+                const inProgress = data.find((u: any) =>
+                    ['queued', 'preflight_running', 'snapshotting', 'updating', 'migrating', 'health_checking', 'rollback_started', 'rollback_running'].includes(u.status)
+                );
+                if (inProgress) {
+                    setIsPolling(true);
+                } else {
+                    setIsPolling(false);
+                }
+            } else {
+                if (isPolling && (res.status === 502 || res.status === 503)) {
+                     setIsBackendReachable(false);
+                }
             }
         } catch (e) {
-            console.error('Failed to fetch updates:', e);
+            console.error("Failed to fetch updates:", e);
+            if (isPolling) {
+                setIsBackendReachable(false);
+            }
         } finally {
             setLoading(false);
         }
     };
+
 
     useEffect(() => {
         fetchUpdates();
@@ -149,18 +169,14 @@ export default function UpdatesPage() {
                             <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
                             <div>
                                 <h3 className="font-semibold text-lg text-blue-500">Update in Progress</h3>
-                                <p className="text-sm text-blue-400/80">{activeUpdate.current_step}</p>
+                                <p className="text-sm text-blue-400/80">
+                                    {!isBackendReachable ? "Backend restarting, waiting for reconnect..." : activeUpdate.status.replace(/_/g, ' ')}
+                                </p>
                             </div>
-                            <span className="ml-auto font-mono text-xl font-bold text-blue-500">{activeUpdate.progress_percent}%</span>
-                        </div>
-                        <div className="w-full bg-blue-950/50 rounded-full h-2 overflow-hidden">
-                            <div
-                                className="bg-blue-500 h-full transition-all duration-500 ease-out"
-                                style={{ width: `${activeUpdate.progress_percent}%` }}
-                            />
                         </div>
                     </Card>
                 )}
+
 
                 <div className="space-y-4">
                     {loading ? (

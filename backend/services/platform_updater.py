@@ -102,15 +102,78 @@ def perform_update(update_record) -> bool:
     """
     from apps.deployments.models_updates import PlatformUpdate
 
-    # Prevent concurrent updates
-    active_updates = PlatformUpdate.objects.filter(status__in=['BACKING_UP', 'PULLING', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK']).exclude(id=update_record.id).exists()
-    if active_updates:
-        update_record.error_message = 'Another update is currently in progress'
-        update_record.status = 'FAILED'
-        update_record.save()
-        return False
+    from apps.core.services.audit_service import AuditService
+    from django.db import transaction
+    import os
+
+    with transaction.atomic():
+        # Lock the row if it exists or use a global lock check
+        active_updates = PlatformUpdate.objects.select_for_update().filter(
+            status__in=[
+                'QUEUED',
+                'PREFLIGHT_RUNNING',
+                'SNAPSHOTTING',
+                'UPDATING',
+                'MIGRATING',
+                'HEALTH_CHECKING',
+                'ROLLBACK_STARTED',
+                'ROLLBACK_RUNNING',
+                'PENDING', 'PULLING', 'BACKING_UP', 'RESTARTING', 'HEALTH_CHECK'
+            ]
+        ).exclude(id=update_record.id).exists()
+
+        if active_updates:
+            update_record.error_message = 'Another update is currently in progress'
+            update_record.status = 'FAILED'
+            update_record.save()
+            return False
 
     try:
+        update_record.status = 'PREFLIGHT_RUNNING'
+        update_record.save()
+        AuditService.log("paas_update_started", target=f"update_{update_record.id}")
+
+        db_url = os.getenv("DIRECT_DATABASE_URL")
+        if not db_url:
+            update_record.append_log("DIRECT_DATABASE_URL is missing. Aborting to protect database integrity.")
+            raise PlatformUpdateError("DIRECT_DATABASE_URL missing")
+
+        update_record.append_log("Recording current migration state...")
+        ok, migrations_out = _run(["python", "manage.py", "showmigrations", "--plan"])
+        if ok:
+            update_record.append_log("Migration state recorded.")
+        else:
+            update_record.append_log(f"Failed to record migrations: {migrations_out}")
+            raise PlatformUpdateError("Migration recording failed")
+
+        update_record.status = 'SNAPSHOTTING'
+        update_record.save()
+
+        if str(os.getenv("PAAS_ENABLE_DB_SNAPSHOTS", "true")).lower() == "true":
+            backup_dir = os.getenv("PAAS_BACKUP_DIR", "/var/lib/cloudneuron/backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            import datetime
+            ts = datetime.datetime.now().strftime("%Y%md%H%M%S")
+            snapshot_path = os.path.join(backup_dir, f"db_snapshot_{update_record.id}_{ts}.dump")
+
+            update_record.append_log(f"Creating snapshot at {snapshot_path}")
+
+            ok, snap_out = _run(["pg_dump", "--format=custom", "--no-owner", "--no-acl", "--file", snapshot_path, db_url])
+            if not ok:
+                 update_record.append_log(f"Snapshot failed: {snap_out}")
+                 raise PlatformUpdateError("Snapshot failed")
+
+            # In old model, snapshot_data is JSON.
+            sd = update_record.snapshot_data or {}
+            sd['db_snapshot_path'] = snapshot_path
+            update_record.snapshot_data = sd
+            update_record.save(update_fields=['snapshot_data'])
+            AuditService.log("paas_update_snapshot_created", target=f"update_{update_record.id}")
+        else:
+            sd = update_record.snapshot_data or {}
+            sd['db_snapshot_path'] = "skipped"
+            update_record.snapshot_data = sd
+            update_record.save(update_fields=['snapshot_data'])
         # Step 1: Snapshot
         update_record.status = 'BACKING_UP'
         update_record.current_step = 'Creating pre-update snapshot'
@@ -248,7 +311,52 @@ def perform_update(update_record) -> bool:
 
 def _rollback(update_record) -> bool:
     """Roll back to the snapshot state."""
-    update_record.append_log('Starting automatic rollback...')
+    from apps.core.services.audit_service import AuditService
+    import os
+
+    update_record.status = 'ROLLBACK_RUNNING'
+    update_record.save()
+    AuditService.log("paas_rollback_started", target=f"update_{update_record.id}")
+
+    allow_restore = str(os.getenv("PAAS_ALLOW_AUTOMATED_DB_RESTORE", "false")).lower() == "true"
+    db_snap = update_record.snapshot_data.get('db_snapshot_path') if isinstance(update_record.snapshot_data, dict) else None
+    if allow_restore and db_snap and db_snap != "skipped":
+         update_record.append_log("Restoring database from snapshot...")
+
+         db_url = os.getenv("DIRECT_DATABASE_URL")
+         if not db_url:
+             update_record.append_log("DIRECT_DATABASE_URL missing during restore. Failing rollback.")
+             update_record.status = 'FAILED'
+             update_record.save()
+             return False
+
+         env = os.getenv("PAAS_ENVIRONMENT", "production")
+         if env != "production" and not os.getenv("PAAS_ALLOW_DANGEROUS_RESTORE"):
+             update_record.append_log("Cannot restore to non-production database without explicit override.")
+             update_record.status = 'FAILED'
+             update_record.save()
+             return False
+
+         AuditService.log("paas_rollback_db_restore_started", target=f"update_{update_record.id}")
+
+         ok, res_out = _run(["pg_restore", "--clean", "--no-owner", "--no-acl", "--if-exists", "-d", db_url, db_snap])
+         if not ok:
+             update_record.append_log(f"Restore failed: {res_out}")
+             update_record.status = 'FAILED'
+             update_record.save()
+             return False
+
+         AuditService.log("paas_rollback_db_restore_succeeded", target=f"update_{update_record.id}")
+
+    elif not allow_restore and db_snap and db_snap != "skipped":
+         update_record.append_log("Automated DB restore disabled. Manual DB restore required.")
+         update_record.status = 'FAILED'
+         update_record.error_message = f"Rollback partial: Manual DB restore required. Check snapshot: {db_snap}"
+         update_record.save()
+         AuditService.log("paas_rollback_failed", target=f"update_{update_record.id}", status="failed", message="Manual DB restore required")
+         return False
+
+    update_record.append_log('Starting automatic rollback of application containers...')
 
     snapshot = update_record.snapshot_data
     old_commit = snapshot.get('commit', '')
