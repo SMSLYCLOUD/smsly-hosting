@@ -1,7 +1,13 @@
 import ipaddress
+import hashlib
+import hmac
+import json
 import socket
-import requests
+import time
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -12,20 +18,78 @@ from .models_servers import ManagedServer
 from .tasks import execute_server_transfer_task, rollback_transfer_task
 
 
-def is_safe_ip(ip_str):
+def is_safe_ip(ip_str, allow_private=False):
     """
     Check if an IP is safe for public transfer requests.
     Blocks private, loopback, and reserved ranges to prevent SSRF.
     """
     try:
         ip = ipaddress.ip_address(ip_str)
-        # Block private, loopback, link-local, multicast, and reserved ranges
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or
+        if (ip.is_loopback or ip.is_link_local or
             ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False
+        if ip.is_private and not allow_private:
             return False
         return True
     except ValueError:
         return False
+
+
+def _gateway_secret_candidates(source_ip):
+    secrets = []
+    for server in ManagedServer.objects.filter(
+        Q(host=source_ip) | Q(private_ip=source_ip)
+    ):
+        secret = str(server.gateway_secret or '').strip()
+        if secret:
+            secrets.append(secret)
+
+    configured_secret = str(
+        getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')
+    ).strip()
+    if configured_secret:
+        secrets.append(configured_secret)
+
+    return secrets
+
+
+def _verify_transfer_sync_hmac(request, source_ip, body):
+    signature = request.headers.get('X-Gateway-Signature-V2', '')
+    timestamp = request.headers.get('X-Request-Timestamp', '')
+    if not signature or not timestamp:
+        return False
+
+    try:
+        request_ts = int(timestamp)
+    except ValueError:
+        return False
+
+    if abs(int(time.time()) - request_ts) > 300:
+        return False
+
+    body_hash = hashlib.sha256(body).hexdigest()
+    payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}"
+
+    for secret in _gateway_secret_candidates(source_ip):
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, signature):
+            return True
+
+    return False
+
+
+def _resolve_incoming_owner(request, source_ip):
+    if request.user and request.user.is_authenticated:
+        return request.user
+
+    server = ManagedServer.objects.filter(
+        Q(host=source_ip) | Q(private_ip=source_ip)
+    ).select_related('owner').first()
+    if server and server.owner_id:
+        return server.owner
+
+    User = get_user_model()
+    return User.objects.filter(is_superuser=True, is_active=True).first()
 
 
 class ServerTransferViewSet(viewsets.ModelViewSet):
@@ -33,8 +97,18 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     serializer_class = ServerTransferSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        if self.action == 'register_incoming':
+            return [permissions.AllowAny()]
+        return super().get_permissions()
+
     def get_queryset(self):
-        return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return self.queryset.none()
+        return self.queryset.filter(
+            Q(service__owner=user) | Q(owner=user)
+        ).distinct().order_by('-created_at')
 
     @action(detail=False, methods=['post'], url_path='register-incoming')
     def register_incoming(self, request):
@@ -42,15 +116,47 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         Internal endpoint: Source node notifies target node of an incoming transfer.
         This allows the target dashboard to show the transfer status.
         """
-        source_ip = request.data.get('source_ip')
-        target_ip = request.data.get('target_ip')
-        transfer_type = request.data.get('transfer_type', 'SERVICE')
-        service_name = request.data.get('service_name')
+        raw_body = request.body
+        data = request.data
+        source_ip = data.get('source_ip')
+        target_ip = data.get('target_ip')
+        transfer_type = data.get('transfer_type', 'SERVICE')
+        service_name = data.get('service_name')
+
+        if transfer_type not in {'SERVICE', 'FULL'}:
+            return Response(
+                {'error': 'transfer_type must be SERVICE or FULL.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not source_ip or not target_ip:
+            return Response(
+                {'error': 'source_ip and target_ip are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ipaddress.ip_address(source_ip)
+            ipaddress.ip_address(target_ip)
+        except ValueError:
+            return Response(
+                {'error': 'source_ip and target_ip must be valid IP addresses.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not request.user.is_authenticated and not _verify_transfer_sync_hmac(request, source_ip, raw_body):
+            return Response(
+                {'error': 'Valid node authentication is required.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        owner = _resolve_incoming_owner(request, source_ip)
 
         # Check if a similar incoming transfer already exists
         existing = ServerTransfer.objects.filter(
             source_node_id=source_ip,
             target_server_ip=target_ip,
+            owner=owner,
             status__in=['PREPARING', 'UPLOADING', 'RESTORING']
         ).first()
 
@@ -62,6 +168,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             source_server_ip=source_ip,
             target_server_ip=target_ip,
             transfer_type=transfer_type,
+            owner=owner,
             is_incoming=True,
             source_node_id=source_ip,
             current_step=f"Incoming {transfer_type} transfer from {source_ip}"
@@ -75,7 +182,14 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"DEBUG: Transfer request received. Data: {request.data}")
+        logger.info(
+            "Transfer request received: transfer_type=%s service_id=%s target_server_id=%s target_ip_provided=%s auth_provided=%s",
+            request.data.get('transfer_type'),
+            request.data.get('service_id'),
+            request.data.get('target_server_id'),
+            bool(request.data.get('target_server_ip')),
+            bool(request.data.get('target_ssh_key') or request.data.get('target_ssh_password')),
+        )
         
         serializer = ServerTransferCreateSerializer(data=request.data)
         if not serializer.is_valid():
@@ -104,21 +218,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         source_server_ip = payload.get('source_server_ip')
         if not source_server_ip:
             source_server_ip = PlatformConfig.load().server_ip
-        
-        # Fallback: Auto-detect local IP if still missing
-        if not source_server_ip:
-            try:
-                # Try to get public IP via common check service
-                source_server_ip = requests.get('https://api.ipify.org', timeout=5).text.strip()
-            except Exception:
-                # Local network fallback
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    s.connect(("8.8.8.8", 80))
-                    source_server_ip = s.getsockname()[0]
-                    s.close()
-                except Exception:
-                    source_server_ip = None
 
         if not source_server_ip:
             return Response(
@@ -179,7 +278,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         target_server_ip = resolved_target_ip
 
         # SSRF Protection
-        if not is_safe_ip(target_server_ip):
+        if not is_safe_ip(target_server_ip, allow_private=bool(target_server)):
             return Response(
                 {'error': 'Target server IP is in a forbidden range (SSRF protection).'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -210,6 +309,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             target_ssh_password=target_ssh_password,
             transfer_type=transfer_type,
             service=service,
+            owner=request.user,
         )
 
         execute_server_transfer_task.delay(str(transfer.id))

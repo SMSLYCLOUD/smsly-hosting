@@ -8,6 +8,7 @@ deploying WireGuard configurations across the server fleet.
 import logging
 
 from django.db import DatabaseError
+from django.db.models import Q
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
@@ -84,6 +85,13 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
     queryset = MeshNetwork.objects.all().prefetch_related("peers")
     permission_classes = [IsAdminUser]
 
+    def get_queryset(self):
+        queryset = self.queryset
+        user = self.request.user
+        if user and user.is_superuser:
+            return queryset
+        return queryset.filter(Q(project__owner=user) | Q(project__isnull=True))
+
     def get_serializer_class(self):
         if self.action in ["create"]:
             return MeshNetworkCreateSerializer
@@ -130,7 +138,10 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
 
         from apps.deployments.models_servers import ManagedServer
         try:
-            server = ManagedServer.objects.get(id=server_id)
+            server_queryset = ManagedServer.objects.all()
+            if not request.user.is_superuser:
+                server_queryset = server_queryset.filter(owner=request.user)
+            server = server_queryset.get(id=server_id)
         except ManagedServer.DoesNotExist:
             return Response(
                 {"error": "Server not found."},

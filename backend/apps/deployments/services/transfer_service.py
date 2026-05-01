@@ -7,11 +7,14 @@ import requests
 import shlex
 import glob
 import socket
+import hashlib
+import hmac
 from datetime import timedelta
 
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Q
 
 from .backup_service import BackupService
 from .ssh_client import SSHClient
@@ -35,13 +38,52 @@ class ServerTransferService:
         self.transfer.save(update_fields=['logs'])
         logger.info(f"Transfer {self.transfer.id}: {message}")
 
+    def _target_server_record(self):
+        from ..models_core import ManagedServer
+
+        target = str(self.transfer.target_server_ip or '').strip()
+        if not target:
+            return None
+        return ManagedServer.objects.filter(Q(host=target) | Q(private_ip=target)).first()
+
+    def _build_sync_auth_headers(self, body: bytes, path: str) -> dict:
+        headers = {'Content-Type': 'application/json'}
+        server = self._target_server_record()
+
+        token = str(getattr(server, 'api_token', '') or '').strip() if server else ''
+        if token:
+            if token.lower().startswith(('bearer ', 'token ')):
+                headers['Authorization'] = token
+            elif token.startswith('smsly_'):
+                headers['Authorization'] = f'Bearer {token}'
+            else:
+                headers['Authorization'] = f'Token {token}'
+
+        secret = str(getattr(server, 'gateway_secret', '') or '').strip() if server else ''
+        if not secret:
+            secret = str(
+                getattr(settings, 'GATEWAY_SECRET', '') or getattr(settings, 'SECRET_KEY', '')
+            ).strip()
+
+        if secret:
+            timestamp = str(int(time.time()))
+            body_hash = hashlib.sha256(body).hexdigest()
+            payload = f"POST|{path}|{timestamp}|{body_hash}"
+            signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+            headers['X-Request-Timestamp'] = timestamp
+            headers['X-Gateway-Signature-V2'] = signature
+
+        return headers
+
     def _sync_target_dashboard(self):
         """Notify the target server of this incoming transfer for dashboard visibility."""
         try:
-            # We assume the target server has a CloudNeuron API at target_server_ip
-            # Usually we use the same port and a standard token if possible, 
-            # but for now we try a simple unauthenticated register (or via a cluster secret)
-            target_url = f"https://{self.transfer.target_server_ip}/api/v1/transfers/register-incoming/"
+            path = "/api/v1/transfers/register-incoming/"
+            server = self._target_server_record()
+            if server and server.api_url:
+                target_url = f"{str(server.api_url).rstrip('/')}{path}"
+            else:
+                target_url = f"https://{self.transfer.target_server_ip}{path}"
             
             payload = {
                 'source_ip': self.transfer.source_server_ip,
@@ -49,10 +91,17 @@ class ServerTransferService:
                 'transfer_type': self.transfer.transfer_type,
                 'service_name': self.transfer.service.name if self.transfer.service else None
             }
+            body = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode()
+            headers = self._build_sync_auth_headers(body, path)
             
-            # Since this is internal, we might need a cluster secret header in the future.
-            # For now, we fire and forget or log the failure.
-            resp = requests.post(target_url, json=payload, timeout=5, verify=False)
+            verify_tls = bool(getattr(settings, "TRANSFER_SYNC_VERIFY_TLS", True))
+            resp = requests.post(
+                target_url,
+                data=body,
+                headers=headers,
+                timeout=5,
+                verify=verify_tls,
+            )
             if resp.status_code in (200, 201):
                 self._log("Target dashboard synchronized successfully.")
             else:
@@ -252,7 +301,10 @@ class ServerTransferService:
                      f"Searched for: {candidates} and {backend_container}"
                  )
 
-        self.ssh.exec_command(f"docker cp {shlex.quote(remote_backup_path)} {backend_container}:/tmp/transfer_backup.tar.gz")
+        safe_backend_container = shlex.quote(backend_container)
+        self.ssh.exec_command(
+            f"docker cp {shlex.quote(remote_backup_path)} {safe_backend_container}:/tmp/transfer_backup.tar.gz"
+        )
 
         self._update(75, 'Hydrating Service via remote Django ORM...')
         
@@ -317,18 +369,24 @@ if __name__ == '__main__':
             # Upload to host
             self.ssh.upload_file(local_script.name, script_path)
             # Copy into container
-            self.ssh.exec_command(f"docker cp {shlex.quote(script_path)} {backend_container}:/tmp/restore_trigger.py")
+            self.ssh.exec_command(
+                f"docker cp {shlex.quote(script_path)} {safe_backend_container}:/tmp/restore_trigger.py"
+            )
         finally:
             os.unlink(local_script.name)
 
         self._update(85, 'Running database and volume migrations on target...')
         # Execute the python script inside the remote container
-        result = self.ssh.exec_command(f"docker exec {backend_container} python3 /tmp/restore_trigger.py")
+        result = self.ssh.exec_command(
+            f"docker exec {safe_backend_container} python3 /tmp/restore_trigger.py"
+        )
         if "RESTORE_FAILED" in result or "ERROR:" in result:
             raise RuntimeError(f"Remote service hydration failed: {result}")
             
         # Cleanup
-        self.ssh.exec_command(f"docker exec {backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py")
+        self.ssh.exec_command(
+            f"docker exec {safe_backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py"
+        )
         self.ssh.exec_command(f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}")
 
         self._update(90, 'Starting service container on target...')
@@ -504,7 +562,13 @@ if os.path.exists(services_dir):
             WireGuardService.add_peer_to_mesh(mesh, server=target_server, is_local=False)
 
             # 5. Deploy configurations to establish connection
-            WireGuardService.deploy_full_mesh(mesh)
+            results = WireGuardService.deploy_full_mesh(mesh)
+            if results.get("failed"):
+                logger.warning(
+                    "Mesh interconnect configured but deployment had failures: %s",
+                    results["failed"],
+                )
+                return
 
             logger.info(f"Successfully configured mesh interconnect between local and {self.transfer.target_server_ip}")
         except Exception as e:
@@ -578,10 +642,13 @@ if os.path.exists(services_dir):
             logger.info("Connectivity check passed: target -> %s:22", source_ip)
             return
 
-        raise RuntimeError(
+        message = (
             f"Target server cannot reach source server on TCP/22 ({source_ip}). "
             "Verify firewall/security-group rules between both servers."
         )
+        if bool(getattr(settings, "TRANSFER_REQUIRE_BIDIRECTIONAL_SSH", False)):
+            raise RuntimeError(message)
+        logger.warning(message)
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'
@@ -593,7 +660,10 @@ if os.path.exists(services_dir):
         # Update Service record to point to the new server for grouping in Transfers page
         if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
             from ..models_core import ManagedServer
-            target_server = ManagedServer.objects.filter(host=self.transfer.target_server_ip).first()
+            target_server = ManagedServer.objects.filter(
+                Q(host=self.transfer.target_server_ip) |
+                Q(private_ip=self.transfer.target_server_ip)
+            ).first()
             if target_server:
                 self.transfer.service.server = target_server
                 self.transfer.service.save(update_fields=['server'])

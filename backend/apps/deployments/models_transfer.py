@@ -1,12 +1,21 @@
 import uuid
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
+from encrypted_model_fields.fields import EncryptedCharField, EncryptedTextField
 from .models_core import Service
 from .models_backup import ServiceBackup, ServerBackup
 
 class ServerTransfer(models.Model):
     """Tracks migration of services from source to target server."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='server_transfers',
+    )
     status = models.CharField(choices=[
         ('PREPARING', 'Preparing'),        # creating backup on source
         ('UPLOADING', 'Uploading'),         # transferring to target
@@ -25,8 +34,8 @@ class ServerTransfer(models.Model):
 
     # Target
     target_server_ip = models.GenericIPAddressField()
-    target_ssh_key = models.TextField(blank=True)  # encrypted SSH key for target
-    target_ssh_password = models.CharField(max_length=255, blank=True, default='')  # SSH password for target
+    target_ssh_key = EncryptedTextField(blank=True, default='')
+    target_ssh_password = EncryptedCharField(max_length=255, blank=True, default='')
 
     # Scope
     transfer_type = models.CharField(choices=[

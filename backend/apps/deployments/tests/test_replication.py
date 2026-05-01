@@ -7,6 +7,7 @@ from django.urls import reverse
 from django.contrib.auth import get_user_model
 
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
+from apps.deployments.services.replication_service import ReplicationService
 
 User = get_user_model()
 
@@ -28,13 +29,34 @@ def mesh():
     mesh = MeshNetwork.objects.create(name="test-mesh", subnet="10.100.0.0/24")
     # Peer 1 (Local)
     WireGuardPeer.objects.create(
-        mesh=mesh, is_local=True, is_active=True, wg_address="10.100.0.1"
+        mesh=mesh, is_local=True, is_active=True, wg_address="10.100.0.1",
+        private_key="local-private", public_key="l" * 44,
     )
     # Peer 2 (Remote)
     WireGuardPeer.objects.create(
-        mesh=mesh, is_local=False, is_active=True, wg_address="10.100.0.2"
+        mesh=mesh, is_local=False, is_active=True, wg_address="10.100.0.2",
+        private_key="remote-private", public_key="r" * 44,
     )
     return mesh
+
+
+@pytest.mark.django_db
+def test_replication_configs_bind_to_wireguard_addresses(mesh):
+    patroni_configs = ReplicationService.generate_patroni_compose(
+        mesh,
+        "db-pass",
+        "admin-pass",
+        "repl-pass",
+    )
+    local_config = patroni_configs["10.100.0.1"]
+    haproxy_config = ReplicationService.generate_haproxy_config(mesh)
+
+    assert "--listen-client-urls http://10.100.0.1:2379" in local_config
+    assert 'PATRONI_POSTGRESQL_LISTEN: "10.100.0.1:5432"' in local_config
+    assert 'PATRONI_RESTAPI_LISTEN: "10.100.0.1:8008"' in local_config
+    assert "0.0.0.0:5432" not in local_config
+    assert "bind 10.100.0.1:5000" in haproxy_config
+    assert "bind *:5000" not in haproxy_config
 
 
 @pytest.mark.django_db

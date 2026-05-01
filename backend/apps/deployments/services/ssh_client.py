@@ -13,10 +13,21 @@ class SSHConnectionError(Exception):
 
 
 class SSHClient:
-    def __init__(self, ip, key_content='', user='root', password=''):
-        self.ip = ip
-        self.user = user
-        self.key_content = key_content
+    def __init__(
+        self,
+        ip=None,
+        key_content='',
+        user='root',
+        password='',
+        port=22,
+        host=None,
+        username=None,
+        private_key=None,
+    ):
+        self.ip = ip or host
+        self.port = port
+        self.user = username or user
+        self.key_content = key_content or private_key or ''
         self.password = password
         self.client = None
         self.sftp = None
@@ -73,6 +84,7 @@ class SSHClient:
         # Determine auth method: key or password
         connect_kwargs = {
             'hostname': self.ip,
+            'port': self.port,
             'username': self.user,
             'timeout': 10,
             'banner_timeout': 30,
