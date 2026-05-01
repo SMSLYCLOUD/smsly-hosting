@@ -1023,11 +1023,13 @@ export const deployApi = {
     serviceId: string,
     ref: string = 'HEAD',
     serverIds: string[] = [],
+    includeLocal: boolean = true,
     requestConfig?: any,
   ): Promise<any> => {
     const res = await api.post(`/services/${serviceId}/multi-deploy/`, {
       ref,
       server_ids: serverIds,
+      include_local: includeLocal,
     }, requestConfig);
     return res.data;
   },

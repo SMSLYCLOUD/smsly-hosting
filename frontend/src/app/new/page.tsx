@@ -89,6 +89,7 @@ export default function NewServicePage() {
   const [servers, setServers] = React.useState<ManagedServer[]>([])
   const [serversLoading, setServersLoading] = React.useState(false)
   const [selectedServers, setSelectedServers] = React.useState<string[]>([])
+  const [includeLocal, setIncludeLocal] = React.useState(true)
   const [deployResults, setDeployResults] = React.useState<any>(null)
 
   // Project selection state
@@ -293,6 +294,7 @@ export default function NewServicePage() {
         service.id,
         branch || 'main',
         selectedServers,
+        includeLocal,
         localOnlyRequest,
       )
       setDeployResults(results)
@@ -301,7 +303,7 @@ export default function NewServicePage() {
       toast({
         title: "🚀 Deploying!",
         description: remoteCount > 0
-          ? `Service created — deploying to local + ${remoteCount} remote server${remoteCount > 1 ? 's' : ''}.`
+          ? `Service created — deploying to ${includeLocal ? 'local + ' : ''}${remoteCount} remote server${remoteCount > 1 ? 's' : ''}.`
           : "Service created — AI is handling the rest.",
       })
       // Brief delay to let progress show before navigating
@@ -943,8 +945,25 @@ export default function NewServicePage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    {/* Local server — always included */}
-                    <div className="flex items-center gap-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
+                    {/* Local server selection */}
+                    <button
+                      type="button"
+                      onClick={() => setIncludeLocal(!includeLocal)}
+                      className={cn(
+                        "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all",
+                        includeLocal
+                          ? "border-emerald-500/30 bg-emerald-500/5 shadow-sm"
+                          : "border-border hover:border-primary/50 hover:bg-muted/30"
+                      )}
+                    >
+                      {/* Checkbox */}
+                      <div className={cn(
+                        "w-5 h-5 rounded border-2 flex items-center justify-center transition-colors",
+                        includeLocal ? "bg-emerald-500 border-emerald-500" : "border-muted-foreground/40"
+                      )}>
+                        {includeLocal && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
+                      </div>
+
                       <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center">
                         <Monitor className="h-4 w-4 text-emerald-500" />
                       </div>
@@ -952,8 +971,10 @@ export default function NewServicePage() {
                         <p className="font-medium text-sm">This Server (Local)</p>
                         <p className="text-xs text-muted-foreground">Primary deployment target</p>
                       </div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 font-medium">Always included</span>
-                    </div>
+                      {includeLocal && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-500 font-medium">Included</span>
+                      )}
+                    </button>
 
                     {/* Remote servers */}
                     {serversLoading ? (
@@ -1030,11 +1051,15 @@ export default function NewServicePage() {
                       })
                     )}
 
-                    {selectedServers.length > 0 && (
+                    {(selectedServers.length > 0 || includeLocal) && (
                       <div className="flex items-center gap-2 pt-2 text-sm">
                         <Rocket className="h-4 w-4 text-primary" />
                         <span>
-                          Deploying to <strong>local + {selectedServers.length} remote</strong> server{selectedServers.length > 1 ? 's' : ''}
+                          Deploying to <strong>
+                            {includeLocal ? 'local' : ''}
+                            {includeLocal && selectedServers.length > 0 ? ' + ' : ''}
+                            {selectedServers.length > 0 ? `${selectedServers.length} remote` : ''}
+                          </strong> server{(selectedServers.length + (includeLocal ? 1 : 0)) > 1 ? 's' : ''}
                         </span>
                       </div>
                     )}
@@ -1110,8 +1135,8 @@ export default function NewServicePage() {
                 {isDeploying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Rocket className="mr-2 h-4 w-4" />}
                 {isDeploying
                   ? "Deploying..."
-                  : selectedServers.length > 0
-                    ? `🚀 Deploy to ${1 + selectedServers.length} Servers`
+                  : (selectedServers.length + (includeLocal ? 1 : 0)) > 1
+                    ? `🚀 Deploy to ${selectedServers.length + (includeLocal ? 1 : 0)} Servers`
                     : "🚀 Deploy Service"
                 }
               </Button>

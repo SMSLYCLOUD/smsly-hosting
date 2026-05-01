@@ -45,6 +45,10 @@ class ServerTransfer(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
     estimated_downtime_seconds = models.IntegerField(default=0)
 
+    # Federated Dashboard Sync
+    is_incoming = models.BooleanField(default=False, help_text="True if this node is the target")
+    source_node_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID/IP of the initiating node")
+
     # Rollback
     can_rollback = models.BooleanField(default=True)
     rollback_deadline = models.DateTimeField(null=True)  # after this, source cleaned up
