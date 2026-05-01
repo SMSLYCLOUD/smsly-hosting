@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import requests
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -60,6 +61,22 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         source_server_ip = payload.get('source_server_ip')
         if not source_server_ip:
             source_server_ip = PlatformConfig.load().server_ip
+        
+        # Fallback: Auto-detect local IP if still missing
+        if not source_server_ip:
+            try:
+                # Try to get public IP via common check service
+                source_server_ip = requests.get('https://api.ipify.org', timeout=5).text.strip()
+            except Exception:
+                # Local network fallback
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.connect(("8.8.8.8", 80))
+                    source_server_ip = s.getsockname()[0]
+                    s.close()
+                except Exception:
+                    source_server_ip = None
+
         if not source_server_ip:
             return Response(
                 {
