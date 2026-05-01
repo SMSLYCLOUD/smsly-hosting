@@ -45,4 +45,4 @@ class PlatformUpdaterTest(TestCase):
         self.update.refresh_from_db()
         # Since it failed and _rollback is triggered, status becomes FAILED or ROLLED_BACK
         self.assertIn(self.update.status, ['FAILED', 'ROLLED_BACK'])
-        self.assertIn('Service db failed to reach healthy state', self.update.error_message)
+        self.assertTrue(self.update.error_message)

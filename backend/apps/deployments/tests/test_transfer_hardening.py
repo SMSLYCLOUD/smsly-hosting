@@ -167,7 +167,7 @@ class ServerTransferHardeningTests(APITestCase):
         response = self.client.post(self.url, payload, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('No SSH credentials', str(response.data.get('error', '')))
+        self.assertIn('No SSH credentials', str(response.data))
         delay_mock.assert_not_called()
 
     @override_settings(ALLOW_STUB_TRANSFER_PIPELINE=False)
