@@ -3432,8 +3432,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         response = FileResponse(
             open(file_path, 'rb'),
             as_attachment=True,
-            filename=os.path.basename(file_path),
-            blksize=65536
+            filename=os.path.basename(file_path)
         )
         response['Content-Length'] = os.path.getsize(file_path)
         response['Content-Type'] = 'application/x-tar'

@@ -37,8 +37,15 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"DEBUG: Transfer request received. Data: {request.data}")
+        
         serializer = ServerTransferCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning(f"DEBUG: Transfer validation failed. Errors: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
         payload = serializer.validated_data
 
         transfer_type = payload['transfer_type']
