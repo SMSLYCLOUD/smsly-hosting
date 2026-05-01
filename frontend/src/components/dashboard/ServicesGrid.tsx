@@ -27,7 +27,7 @@ import { motion } from 'framer-motion';
 import Link from 'next/link';
 
 interface ServicesGridProps {
-  services: Service[];
+  services: (Service & { isAddon?: boolean; addon_type?: string; connection_url?: string })[];
 }
 
 export function ServicesGrid({ services }: ServicesGridProps) {
@@ -112,7 +112,9 @@ export function ServicesGrid({ services }: ServicesGridProps) {
           <div className="p-4 border-b border-border/50 flex justify-between items-start">
             <div className="flex gap-3">
               <div className="p-2.5 rounded-lg bg-muted border border-border shadow-inner">
-                {service.name.includes('db') || service.name.includes('postgres') ? (
+                {service.isAddon ? (
+                  <Database size={20} className="text-blue-500" />
+                ) : service.name.includes('db') || service.name.includes('postgres') ? (
                   <Database size={20} className="text-blue-500" />
                 ) : service.name.includes('redis') ? (
                   <Activity size={20} className="text-red-500" />
@@ -121,11 +123,11 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 )}
               </div>
               <div>
-                <h3 className="font-bold text-sm text-foreground tracking-tight cursor-pointer hover:underline" onClick={() => router.push(`/services/${service.id}`)}>
+                <h3 className="font-bold text-sm text-foreground tracking-tight cursor-pointer hover:underline" onClick={() => router.push(service.isAddon ? `/addons/${service.id}` : `/services/${service.id}`)}>
                   {service.name}
                 </h3>
                 <p className="text-[11px] text-muted-foreground font-mono truncate w-32">
-                  {service.latest_deployment?.commit_hash?.substring(0, 7) || 'HEAD'}
+                  {service.isAddon ? service.addon_type : (service.latest_deployment?.commit_hash?.substring(0, 7) || 'HEAD')}
                 </p>
               </div>
             </div>
@@ -136,7 +138,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500 animate-pulse' :
                 'bg-yellow-500'
                 }`} />
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => router.push(`/services/${service.id}`)}>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => router.push(service.isAddon ? `/addons/${service.id}` : `/services/${service.id}`)}>
                 <MoreVertical size={14} />
               </Button>
             </div>
@@ -146,21 +148,22 @@ export function ServicesGrid({ services }: ServicesGridProps) {
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center gap-2">
               <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                service.isAddon ? 'bg-blue-500/15 text-blue-400' :
                 service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' :
                 service.latest_deployment?.status === 'FAILED' ? 'bg-red-500/15 text-red-400' :
                 service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500/15 text-blue-400' :
                 'bg-yellow-500/15 text-yellow-400'
               }`}>
-                {service.latest_deployment?.status || 'PENDING'}
+                {service.isAddon ? 'ADDON' : (service.latest_deployment?.status || 'PENDING')}
               </span>
               {service.deploy_mode === 'COMPOSE' && (
                 <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-violet-500/15 text-violet-400">Compose</span>
               )}
-              <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>
+              {!service.isAddon && <span className="text-[10px] text-muted-foreground ml-auto font-mono">{service.branch || 'main'}</span>}
             </div>
-            {service.public_domain && (
+            {(service.public_domain || service.connection_url) && (
               <p className="text-[11px] text-muted-foreground truncate">
-                {service.public_domain}
+                {service.public_domain || service.connection_url}
               </p>
             )}
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
