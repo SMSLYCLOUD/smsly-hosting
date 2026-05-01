@@ -36,6 +36,42 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
 
+    @action(detail=False, methods=['post'], url_path='register-incoming')
+    def register_incoming(self, request):
+        """
+        Internal endpoint: Source node notifies target node of an incoming transfer.
+        This allows the target dashboard to show the transfer status.
+        """
+        source_ip = request.data.get('source_ip')
+        target_ip = request.data.get('target_ip')
+        transfer_type = request.data.get('transfer_type', 'SERVICE')
+        service_name = request.data.get('service_name')
+
+        # Check if a similar incoming transfer already exists
+        existing = ServerTransfer.objects.filter(
+            source_node_id=source_ip,
+            target_server_ip=target_ip,
+            status__in=['PREPARING', 'UPLOADING', 'RESTORING']
+        ).first()
+
+        if existing:
+            return Response({'id': str(existing.id), 'status': existing.status})
+
+        transfer = ServerTransfer.objects.create(
+            status='PREPARING',
+            source_server_ip=source_ip,
+            target_server_ip=target_ip,
+            transfer_type=transfer_type,
+            is_incoming=True,
+            source_node_id=source_ip,
+            current_step=f"Incoming {transfer_type} transfer from {source_ip}"
+        )
+        if service_name:
+            transfer.logs = f"Targeting service: {service_name}\n"
+            transfer.save(update_fields=['logs'])
+
+        return Response({'id': str(transfer.id), 'status': transfer.status})
+
     def create(self, request, *args, **kwargs):
         import logging
         logger = logging.getLogger(__name__)

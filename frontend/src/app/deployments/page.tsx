@@ -18,6 +18,8 @@ interface Deployment {
   status: string;
   created_at: string;
   commit_hash?: string;
+  commit_message?: string;
+  source_node?: string;
   logs_url?: string;
 }
 
@@ -161,6 +163,11 @@ export default function DeploymentsPage() {
                         </span>
                       )}
                       <span>{new Date(deploy.created_at).toLocaleString()}</span>
+                      {deploy.source_node && (
+                        <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 text-[10px] h-5">
+                          Remote: {deploy.source_node}
+                        </Badge>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

@@ -35,6 +35,31 @@ class ServerTransferService:
         self.transfer.save(update_fields=['logs'])
         logger.info(f"Transfer {self.transfer.id}: {message}")
 
+    def _sync_target_dashboard(self):
+        """Notify the target server of this incoming transfer for dashboard visibility."""
+        try:
+            # We assume the target server has a CloudNeuron API at target_server_ip
+            # Usually we use the same port and a standard token if possible, 
+            # but for now we try a simple unauthenticated register (or via a cluster secret)
+            target_url = f"https://{self.transfer.target_server_ip}/api/v1/transfers/register-incoming/"
+            
+            payload = {
+                'source_ip': self.transfer.source_server_ip,
+                'target_ip': self.transfer.target_server_ip,
+                'transfer_type': self.transfer.transfer_type,
+                'service_name': self.transfer.service.name if self.transfer.service else None
+            }
+            
+            # Since this is internal, we might need a cluster secret header in the future.
+            # For now, we fire and forget or log the failure.
+            resp = requests.post(target_url, json=payload, timeout=5, verify=False)
+            if resp.status_code in (200, 201):
+                self._log("Target dashboard synchronized successfully.")
+            else:
+                self._log(f"Warning: Could not sync target dashboard (HTTP {resp.status_code}).")
+        except Exception as e:
+            self._log(f"Warning: Target dashboard sync skipped: {e}")
+
     def execute(self):
         """Run transfer pipeline with explicit stage transitions."""
         try:
@@ -42,6 +67,7 @@ class ServerTransferService:
 
             self.transfer.status = 'PREPARING'
             self.transfer.save(update_fields=['status'])
+            self._sync_target_dashboard()
             self._prepare()
 
             self.transfer.status = 'UPLOADING'

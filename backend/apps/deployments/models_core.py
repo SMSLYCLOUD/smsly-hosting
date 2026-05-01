@@ -599,6 +599,9 @@ class Deployment(TimeStampedModel):
     # Rollback tracking
     is_rollback = models.BooleanField(
         default=False, help_text="Whether this deployment is a rollback")
+    source_node = models.CharField(
+        max_length=255, blank=True, null=True,
+        help_text="Node that triggered this deployment (for multi-deploy)")
     rollback_from = models.ForeignKey(
         'self',
         on_delete=models.SET_NULL,

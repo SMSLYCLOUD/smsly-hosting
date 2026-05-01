@@ -611,6 +611,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
+        source_node = request.data.get('source_node')
 
         # Check for primary server exclusion
         server = getattr(service, 'server', None)
@@ -652,7 +653,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
-            commit_message=f"Manual Trigger: {ref}"
+            commit_message=f"Manual Trigger: {ref}" if not source_node else f"Remote Deploy: {ref}",
+            source_node=source_node
         )
 
         try:
@@ -888,8 +890,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_servers import ManagedServer
 
         service = self.get_object()
-        ref = str(request.data.get('ref', 'HEAD'))[:200]     # F7: bound length
+        ref = str(request.data.get('ref', 'HEAD'))[:200]
         server_ids = request.data.get('server_ids', [])
+        include_local = request.data.get('include_local', True)
+
+        from .models_core import PlatformConfig
+        p_config = PlatformConfig.objects.first()
+        local_node_id = p_config.server_ip if p_config else "Controller"
 
         # F3: validate & cap server_ids
         if not isinstance(server_ids, list):
@@ -906,47 +913,52 @@ class ServiceViewSet(viewsets.ModelViewSet):
         results = {'local': None, 'remotes': []}
 
         # ── 1. Local deploy ─────────────────────────────────────
-        existing = _has_active_deployment(service)
-        if existing:
-            results['local'] = {
-                'status': 'skipped',
-                'reason': f'Deployment already in progress ({existing.status})',
-                'deployment': DeploymentSerializer(existing).data,
-            }
-        else:
-            provider = _resolve_provider_for_service(service)
-            if not provider:
+        if include_local:
+            existing = _has_active_deployment(service)
+            if existing:
                 results['local'] = {
-                    'status': 'error',
-                    'reason': 'No active cloud provider configured',
+                    'status': 'skipped',
+                    'reason': f'Deployment already in progress ({existing.status})',
+                    'deployment': DeploymentSerializer(existing).data,
                 }
             else:
-                deployment = Deployment.objects.create(
-                    service=service,
-                    status=Deployment.Status.QUEUED,
-                    commit_hash=ref if ref != 'HEAD' else 'latest',
-                    commit_message=f"Multi-deploy: {ref}",
-                )
-                try:
-                    smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
-                    results['local'] = {
-                        'status': 'queued',
-                        'deployment': DeploymentSerializer(deployment).data,
-                    }
-                except Exception as exc:
-                    logger.exception('multi_deploy: local deploy task failed')
-                    deployment.status = Deployment.Status.FAILED
-                    deployment.finished_at = timezone.now()
-                    deployment.build_logs = f"\n[ERROR] {exc}\n"
-                    deployment.save(
-                        update_fields=['status', 'finished_at', 'build_logs', 'updated_at'])
-                    # F4: sanitize — don't leak raw exception to client
+                provider = _resolve_provider_for_service(service)
+                if not provider:
                     results['local'] = {
                         'status': 'error',
-                        'reason': 'Failed to queue local deployment. Check server logs.',
-                        'deployment': DeploymentSerializer(deployment).data,
+                        'reason': 'No active cloud provider configured',
                     }
-
+                else:
+                    deployment = Deployment.objects.create(
+                        service=service,
+                        status=Deployment.Status.QUEUED,
+                        commit_hash=ref if ref != 'HEAD' else 'latest',
+                        commit_message=f"Multi-deploy: {ref}",
+                    )
+                    try:
+                        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+                        results['local'] = {
+                            'status': 'queued',
+                            'deployment': DeploymentSerializer(deployment).data,
+                        }
+                    except Exception as exc:
+                        logger.exception('multi_deploy: local deploy task failed')
+                        deployment.status = Deployment.Status.FAILED
+                        deployment.finished_at = timezone.now()
+                        deployment.build_logs = f"\n[ERROR] {exc}\n"
+                        deployment.save(
+                            update_fields=['status', 'finished_at', 'build_logs', 'updated_at'])
+                        # F4: sanitize — don't leak raw exception to client
+                        results['local'] = {
+                            'status': 'error',
+                            'reason': 'Failed to queue local deployment. Check server logs.',
+                            'deployment': DeploymentSerializer(deployment).data,
+                        }
+        else:
+            results['local'] = {
+                'status': 'skipped',
+                'reason': 'Excluded by user preference',
+            }
         # ── 2. Remote deploys ───────────────────────────────────
         if server_ids:
             servers = ManagedServer.objects.filter(
@@ -1083,7 +1095,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     deploy_resp = req_lib.post(
                         f'{base_url}/api/v1/services/{remote_svc_id}/deploy/',
                         headers=headers,
-                        json={'ref': ref},
+                        json={
+                            'ref': ref,
+                            'source_node': local_node_id
+                        },
                         timeout=15,
                     )
                     if deploy_resp.status_code in (200, 201):
