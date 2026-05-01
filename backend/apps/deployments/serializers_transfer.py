@@ -89,10 +89,21 @@ class ServerTransferCreateSerializer(serializers.Serializer):
         # Require at least one SSH auth method
         has_key = bool(attrs.get('target_ssh_key', '').strip())
         has_password = bool(attrs.get('target_ssh_password', '').strip())
-        has_managed_target = bool(target_server_id)
-        if not has_key and not has_password and not has_managed_target:
+        target_server = None
+        
+        if target_server_id:
+            from .models_servers import ManagedServer
+            target_server = ManagedServer.objects.filter(id=target_server_id).first()
+            if not target_server:
+                raise serializers.ValidationError({'target_server_id': "Target server not found."})
+
+        has_managed_credentials = False
+        if target_server:
+            has_managed_credentials = bool(target_server.ssh_key or target_server.ssh_password)
+
+        if not has_key and not has_password and not has_managed_credentials:
             raise serializers.ValidationError(
-                "Provide target_ssh_key, target_ssh_password, or target_server_id with saved SSH credentials."
+                "Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
             )
 
         return attrs

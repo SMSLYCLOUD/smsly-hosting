@@ -193,13 +193,14 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         
         serializer = ServerTransferCreateSerializer(data=request.data)
         if not serializer.is_valid():
-            logger.warning(f"DEBUG: Transfer validation failed. Errors: {serializer.errors}")
+            logger.warning(f"Transfer validation failed: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
         payload = serializer.validated_data
 
         transfer_type = payload['transfer_type']
         if transfer_type == 'FULL':
+            logger.warning("Transfer failed: FULL transfer not implemented yet.")
             return Response(
                 {'error': 'FULL server transfer is not available via API yet.'},
                 status=status.HTTP_501_NOT_IMPLEMENTED,
@@ -210,6 +211,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             owner=request.user,
         ).first()
         if not service:
+            logger.warning(f"Transfer failed: Service {payload.get('service_id')} not found for user {request.user}")
             return Response(
                 {'error': 'Service not found'},
                 status=status.HTTP_404_NOT_FOUND,
@@ -220,6 +222,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             source_server_ip = PlatformConfig.load().server_ip
 
         if not source_server_ip:
+            logger.warning("Transfer failed: Source server IP (local node IP) not set in PlatformConfig.")
             return Response(
                 {
                     'error': (
@@ -237,6 +240,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 owner=request.user,
             ).first()
             if not target_server:
+                logger.warning(f"Transfer failed: Target server {payload.get('target_server_id')} not found for user {request.user}")
                 return Response(
                     {'error': 'Connected target server not found'},
                     status=status.HTTP_404_NOT_FOUND,
@@ -247,6 +251,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         )
         target_server_ip = str(target_server_ip or '').strip()
         if not target_server_ip:
+            logger.warning("Transfer failed: Target server IP could not be resolved.")
             return Response(
                 {'error': 'Target server IP is required (local node IP not set).'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -265,6 +270,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 resolved_target_ip = None
 
             if not resolved_target_ip:
+                logger.warning(f"Transfer failed: Target host {target_server_ip} did not resolve to IP.")
                 return Response(
                     {
                         'error': (
@@ -279,6 +285,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
 
         # SSRF Protection
         if not is_safe_ip(target_server_ip, allow_private=bool(target_server)):
+            logger.warning(f"Transfer failed: Target IP {target_server_ip} blocked by SSRF protection.")
             return Response(
                 {'error': 'Target server IP is in a forbidden range (SSRF protection).'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -291,6 +298,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             target_ssh_password = str(target_server.ssh_password or '').strip()
 
         if not target_ssh_key and not target_ssh_password:
+            logger.warning(f"Transfer failed: No SSH credentials found for target {target_server_ip}")
             return Response(
                 {
                     'error': (
