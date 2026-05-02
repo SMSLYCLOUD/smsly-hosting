@@ -1,12 +1,5 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-
-# Mock django models before importing
-sys.modules['django.db'] = MagicMock()
-sys.modules['apps.deployments.models'] = MagicMock()
 
 from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
 

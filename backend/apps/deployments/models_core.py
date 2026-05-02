@@ -79,6 +79,10 @@ class ManagedServer(models.Model):
     ssh_key = EncryptedTextField(blank=True, default="")
 
     is_primary = models.BooleanField(default=False)
+    allow_user_workloads = models.BooleanField(
+        default=True,
+        help_text="When false, user services cannot be scheduled to this server.",
+    )
 
     # ── Status ──
     status = models.CharField(

@@ -31,6 +31,9 @@ interface MeshNetwork {
     listen_port: number;
     interface_name: string;
     is_active: boolean;
+    mesh_status?: 'UNKNOWN' | 'DEPLOYING' | 'ACTIVE' | 'FAILED';
+    mesh_last_error?: string;
+    mesh_last_deployed_at?: string | null;
     peers: Peer[];
     peer_count: number;
 }
@@ -314,9 +317,23 @@ export default function NetworkPage() {
                                                 <span>•</span>
                                                 <span>{mesh.peer_count} peers</span>
                                             </div>
+                                            {mesh.mesh_last_error && (
+                                                <p className="mt-1 text-xs text-red-500">{mesh.mesh_last_error}</p>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                        <span className={`text-xs px-2.5 py-1 rounded-full font-bold uppercase ${
+                                            mesh.mesh_status === 'ACTIVE'
+                                                ? 'bg-emerald-500/10 text-emerald-500'
+                                                : mesh.mesh_status === 'FAILED'
+                                                  ? 'bg-red-500/10 text-red-500'
+                                                  : mesh.mesh_status === 'DEPLOYING'
+                                                    ? 'bg-blue-500/10 text-blue-500'
+                                                    : 'bg-zinc-500/10 text-zinc-500'
+                                        }`}>
+                                            {mesh.mesh_status || 'UNKNOWN'}
+                                        </span>
                                         <Button
                                             variant="outline" size="sm"
                                             onClick={() => checkHealth(mesh.id)}

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node -e \"console.log('No frontend unit tests configured')\""
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

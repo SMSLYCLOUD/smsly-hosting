@@ -38,6 +38,7 @@ from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
 from .tasks import smart_deploy_task, resume_deploy_task, create_service_backup_task, create_server_backup_task, restore_service_backup_task
 from .domain_utils import normalize_domain
+from .services.server_guard import ServerGuard
 from apps.cloud.models import CloudProvider
 import os
 import uuid
@@ -281,21 +282,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
-        # Prevent deploying a service on a primary server
         server = serializer.validated_data.get('server')
-        if server:
-            is_control_plane = (
-                getattr(server, "is_primary", False)
-                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
-                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
-            )
-            if is_control_plane:
-                from rest_framework.exceptions import ValidationError
-                raise ValidationError({
-                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
-                    "message": "Primary/control-plane server cannot be used for user deployments.",
-                    "details": {"server_id": str(server.id)}
-                })
+        ServerGuard.assert_user_workload_allowed(server)
 
         deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
 
@@ -311,19 +299,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         server = serializer.validated_data.get('server')
-        if server:
-            is_control_plane = (
-                getattr(server, "is_primary", False)
-                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
-                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
-            )
-            if is_control_plane:
-                from rest_framework.exceptions import ValidationError
-                raise ValidationError({
-                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
-                    "message": "Primary/control-plane server cannot be used for user deployments.",
-                    "details": {"server_id": str(server.id)}
-                })
+        ServerGuard.assert_user_workload_allowed(server)
 
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
         service = serializer.save()
@@ -619,26 +595,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         ref = request.data.get('ref', 'HEAD')
         source_node = request.data.get('source_node')
 
-        # Check for primary server exclusion
         server = getattr(service, 'server', None)
-        if server:
-            is_control_plane = (
-                getattr(server, "is_primary", False)
-                or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
-                or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
-            )
-            if is_control_plane:
-                return Response(
-                    {
-                        "ok": False,
-                        "error": {
-                            "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
-                            "message": "Primary/control-plane server cannot be used for user deployments.",
-                            "details": {"server_id": str(server.id)},
-                        },
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        guard = ServerGuard.check_user_workload_allowed(server)
+        if not guard["ok"]:
+            return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
         # Prevent rapid-fire deployment spam
         existing = _has_active_deployment(service)
@@ -919,7 +879,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         results = {'local': None, 'remotes': []}
 
         # ── 1. Local deploy ─────────────────────────────────────
-        if include_local:
+        if include_local and ServerGuard.is_control_plane(getattr(service, 'server', None)):
+            local_guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
+            results['local'] = {
+                'status': 'error',
+                'reason': local_guard['error']['message'],
+                'error': local_guard['error'],
+            }
+        elif include_local:
             existing = _has_active_deployment(service)
             if existing:
                 results['local'] = {
@@ -992,6 +959,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     'server_id': str(server.id),
                     'server_name': server.name,
                 }
+                remote_guard = ServerGuard.check_user_workload_allowed(server)
+                if not remote_guard["ok"]:
+                    remote_result['status'] = 'error'
+                    remote_result['reason'] = remote_guard['error']['message']
+                    remote_result['error'] = remote_guard['error']
+                    results['remotes'].append(remote_result)
+                    continue
                 if not server.api_url:
                     remote_result['status'] = 'skipped'
                     remote_result['reason'] = 'No API URL (still provisioning?)'
@@ -1141,6 +1115,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         No need to find the deployment ID — just hit this endpoint.
         """
         service = self.get_object()
+        guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
+        if not guard["ok"]:
+            return Response(guard, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = InstantRollbackSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         reason = serializer.validated_data.get('message', '')
@@ -1585,23 +1563,39 @@ class ServiceViewSet(viewsets.ModelViewSet):
             cfg = PlatformConfig.load()
             if cfg.domain and domain == cfg.domain.strip().lower():
                 return Response(status=status.HTTP_200_OK)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("check_domain: PlatformConfig check failed: %s", exc)
 
         # 2. Check against Services (Public Domain)
         if Service.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
         # 3. Check Custom Domains (JSONField)
-        # Optimized lookup for custom_domains JSON field
-        if Service.objects.filter(custom_domains__contains=domain).exists():
-            return Response(status=status.HTTP_200_OK)
+        # We try multiple ways to match for maximum compatibility across DB backends.
+        try:
+            # Postgres-optimized list containment check
+            if Service.objects.filter(custom_domains__contains=[domain]).exists():
+                return Response(status=status.HTTP_200_OK)
+        except Exception as exc:
+            logger.debug("check_domain: optimized contains check failed, falling back: %s", exc)
+
+        # Fallback: iterate over services with custom domains (safe for small-to-medium clusters)
+        # Using .only() to minimize DB load
+        for service in Service.objects.exclude(custom_domains=[]).only('custom_domains'):
+            values = [
+                str(v or "").strip().lower()
+                for v in (service.custom_domains or [])
+                if str(v or "").strip()
+            ]
+            if domain in values:
+                return Response(status=status.HTTP_200_OK)
 
         # 4. Check against Addons
         from .models_addons import Addon
         if Addon.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
+        logger.warning("check_domain: unauthorized domain attempt: %s", domain)
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     def _sync_caddy(self):
@@ -2081,6 +2075,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         target_deployment = self.get_object()
         service = target_deployment.service
+        guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
+        if not guard["ok"]:
+            return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
         # Validate the target deployment
         if not target_deployment.commit_hash:
@@ -2274,26 +2271,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 # ZH-011 FIX: Verify service ownership before triggering deployment
                 service = Service.objects.get(id=service_id, owner=request.user)
 
-                # Check for primary server exclusion
-                server = getattr(service, 'server', None)
-                if server:
-                    is_control_plane = (
-                        getattr(server, "is_primary", False)
-                        or getattr(server, "role", None) in ["primary", "control_plane", "control-plane"]
-                        or getattr(server, "server_type", None) in ["primary", "control_plane", "control-plane"]
-                    )
-                    if is_control_plane:
-                        return Response(
-                            {
-                                "ok": False,
-                                "error": {
-                                    "code": "PRIMARY_SERVER_DEPLOYMENT_BLOCKED",
-                                    "message": "Primary/control-plane server cannot be used for user deployments.",
-                                    "details": {"server_id": str(server.id)},
-                                },
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
+                if not guard["ok"]:
+                    return Response(guard, status=status.HTTP_400_BAD_REQUEST)
                 provider = CloudProvider.objects.get(id=provider_id)
 
                 # Prevent rapid-fire deployment spam
@@ -3306,14 +3286,21 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         target_service_id = request.data.get('target_service_id')
 
         if target_service_id:
-            if not Service.objects.filter(
+            target_service = Service.objects.filter(
                 id=target_service_id,
                 owner=request.user,
-            ).exists():
+            ).first()
+            if not target_service:
                 return Response(
                     {'error': 'Target service not found'},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+        else:
+            target_service = backup.service
+
+        guard = ServerGuard.check_user_workload_allowed(getattr(target_service, 'server', None))
+        if not guard["ok"]:
+            return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
         restore_service_backup_task.delay(
             backup_id=str(backup.id),

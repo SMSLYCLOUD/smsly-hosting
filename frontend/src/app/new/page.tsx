@@ -238,6 +238,8 @@ export default function NewServicePage() {
   }, [])
 
   const toggleServer = (id: string) => {
+    const server = servers.find(s => s.id === id)
+    if (!server || server.is_primary || server.allow_user_workloads === false || server.status !== 'ONLINE') return
     setSelectedServers(prev =>
       prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
     )
@@ -290,16 +292,21 @@ export default function NewServicePage() {
       }
 
       // Trigger Multi-Deploy (local + selected remote servers)
+      const workloadServerIds = selectedServers.filter(id => {
+        const server = servers.find(s => s.id === id)
+        return server && !server.is_primary && server.allow_user_workloads !== false
+      })
+
       const results = await deployApi.multiDeploy(
         service.id,
         branch || 'main',
-        selectedServers,
+        workloadServerIds,
         includeLocal,
         localOnlyRequest,
       )
       setDeployResults(results)
 
-      const remoteCount = selectedServers.length
+      const remoteCount = workloadServerIds.length
       toast({
         title: "🚀 Deploying!",
         description: remoteCount > 0
@@ -991,18 +998,20 @@ export default function NewServicePage() {
                     ) : (
                       servers.map(server => {
                         const isOnline = server.status === 'ONLINE'
+                        const isWorkloadTarget = !server.is_primary && server.allow_user_workloads !== false
+                        const isDisabled = !isOnline || !isWorkloadTarget
                         const isSelected = selectedServers.includes(server.id)
                         return (
                           <button
                             key={server.id}
                             type="button"
                             onClick={() => toggleServer(server.id)}
-                            disabled={!isOnline}
+                            disabled={isDisabled}
                             className={cn(
                               "w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-all",
-                              isSelected && isOnline
+                              isSelected && !isDisabled
                                 ? "border-primary bg-primary/5 shadow-sm"
-                                : isOnline
+                                : !isDisabled
                                   ? "border-border hover:border-primary/50 hover:bg-muted/30"
                                   : "border-border opacity-50 cursor-not-allowed"
                             )}
@@ -1030,6 +1039,11 @@ export default function NewServicePage() {
                                 {server.host} · {server.services_count || 0} services
                                 {server.server_version ? ` · v${server.server_version}` : ''}
                               </p>
+                              {!isWorkloadTarget && (
+                                <p className="text-[10px] text-amber-500 font-medium">
+                                  Control-plane or workloads disabled
+                                </p>
+                              )}
                             </div>
 
                             {/* Status */}
