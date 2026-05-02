@@ -4,11 +4,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Server, Plus, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2,
+    Server, Plus, Trash2, RefreshCw, RefreshCcw, CheckCircle2, XCircle, Loader2,
     Globe, Shield, Wifi, WifiOff, ChevronRight, Monitor, ArrowUpRight,
     Terminal, Key, Lock, Zap, Link2
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -187,6 +188,20 @@ export default function ServersPage() {
             toast({ title: 'Failed to provision server', description: err.message, variant: 'destructive' });
         }
         setSubmitting(false);
+    };
+
+    const handleRetryProvision = async (id: string) => {
+        try {
+            const result = await apiFetch(`/api/v1/servers/${id}/retry-provision/`, 'POST');
+            fetchServers();
+            // Open logs view
+            setViewingLogs(id);
+            setProvisionLogs(result.provision_logs || '');
+            setProvisionStatus('PENDING');
+            toast({ title: 'Provisioning restarted', description: 'SSH installer task has been queued.' });
+        } catch (err: any) {
+            toast({ title: 'Failed to restart provisioning', description: err.message, variant: 'destructive' });
+        }
     };
 
     const deleteServer = async (id: string) => {
@@ -601,7 +616,7 @@ export default function ServersPage() {
                                             <Button
                                                 size="xs"
                                                 variant="outline"
-                                                onClick={() => handleProvisionServer(servers.find(s => s.id === viewingLogs)!)}
+                                                onClick={() => handleRetryProvision(viewingLogs)}
                                                 className="h-6 px-2 text-[10px] bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
                                             >
                                                 <RefreshCcw size={10} className="mr-1" />
