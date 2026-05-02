@@ -614,7 +614,7 @@ export default function ServersPage() {
                                         )}
                                         {provisionStatus === 'FAILED' && (
                                             <Button
-                                                size="xs"
+                                                size="sm"
                                                 variant="outline"
                                                 onClick={() => handleRetryProvision(viewingLogs)}
                                                 className="h-6 px-2 text-[10px] bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
