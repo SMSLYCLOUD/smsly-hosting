@@ -2476,7 +2476,7 @@ def run_maintenance_task(self, command_flag: str):
     Run maintenance commands via the Docker API from inside the Celery container.
     Valid flags: --clear, --update, --refresh
     """
-    if command_flag not in ['--clear', '--update', '--refresh']:
+    if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh']:
         logger.error(f"Invalid maintenance command: {command_flag}")
         return {"status": "error", "reason": "invalid_command"}
 
@@ -2546,14 +2546,16 @@ def run_maintenance_task(self, command_flag: str):
             else:
                 return {"status": "error", "message": result.get('message', 'Failed to write proxy reload flag.')}
 
-        elif command_flag == '--update':
+        elif command_flag in ['--update', '--update-frontend']:
             # Signal the host-side watcher to run install.sh --update
             update_flag = os.path.join(settings.CADDY_CONFIG_DIR, ".update")
+            mode = "update" if command_flag == '--update' else "frontend"
             try:
                 with open(update_flag, "w", encoding="utf-8") as f:
-                    f.write("update")
-                logger.info("Platform update flag written to shared volume.")
-                return {"status": "success", "message": "Platform update initiated. The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect."}
+                    f.write(mode)
+                logger.info(f"Platform {mode} update flag written to shared volume.")
+                msg = "Platform update initiated." if mode == "update" else "Platform frontend update initiated."
+                return {"status": "success", "message": f"{msg} The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect."}
             except Exception as e:
                 logger.error(f"Failed to write update flag: {e}")
                 return {"status": "error", "message": f"Failed to initiate update: {e}"}

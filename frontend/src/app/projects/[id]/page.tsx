@@ -13,8 +13,9 @@ import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, FolderOpen, Settings2,
-  GitBranch, Globe, Layers, Trash2, X, Save,
+  GitBranch, Globe, Layers, Trash2, X, Save, RefreshCcw,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -53,6 +54,7 @@ function ProjectDetailContent() {
   const [editEmoji, setEditEmoji] = useState('📦');
   const [editColor, setEditColor] = useState('#6366f1');
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -124,6 +126,25 @@ function ProjectDetailContent() {
       toast({ title: 'Error', description: 'Failed to update project', variant: 'destructive' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSyncEnvs = async () => {
+    setSyncing(true);
+    try {
+      await projectsApi.syncEnvs(projectId);
+      toast({ 
+        title: 'Ecosystem Synced', 
+        description: 'Environment variables propagated to all services in this project.' 
+      });
+    } catch (err: any) {
+      toast({ 
+        title: 'Sync Failed', 
+        description: err?.response?.data?.error || 'Failed to sync ecosystem environments.', 
+        variant: 'destructive' 
+      });
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -204,6 +225,16 @@ function ProjectDetailContent() {
               className="text-zinc-400 hover:text-white"
             >
               <Plus className="w-4 h-4 mr-1" /> Add Service
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleSyncEnvs}
+              disabled={syncing}
+              className="text-zinc-400 hover:text-white border-zinc-800"
+            >
+              <RefreshCcw className={cn("w-4 h-4 mr-1", syncing && "animate-spin")} />
+              {syncing ? 'Syncing...' : 'Sync All Envs'}
             </Button>
             <Button
               size="sm"

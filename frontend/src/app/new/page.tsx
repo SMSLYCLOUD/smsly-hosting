@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff } from "lucide-react"
+import { Github, Box, Layers, ArrowRight, Loader2, Search, Sparkles, Zap, Settings2, Rocket, CheckCircle2, Code2, Database, Globe, GitBranch, Key, SkipForward, Server, Monitor, Wifi, WifiOff, Filter, Tag, LayoutGrid, ListFilter } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -81,6 +81,9 @@ export default function NewServicePage() {
   const [ghLoading, setGhLoading] = React.useState(false)
   const [ghSearch, setGhSearch] = React.useState("")
   const [ghConnected, setGhConnected] = React.useState(false)
+  const [ghCategories, setGhCategories] = React.useState<Record<string, any[]>>({})
+  const [ghClusters, setGhClusters] = React.useState<any[]>([])
+  const [selectedCategory, setSelectedCategory] = React.useState<string>("All")
 
   // Templates from API
   const [templates, setTemplates] = React.useState<any[]>([])
@@ -102,6 +105,8 @@ export default function NewServicePage() {
     api.get('/integrations/github/repos/')
       .then(res => {
         setGhRepos(res.data?.repos || [])
+        setGhCategories(res.data?.categories || {})
+        setGhClusters(res.data?.clusters || [])
         setGhConnected(true)
       })
       .catch(() => setGhConnected(false))
@@ -110,9 +115,13 @@ export default function NewServicePage() {
     projectsApi.list().then(setProjectsList).catch(() => {})
   }, [])
 
-  const filteredRepos = ghRepos.filter(r =>
-    !ghSearch || r.full_name?.toLowerCase().includes(ghSearch.toLowerCase())
-  )
+  const filteredRepos = ghRepos.filter(r => {
+    const matchesSearch = !ghSearch || r.full_name?.toLowerCase().includes(ghSearch.toLowerCase())
+    const matchesCategory = selectedCategory === "All" || r.category === selectedCategory
+    return matchesSearch && matchesCategory
+  })
+
+  const categoryList = ["All", ...Object.keys(ghCategories).sort()]
 
   // ── AI Analysis ────────────────────────────────────────────────────────
   const runAnalysis = async (url: string) => {
@@ -417,15 +426,48 @@ export default function NewServicePage() {
                     {ghConnected && (
                       <div className="space-y-2">
                         <Label>Your GitHub Repositories</Label>
-                        <div className="relative">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            placeholder="Search repositories..."
-                            className="pl-10"
-                            value={ghSearch}
-                            onChange={(e) => setGhSearch(e.target.value)}
-                          />
+                        <div className="flex gap-4">
+                          <div className="relative flex-1">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                              placeholder="Search repositories..."
+                              className="pl-10"
+                              value={ghSearch}
+                              onChange={(e) => setGhSearch(e.target.value)}
+                            />
+                          </div>
+                          <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                            <SelectTrigger className="w-[180px]">
+                              <ListFilter className="h-4 w-4 mr-2" />
+                              <SelectValue placeholder="Category" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {categoryList.map(cat => (
+                                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
+
+                        {ghClusters.length > 0 && !ghSearch && selectedCategory === "All" && (
+                          <div className="space-y-2">
+                            <p className="text-[10px] uppercase tracking-wider font-bold text-muted-foreground">Detected Clusters</p>
+                            <div className="flex flex-wrap gap-2">
+                              {ghClusters.slice(0, 5).map(cluster => (
+                                <Button
+                                  key={cluster.name}
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 text-xs border-dashed border-primary/40 hover:bg-primary/5"
+                                  onClick={() => setGhSearch(cluster.name.toLowerCase() + "-")}
+                                >
+                                  <LayoutGrid className="h-3 w-3 mr-1" />
+                                  {cluster.name} ({cluster.count})
+                                </Button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {ghLoading ? (
                           <div className="flex items-center justify-center py-6">
                             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -442,9 +484,14 @@ export default function NewServicePage() {
                                 )}
                                 onClick={() => setRepoUrl(repo.clone_url)}
                               >
-                                <Github className="h-4 w-4 flex-shrink-0" />
+                                <div className="flex h-8 w-8 items-center justify-center rounded bg-muted/50 border border-border/50 flex-shrink-0">
+                                  <span className="text-sm">{STACK_ICONS[repo.language?.toLowerCase()] || "📦"}</span>
+                                </div>
                                 <div className="flex-1 min-w-0">
-                                  <p className="font-medium truncate">{repo.full_name}</p>
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-medium truncate">{repo.name}</p>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">{repo.category}</span>
+                                  </div>
                                   <p className="text-xs text-muted-foreground truncate">{repo.description || 'No description'}</p>
                                 </div>
                                 {repo.private && (

@@ -166,7 +166,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]
     [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN=$(printf '%q' "$CLOUDFLARE_API_TOKEN")"
 
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*; echo ''; echo 'Installation complete. Press Enter to exit.'; read"
+    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
 fi
 
 # Ensure we start in a valid directory.
@@ -1716,14 +1716,18 @@ if [ -n "$UPDATE_MODE" ]; then
     echo -e "${GREEN}  ✓ All required files present${NC}"
 
     # ─── Disk space check (prevents mid-build failure) ───────────────────────
-    echo -e "${BLUE}  → Running comprehensive Docker prune to free up disk space...${NC}"
-    docker container prune -f || true
-    docker image prune -af || true
     DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
-    if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
-        echo -e "${YELLOW}  ⚠ WARNING: Only ${DISK_AVAIL_MB}MB disk space available.${NC}"
-        echo -e "${YELLOW}    Docker builds typically need 2GB+. Cleaning safe caches (no volume deletion)...${NC}"
-        bust_core_build_cache
+    if [ "$DISK_AVAIL_MB" -lt 5000 ]; then
+        echo -e "${YELLOW}  ⚠ Disk space low (${DISK_AVAIL_MB}MB). Running Docker prune...${NC}"
+        docker container prune -f || true
+        docker image prune -f || true # Only dangling images by default
+        
+        if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
+            echo -e "${RED}  ⚠ Disk space CRITICAL. Running aggressive prune...${NC}"
+            docker image prune -af || true
+            bust_core_build_cache
+        fi
+        
         DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
         echo -e "${BLUE}  → Disk space after cleanup: ${DISK_AVAIL_MB}MB${NC}"
         if [ "$DISK_AVAIL_MB" -lt 1000 ]; then
@@ -1748,13 +1752,13 @@ if [ -n "$UPDATE_MODE" ]; then
 
     case "$UPDATE_MODE" in
         frontend)
-            echo -e "${BLUE}  → Rebuilding frontend container only...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache frontend
+            echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
+            docker compose -f "$COMPOSE_FILE" build frontend
             docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
             ;;
         backend)
-            echo -e "${BLUE}  → Rebuilding backend containers...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache backend celery
+            echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
+            docker compose -f "$COMPOSE_FILE" build backend celery
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
@@ -1803,9 +1807,9 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}    ↳ Ensuring networks exist...${NC}"
             ensure_update_networks
 
-            # 5. Rebuild core images from scratch while OLD containers are still running
-            echo -e "${BLUE}    ↳ Rebuilding core images (no cache)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build --no-cache $CORE_SERVICES
+            # 5. Rebuild core images (CACHED unless --no-cache passed manually)
+            echo -e "${BLUE}    ↳ Rebuilding core images...${NC}"
+            docker compose -f "$COMPOSE_FILE" build $CORE_SERVICES
 
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop

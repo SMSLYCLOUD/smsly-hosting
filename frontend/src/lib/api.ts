@@ -1516,6 +1516,10 @@ export const projectsApi = {
   removeService: async (projectId: string, serviceId: string): Promise<void> => {
     await api.post(`/projects/${projectId}/remove-service/`, { service_id: serviceId });
   },
+  syncEnvs: async (id: string): Promise<any> => {
+    const response = await api.post(`/projects/${id}/sync-envs/`);
+    return response.data;
+  },
 };
 
 // =============================================================================
