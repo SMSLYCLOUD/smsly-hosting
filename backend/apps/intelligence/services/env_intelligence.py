@@ -14,14 +14,18 @@ class EnvironmentIntelligenceService:
     """
 
     SYSTEM_PROMPT = (
-        "You are the SMSLY AI Senate Committee. Your task is to analyze environment "
-        "variables detected in a codebase and provide optimal production values. "
-        "Categorize each variable as: \n"
-        "- SECRET: Requires a unique random hex string (e.g., JWT_SECRET, API_KEY)\n"
-        "- SERVICE_URL: Maps to internal SMSLY services (db, redis, rabbitmq, backend, identity)\n"
-        "- CONFIG_FLAG: Boolean or Enum (e.g., DEBUG=False, ENVIRONMENT=production)\n"
-        "- CONSTANT: Static values (e.g., PORT=8000, LOG_LEVEL=info)\n"
-        "Return your resolution in valid JSON format only."
+        "You are the SMSLY AI Senate Committee. Your mission is to provide a 100% complete, "
+        "production-ready environment configuration. \n"
+        "RULES:\n"
+        "1. EXHAUSTIVENESS: Every variable detected must have a value. Never return null or empty.\n"
+        "2. SECRETS: Use 'GENERATE' for keys/tokens/passwords. We will generate high-entropy hex strings.\n"
+        "3. LINKING: Use internal service names (e.g., http://service-name:8000) for cross-service dependencies.\n"
+        "4. CATEGORIES:\n"
+        "   - SECRET: JWT_SECRET, API_KEY, etc.\n"
+        "   - SERVICE_URL: db, redis, rabbitmq, and sibling microservices.\n"
+        "   - CONFIG_FLAG: DEBUG=False, ENVIRONMENT=production.\n"
+        "   - CONSTANT: PORT=8000, LOG_LEVEL=info.\n"
+        "Return valid JSON only."
     )
 
     @classmethod
@@ -43,10 +47,12 @@ class EnvironmentIntelligenceService:
             brief_lines.append(f"- {var}: {ctx_summary}")
 
         prompt = (
-            "Review the following environment variables and provide suggested production values. "
-            "For SECRETS, just state 'GENERATE'. For SERVICE_URLs, use internal Docker names. "
-            "For standard flags like DEBUG, use 'False'. For PORT, use '8000'.\n\n"
-            "Return a JSON object where keys are variable names and values are the suggested strings.\n\n"
+            "Review every single environment variable below. Provide a suggested production value for each.\n"
+            "REQUIREMENT: 100% coverage. Do not skip any variable.\n"
+            "For SECRETS: state 'GENERATE'.\n"
+            "For INTERNAL URLs: use service names.\n"
+            "For standard settings: use production-safe defaults.\n\n"
+            "Return a JSON object: { \"VAR_NAME\": \"value\" }\n\n"
             + "\n".join(brief_lines)
         )
 
@@ -135,14 +141,12 @@ class EnvironmentIntelligenceService:
 
         prompt = (
             "You are resolving environment variables for an interconnected ecosystem of microservices.\n"
-            "ENSURE CONSISTENCY: If one service is a frontend and another is a backend, map the frontend's "
-            "backend URL variables (e.g. API_URL, BACKEND_URL) to the internal service name of the backend.\n\n"
+            "GOAL: Produce a perfectly linked cluster where all services know how to talk to each other.\n\n"
+            "LINKING RULES:\n"
+            "1. If Service A depends on Service B, map Service A's URL variables (API_URL, etc.) to 'http://service-b:PORT'.\n"
+            "2. Map database/cache variables to {{POSTGRES_URL}}, {{REDIS_URL}}, etc.\n"
+            "3. Every single variable in the brief MUST be present in your JSON output.\n\n"
             "Return a JSON object where keys are SERVICE NAMES and values are objects of their env vars.\n\n"
-            "Format:\n"
-            "{\n"
-            "  \"service-a\": {\"VAR1\": \"val1\", \"VAR2\": \"GENERATE\"},\n"
-            "  \"service-b\": {\"API_URL\": \"http://service-a:8000\"}\n"
-            "}\n\n"
             + "\n".join(committee_brief)
         )
 

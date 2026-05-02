@@ -304,12 +304,16 @@ class RepoScanner:
             re.compile(r'environ\.get\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'environ\[["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'config\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'BaseSettings\):.*?\n\s+([A-Z_][A-Z0-9_]*)', re.DOTALL), # Pydantic settings
+            re.compile(r'Field\(.*?, env=["\']([A-Z_][A-Z0-9_]*)["\']'),
 
             # ── JavaScript / TypeScript ──
             re.compile(r'process\.env\.([A-Z_][A-Z0-9_]*)'),
             re.compile(r'process\.env\[["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'import\.meta\.env\.([A-Z_][A-Z0-9_]*)'),
             re.compile(r'configService\.get(?:OrThrow)?\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'env: ["\']([A-Z_][A-Z0-9_]*)["\']'), # Next.js / Vite configs
+            re.compile(r'RuntimeConfig.*?([A-Z_][A-Z0-9_]*)'),
 
             # ── Go ──
             re.compile(r'os\.Getenv\(["\']([A-Z_][A-Z0-9_]*)["\']'),
@@ -318,9 +322,14 @@ class RepoScanner:
             # ── Rust ──
             re.compile(r'std::env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
             re.compile(r'env::var\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+            re.compile(r'dotenv!\(["\']([A-Z_][A-Z0-9_]*)["\']'),
+
+            # ── General Config Grep (Aggressive) ──
+            # Look for lines that look like: VAR_NAME = or VAR_NAME: in config files
+            re.compile(r'^\s*([A-Z_][A-Z0-9_]{3,})\s*[:=]'),
         ]
 
-        code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.cs'}
+        code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.cs', '.yaml', '.yml', '.toml', '.json'}
 
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -331,40 +340,56 @@ class RepoScanner:
 
             for f in files:
                 _, ext = os.path.splitext(f)
-                if ext not in code_extensions:
+                if ext not in code_extensions and f not in CONFIG_FILES:
                     continue
 
                 filepath = os.path.join(root, f)
                 try:
-                    content = self._safe_read(filepath, 50000)
+                    # Increase read limit for aggressive scanning
+                    content = self._safe_read(filepath, 100000)
                     lines = content.splitlines()
                     for i, line in enumerate(lines):
                         for pattern in code_patterns:
                             for match in pattern.finditer(line):
-                                var_name = match.group(1)
-                                context = line.strip()
-                                # Capture 1 line above and below for better context
-                                prev_line = lines[i-1].strip() if i > 0 else ""
-                                next_line = lines[i+1].strip() if i < len(lines)-1 else ""
-                                full_ctx = f"{prev_line}\n{context}\n{next_line}".strip()
-                                add_var(var_name, full_ctx)
+                                try:
+                                    var_name = match.group(1)
+                                    context = line.strip()
+                                    # Capture 1 line above and below for better context
+                                    prev_line = lines[i-1].strip() if i > 0 else ""
+                                    next_line = lines[i+1].strip() if i < len(lines)-1 else ""
+                                    full_ctx = f"{prev_line}\n{context}\n{next_line}".strip()
+                                    add_var(var_name, full_ctx)
+                                except (IndexError, AttributeError):
+                                    continue
                 except Exception: # pylint: disable=broad-exception-caught
                     pass
 
         # 3. Scan docker-compose files for ${VAR} interpolation
         compose_pattern = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::?[-?+])?[^}]*\}')
+        docker_env_pattern = re.compile(r'ENV\s+([A-Z_][A-Z0-9_]*)')
+        docker_arg_pattern = re.compile(r'ARG\s+([A-Z_][A-Z0-9_]*)')
+
         for root, dirs, files in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
             for f in files:
-                if not (f.startswith('docker-compose') and (f.endswith('.yml') or f.endswith('.yaml'))):
+                if not (f.startswith('docker-compose') or f == 'Dockerfile' or f.endswith(('.yml', '.yaml'))):
                     continue
                 filepath = os.path.join(root, f)
                 try:
                     content = self._safe_read(filepath, MAX_FILE_READ)
+                    # Scan for compose interpolations
                     for match in compose_pattern.finditer(content):
-                        add_var(match.group(1), f"Found in {f}")
+                        add_var(match.group(1), f"Found in {f} (interpolation)")
+                    
+                    # Scan for Docker ENV/ARG
+                    for match in docker_env_pattern.finditer(content):
+                        add_var(match.group(1), f"Found in {f} (ENV)")
+                    for match in docker_arg_pattern.finditer(content):
+                        add_var(match.group(1), f"Found in {f} (ARG)")
                 except Exception:
                     pass
+
+        return env_vars
 
         return env_vars
 

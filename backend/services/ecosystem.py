@@ -410,46 +410,42 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
-ECOSYSTEM_PROMPT = """You are the Lead DevOps Architect of the AI Senate. Your mission is to analyze an interconnected ecosystem of microservices and produce a 100% complete, zero-config deployment plan.
-
-For each repository, you are provided with Code Context Snippets. Use these to:
-1. Precisely determine the tech stack and entry point.
-2. Identify every required environment variable and its purpose.
-3. Map cross-service dependencies (e.g., if a frontend uses BACKEND_URL, map it to the backend service).
-
-Return ONLY valid JSON matching this structure:
-{
-  "services": [
+ECOSYSTEM_PROMPT = """You are the Lead DevOps Architect of the AI Senate. Your mission is to produce a 100% complete, zero-config deployment plan for an interconnected ecosystem of microservices.
+    
+    CRITICAL RULES:
+    1. EXHAUSTIVENESS: Identify and resolve EVERY environment variable detected in the codebase context. Never return empty values.
+    2. DETERMINISTIC LINKING:
+       - Use {{SERVICE:repo-name}} for internal cross-service URLs.
+       - Use {{POSTGRES_URL}}, {{REDIS_URL}}, etc., for shared infrastructure.
+       - Use {{GENERATE}} for all secrets, keys, and tokens.
+    3. DEPENDENCY GRAPH: Correcty map depends_on based on URL usage (e.g., if A calls B's URL, A depends on B).
+    4. DEPLOY ORDER: Services that provide APIs (backends) must deploy before consumers (frontends).
+    
+    Return ONLY valid JSON matching this structure:
     {
-      "repo": "owner/repo-name",
-      "name": "short-name",
-      "stack": "django|nextjs|node|python|etc",
-      "port": 8000,
-      "build": "dockerfile|nixpacks",
-      "addons": ["POSTGRES", "REDIS", ...],
-      "env_vars": {
-        "DATABASE_URL": "{{POSTGRES_URL}}",
-        "SECRET_KEY": "{{GENERATE}}",
-        "API_URL": "{{SERVICE:backend-repo-name}}"
-      },
-      "depends_on": ["other-repo-name"],
-      "deploy_order": 1
+      "services": [
+        {
+          "repo": "owner/repo-name",
+          "name": "short-name",
+          "stack": "django|nextjs|node|python|etc",
+          "port": 8000,
+          "build": "dockerfile|nixpacks",
+          "addons": ["POSTGRES", "REDIS", ...],
+          "env_vars": {
+            "DATABASE_URL": "{{POSTGRES_URL}}",
+            "SECRET_KEY": "{{GENERATE}}",
+            "API_URL": "{{SERVICE:backend-repo-name}}"
+          },
+          "depends_on": ["other-repo-name"],
+          "deploy_order": 1
+        }
+      ],
+      "addons": [
+        {"type": "POSTGRES", "shared_by": ["repo-a", "repo-b"]}
+      ],
+      "deploy_sequence": ["addons", "service-a", "service-b"]
     }
-  ],
-  "addons": [
-    {"type": "POSTGRES", "shared_by": ["repo-a", "repo-b"]}
-  ],
-  "deploy_sequence": ["addons", "service-a", "service-b"]
-}
-
-Placeholder Rules:
-- {{POSTGRES_URL}}, {{REDIS_URL}}, {{MONGODB_URL}} -> Auto-provisioned infra.
-- {{GENERATE}} -> Exhaustive AI Senate secret generation (secure hex).
-- {{SERVICE:repo-name}} -> Internal platform URL mapping.
-
-Exhaustiveness Rule:
-Do NOT leave environment variables empty. If a variable is detected in the context snippets, provide a suggested production value or use a placeholder.
-"""
+    """
 
 
 def analyze_ecosystem(repos_data: List[dict]) -> dict:
@@ -669,11 +665,6 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
 def _apply_smsly_core_intelligence(services: List[dict]):
     """
     Apply deterministic SMSLY ecosystem rules.
-
-    When a SMSLY core service is present, enforce:
-    - core deploys first
-    - core gets baseline infra env/addons
-    - SMSLY sibling services depend on core and receive core URL envs
     """
     deployable = [
         svc for svc in services
@@ -682,7 +673,12 @@ def _apply_smsly_core_intelligence(services: List[dict]):
     if not deployable:
         return
 
+    # Find the core platform service
     core = next((svc for svc in deployable if _is_smsly_core_service(svc)), None)
+    if not core:
+        # Fallback: find any service with "platform" or "backend" in the name if no explicit core
+        core = next((svc for svc in deployable if "platform" in svc.get("name", "").lower() or "backend" in svc.get("name", "").lower()), None)
+
     if not core:
         return
 
@@ -691,62 +687,69 @@ def _apply_smsly_core_intelligence(services: List[dict]):
     core_refs = {_normalize_token(core_name), _normalize_token(core_repo_short)}
 
     core["name"] = core_name
-    if not str(core.get("stack") or "").strip():
-        core["stack"] = "django"
-    if not str(core.get("build") or "").strip():
-        core["build"] = "nixpacks"
-
     core_env = _env_plan_map(core.get("env_vars", {}))
-    core_env.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
-    core_env.setdefault("REDIS_URL", "{{REDIS_URL}}")
-    core_env.setdefault("SECRET_KEY", "{{GENERATE}}")
-    core_env.setdefault("GATEWAY_SECRET", "{{GENERATE}}")
-    core["env_vars"] = core_env
-
-    core_addons = {
-        str(addon or "").strip().upper()
-        for addon in (core.get("addons") or [])
-        if str(addon or "").strip()
-    }
-    core_addons.update({"POSTGRES", "REDIS"})
-    core["addons"] = sorted(core_addons)
-
-    core_depends = [
-        dep for dep in _coerce_depends_on(core.get("depends_on", []))
-        if _normalize_token(dep) not in core_refs
-    ]
-    core["depends_on"] = core_depends
-
+    
+    # ── Enforce standard platform links ──
+    core_placeholder = f"{{{{SERVICE:{core_name}}}}}"
+    
     for service in deployable:
-        if service is core or not _is_smsly_service(service):
-            continue
-
-        depends = _coerce_depends_on(service.get("depends_on", []))
-        depends_norm = {_normalize_token(dep) for dep in depends}
-        if not depends_norm.intersection(core_refs):
-            depends.append(core_name)
-        service["depends_on"] = depends
-
         env_map = _env_plan_map(service.get("env_vars", {}))
-        core_placeholder = f"{{{{SERVICE:{core_name}}}}}"
-        env_map.setdefault("SMSLY_PLATFORM_API_URL", core_placeholder)
-        env_map.setdefault("SMSLY_CORE_URL", core_placeholder)
-        service["env_vars"] = env_map
+        
+        # Link everything to core by default if it's a SMSLY service
+        if _is_smsly_service(service) and service is not core:
+            env_map.setdefault("SMSLY_PLATFORM_API_URL", core_placeholder)
+            env_map.setdefault("SMSLY_CORE_URL", core_placeholder)
+            
+            # Add dependency if not already there
+            depends = _coerce_depends_on(service.get("depends_on", []))
+            if core_name not in depends:
+                depends.append(core_name)
+            service["depends_on"] = depends
 
+        # Cross-link other common SMSLY services if detected
+        for other in deployable:
+            if other == service: continue
+            other_name = other.get("name")
+            if not other_name: continue
+            
+            # E.g. if we find "smsly-marketer", inject SMSLY_MARKETER_URL into others
+            if "marketer" in other_name.lower():
+                env_map.setdefault("SMSLY_MARKETER_URL", f"{{{{SERVICE:{other_name}}}}}")
+            elif "security" in other_name.lower():
+                env_map.setdefault("SMSLY_SECURITY_URL", f"{{{{SERVICE:{other_name}}}}}")
+            elif "intelligence" in other_name.lower():
+                env_map.setdefault("SMSLY_INTELLIGENCE_URL", f"{{{{SERVICE:{other_name}}}}}")
+
+        # Addon auto-selection for SMSLY services
         addon_set = {
             str(addon or "").strip().upper()
             for addon in (service.get("addons") or [])
             if str(addon or "").strip()
         }
         service_key = _normalize_token(service.get("name") or _repo_short_name(service))
-        if "sms" in service_key:
+        if "sms" in service_key or "core" in service_key or "platform" in service_key:
             addon_set.update({"POSTGRES", "REDIS"})
-        elif "marketing" in service_key:
+        elif "marketing" in service_key or "marketer" in service_key:
             addon_set.add("POSTGRES")
         elif "voice" in service_key:
             addon_set.add("REDIS")
         service["addons"] = sorted(addon_set)
+        
+        service["env_vars"] = env_map
 
+    # Ensure stack/build/infra defaults for core
+    if not str(core.get("stack") or "").strip():
+        core["stack"] = "django"
+    if not str(core.get("build") or "").strip():
+        core["build"] = "nixpacks"
+
+    core_env.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
+    core_env.setdefault("REDIS_URL", "{{REDIS_URL}}")
+    core_env.setdefault("SECRET_KEY", "{{GENERATE}}")
+    core_env.setdefault("GATEWAY_SECRET", "{{GENERATE}}")
+    core["env_vars"] = core_env
+
+    # Final sorting for deploy sequence
     ordered = sorted(
         deployable,
         key=lambda svc: (
@@ -905,9 +908,83 @@ def scan_and_analyze(token: str) -> dict:
 
     # 3. AI ecosystem analysis
     plan = analyze_ecosystem(repos_data)
-
-    # 4. Enrich with metadata
     plan["total_repos_scanned"] = len(all_repos)
     plan["deployable_repos"] = len(repos_data)
 
     return plan
+
+
+def sync_ecosystem_envs(project_id: str) -> dict:
+    """
+    Exhaustive sync of all environment variables for a project ecosystem.
+    Uses AI Senate to re-analyze every service in the project and push fresh linking/secrets.
+    """
+    from apps.deployments.models import Service, Project, EnvironmentVariable
+    from django.db import transaction
+    import secrets
+
+    try:
+        project = Project.objects.get(id=project_id)
+        services = Service.objects.filter(project=project, status='ACTIVE')
+        
+        if not services.exists():
+            return {"status": "error", "message": "No active services found in this project to sync."}
+
+        # 1. Prepare data for AI analysis
+        repos_data = []
+        for s in services:
+            repos_data.append({
+                'repo': s.repository_url.split('github.com/')[-1] if s.repository_url else s.name,
+                'name': s.name,
+                'clone_dir': getattr(s, 'local_path', None), # Assume local path if available
+                'stack': getattr(s, 'stack', 'unknown'),
+                'description': getattr(s, 'description', '')
+            })
+
+        # 2. Trigger AI Ecosystem Analysis
+        logger.info("Triggering AI Ecosystem Analysis for project %s (%d services)", project.name, len(services))
+        plan = analyze_ecosystem(repos_data)
+        
+        if not plan or "services" not in plan:
+            return {"status": "error", "message": "AI Senate failed to produce a valid ecosystem plan."}
+
+        # 3. Persist the plan (Sync All)
+        with transaction.atomic():
+            for svc_plan in plan["services"]:
+                svc_name = svc_plan.get("name")
+                service = next((s for s in services if s.name == svc_name), None)
+                if not service: continue
+
+                plan_envs = svc_plan.get("env_vars", {})
+                for key, val in plan_envs.items():
+                    # Placeholder resolution
+                    final_val = val
+                    if val == "{{GENERATE}}":
+                        final_val = secrets.token_hex(32)
+                    elif str(val).startswith("{{SERVICE:"):
+                        # Keep placeholder for runtime resolution or resolve now if possible
+                        target_repo = val.replace("{{SERVICE:", "").replace("}}", "")
+                        target_svc = next((s for s in services if s.name == target_repo or s.repository_url and target_repo in s.repository_url), None)
+                        if target_svc:
+                            final_val = f"http://{target_svc.name}:{target_svc.internal_port}"
+
+                    # Update or create
+                    EnvironmentVariable.objects.update_or_create(
+                        service=service,
+                        key=key,
+                        defaults={
+                            "value": final_val,
+                            "is_secret": val == "{{GENERATE}}" or any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD"]),
+                            "source": "SYSTEM"
+                        }
+                    )
+
+        return {
+            "status": "success", 
+            "message": f"Ecosystem sync complete for {len(services)} services. AI Provider: {plan.get('ai_provider', 'unknown')}",
+            "plan": plan
+        }
+
+    except Exception as e:
+        logger.exception("Failed to sync ecosystem envs: %s", e)
+        return {"status": "error", "message": str(e)}
