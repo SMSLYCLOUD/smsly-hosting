@@ -58,18 +58,20 @@ def verify_dns_and_provision_ssl_task(domain_id):
                 actual_ip = socket.gethostbyname(domain.domain_name)
                 domain.dns_actual = f"A record to {actual_ip}"
 
+        old_status = domain.status
         if expected_ip and actual_ip == expected_ip:
             domain.status = DomainStatus.DNS_VERIFIED
             domain.last_error = None
             domain.verified = True
             domain.save(update_fields=['status', 'dns_actual', 'last_error', 'verified'])
             
-            # Only trigger reload if status changed to something that affects routing
-            if domain.status in [DomainStatus.DNS_VERIFIED, DomainStatus.ACTIVE]:
+            # Only trigger reload if status transitioned from a non-routing state to a routing state
+            if old_status not in [DomainStatus.DNS_VERIFIED, DomainStatus.ACTIVE] and \
+               domain.status in [DomainStatus.DNS_VERIFIED, DomainStatus.ACTIVE]:
                 logger.info(f"DNS verified for {domain.domain_name} — triggering Caddy reload")
                 _trigger_caddy_reload()
             else:
-                logger.debug(f"DNS verification finished for {domain.domain_name} with status {domain.status} — no reload needed")
+                logger.debug(f"DNS verification finished for {domain.domain_name} (no status change) — no reload needed")
             return
 
         # In case server IP is not set, resolve the platform domain and compare
