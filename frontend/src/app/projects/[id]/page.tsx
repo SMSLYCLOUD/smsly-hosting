@@ -226,16 +226,18 @@ function ProjectDetailContent() {
             >
               <Plus className="w-4 h-4 mr-1" /> Add Service
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleSyncEnvs}
-              disabled={syncing}
-              className="text-zinc-400 hover:text-white border-zinc-800"
-            >
-              <RefreshCcw className={cn("w-4 h-4 mr-1", syncing && "animate-spin")} />
-              {syncing ? 'Syncing...' : 'Sync All Envs'}
-            </Button>
+            {services.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleSyncEnvs}
+                disabled={syncing}
+                className="text-zinc-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all border border-transparent hover:border-emerald-500/20"
+              >
+                <RefreshCcw className={cn("w-3.5 h-3.5 mr-1.5", syncing && "animate-spin")} />
+                {syncing ? 'Syncing...' : 'Sync Ecosystem'}
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={() => router.push('/new')}
