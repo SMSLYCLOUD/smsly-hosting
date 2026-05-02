@@ -104,8 +104,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         _build_service_domain_block(public_domain, public_domain)
                     )
 
-            for domain_val in (service.custom_domains or []):
-                value = domain_val.strip() if isinstance(domain_val, str) else ""
+            from apps.domains.models import Domain, DomainStatus
+            for domain_obj in Domain.objects.filter(service=service, status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]):
+                value = domain_obj.domain_name.strip()
                 if not value:
                     continue
                 try:

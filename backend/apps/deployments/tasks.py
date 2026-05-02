@@ -865,9 +865,20 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
 def _handle_remote_deployment(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    from apps.deployments.services.server_guard import ServerGuard
+
+    service = deployment.service
+    guard = ServerGuard.check_user_workload_allowed(server)
+    if not guard["ok"]:
+        _handle_failure(
+            None,
+            deployment,
+            guard["error"]["message"],
+            "Placement Guard",
+        )
+        return
 
     orchestrator = RemoteOrchestrator(server)
-    service = deployment.service
 
     append_log(deployment, f"🌐 Delegating deployment to remote server: {server.name} ({server.host})\n")
     update_stage(deployment, 'Remote Sync', 'running')

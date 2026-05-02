@@ -1,5 +1,4 @@
 import uuid
-import shlex
 import base64
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
@@ -20,20 +19,17 @@ class MeshNetworkTest(TestCase):
         self.assertEqual(mesh.next_available_ip(), "10.100.0.3")
 
     @patch('docker.from_env')
-    def test_deploy_local_sanitizes_input(self, mock_docker):
+    def test_deploy_local_validates_and_encodes_config(self, mock_docker):
         mock_client = MagicMock()
         mock_docker.return_value = mock_client
 
-        # Deploy config with an interface that could cause shell injection
-        malicious_iface = "wg0; rm -rf /"
-        safe_iface = shlex.quote(malicious_iface)
-        config = "[Interface]\nPrivateKey=test"
+        config = "[Interface]\nPrivateKey = test\nAddress = 10.100.0.1/24\n"
 
-        WireGuardService._deploy_local(config, malicious_iface)
+        WireGuardService._deploy_local(config, "wg0")
 
         # Check that the first docker run uses the safe interface and base64 config
         b64_config = base64.b64encode(config.encode()).decode()
-        expected_cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf && chmod 600 /etc/wireguard/{safe_iface}.conf"
+        expected_cmd = f"mkdir -p /etc/wireguard && echo '{b64_config}' | base64 -d > /etc/wireguard/wg0.conf && chmod 600 /etc/wireguard/wg0.conf"
 
         mock_client.containers.run.assert_any_call(
             "alpine",
@@ -43,30 +39,47 @@ class MeshNetworkTest(TestCase):
             volumes={"/etc/wireguard": {"bind": "/etc/wireguard", "mode": "rw"}},
         )
 
+    @patch('docker.from_env')
+    def test_deploy_local_rejects_unsafe_interface(self, mock_docker):
+        config = "[Interface]\nPrivateKey = test\nAddress = 10.100.0.1/24\n"
+        with self.assertRaises(ValueError):
+            WireGuardService._deploy_local(config, "wg0; rm -rf /")
+        mock_docker.assert_not_called()
+
     @patch('apps.deployments.services.wireguard_service.WireGuardService._ssh_run')
-    def test_deploy_remote_sanitizes_input(self, mock_ssh):
-        malicious_iface = "wg0; echo hi"
-        safe_iface = shlex.quote(malicious_iface)
-        config = "[Interface]\nPrivateKey=test"
+    def test_deploy_remote_validates_and_encodes_config(self, mock_ssh):
+        config = "[Interface]\nPrivateKey = test\nAddress = 10.100.0.2/24\n"
 
         from django.contrib.auth import get_user_model
         User = get_user_model()
         user = User.objects.create_user(username="test", password="test")
         server = ManagedServer.objects.create(name="test-server", host="1.1.1.1", owner=user)
 
-        WireGuardService._deploy_remote(server, config, malicious_iface)
+        WireGuardService._deploy_remote(server, config, "wg0")
 
         b64_config = base64.b64encode(config.encode()).decode()
         expected_command = " && ".join([
             "apt-get update > /dev/null 2>&1 || true",
             "apt-get install -y wireguard iptables > /dev/null 2>&1 || true",
             "mkdir -p /etc/wireguard",
-            f"echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf",
-            f"chmod 600 /etc/wireguard/{safe_iface}.conf",
+            f"echo '{b64_config}' | base64 -d > /etc/wireguard/wg0.conf",
+            "chmod 600 /etc/wireguard/wg0.conf",
             "modprobe wireguard || true",
-            f"wg-quick down {safe_iface} 2>/dev/null || true",
-            f"wg-quick up {safe_iface}",
-            f"systemctl enable wg-quick@{safe_iface} 2>/dev/null || true",
+            "wg-quick down wg0 2>/dev/null || true",
+            "wg-quick up wg0",
+            "systemctl enable wg-quick@wg0 2>/dev/null || true",
         ])
 
         mock_ssh.assert_called_once_with(server, expected_command)
+
+    @patch('apps.deployments.services.wireguard_service.WireGuardService._ssh_run')
+    def test_deploy_remote_rejects_incomplete_config(self, mock_ssh):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.create_user(username="test2", password="test")
+        server = ManagedServer.objects.create(name="test-server-2", host="1.1.1.2", owner=user)
+
+        with self.assertRaises(ValueError):
+            WireGuardService._deploy_remote(server, "[Interface]\nPrivateKey = test\n", "wg0")
+
+        mock_ssh.assert_not_called()

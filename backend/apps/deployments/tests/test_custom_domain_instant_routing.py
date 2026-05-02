@@ -34,13 +34,15 @@ class CaddyCustomDomainRoutingTests(TestCase):
         )
 
     def test_custom_domain_block_rewrites_host_to_public_domain(self):
-        Service.objects.create(
+        svc = Service.objects.create(
             name='buyforfront-caddy',
             owner=self.user,
             provider=self.provider,
             public_domain='buyforfront-0398be.cloud.smsly.cloud',
             custom_domains=['intelliphoton.com'],
         )
+        from apps.domains.models import Domain, DomainStatus
+        Domain.objects.create(domain_name='intelliphoton.com', service=svc, status=DomainStatus.DNS_VERIFIED)
         config = SimpleNamespace(
             domain='cloud.smsly.cloud',
             use_ssl=True,
@@ -158,7 +160,8 @@ class InstantCustomDomainApiTests(APITestCase):
 
     @patch('apps.deployments.views.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
-    def test_add_domain_does_not_queue_redeploy(self, _sync_mock, delay_mock):
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_add_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
             {'domain': 'instant.example.com'},
@@ -177,7 +180,8 @@ class InstantCustomDomainApiTests(APITestCase):
 
     @patch('apps.deployments.views.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
-    def test_delete_domain_does_not_queue_redeploy(self, _sync_mock, delay_mock):
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_delete_domain_does_not_queue_redeploy(self, verify_mock, _sync_mock, delay_mock):
         self.service.custom_domains = ['instant.example.com']
         self.service.save(update_fields=['custom_domains'])
 
@@ -198,7 +202,8 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(self.service.deployments.count(), 1)
 
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
-    def test_add_domain_keeps_domain_when_caddy_sync_fails(self, _sync_mock):
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_add_domain_keeps_domain_when_caddy_sync_fails(self, verify_mock, _sync_mock):
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
             {'domain': 'rollback.example.com'},
@@ -211,7 +216,8 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertIn('rollback.example.com', self.service.custom_domains)
 
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': False, 'message': 'sync failed'})
-    def test_delete_domain_keeps_change_when_caddy_sync_fails(self, _sync_mock):
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_delete_domain_keeps_change_when_caddy_sync_fails(self, verify_mock, _sync_mock):
         self.service.custom_domains = ['rollback.example.com']
         self.service.save(update_fields=['custom_domains'])
 
@@ -226,14 +232,17 @@ class InstantCustomDomainApiTests(APITestCase):
         self.service.refresh_from_db()
         self.assertNotIn('rollback.example.com', self.service.custom_domains)
 
-    def test_add_domain_rejects_global_conflict(self):
-        Service.objects.create(
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_add_domain_rejects_global_conflict(self, verify_mock):
+        other_service = Service.objects.create(
             name='domain-conflict-service',
             owner=self.user,
             provider=self.provider,
             public_domain='domain-conflict-service-bbbbbb.cloud.smsly.cloud',
             custom_domains=['taken.example.com'],
         )
+        from apps.domains.models import Domain
+        Domain.objects.create(domain_name='taken.example.com', service=other_service)
 
         response = self.client.post(
             f'/api/v1/services/{self.service.id}/add-domain/',
@@ -244,7 +253,8 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         self.assertIn('already assigned', response.data.get('error', ''))
 
-    def test_add_domain_enforces_plan_quota(self):
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_add_domain_enforces_plan_quota(self, verify_mock):
         plan = PricingPlan.objects.create(
             name='Starter',
             slug='starter',

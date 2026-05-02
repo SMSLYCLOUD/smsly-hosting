@@ -8,7 +8,10 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 IS_TESTING = bool(os.environ.get('TESTING')) or any(
-    arg == 'test' or arg.startswith('test') or arg.endswith('pytest')
+    (arg_text := str(arg).lower()) == 'test'
+    or Path(arg_text).name.startswith('test')
+    or 'pytest' in arg_text
+    or '/tests/' in arg_text.replace('\\', '/')
     for arg in sys.argv
 )
 
