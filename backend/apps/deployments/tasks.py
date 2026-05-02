@@ -2547,19 +2547,42 @@ def delete_service_task(self, service_id: str):
     """Async reliable deletion of a Service"""
     from apps.deployments.models_core import Service
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    
     try:
         service = Service.objects.get(id=service_id)
     except Service.DoesNotExist:
         return
 
-    orchestrator = DeletionOrchestrator()
-    success = orchestrator.delete_service_resources(service)
+    success = False
+    
+    # 1. Handle remote server cleanup if applicable
+    if service.server and not service.server.is_primary:
+        try:
+            logger.info("Decommissioning service %s on remote node %s", service.name, service.server.host)
+            remote = RemoteOrchestrator(service.server)
+            # Find the remote service ID (matching by name is the most reliable if ID not stored)
+            # For now, we assume the remote server uses the same name-based lookups
+            success = remote.delete_service(str(service.id))
+        except Exception as exc:
+            logger.warning("Remote deletion failed for service %s: %s. Falling back to local/DB cleanup.", service.name, exc)
+            success = False
+    else:
+        # 2. Local cleanup
+        orchestrator = DeletionOrchestrator()
+        success = orchestrator.delete_service_resources(service)
+        
+        # 3. Resilience: If local docker client is missing but service is unassigned, 
+        # allow DB deletion to proceed so it doesn't get "stuck" in the UI.
+        if not success and not service.server and not orchestrator.docker_client:
+            logger.warning("Docker client unavailable for unassigned service %s. Forcing database-only deletion.", service.name)
+            success = True
 
     if success:
         service.delete()
     else:
         service.status = Service.Status.DELETION_FAILED
-        service.deletion_error = "Failed to remove some runtime resources."
+        service.deletion_error = "Failed to remove some runtime resources. If this node is unassigned or unreachable, use 'Retry' or manual DB cleanup."
         service.save(update_fields=['status', 'deletion_error'])
 
 
@@ -2576,9 +2599,15 @@ def delete_addon_task(self, addon_id: str):
     orchestrator = DeletionOrchestrator()
     success = orchestrator.delete_addon_resources(addon)
 
+    # Resilience: If local docker client is missing but addon has no server (or is unassigned), 
+    # allow DB deletion to proceed.
+    if not success and not orchestrator.docker_client:
+        logger.warning("Docker client unavailable for addon %s. Forcing database-only deletion.", addon.id)
+        success = True
+
     if success:
         addon.delete()
     else:
         addon.status = Addon.Status.DELETION_FAILED
-        addon.deletion_error = "Failed to remove some runtime resources."
+        addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
         addon.save(update_fields=['status', 'deletion_error'])

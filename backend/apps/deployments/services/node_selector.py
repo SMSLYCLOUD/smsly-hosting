@@ -13,7 +13,7 @@ def select_eligible_node(user) -> ManagedServer:
         if s.status != "ONLINE":
             continue
 
-        if getattr(s, 'is_control_plane', False):
+        if getattr(s, 'is_primary', False):
             if getattr(s, 'allow_user_workloads', False) or allow_control_plane:
                 eligible.append(s)
         else:

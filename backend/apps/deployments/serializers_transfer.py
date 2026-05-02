@@ -96,6 +96,11 @@ class ServerTransferCreateSerializer(serializers.Serializer):
             target_server = ManagedServer.objects.filter(id=target_server_id).first()
             if not target_server:
                 raise serializers.ValidationError({'target_server_id': "Target server not found."})
+            
+            if target_server.status != ManagedServer.Status.ONLINE:
+                raise serializers.ValidationError(
+                    {'target_server_id': f"Target server '{target_server.name}' is currently {target_server.status}. Transfers are only allowed to ONLINE nodes."}
+                )
 
         if not has_key and not has_password and not target_server:
             raise serializers.ValidationError(

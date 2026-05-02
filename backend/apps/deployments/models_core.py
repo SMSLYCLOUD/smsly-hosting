@@ -107,6 +107,11 @@ class ManagedServer(models.Model):
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")
 
+    @classmethod
+    def get_primary(cls):
+        """Return the primary/control-plane server."""
+        return cls.objects.filter(is_primary=True).first()
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
