@@ -835,12 +835,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             port = 3000
         port = max(1, min(65535, port))
 
-        server_id = svc_plan.get("server_id")
+        server_id = svc_plan.get("server_id") or plan.get("server_id")
         server = None
         if server_id:
             from apps.deployments.models import ManagedServer
             try:
-                server = ManagedServer.objects.filter(id=server_id, owner=user).first()
+                if str(server_id).lower() in ("local", "primary"):
+                    server = ManagedServer.get_primary()
+                else:
+                    server = ManagedServer.objects.filter(id=server_id, owner=user).first()
             except Exception:
                 pass
         else:

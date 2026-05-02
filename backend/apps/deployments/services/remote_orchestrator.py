@@ -163,3 +163,16 @@ class RemoteOrchestrator:
             pass
             
         return {}
+
+    def delete_service(self, remote_service_id: str) -> bool:
+        """Tell the remote server to delete the given service."""
+        path = f"/api/v1/services/{remote_service_id}/"
+        headers = self._get_headers("DELETE", path)
+        
+        try:
+            resp = requests.delete(f"{self.base_url}{path}", headers=headers, timeout=20)
+            # 202 Accepted or 204 No Content
+            return resp.status_code in (202, 204, 200)
+        except Exception as e:
+            logger.error("Error deleting service on remote: %s", e)
+            return False

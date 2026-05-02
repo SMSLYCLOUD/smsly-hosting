@@ -12,14 +12,21 @@ class ServerGuard:
     def is_control_plane(cls, server) -> bool:
         if not server:
             return False
+            
+        from django.conf import settings
+        allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
+        
+        is_primary = bool(getattr(server, "is_primary", False))
         role = str(getattr(server, "role", "") or "").upper()
         server_type = str(getattr(server, "server_type", "") or "").upper()
-        return (
-            bool(getattr(server, "is_primary", False))
-            or not bool(getattr(server, "allow_user_workloads", True))
-            or role in cls.CONTROL_PLANE_VALUES
-            or server_type in cls.CONTROL_PLANE_VALUES
-        )
+        
+        # If it's the primary/control-plane, only block if global workloads are NOT allowed
+        if is_primary or role in cls.CONTROL_PLANE_VALUES or server_type in cls.CONTROL_PLANE_VALUES:
+            if not allow_control_plane and not bool(getattr(server, "allow_user_workloads", False)):
+                return True
+        
+        # Otherwise, respect the per-server workload flag
+        return not bool(getattr(server, "allow_user_workloads", True))
 
     @classmethod
     def is_primary(cls, server_id: str) -> bool:
@@ -53,7 +60,11 @@ class ServerGuard:
 
     @classmethod
     def filter_user_workload_targets(cls, queryset):
-        return queryset.filter(is_primary=False, allow_user_workloads=True)
+        return queryset.filter(
+            is_primary=False,
+            allow_user_workloads=True,
+            status=ManagedServer.Status.ONLINE
+        )
 
     @classmethod
     def assert_not_primary(cls, server_id: str):

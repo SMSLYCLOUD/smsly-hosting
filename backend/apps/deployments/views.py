@@ -282,12 +282,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
+        from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
+        
+        # Seamless: If no server is assigned, pick the primary node automatically
+        if not server:
+            server = ManagedServer.get_primary()
+            if server:
+                logger.info("Auto-assigning primary server %s to service %s", server.name, serializer.validated_data.get('name'))
+        
         ServerGuard.assert_user_workload_allowed(server)
 
         deploy_type = serializer.validated_data.get('deploy_type', 'GIT')
 
-        service = serializer.save(owner=self.request.user)
+        service = serializer.save(owner=self.request.user, server=server)
 
         # Setup GitHub Webhook if applicable
         if service.deploy_type == 'GIT' and service.repository_url:
@@ -298,11 +306,19 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ).start()
 
     def perform_update(self, serializer):
+        from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
+        
+        # Seamless: If no server is assigned during update, pick the primary node automatically
+        if not server:
+            server = ManagedServer.get_primary()
+            if server:
+                logger.info("Auto-assigning primary server %s to service %s during update", server.name, serializer.instance.name)
+        
         ServerGuard.assert_user_workload_allowed(server)
 
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
-        service = serializer.save()
+        service = serializer.save(server=server)
 
         # Setup GitHub Webhook if repo URL changed or was newly set
         new_repo_url = service.repository_url

@@ -400,7 +400,11 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return self.queryset.filter(owner=self.request.user)
+        qs = self.queryset.filter(owner=self.request.user)
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
 
     def get_serializer_class(self):
         if self.action == "provision_new":
@@ -411,9 +415,6 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         server = serializer.save(owner=self.request.user)
-        if server.is_primary and server.allow_user_workloads:
-            server.allow_user_workloads = False
-            server.save(update_fields=["allow_user_workloads", "updated_at"])
         # Attempt to auto-fetch the service count when connecting an existing server
         if server.api_url and server.api_token:
             from threading import Thread
@@ -421,9 +422,6 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         server = serializer.save()
-        if server.is_primary and server.allow_user_workloads:
-            server.allow_user_workloads = False
-            server.save(update_fields=["allow_user_workloads", "updated_at"])
         if server.api_url and server.api_token:
             from threading import Thread
             Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
