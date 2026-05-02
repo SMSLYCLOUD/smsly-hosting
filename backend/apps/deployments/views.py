@@ -1571,6 +1571,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_200_OK)
 
         # 3. Check Custom Domains (JSONField)
+        # Optimized lookup for custom_domains JSON field
+        from apps.domains.models import Domain, DomainStatus
+        if Domain.objects.filter(domain_name=domain, status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]).exists():
+            return Response(status=status.HTTP_200_OK)
         # We try multiple ways to match for maximum compatibility across DB backends.
         try:
             # Postgres-optimized list containment check
@@ -1634,14 +1638,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if public_conflict:
             return public_conflict
 
-        for other in Service.objects.exclude(id=service.id).only("id", "name", "custom_domains"):
-            other_domains = [
-                str(d or "").strip().lower()
-                for d in (other.custom_domains or [])
-                if str(d or "").strip()
-            ]
-            if domain in other_domains:
-                return other
+        from apps.domains.models import Domain
+        domain_obj = Domain.objects.filter(domain_name=domain).exclude(service=service).first()
+        if domain_obj:
+            return domain_obj.service
         return None
 
     def _enforce_custom_domain_quota(self, service: Service, new_total: int):
@@ -1664,6 +1664,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except ImportError:
             pass
         return None
+
+    @action(detail=True, methods=['post'], url_path='retry-domain')
+    def retry_domain(self, request, pk=None):
+        """Retry domain verification"""
+        service = self.get_object()
+        domain_name = request.data.get('domain', '').strip().lower()
+        if not domain_name:
+            return Response({'error': 'Domain required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.domains.models import Domain
+        domain_obj = Domain.objects.filter(service=service, domain_name=domain_name).first()
+        if not domain_obj:
+            return Response({'error': 'Domain not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        from apps.domains.tasks import verify_dns_and_provision_ssl_task
+        verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+
+        return Response({'message': 'Verification retried', 'status': domain_obj.status})
 
     @action(detail=True, methods=['post'], url_path='add-domain')
     def add_domain(self, request, pk=None):
@@ -1709,6 +1727,21 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
+
+        from apps.domains.models import Domain, DomainStatus
+        # Clean up old domains
+        Domain.objects.filter(service=service).exclude(domain_name__in=domains).delete()
+
+        # Add new domains
+        for d in domains:
+            domain_obj, created = Domain.objects.get_or_create(
+                domain_name=d,
+                defaults={'service': service, 'status': DomainStatus.PENDING}
+            )
+            if created:
+                from apps.domains.tasks import verify_dns_and_provision_ssl_task
+                verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+
 
         # Auto-sync Caddyfile so SSL + routing are provisioned immediately.
         # No service redeploy is required.
@@ -1791,6 +1824,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         domains = [d for d in domains if d != domain]
         service.custom_domains = domains
         service.save(update_fields=['custom_domains'])
+
+        from apps.domains.models import Domain
+        Domain.objects.filter(domain_name=domain, service=service).delete()
+
+        from apps.domains.models import Domain, DomainStatus
+        # Clean up old domains
+        Domain.objects.filter(service=service).exclude(domain_name__in=domains).delete()
+
+        # Add new domains
+        for d in domains:
+            domain_obj, created = Domain.objects.get_or_create(
+                domain_name=d,
+                defaults={'service': service, 'status': DomainStatus.PENDING}
+            )
+            if created:
+                from apps.domains.tasks import verify_dns_and_provision_ssl_task
+                verify_dns_and_provision_ssl_task.delay(domain_obj.id)
+
 
         # Auto-sync Caddyfile so stale domain entry is removed immediately.
         caddy_result = self._sync_caddy()
