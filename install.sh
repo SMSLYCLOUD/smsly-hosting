@@ -3550,9 +3550,9 @@ echo -e "\n${BLUE}Verification Score: $VERIFY_PASS_COUNT/$VERIFY_TOTAL${NC}"
 
 # ─── Install Autoscaler as systemd service ──────────────────────────────────
 echo -e "${BLUE}  → Installing smsly-autoscaler systemd service...${NC}"
-cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
+cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
     mkdir -p /opt/smsly
-    cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py
+    cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py
 }
 chmod +x /opt/smsly/autoscaler.py
 
@@ -3660,7 +3660,7 @@ echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
-    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ]; then
+    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ] && [ "$NON_INTERACTIVE" != "true" ]; then
         echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
         echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
         for i in $(seq 30 -1 1); do

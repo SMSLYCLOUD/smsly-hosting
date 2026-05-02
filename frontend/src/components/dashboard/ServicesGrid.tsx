@@ -194,7 +194,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
 
           {/* Footer / Actions */}
           <div className="p-3 border-t border-border/50 bg-muted/20 flex justify-between items-center">
-            <div className="flex gap-1">
+            <div className="flex gap-2">
               <Button
                 variant="ghost"
                 size="icon"
@@ -216,7 +216,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 </Button>
               )}
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-1.5">
               <Button
                 variant="ghost"
                 size="icon"
