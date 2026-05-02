@@ -1,14 +1,14 @@
 import requests
-import time
 import os
 import sys
+import pytest
 
 ROUTER_URL = os.environ.get("AI_ROUTER_URL", "https://ai-router-b7bd2fad-eb7003.pcloud.linadeluxe.com")
 API_KEY = os.environ.get("AI_ROUTER_API_KEY")
-
-if not API_KEY:
-    print("Error: AI_ROUTER_API_KEY environment variable is not set. Please set it to the master key.")
-    sys.exit(1)
+pytestmark = pytest.mark.skipif(
+    not API_KEY,
+    reason="AI_ROUTER_API_KEY is required for live AI router smoke tests.",
+)
 
 headers = {
     "Authorization": f"Bearer {API_KEY}",
@@ -71,7 +71,13 @@ def check_endpoint():
         print(f"Error testing completion: {e}")
         return False
 
+def test_ai_router_endpoint():
+    assert check_endpoint()
+
 if __name__ == "__main__":
+    if not API_KEY:
+        print("AI_ROUTER_API_KEY is required for the live AI router smoke test.")
+        sys.exit(1)
     success = check_endpoint()
     if not success:
         print("\n❌ Tests failed or returned warnings. This is expected if the router hasn't been re-deployed yet!")

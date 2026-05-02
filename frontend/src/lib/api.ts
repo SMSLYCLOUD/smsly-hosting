@@ -909,15 +909,20 @@ export interface ManagedServer {
   id: string;
   name: string;
   host: string;
+  private_ip?: string | null;
   api_url: string;
   api_token?: string;
   ssh_port: number;
+  ssh_user?: string;
+  provider_metadata?: Record<string, any>;
   has_ssh_credentials?: boolean;
   is_primary: boolean;
+  allow_user_workloads: boolean;
   status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
   last_health_check: string | null;
   server_version: string;
   services_count: number;
+  provision_status?: 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
   created_at: string;
 }
 
@@ -1427,6 +1432,10 @@ export const addonsApi = {
     },
     deprovision: async (id: string): Promise<any> => {
         const res = await api.post(`/addons/${id}/deprovision/`);
+        return res.data;
+    },
+    retryDelete: async (id: string): Promise<any> => {
+        const res = await api.post(`/addons/${id}/retry-delete/`);
         return res.data;
     },
     reprovision: async (id: string): Promise<any> => {

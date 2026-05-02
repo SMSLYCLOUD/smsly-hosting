@@ -6,9 +6,11 @@ deploying WireGuard configurations across the server fleet.
 """
 
 import logging
+import ipaddress
 
 from django.db import DatabaseError
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
@@ -53,9 +55,18 @@ class MeshNetworkSerializer(serializers.ModelSerializer):
         model = MeshNetwork
         fields = [
             "id", "name", "subnet", "listen_port", "interface_name",
-            "is_active", "peers", "peer_count", "created_at",
+            "is_active", "mesh_status", "mesh_last_error",
+            "mesh_last_result", "mesh_last_deployed_at",
+            "replication_status", "replication_last_error",
+            "replication_last_result", "replication_updated_at",
+            "peers", "peer_count", "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = [
+            "id", "created_at", "mesh_status", "mesh_last_error",
+            "mesh_last_result", "mesh_last_deployed_at",
+            "replication_status", "replication_last_error",
+            "replication_last_result", "replication_updated_at",
+        ]
 
     def get_peer_count(self, obj):
         return obj.peers.filter(is_active=True).count()
@@ -65,6 +76,19 @@ class MeshNetworkCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = MeshNetwork
         fields = ["name", "subnet", "listen_port", "interface_name"]
+
+    def validate_subnet(self, value):
+        try:
+            ipaddress.IPv4Network(value, strict=False)
+        except ValueError as exc:
+            raise serializers.ValidationError("subnet must be a valid IPv4 CIDR.") from exc
+        return value
+
+    def validate_interface_name(self, value):
+        try:
+            return WireGuardService.validate_interface_name(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 # ─── ViewSets ────────────────────────────────────────────────────────────────
@@ -152,6 +176,9 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
             peer = WireGuardService.add_peer_to_mesh(mesh, server=server)
             # Deploy updated configs to all peers
             # Deploy via celery to avoid connection reset when interface restarts
+            mesh.mesh_status = "DEPLOYING"
+            mesh.mesh_last_error = ""
+            mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
             deploy_mesh_task.delay(mesh.id)
             results = {"status": "Deploying in background"}
             return Response({
@@ -209,8 +236,17 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         mesh = self.get_object()
         try:
             # Deploy via celery to avoid connection reset when interface restarts
+            mesh.mesh_status = "DEPLOYING"
+            mesh.mesh_last_error = ""
+            mesh.mesh_last_deployed_at = timezone.now()
+            mesh.save(update_fields=[
+                "mesh_status",
+                "mesh_last_error",
+                "mesh_last_deployed_at",
+                "updated_at",
+            ])
             deploy_mesh_task.delay(mesh.id)
-            results = {"status": "Deploying in background"}
+            results = {"status": "Deploying in background", "mesh_status": mesh.mesh_status}
             return Response(results)
         except Exception as e:
             return Response(
@@ -225,6 +261,19 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         """Check connectivity between all peers in the mesh."""
         mesh = self.get_object()
         results = WireGuardService.check_mesh_health(mesh)
+        has_error = bool(results.get("error")) or any(
+            str(peer.get("status", "")) != "OK"
+            for peer in results.get("peers", [])
+        )
+        mesh.mesh_last_result = results
+        mesh.mesh_last_error = results.get("error", "") if has_error else ""
+        mesh.mesh_status = "FAILED" if has_error else "ACTIVE"
+        mesh.save(update_fields=[
+            "mesh_last_result",
+            "mesh_last_error",
+            "mesh_status",
+            "updated_at",
+        ])
         return Response(results)
 
     # ── WireGuard Status ─────────────────────────────────────────────

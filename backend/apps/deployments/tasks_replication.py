@@ -11,7 +11,11 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 
-@shared_task(name="apps.deployments.tasks_replication.check_replication_health_task")
+@shared_task(
+    name="apps.deployments.tasks_replication.check_replication_health_task",
+    soft_time_limit=300,
+    time_limit=360,
+)
 def check_replication_health_task():
     """
     Periodic task (every 30s): check WAL replication lag across all meshes.
@@ -57,25 +61,78 @@ def check_replication_health_task():
             logger.error(f"Replication health check failed for mesh {mesh.name}: {e}")
 
 
-@shared_task(name="apps.deployments.tasks_replication.deploy_replication_task")
-def deploy_replication_task(mesh_id: str, db_password: str,
+@shared_task(
+    bind=True,
+    name="apps.deployments.tasks_replication.deploy_replication_task",
+    max_retries=0,
+    soft_time_limit=1200,
+    time_limit=1260,
+)
+def deploy_replication_task(self, mesh_id: str, db_password: str,
                              admin_password: str,
                              replication_password: str = "repl_pass"):
     """Deploy Patroni replication cluster to a mesh (async)."""
     from apps.deployments.models_mesh import MeshNetwork
     from apps.deployments.services.replication_service import ReplicationService
+    from django.utils import timezone
 
     try:
         mesh = MeshNetwork.objects.get(id=mesh_id)
+        mesh.replication_status = "DEPLOYING"
+        mesh.replication_last_error = ""
+        mesh.replication_last_result = {}
+        mesh.replication_updated_at = timezone.now()
+        mesh.save(update_fields=[
+            "replication_status",
+            "replication_last_error",
+            "replication_last_result",
+            "replication_updated_at",
+            "updated_at",
+        ])
         results = ReplicationService.deploy_replication(
             mesh, db_password, admin_password, replication_password,
         )
-        logger.info(f"Replication deployment completed: {results}")
+        failed = [
+            node for node in results.get("patroni", [])
+            if str(node.get("status", "")).startswith("FAILED")
+        ]
+        haproxy_failed = str(results.get("haproxy", "")).startswith("FAILED")
+        mesh.replication_status = "FAILED" if failed or haproxy_failed else "ACTIVE"
+        mesh.replication_last_error = "; ".join(
+            [str(node.get("status")) for node in failed]
+            + ([str(results.get("haproxy"))] if haproxy_failed else [])
+        )
+        mesh.replication_last_result = results
+        mesh.replication_updated_at = timezone.now()
+        mesh.save(update_fields=[
+            "replication_status",
+            "replication_last_error",
+            "replication_last_result",
+            "replication_updated_at",
+            "updated_at",
+        ])
+        logger.info("Replication deployment completed for mesh %s", mesh.name)
         return results
     except MeshNetwork.DoesNotExist:
         logger.error(f"Mesh {mesh_id} not found")
+        return {"error": "Mesh not found"}
     except Exception as e:
+        try:
+            mesh.replication_status = "FAILED"
+            mesh.replication_last_error = str(e)
+            mesh.replication_last_result = {"error": str(e)}
+            mesh.replication_updated_at = timezone.now()
+            mesh.save(update_fields=[
+                "replication_status",
+                "replication_last_error",
+                "replication_last_result",
+                "replication_updated_at",
+                "updated_at",
+            ])
+        except Exception:
+            pass
         logger.error(f"Replication deployment failed: {e}")
+        return {"error": str(e)}
 
 
 @shared_task(name="apps.deployments.tasks_replication.manual_failover_task")

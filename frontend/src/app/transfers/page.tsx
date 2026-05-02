@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import api, { servicesApi, addonsApi, serversApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -15,84 +15,90 @@ export default function TransfersPage() {
     const [services, setServices] = useState<any[]>([]);
     const [addons, setAddons] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [transfers, setTransfers] = useState<any[]>([]);
+    const [transfersLoading, setTransfersLoading] = useState(false);
 
     // Grouping structure for DnD
     const [groupedServices, setGroupedServices] = useState<Record<string, any[]>>({});
     const showAll = shouldShowAllNav();
     const transferDisabled = !featureFlags.transfers && !showAll;
-    const transferBlockedNoTarget = servers.length === 0;
+    const workloadServers = servers.filter(server => !server.is_primary && server.allow_user_workloads !== false);
+    const transferBlockedNoTarget = workloadServers.length === 0;
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                // Fetch connected servers
-                const serversRes = await serversApi.list();
-                const serversData = serversRes;
-                setServers(serversData);
+    const fetchTransfers = useCallback(async () => {
+        setTransfersLoading(true);
+        try {
+            const res = await api.get('/transfers/');
+            setTransfers(Array.isArray(res.data) ? res.data : res.data?.results || []);
+        } catch (error) {
+            console.error("Failed to fetch transfers", error);
+        } finally {
+            setTransfersLoading(false);
+        }
+    }, []);
 
-                // Fetch services
-                const servicesRes = await servicesApi.list();
-                const servicesData = servicesRes;
-                setServices(servicesData);
+    const fetchData = useCallback(async () => {
+        try {
+            const [serversData, servicesData, addonsData] = await Promise.all([
+                serversApi.list(),
+                servicesApi.list(),
+                addonsApi.list(),
+            ]);
+            setServers(serversData);
+            setServices(servicesData);
+            setAddons(addonsData);
 
-                // Fetch addons
-                const addonsRes = await addonsApi.list();
-                const addonsData = addonsRes;
-                setAddons(addonsData);
+            const addonsByService: Record<string, any[]> = {};
+            addonsData.forEach((addon: any) => {
+                const sId = addon.service;
+                if (sId) {
+                    if (!addonsByService[sId]) addonsByService[sId] = [];
+                    addonsByService[sId].push(addon);
+                }
+            });
 
-                // Group addons by parent service ID
-                const addonsByService: Record<string, any[]> = {};
-                addonsData.forEach((addon: any) => {
-                    const sId = addon.service;
-                    if (sId) {
-                        if (!addonsByService[sId]) addonsByService[sId] = [];
-                        addonsByService[sId].push(addon);
-                    }
-                });
-
-                // Group by server
-                const grouped: Record<string, any[]> = {};
-                grouped['local'] = [];
-                serversData.forEach((srv: any) => {
+            const grouped: Record<string, any[]> = { local: [] };
+            serversData
+                .filter((srv: any) => !srv.is_primary && srv.allow_user_workloads !== false)
+                .forEach((srv: any) => {
                     grouped[srv.id] = [];
                 });
 
-                const linkedAddonIds = new Set();
+            const linkedAddonIds = new Set();
 
-                // Add services with their linked addons
-                servicesData.forEach((srv: any) => {
-                    const serverId = srv.server || 'local';
-                    if (!grouped[serverId]) grouped[serverId] = [];
-                    
-                    const linkedAddons = addonsByService[srv.id] || [];
-                    linkedAddons.forEach(a => linkedAddonIds.add(a.id));
-
-                    grouped[serverId].push({ 
-                        ...srv, 
-                        type: 'service',
-                        addons: linkedAddons 
-                    });
+            servicesData.forEach((srv: any) => {
+                const serverId = grouped[srv.server] ? srv.server : 'local';
+                const linkedAddons = addonsByService[srv.id] || [];
+                linkedAddons.forEach(a => linkedAddonIds.add(a.id));
+                grouped[serverId].push({
+                    ...srv,
+                    type: 'service',
+                    addons: linkedAddons
                 });
+            });
 
-                // Add orphan addons (not linked to any service)
-                addonsData.forEach((addon: any) => {
-                    if (!linkedAddonIds.has(addon.id)) {
-                        const serverId = addon.server || 'local';
-                        if (!grouped[serverId]) grouped[serverId] = [];
-                        grouped[serverId].push({ ...addon, type: 'addon', addons: [] });
-                    }
-                });
+            addonsData.forEach((addon: any) => {
+                if (!linkedAddonIds.has(addon.id)) {
+                    const serverId = grouped[addon.server] ? addon.server : 'local';
+                    grouped[serverId].push({ ...addon, type: 'addon', addons: [] });
+                }
+            });
 
-                setGroupedServices(grouped);
-            } catch (error) {
-                console.error("Failed to fetch transfer data", error);
-                toast.error("Failed to load connected servers or services");
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
+            setGroupedServices(grouped);
+        } catch (error) {
+            console.error("Failed to fetch transfer data", error);
+            toast.error("Failed to load connected servers or services");
+        } finally {
+            setLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        fetchData();
+        fetchTransfers();
+        const interval = setInterval(fetchTransfers, 5000);
+        return () => clearInterval(interval);
+    }, [fetchData, fetchTransfers]);
 
     // ─────────────────────────────────────────────────────────────────
     // DnD Handlers
@@ -131,6 +137,12 @@ export default function TransfersPage() {
             return;
         }
 
+        const targetServer = servers.find(server => server.id === targetServerId);
+        if (!targetServer || targetServer.is_primary || targetServer.allow_user_workloads === false) {
+            toast.error("Select a workload-enabled remote server.");
+            return;
+        }
+
         // Optimistic UI update
         const itemToMove = groupedServices[sourceServerId].find(item => item.id === itemId);
         if (!itemToMove) return;
@@ -161,13 +173,10 @@ export default function TransfersPage() {
 
             await api.post(endpoint, payload);
             toast.success(`Transfer initiated to ${getServerName(targetServerId)}`);
+            fetchTransfers();
         } catch (error: any) {
             console.error("Transfer failed", error);
-            const errorMsg = error.response?.data?.error || 
-                           (error.response?.data && typeof error.response.data === 'object' 
-                                ? Object.values(error.response.data).join(', ') 
-                                : "Transfer request failed");
-            toast.error(errorMsg);
+            toast.error(parseApiError(error, "Transfer request failed"));
 
             // Revert UI on failure
             setGroupedServices(prev => {
@@ -214,7 +223,7 @@ export default function TransfersPage() {
                     <div className="flex items-center gap-3">
                         <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900/50 border border-zinc-800">
                             <Server className="w-3.5 h-3.5 text-zinc-500" />
-                            <span className="text-[11px] font-medium text-zinc-400">Connected Nodes: {servers.length + 1}</span>
+                            <span className="text-[11px] font-medium text-zinc-400">Transfer Targets: {workloadServers.length}</span>
                         </div>
                         <Button 
                             variant="outline" 
@@ -253,7 +262,7 @@ export default function TransfersPage() {
                                 />
 
                                 {/* Remote Servers */}
-                                {servers.map(server => (
+                                {workloadServers.map(server => (
                                     <ServerColumn
                                         key={server.id}
                                         id={server.id}
@@ -276,9 +285,43 @@ export default function TransfersPage() {
                                     <MessagesSquare className="w-4 h-4 text-emerald-400" />
                                     <h3 className="text-sm font-bold text-white uppercase tracking-wider">Active Stream</h3>
                                 </div>
-                                <div className="rounded-xl border border-dashed border-zinc-800 bg-black/20 p-8 flex flex-col items-center justify-center text-center">
-                                    <p className="text-xs text-zinc-500 italic">Static. No active neural transfers detected.</p>
-                                </div>
+                                {transfersLoading && transfers.length === 0 ? (
+                                    <div className="rounded-xl border border-dashed border-zinc-800 bg-black/20 p-8 flex flex-col items-center justify-center text-center">
+                                        <p className="text-xs text-zinc-500 italic">Loading transfer state...</p>
+                                    </div>
+                                ) : transfers.length === 0 ? (
+                                    <div className="rounded-xl border border-dashed border-zinc-800 bg-black/20 p-8 flex flex-col items-center justify-center text-center">
+                                        <p className="text-xs text-zinc-500 italic">No transfer jobs are running.</p>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                                        {transfers.slice(0, 6).map((transfer: any) => (
+                                            <div key={transfer.id} className="rounded-xl border border-zinc-800 bg-black/30 p-3">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="text-[10px] font-bold text-zinc-400 uppercase">{transfer.transfer_type}</span>
+                                                    <span className={`text-[10px] font-bold uppercase ${
+                                                        transfer.status === 'COMPLETED'
+                                                            ? 'text-emerald-400'
+                                                            : transfer.status === 'FAILED'
+                                                              ? 'text-red-400'
+                                                              : 'text-amber-400'
+                                                    }`}>
+                                                        {transfer.status}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-2 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-emerald-500 transition-all"
+                                                        style={{ width: `${Math.max(0, Math.min(100, transfer.progress_percent || 0))}%` }}
+                                                    />
+                                                </div>
+                                                <p className="mt-2 text-[11px] text-zinc-400 leading-relaxed">
+                                                    {transfer.current_step || transfer.error_message || `${transfer.source_server_ip} -> ${transfer.target_server_ip}`}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-md p-5 flex flex-col shadow-2xl overflow-hidden">
@@ -287,16 +330,22 @@ export default function TransfersPage() {
                                     <h3 className="text-sm font-bold text-white uppercase tracking-wider">Telemetry Log</h3>
                                 </div>
                                 <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
-                                    <div className="p-3 rounded-lg bg-black/30 border border-zinc-800/50">
-                                        <div className="flex justify-between items-center mb-1">
-                                            <span className="text-[10px] font-bold text-zinc-600 uppercase">System Ready</span>
-                                            <span className="text-[9px] text-zinc-700">Just now</span>
+                                    {transfers.slice(0, 8).map((transfer: any) => (
+                                        <div key={`log-${transfer.id}`} className="p-3 rounded-lg bg-black/30 border border-zinc-800/50">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-[10px] font-bold text-zinc-600 uppercase">{transfer.status}</span>
+                                                <span className="text-[9px] text-zinc-700">
+                                                    {transfer.created_at ? new Date(transfer.created_at).toLocaleTimeString() : ''}
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-zinc-400 leading-relaxed">
+                                                {transfer.error_message || transfer.current_step || 'Transfer queued.'}
+                                            </p>
                                         </div>
-                                        <p className="text-[11px] text-zinc-400 leading-relaxed">
-                                            Transfer Hub initialized. Secure tunnels are open and verified.
-                                        </p>
-                                    </div>
-                                    <p className="text-center py-10 text-[10px] text-zinc-600 font-medium">End of telemetry stream.</p>
+                                    ))}
+                                    {transfers.length === 0 && (
+                                        <p className="text-center py-10 text-[10px] text-zinc-600 font-medium">Transfer events will appear here.</p>
+                                    )}
                                 </div>
                             </div>
                         </div>
