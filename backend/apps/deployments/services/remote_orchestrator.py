@@ -80,12 +80,12 @@ class RemoteOrchestrator:
         payload = {
             "name": service.name,
             "deploy_type": service.deploy_type,
-            "git_repo": service.git_repo,
-            "git_branch": service.git_branch,
+            "repository_url": service.repository_url,
+            "branch": service.branch,
             "docker_image": service.docker_image,
             "internal_port": service.internal_port,
             "is_public": service.is_public,
-            "build_strategy": service.build_strategy,
+            "buildpack": service.buildpack,
         }
         
         body = requests.models.complexjson.dumps(payload).encode()
