@@ -42,7 +42,7 @@ class PlatformUpdateViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Run async
         from .tasks import platform_update_task
-        platform_update_task.delay(update_id=str(update.id))
+        platform_update_task(None, update_id=str(update.id))
 
         return Response(
             PlatformUpdateSerializer(update).data,
@@ -58,7 +58,7 @@ class PlatformUpdateViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST)
 
         from .tasks import platform_rollback_task
-        platform_rollback_task.delay(update_id=str(update.id))
+        platform_rollback_task(None, update_id=str(update.id))
         update.status = 'ROLLING_BACK'
         update.save(update_fields=['status'])
         return Response(PlatformUpdateSerializer(update).data)

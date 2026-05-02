@@ -2979,14 +2979,17 @@ class SystemConfigView(GenericAPIView):
         from .tasks import run_maintenance_task
 
         if action == 'clear':
-            run_maintenance_task.delay(command_flag='--clear')
-            return Response({"status": "queued", "message": "System cache and stale container clearance initiated."})
+            res = run_maintenance_task(None, command_flag='--clear')
+            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
+            return Response(res, status=status_code)
         elif action == 'update':
-            run_maintenance_task.delay(command_flag='--update')
-            return Response({"status": "queued", "message": "Platform update initiated."})
+            res = run_maintenance_task(None, command_flag='--update')
+            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
+            return Response(res, status=status_code)
         elif action == 'refresh':
-            run_maintenance_task.delay(command_flag='--refresh')
-            return Response({"status": "queued", "message": "Proxy routing refresh initiated."})
+            res = run_maintenance_task(None, command_flag='--refresh')
+            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
+            return Response(res, status=status_code)
 
         return Response({"error": "Invalid maintenance action specified. Use clear, update, or refresh."}, status=status.HTTP_400_BAD_REQUEST)
 
