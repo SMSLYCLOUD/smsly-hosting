@@ -497,6 +497,25 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             "provision_logs": server.provision_logs,
         })
 
+    @action(detail=True, methods=["post"], url_path="retry-provision")
+    def retry_provision(self, request, pk=None):
+        """Retry the provisioning process for an existing server."""
+        server = self.get_object()
+
+        # Reset status and clear logs
+        server.provision_status = ManagedServer.ProvisionStatus.PENDING
+        server.provision_logs = f"--- Retry started by {request.user.username} at {timezone.now()} ---\n"
+        server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
+
+        # Kick off async provisioning
+        from .services.provisioner import provision_server
+        provision_server.delay(str(server.id))
+
+        return Response(
+            ManagedServerSerializer(server).data,
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     # ── Health Check ─────────────────────────────────────────────────────
 
     @action(detail=True, methods=["post"])
