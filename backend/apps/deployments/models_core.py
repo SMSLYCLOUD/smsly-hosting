@@ -203,6 +203,7 @@ class Service(TimeStampedModel):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(max_length=255, blank=True, unique=True)
 
     # Provider Integration
     provider = models.ForeignKey(
@@ -430,7 +431,45 @@ class Service(TimeStampedModel):
         help_text="If False, Traefik route is disabled; service only reachable via Docker DNS")
 
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.slug})"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
+            if not self.slug:
+                self.slug = str(self.id)[:8]
+            
+            # Ensure uniqueness
+            original_slug = self.slug
+            counter = 1
+            slug_exists = Service.objects.filter(slug=self.slug)
+            if self.pk:
+                slug_exists = slug_exists.exclude(pk=self.pk)
+            
+            while slug_exists.exists():
+                self.slug = f"{original_slug}-{counter}"
+                counter += 1
+                slug_exists = Service.objects.filter(slug=self.slug)
+                if self.pk:
+                    slug_exists = slug_exists.exclude(pk=self.pk)
+
+        if not self.verification_token:
+            self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
+
+        if not getattr(self, 'health_webhook_token', None):
+            import secrets
+            self.health_webhook_token = secrets.token_urlsafe(32)
+
+        # Use slug for deterministic public domain
+        if not self.public_domain:
+            import hashlib
+            seed = f"{self.owner_id}:{self.slug}".encode()
+            short_id = hashlib.sha256(seed).hexdigest()[:6]
+            base_domain = self.default_public_base_domain()
+            self.public_domain = f"{self.slug}-{short_id}.{base_domain}"
+
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def clean(self):
         super().clean()
@@ -457,6 +496,7 @@ class Service(TimeStampedModel):
             configured = ""
 
         try:
+            from .models_addons import PlatformConfig
             platform_cfg = PlatformConfig.objects.only("domain").first()
             if platform_cfg and platform_cfg.domain:
                 configured = platform_cfg.domain.strip().lower().rstrip(".")
@@ -465,29 +505,6 @@ class Service(TimeStampedModel):
             pass
 
         return configured or fallback
-
-    def save(self, *args, **kwargs):
-        if not self.verification_token:
-            self.verification_token = f"smsly-verify-{uuid.uuid4().hex[:12]}"
-
-        if not self.health_webhook_token:
-            import secrets
-            self.health_webhook_token = secrets.token_urlsafe(32)
-
-        # Auto-generate deterministic subdomain from owner + name
-        # Same owner + same name = same domain, always.
-        if not self.public_domain:
-            import hashlib
-            slug = re.sub(r'[^a-z0-9]+', '-', self.name.lower()).strip('-')
-            slug = (slug[:48]).strip('-') or "service"
-            # Deterministic hash: owner_id + service_name → stable short_id
-            seed = f"{self.owner_id}:{self.name}".encode()
-            short_id = hashlib.sha256(seed).hexdigest()[:6]
-            base_domain = self.default_public_base_domain()
-            self.public_domain = f"{slug}-{short_id}.{base_domain}"
-
-        self.full_clean()  # Enforce validation (e.g. max_length)
-        super().save(*args, **kwargs)
 
 
 class ComplianceProfile(models.Model):

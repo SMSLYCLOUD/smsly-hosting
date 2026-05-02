@@ -38,11 +38,16 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app
+      - ./caddy-config:/caddy-config
+      - repo_cache_data:/app/repo_cache
     depends_on:
       - redis
       - db
+      - socket-proxy
     command: celery -A config worker --loglevel=info -Q fast --concurrency=8
     restart: always
     networks:
@@ -55,11 +60,19 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app
+      - ./install.sh:/app/install.sh:ro
+      - ./:/platform-src:ro
+      - ./caddy-config:/caddy-config
+      - backups_data:/app/backups
+      - repo_cache_data:/app/repo_cache
     depends_on:
       - redis
       - db
+      - socket-proxy
     command: celery -A config worker --loglevel=info -Q deploy --concurrency=8
     restart: always
     networks:
@@ -72,11 +85,16 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     env_file: .env
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app
+      - ./caddy-config:/caddy-config
+      - repo_cache_data:/app/repo_cache
     depends_on:
       - redis
       - db
+      - socket-proxy
     command: celery -A config worker --loglevel=info -Q default --concurrency=8
     restart: always
     networks:

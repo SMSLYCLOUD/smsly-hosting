@@ -17,14 +17,15 @@ class CoreHardeningTests(TestCase):
         self.admin = User.objects.create_superuser('admin', 'admin@example.com', 'password')
         self.user = User.objects.create_user('user', 'user@example.com', 'password')
 
-    def test_paas_update_requires_admin(self):
+    @patch('apps.deployments.tasks.platform_update_task.delay')
+    def test_paas_update_requires_admin(self, mock_delay):
         self.client.force_authenticate(user=self.user)
         response = self.client.post(reverse('platform-update-trigger'))
         self.assertEqual(response.status_code, 403)
 
-    @patch('apps.deployments.tasks.execute_platform_update.delay')
+    @patch('apps.deployments.tasks.platform_update_task.delay')
     def test_paas_update_blocks_concurrent(self, mock_delay):
-        PlatformUpdate.objects.create(status='UPDATING')
+        PlatformUpdate.objects.create(status='PENDING')
         self.client.force_authenticate(user=self.admin)
         response = self.client.post(reverse('platform-update-trigger'))
         self.assertEqual(response.status_code, 409)
