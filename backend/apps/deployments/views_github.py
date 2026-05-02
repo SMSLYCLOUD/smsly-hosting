@@ -178,8 +178,12 @@ def github_repos(request):
         # search API nests inside "items"
         items = raw.get("items", raw) if q else raw
 
-        repos = [
-            {
+        repos = []
+        for r in items:
+            if not isinstance(r, dict):
+                continue
+            
+            repo_data = {
                 "full_name": r["full_name"],
                 "name": r["name"],
                 "private": r["private"],
@@ -191,11 +195,27 @@ def github_repos(request):
                 "updated_at": r.get("updated_at"),
                 "stargazers_count": r.get("stargazers_count", 0),
             }
-            for r in items
-            if isinstance(r, dict)
-        ]
+            repo_data["category"] = _categorize_repo(repo_data)
+            repos.append(repo_data)
 
-        return Response({"repos": repos, "page": page, "per_page": per_page})
+        # Build categorized response
+        categories = {}
+        for repo in repos:
+            cat = repo["category"]
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(repo)
+
+        # Detect clusters
+        clusters = _cluster_repos(repos)
+
+        return Response({
+            "repos": repos, 
+            "categories": categories,
+            "clusters": clusters,
+            "page": page, 
+            "per_page": per_page
+        })
 
     except requests.exceptions.HTTPError as exc:
         sc = exc.response.status_code if exc.response is not None else 502
@@ -210,3 +230,66 @@ def github_repos(request):
             {"error": str(exc), "repos": []},
             status=status.HTTP_502_BAD_GATEWAY,
         )
+
+
+def _categorize_repo(repo: dict) -> str:
+    """Heuristic-based categorization of a repository."""
+    name = repo["name"].lower()
+    desc = repo["description"].lower()
+    lang = repo["language"].lower()
+
+    # 1. Intelligence / AI
+    ai_keywords = {"ai", "intelligence", "grok", "openai", "claude", "gemini", "langchain", "llama", "cognition", "braid"}
+    if any(k in name or k in desc for k in ai_keywords):
+        return "Intelligence"
+
+    # 2. Frontend
+    fe_keywords = {"frontend", "ui", "ux", "dashboard", "portal", "nextjs", "react", "vue", "svelte", "tailwind", "css", "html", "website"}
+    if any(k in name or k in desc for k in fe_keywords) or lang in {"typescript", "javascript", "css", "html"}:
+        # Sub-check: if it has "backend" or "api" it might be fullstack, but let's prioritize Frontend if lang is TS/JS
+        if not any(bk in name for bk in {"backend", "api", "core", "server"}):
+            return "Frontend"
+
+    # 3. Infrastructure / DevOps
+    infra_keywords = {"infrastructure", "devops", "docker", "kubernetes", "k8s", "terraform", "ansible", "deployment", "hosting", "cloud"}
+    if any(k in name or k in desc for k in infra_keywords) or lang in {"hcl", "shell", "dockerfile"}:
+        return "Infrastructure"
+
+    # 4. Core / Backend
+    be_keywords = {"backend", "api", "core", "server", "service", "engine", "platform", "os"}
+    if any(k in name or k in desc for k in be_keywords) or lang in {"python", "go", "rust", "ruby", "php", "java", "c#", "c++"}:
+        return "Core"
+
+    # 5. Utilities
+    util_keywords = {"utility", "tools", "cli", "scripts", "helper", "sdk", "library"}
+    if any(k in name or k in desc for k in util_keywords):
+        return "Utilities"
+
+    return "Others"
+
+
+def _cluster_repos(repos: list[dict]) -> list[dict]:
+    """Detect groups of repositories with common prefixes."""
+    if not repos:
+        return []
+    
+    prefixes = {}
+    for repo in repos:
+        name = repo["name"]
+        if "-" in name:
+            prefix = name.split("-")[0]
+            if len(prefix) > 2:
+                if prefix not in prefixes:
+                    prefixes[prefix] = []
+                prefixes[prefix].append(repo)
+
+    clusters = []
+    for prefix, group in prefixes.items():
+        if len(group) >= 3:  # Only count as a cluster if 3+ repos share prefix
+            clusters.append({
+                "name": prefix.upper(),
+                "count": len(group),
+                "repos": [r["full_name"] for r in group]
+            })
+    
+    return sorted(clusters, key=lambda x: x["count"], reverse=True)

@@ -40,7 +40,7 @@ class BackupSerializer(serializers.ModelSerializer):
 
 
 class AddonViewSet(viewsets.ModelViewSet):
-    queryset = Addon.objects.all()
+    queryset = Addon.objects.all().order_by('id')
     serializer_class = AddonSerializer
     permission_classes = [IsAuthenticated]
 

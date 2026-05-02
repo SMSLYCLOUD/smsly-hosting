@@ -13,7 +13,7 @@ from django.conf import settings
 
 
 class TeamViewSet(viewsets.ModelViewSet):
-    queryset = Team.objects.all()
+    queryset = Team.objects.all().order_by('name')
     serializer_class = TeamSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -21,7 +21,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         # Return teams owned by user or where user is a member
         from django.db.models import Q
         return self.queryset.filter(Q(owner=self.request.user) | Q(
-            members__user=self.request.user)).distinct()
+            members__user=self.request.user)).distinct().order_by('name')
 
     def perform_create(self, serializer):
         team = serializer.save(owner=self.request.user)
@@ -34,7 +34,7 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def members(self, request, pk=None):
         team = self.get_object()
-        members = team.members.all()
+        members = team.members.all().order_by('role', 'user__username')
         serializer = TeamMemberSerializer(members, many=True)
         return Response(serializer.data)
 

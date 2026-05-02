@@ -24,8 +24,8 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Only return active providers for regular users
         if self.request.user.is_staff:
-            return CloudProvider.objects.all()
-        return CloudProvider.objects.filter(is_active=True)
+            return CloudProvider.objects.all().order_by('id')
+        return CloudProvider.objects.filter(is_active=True).order_by('id')
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -160,7 +160,7 @@ class CloudProviderViewSet(viewsets.ModelViewSet):
 class CloudResourceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAdminUser]
     serializer_class = CloudResourceSerializer
-    queryset = CloudResource.objects.all()
+    queryset = CloudResource.objects.all().order_by('id')
 
 
 class IntelligencePayloadSerializer(serializers.Serializer):

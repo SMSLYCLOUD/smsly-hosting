@@ -81,10 +81,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """Owner-scoped: users see only their own projects."""
-        qs = Project.objects.all()
+        qs = Project.objects.all().order_by('id')
         if self.request.user.is_superuser:
             return qs
-        return qs.filter(owner=self.request.user)
+        return qs.filter(owner=self.request.user).order_by('id')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -176,3 +176,25 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'status': 'ok',
             'service_id': str(service.id),
         })
+
+    @action(detail=True, methods=['post'], url_path='sync-envs')
+    def sync_envs(self, request, pk=None):
+        """
+        POST /api/v1/projects/{id}/sync-envs/
+        
+        Hardens and synchronizes environment variables across all services in the ecosystem.
+        Deterministic linking of Intelligence, Security, and Core services.
+        """
+        project = self.get_object()
+        from services.ecosystem import sync_ecosystem_envs
+        
+        try:
+            logger.info("Triggering instant ecosystem sync for project %s (%s)", project.name, project.id)
+            result = sync_ecosystem_envs(str(project.id))
+            return Response(result)
+        except Exception as e:
+            logger.exception("Ecosystem sync failed for project %s", project.id)
+            return Response(
+                {"error": f"Sync failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
