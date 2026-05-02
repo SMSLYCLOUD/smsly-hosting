@@ -1,11 +1,8 @@
-import unittest
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+from django.test import TestCase
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
 from apps.deployments.services.ecosystem_env import EcosystemEnvResolver, is_weak_value
 
-class TestEcosystemEnv(unittest.TestCase):
+class TestEcosystemEnvSafe(TestCase):
     def test_weak_values(self):
         self.assertTrue(is_weak_value("changeme"))
         self.assertTrue(is_weak_value("my_SECRET_123"))
@@ -37,6 +34,3 @@ class TestEcosystemEnv(unittest.TestCase):
 
         self.assertFalse(success)
         self.assertIn("Service 'api' missing external required env 'EXTERNAL_KEY'", errors)
-
-if __name__ == '__main__':
-    unittest.main()
