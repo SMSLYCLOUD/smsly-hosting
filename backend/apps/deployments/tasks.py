@@ -2484,9 +2484,6 @@ def run_maintenance_task(self, command_flag: str):
         logger.info(f"Running maintenance command: {command_flag}")
 
         if command_flag == '--clear':
-            import docker
-            import shutil
-            import os
             client = docker.from_env()
 
             # 1. Prune unused docker resources
