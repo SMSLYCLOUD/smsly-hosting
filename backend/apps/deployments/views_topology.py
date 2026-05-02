@@ -84,7 +84,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'status': status,
                     'kind': 'COMPUTE',
                     'subtype': getattr(
-                        service, 'build_strategy', 'DOCKERFILE'),
+                        service, 'buildpack', 'NIXPACKS'),
                     'region': '',
                     'port': service.internal_port,
                     'replicas': getattr(service, 'min_replicas', 1),
@@ -95,7 +95,7 @@ class TopologyViewSet(viewsets.GenericViewSet):
                     'deploy_commit': deploy_commit,
                     'deploy_time': deploy_time,
                     'build_strategy': getattr(
-                        service, 'build_strategy', 'DOCKERFILE'),
+                        service, 'buildpack', 'NIXPACKS'),
                     'project_id': project_id,
                     'project_name': project_name,
                     'metadata': {
