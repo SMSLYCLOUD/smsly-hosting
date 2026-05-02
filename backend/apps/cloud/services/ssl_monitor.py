@@ -5,31 +5,34 @@ from datetime import datetime, timezone as dt_timezone
 from celery import shared_task
 from django.utils import timezone
 from apps.deployments.models import Service, PlatformConfig
+from apps.domains.models import Domain, DomainStatus
 from apps.notifications.models import Notification
+from apps.domains.tasks import verify_dns_and_provision_ssl_task
 
 logger = logging.getLogger(__name__)
 
 class SSLMonitorService:
     def check_all_certificates(self):
-        """Check expiry of all SSL certs."""
+        """Check expiry of all SSL certs and retry pending DNS."""
         config = PlatformConfig.load()
         if not config.use_ssl:
             return
 
         # Check platform domain
         if config.domain:
-            self._check_cert(config.domain)
+            self._check_cert_platform(config.domain)
+
+        # Retry DNS pending domains
+        for domain_obj in Domain.objects.filter(status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]):
+            verify_dns_and_provision_ssl_task.delay(domain_obj.id)
 
         # Check custom domains on services
-        services = Service.objects.exclude(custom_domains=[])
-        for service in services:
-            for domain in (service.custom_domains or []):
-                self._check_cert(domain, service.owner)
+        for domain_obj in Domain.objects.exclude(status__in=[DomainStatus.PENDING, DomainStatus.DNS_PENDING]):
+            self._check_cert_domain_obj(domain_obj)
 
-    def _check_cert(self, domain, owner=None):
+    def _check_cert_platform(self, domain):
         import ssl
         import socket
-
         try:
             ctx = ssl.create_default_context()
             with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
@@ -43,10 +46,47 @@ class SSLMonitorService:
             days_left = (expires_at - timezone.now()).days
 
             if days_left < 7:
+                logger.warning(f"SSL Certificate for {domain} expires in {days_left} days.")
+                self._attempt_renew(domain)
+        except Exception as e:
+            logger.warning(f"SSL check failed for platform domain {domain}: {e}")
+
+    def _check_cert_domain_obj(self, domain_obj):
+        import ssl
+        import socket
+        domain = domain_obj.domain_name
+        owner = domain_obj.service.owner
+
+        try:
+            ctx = ssl.create_default_context()
+            with ctx.wrap_socket(socket.socket(), server_hostname=domain) as s:
+                s.settimeout(5.0)
+                s.connect((domain, 443))
+                cert = s.getpeercert()
+
+            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            expires_at = not_after.replace(tzinfo=dt_timezone.utc)
+
+            domain_obj.expires_at = expires_at
+            domain_obj.status = DomainStatus.ACTIVE
+            domain_obj.ssl_active = True
+            domain_obj.last_error = None
+            domain_obj.save(update_fields=['expires_at', 'status', 'ssl_active', 'last_error'])
+
+            days_left = (expires_at - timezone.now()).days
+
+            if days_left < 7:
                 self._alert(domain, days_left, owner)
                 self._attempt_renew(domain)
 
         except Exception as e:
+            domain_obj.ssl_active = False
+            # If it's DNS verified, give Caddy time to provision (on demand TLS).
+            # We won't strictly mark it SSL_FAILED immediately unless we want to. Let's just track the error.
+            if domain_obj.status == DomainStatus.ACTIVE:
+                domain_obj.status = DomainStatus.SSL_FAILED
+            domain_obj.last_error = str(e)
+            domain_obj.save(update_fields=['ssl_active', 'status', 'last_error'])
             logger.warning(f"SSL check failed for {domain}: {e}")
 
     def _alert(self, domain, days, owner):
@@ -76,7 +116,6 @@ class SSLMonitorService:
                 logger.warning("Caddy reload trigger failed for %s: %s", domain, result.get("message"))
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Certificate refresh trigger failed for %s: %s", domain, exc)
-
 
 @shared_task(name="apps.cloud.services.ssl_monitor.check_ssl_certificates_task")
 def check_ssl_certificates_task():
