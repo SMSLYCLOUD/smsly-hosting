@@ -1,10 +1,7 @@
-import unittest
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+from django.test import TestCase
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
 
-class TestEcosystemGraph(unittest.TestCase):
+class TestEcosystemGraphSafe(TestCase):
     def test_topological_order(self):
         manifest_yaml = """
         version: "1"
@@ -39,6 +36,3 @@ class TestEcosystemGraph(unittest.TestCase):
         graph = build_ecosystem_graph(manifest_yaml)
         with self.assertRaises(ValueError):
             graph.get_topological_order()
-
-if __name__ == '__main__':
-    unittest.main()
