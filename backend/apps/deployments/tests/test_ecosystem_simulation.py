@@ -1,11 +1,9 @@
-import unittest
 import os
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
+from django.test import TestCase
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
 from apps.deployments.services.ecosystem_env import EcosystemEnvResolver, is_weak_value
 
-class TestEcosystemSimulation(unittest.TestCase):
+class TestEcosystemSimulationSafe(TestCase):
     def load_fixture(self, name):
         path = os.path.join(os.path.dirname(__file__), 'fixtures/ecosystems', name)
         with open(path, 'r') as f:
@@ -21,7 +19,6 @@ class TestEcosystemSimulation(unittest.TestCase):
         resolver = EcosystemEnvResolver(graph)
         success, envs, errors = resolver.validate_and_resolve()
 
-        # It should fail because EXTERNAL_API_KEY is required external and not provided
         self.assertFalse(success)
         self.assertIn("Service 'api' missing external required env 'EXTERNAL_API_KEY'", "".join(errors))
 
@@ -41,6 +38,3 @@ class TestEcosystemSimulation(unittest.TestCase):
 
         self.assertTrue(is_weak_value("changeme"))
         self.assertTrue(is_weak_value("secret"))
-
-if __name__ == '__main__':
-    unittest.main()
