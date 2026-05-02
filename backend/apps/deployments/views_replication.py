@@ -36,6 +36,12 @@ class ReplicationDeploySerializer(serializers.Serializer):
             )
         return value
 
+    def validate(self, attrs):
+        for field in ("db_password", "admin_password"):
+            if not str(attrs.get(field, "")).strip():
+                raise serializers.ValidationError({field: f"{field} is required."})
+        return attrs
+
 
 class FailoverSerializer(serializers.Serializer):
     target_wg_address = serializers.CharField()
@@ -62,6 +68,12 @@ class ConnectReplicaSerializer(serializers.Serializer):
                 "replication_password must be provided and cannot use the default 'repl_pass'."
             )
         return value
+
+    def validate(self, attrs):
+        for field in ("db_password", "admin_password"):
+            if not str(attrs.get(field, "")).strip():
+                raise serializers.ValidationError({field: f"{field} is required."})
+        return attrs
 
 
 # ─── ViewSet ─────────────────────────────────────────────────────────────────
@@ -103,18 +115,79 @@ class ReplicationViewSet(viewsets.ViewSet):
 
         # Launch async deployment
         from .tasks_replication import deploy_replication_task
+        mesh.replication_status = "DEPLOYING"
+        mesh.replication_last_error = ""
+        mesh.replication_last_result = {}
+        mesh.save(update_fields=[
+            "replication_status",
+            "replication_last_error",
+            "replication_last_result",
+            "updated_at",
+        ])
         deploy_replication_task.delay(
             mesh_id,
             ser.validated_data["db_password"],
             ser.validated_data["admin_password"],
-            ser.validated_data.get("replication_password", "repl_pass"),
+            ser.validated_data["replication_password"],
         )
 
         return Response({
             "status": "Deployment started",
+            "replication_status": mesh.replication_status,
             "mesh": mesh.name,
             "peer_count": mesh.peers.filter(is_active=True).count(),
         }, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=["post"], url_path="enable")
+    def enable(self, request):
+        """Enable replication by deploying the Patroni cluster."""
+        return self.deploy(request)
+
+    @action(detail=False, methods=["post"], url_path="sync-now")
+    def sync_now(self, request):
+        """Refresh replication state immediately and persist visible status."""
+        mesh_id = request.data.get("mesh_id")
+        if not mesh_id:
+            return Response(
+                {"error": "mesh_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            mesh = MeshNetwork.objects.get(id=mesh_id)
+        except MeshNetwork.DoesNotExist:
+            return Response(
+                {"error": "Mesh not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        result = ReplicationService.sync_now(mesh)
+        return Response(result)
+
+    @action(detail=False, methods=["post"], url_path="disable")
+    def disable(self, request):
+        """Disable Patroni replication on every peer in the mesh."""
+        mesh_id = request.data.get("mesh_id")
+        if not mesh_id:
+            return Response(
+                {"error": "mesh_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            mesh = MeshNetwork.objects.get(id=mesh_id)
+        except MeshNetwork.DoesNotExist:
+            return Response(
+                {"error": "Mesh not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        result = ReplicationService.disable_replication(mesh)
+        return Response({
+            "status": mesh.replication_status,
+            "result": result,
+            "error": mesh.replication_last_error,
+        })
 
     @action(detail=False, methods=["get"], url_path="health/(?P<mesh_id>[^/.]+)")
     def health(self, request, mesh_id=None):

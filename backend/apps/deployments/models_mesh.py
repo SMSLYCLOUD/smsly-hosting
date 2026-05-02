@@ -44,6 +44,34 @@ class MeshNetwork(models.Model):
         help_text="WireGuard interface name",
     )
     is_active = models.BooleanField(default=True)
+    mesh_status = models.CharField(
+        max_length=20,
+        default="UNKNOWN",
+        choices=[
+            ("UNKNOWN", "Unknown"),
+            ("DEPLOYING", "Deploying"),
+            ("ACTIVE", "Active"),
+            ("FAILED", "Failed"),
+        ],
+        help_text="Last known WireGuard deployment state.",
+    )
+    mesh_last_error = models.TextField(blank=True, default="")
+    mesh_last_result = models.JSONField(default=dict, blank=True)
+    mesh_last_deployed_at = models.DateTimeField(null=True, blank=True)
+    replication_status = models.CharField(
+        max_length=20,
+        default="DISABLED",
+        choices=[
+            ("DISABLED", "Disabled"),
+            ("DEPLOYING", "Deploying"),
+            ("ACTIVE", "Active"),
+            ("FAILED", "Failed"),
+        ],
+        help_text="Last known Patroni replication state.",
+    )
+    replication_last_error = models.TextField(blank=True, default="")
+    replication_last_result = models.JSONField(default=dict, blank=True)
+    replication_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

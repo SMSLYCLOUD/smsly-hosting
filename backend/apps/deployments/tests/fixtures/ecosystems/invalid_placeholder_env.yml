@@ -1,0 +1,8 @@
+version: "1"
+mode: "production"
+services:
+  web:
+    env:
+      JWT_SECRET:
+        source: generated
+        value: "changeme"

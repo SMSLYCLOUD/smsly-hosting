@@ -97,13 +97,9 @@ class ServerTransferCreateSerializer(serializers.Serializer):
             if not target_server:
                 raise serializers.ValidationError({'target_server_id': "Target server not found."})
 
-        has_managed_credentials = False
-        if target_server:
-            has_managed_credentials = bool(target_server.ssh_key or target_server.ssh_password)
-
-        if not has_key and not has_password and not has_managed_credentials:
+        if not has_key and not has_password and not target_server:
             raise serializers.ValidationError(
-                "Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
+                "No SSH credentials available for target server. Provide target_ssh_key, target_ssh_password, or select a target server with saved SSH credentials."
             )
 
         return attrs
