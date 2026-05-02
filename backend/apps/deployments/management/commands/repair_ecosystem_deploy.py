@@ -51,19 +51,15 @@ class Command(BaseCommand):
                 else:
                     fixes_planned.append(f"Would assign eligible node to {s.name}")
 
-        mock_manifest = yaml.dump({
-            "version": "1",
-            "services": {s.name: {"type": "repaired"} for s in services}
-        })
-
         if is_apply:
-            success, msg = bulk_persist_and_verify_ecosystem_env(mock_manifest, created_services)
-            if success:
-                fixes_planned.append("Verified and persisted environment variables for all services.")
+            from services.ecosystem import sync_ecosystem_envs
+            result = sync_ecosystem_envs(project_id)
+            if result.get("status") == "success":
+                fixes_planned.append(f"Intelligently synced ecosystem env vars via AI Senate: {result.get('message')}")
             else:
-                self.stdout.write(self.style.ERROR(f"Env validation failed during repair: {msg}"))
+                self.stdout.write(self.style.ERROR(f"AI sync failed during repair: {result.get('message')}"))
         else:
-            fixes_planned.append("Would run bulk env resolution and verification.")
+            fixes_planned.append("Would run intelligent AI Senate ecosystem sync.")
 
         if is_apply:
             for s in services:
