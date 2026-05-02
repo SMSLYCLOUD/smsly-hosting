@@ -9,7 +9,7 @@ class ResourceAlertViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        qs = ResourceAlert.objects.filter(service__owner=self.request.user, acknowledged=False)
+        qs = ResourceAlert.objects.filter(service__owner=self.request.user, acknowledged=False).order_by('-created_at')
         service_id = self.request.query_params.get('service')
         if service_id:
             qs = qs.filter(service_id=service_id)
@@ -27,7 +27,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Notification.objects.filter(user=self.request.user)
+        return Notification.objects.filter(user=self.request.user).order_by('-created_at')
 
     @action(detail=True, methods=['post'])
     def mark_read(self, request, pk=None):
@@ -46,7 +46,7 @@ class NotificationPreferenceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return NotificationPreference.objects.filter(user=self.request.user)
+        return NotificationPreference.objects.filter(user=self.request.user).order_by('id')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

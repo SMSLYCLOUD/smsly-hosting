@@ -145,7 +145,7 @@ class APIKeyViewSet(
     viewsets.GenericViewSet,
 ):
     permission_classes = [IsAuthenticated]
-    queryset = APIKey.objects.all()
+    queryset = APIKey.objects.all().order_by('-created_at')
     serializer_class = APIKeySerializer
 
     def get_queryset(self):

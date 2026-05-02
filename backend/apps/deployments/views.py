@@ -279,7 +279,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     """
     Service Management and Nested Resources.
     """
-    queryset = Service.objects.all()
+    queryset = Service.objects.all().order_by('-updated_at')
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2105,7 +2105,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
     """
     API endpoint for managing Deployments.
     """
-    queryset = Deployment.objects.all()
+    queryset = Deployment.objects.all().order_by('-created_at')
     serializer_class = DeploymentSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [
@@ -2979,15 +2979,15 @@ class SystemConfigView(GenericAPIView):
         from .tasks import run_maintenance_task
 
         if action == 'clear':
-            res = run_maintenance_task(None, command_flag='--clear')
+            res = run_maintenance_task.apply(kwargs={'command_flag': '--clear'}).get()
             status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
             return Response(res, status=status_code)
         elif action == 'update':
-            res = run_maintenance_task(None, command_flag='--update')
+            res = run_maintenance_task.apply(kwargs={'command_flag': '--update'}).get()
             status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
             return Response(res, status=status_code)
         elif action == 'refresh':
-            res = run_maintenance_task(None, command_flag='--refresh')
+            res = run_maintenance_task.apply(kwargs={'command_flag': '--refresh'}).get()
             status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
             return Response(res, status=status_code)
 
@@ -3336,7 +3336,7 @@ class RouteStatusView(GenericAPIView):
         )
 
 class ServiceBackupViewSet(viewsets.ModelViewSet):
-    queryset = ServiceBackup.objects.all()
+    queryset = ServiceBackup.objects.all().order_by('-created_at')
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3575,7 +3575,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         })
 
 class BackupScheduleViewSet(viewsets.ModelViewSet):
-    queryset = BackupSchedule.objects.all()
+    queryset = BackupSchedule.objects.all().order_by('id')
     serializer_class = BackupScheduleSerializer
     permission_classes = [permissions.IsAuthenticated]
 
