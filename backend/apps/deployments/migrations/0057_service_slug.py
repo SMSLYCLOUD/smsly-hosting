@@ -5,6 +5,32 @@ import re
 from django.db import migrations, models
 
 
+def _column_names(schema_editor, table_name):
+    with schema_editor.connection.cursor() as cursor:
+        description = schema_editor.connection.introspection.get_table_description(
+            cursor,
+            table_name,
+        )
+
+    return {
+        getattr(column, 'name', column[0])
+        for column in description
+    }
+
+
+def ensure_service_slug_column(apps, schema_editor):
+    Service = apps.get_model('deployments', 'Service')
+    table_name = Service._meta.db_table
+    if 'slug' in _column_names(schema_editor, table_name):
+        return
+
+    quote_name = schema_editor.quote_name
+    schema_editor.execute(
+        f'ALTER TABLE {quote_name(table_name)} '
+        f'ADD COLUMN {quote_name("slug")} varchar(255) NULL'
+    )
+
+
 def _dedupe_slug(base, used_slugs):
     base = (base or 'service').strip('-')[:255] or 'service'
     slug = base
@@ -19,29 +45,41 @@ def _dedupe_slug(base, used_slugs):
     return slug
 
 
+def _service_slug_base(service):
+    raw = service.slug or service.name or ''
+    base = re.sub(r'[^a-z0-9]+', '-', raw.lower()).strip('-')
+    if base:
+        return base
+
+    return str(service.id)[:8] or 'service'
+
+
 def populate_service_slugs(apps, schema_editor):
     Service = apps.get_model('deployments', 'Service')
-    used_slugs = set(
-        Service.objects.exclude(slug__isnull=True)
-        .exclude(slug='')
-        .values_list('slug', flat=True)
+    used_slugs = set()
+
+    for service in Service.objects.all().only('id', 'name', 'slug').order_by('id'):
+        slug = _dedupe_slug(_service_slug_base(service), used_slugs)
+        if service.slug == slug:
+            continue
+
+        Service.objects.filter(pk=service.pk).update(slug=slug)
+
+
+def cleanup_service_slug_artifacts(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+
+    Service = apps.get_model('deployments', 'Service')
+    table_name = schema_editor.quote_name(Service._meta.db_table)
+    constraint_name = schema_editor.quote_name('deployments_service_slug_key')
+    like_index_name = schema_editor.quote_name('deployments_service_slug_6f89c844_like')
+
+    schema_editor.execute(
+        f'ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {constraint_name}'
     )
-
-    for service in Service.objects.filter(slug__isnull=True).order_by('id'):
-        base = re.sub(r'[^a-z0-9]+', '-', (service.name or '').lower()).strip('-')
-        if not base:
-            base = str(service.id)[:8]
-
-        slug = _dedupe_slug(base, used_slugs)
-        Service.objects.filter(pk=service.pk).update(slug=slug)
-
-    for service in Service.objects.filter(slug='').order_by('id'):
-        base = re.sub(r'[^a-z0-9]+', '-', (service.name or '').lower()).strip('-')
-        if not base:
-            base = str(service.id)[:8]
-
-        slug = _dedupe_slug(base, used_slugs)
-        Service.objects.filter(pk=service.pk).update(slug=slug)
+    schema_editor.execute(f'DROP INDEX IF EXISTS {constraint_name}')
+    schema_editor.execute(f'DROP INDEX IF EXISTS {like_index_name}')
 
 
 class Migration(migrations.Migration):
@@ -51,13 +89,27 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='service',
-            name='slug',
-            field=models.SlugField(blank=True, max_length=255, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(
+                    ensure_service_slug_column,
+                    reverse_code=migrations.RunPython.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AddField(
+                    model_name='service',
+                    name='slug',
+                    field=models.SlugField(blank=True, max_length=255, null=True),
+                ),
+            ],
         ),
         migrations.RunPython(
             populate_service_slugs,
+            reverse_code=migrations.RunPython.noop,
+        ),
+        migrations.RunPython(
+            cleanup_service_slug_artifacts,
             reverse_code=migrations.RunPython.noop,
         ),
         migrations.AlterField(
