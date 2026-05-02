@@ -248,7 +248,7 @@ def generate_caddyfile(config) -> str:
     # Usually port 8000 or 8090 on localhost is mapped to the backend.
     sections.append("""{
     on_demand_tls {
-        ask http://localhost:8000/api/v1/services/check-domain/
+        ask http://localhost:8090/api/v1/services/check-domain/
     }
 }""")
 

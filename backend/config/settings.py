@@ -56,6 +56,10 @@ if not DEBUG and not IS_TESTING:
     SECURE_HSTS_PRELOAD = True
     _use_ssl = _env_bool('USE_SSL', default='False')
     SECURE_SSL_REDIRECT = _use_ssl
+    SECURE_REDIRECT_EXEMPT = [
+        r'^api/v1/services/check-domain/',
+        r'^health/',
+    ]
     SESSION_COOKIE_SECURE = _use_ssl
     CSRF_COOKIE_SECURE = _use_ssl
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -104,7 +108,7 @@ ENABLE_LEGACY_TUNNEL_API = config(
     default=False,
     cast=bool,
 )
-_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,backend,smsly-hosting-backend-1,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,backend,smsly-hosting-backend-1'
+_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 APPEND_SLASH = False
 

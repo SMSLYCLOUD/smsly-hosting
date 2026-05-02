@@ -63,7 +63,13 @@ def verify_dns_and_provision_ssl_task(domain_id):
             domain.last_error = None
             domain.verified = True
             domain.save(update_fields=['status', 'dns_actual', 'last_error', 'verified'])
-            _trigger_caddy_reload()
+            
+            # Only trigger reload if status changed to something that affects routing
+            if domain.status in [DomainStatus.DNS_VERIFIED, DomainStatus.ACTIVE]:
+                logger.info(f"DNS verified for {domain.domain_name} — triggering Caddy reload")
+                _trigger_caddy_reload()
+            else:
+                logger.debug(f"DNS verification finished for {domain.domain_name} with status {domain.status} — no reload needed")
             return
 
         # In case server IP is not set, resolve the platform domain and compare
