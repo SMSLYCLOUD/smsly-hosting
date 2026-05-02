@@ -226,7 +226,7 @@ function ProjectDetailContent() {
             >
               <Plus className="w-4 h-4 mr-1" /> Add Service
             </Button>
-            {services.length > 0 && (
+            {services.length > 1 && (
               <Button
                 size="sm"
                 variant="ghost"

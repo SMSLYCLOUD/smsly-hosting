@@ -38,6 +38,10 @@ while true; do
             fi
 
             echo "$LOG_PREFIX Executing in screen: sudo bash install.sh $FLAGS --non-interactive"
+            # Kill any stale install screens before starting a new one
+            sudo screen -ls | grep "cloudneuron-install" | cut -d. -f1 | awk '{print $1}' | xargs sudo kill -9 2>/dev/null || true
+            sudo screen -wipe > /dev/null 2>&1 || true
+
             # We run in a detached screen so it's "wrapped in screen" but won't block the watcher.
             # Output is still logged for persistence.
             sudo screen -S cloudneuron-install -d -m bash -c "bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1"

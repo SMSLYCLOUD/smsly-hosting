@@ -48,7 +48,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
 # To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
+if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
@@ -2328,10 +2328,10 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
 
     # ─── Update autoscaler service (picks up code changes + new token) ────────
-    if [ -f "$INSTALL_DIR/smsly-autoscaler.py" ]; then
+    if [ -f "$INSTALL_DIR/scripts/smsly-autoscaler.py" ]; then
         echo -e "${BLUE}  → Updating smsly-autoscaler service...${NC}"
         mkdir -p /opt/smsly
-        cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py
+        cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py
         chmod +x /opt/smsly/autoscaler.py
 
         AUTOSCALER_API_TOKEN="$(env_get_value "$INSTALL_DIR/.env" "AUTOSCALER_API_TOKEN")"
@@ -2384,11 +2384,11 @@ if [ -f /etc/os-release ]; then
     echo -e "${BLUE}  Detected: $NAME $VERSION_ID${NC}"
     if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
         echo -e "${YELLOW}⚠ Warning: This script is optimized for Ubuntu/Debian.${NC}"
-        if [ -e /dev/tty ]; then
+        if [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
              echo -e "${YELLOW}  Press ENTER to continue anyway, or Ctrl+C to abort.${NC}"
              read -r < /dev/tty
         else
-             echo -e "${YELLOW}  ⚠ Non-interactive mode: Continuing automatically...${NC}"
+             echo -e "${YELLOW}  ⚠ Automated mode: Continuing automatically...${NC}"
         fi
     fi
 fi
@@ -2587,11 +2587,11 @@ else
                 MODE_CHOICE=1
             fi
         fi
-    elif [ -e /dev/tty ]; then
+    elif [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
         read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
         MODE_CHOICE=${MODE_CHOICE:-1}
     else
-        echo -e "${YELLOW}  ⚠ Non-interactive mode detected. Defaulting to IP Mode.${NC}"
+        echo -e "${YELLOW}  ⚠ Automated mode detected. Defaulting to IP Mode.${NC}"
         MODE_CHOICE=1
     fi
 
@@ -2620,13 +2620,12 @@ else
             if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
                 echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
                 echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                if [ -e /dev/tty ]; then
+                if [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
                     read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
                     echo
                     if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
                 else
-                    echo -e "${RED}x Non-interactive install cannot prompt for DNS mismatch. Aborting.${NC}"
-                    exit 1
+                    echo -e "${YELLOW}  ⚠ Automated mode: Ignoring DNS mismatch and continuing...${NC}"
                 fi
             else
                 echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
@@ -3546,9 +3545,9 @@ echo -e "\n${BLUE}Verification Score: $VERIFY_PASS_COUNT/$VERIFY_TOTAL${NC}"
 
 # ─── Install Autoscaler as systemd service ──────────────────────────────────
 echo -e "${BLUE}  → Installing smsly-autoscaler systemd service...${NC}"
-cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
+cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py 2>/dev/null || {
     mkdir -p /opt/smsly
-    cp "$INSTALL_DIR/smsly-autoscaler.py" /opt/smsly/autoscaler.py
+    cp "$INSTALL_DIR/scripts/smsly-autoscaler.py" /opt/smsly/autoscaler.py
 }
 chmod +x /opt/smsly/autoscaler.py
 
