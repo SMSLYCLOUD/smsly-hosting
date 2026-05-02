@@ -25,12 +25,15 @@ class DeletionOrchestrator:
             logger.error(f"DeletionOrchestrator failed to initialize docker client: {e}")
             self.docker_client = None
 
-    def delete_service_resources(self, service: Service) -> bool:
+    def delete_service_resources(self, service: Service, force: bool = False) -> bool:
         """
         Deletes all runtime resources associated with a Service.
+        If force=True, we return True even if some resource removals fail,
+        allowing the DB record to be purged.
         """
         if not self.docker_client:
-            return False
+            # If no docker client, we can only succeed if forced or if it's a metadata-only service
+            return force or not service.server
 
         success = True
         try:
@@ -40,26 +43,30 @@ class DeletionOrchestrator:
                 if not self._safe_remove_container(container):
                     success = False
 
-            # 2. Cleanup unused networks if applicable (usually we use a shared network, so skip)
-
-            # 3. Cleanup volumes (only those strictly owned by this service)
-            # Find volumes mapped to this service or matching names
+            # 3. Cleanup volumes
             volumes_to_remove = self._find_service_volumes(service)
             for volume in volumes_to_remove:
                 if not self._safe_remove_volume(volume):
                     success = False
 
             # 4. Clean up tunnels/FRP if any exist
-            self._cleanup_tunnels(service)
+            try:
+                self._cleanup_tunnels(service)
+            except Exception as e:
+                logger.warning(f"Tunnel cleanup failed for {service.id}: {e}")
+                if not force: success = False
 
             # 5. Cancel Celery tasks related to this service
-            self._cancel_deployments(service)
+            try:
+                self._cancel_deployments(service)
+            except Exception as e:
+                logger.warning(f"Deployment cancellation failed for {service.id}: {e}")
 
         except Exception as e:
             logger.error(f"Error during service deletion orchestration for {service.id}: {e}")
             success = False
 
-        return success
+        return force or success
 
     def delete_addon_resources(self, addon: Addon) -> bool:
         """

@@ -272,6 +272,7 @@ api.interceptors.response.use(
 export interface Service {
   id: string;
   name: string;
+  status: 'ACTIVE' | 'DELETION_PENDING' | 'DELETION_FAILED' | 'UPDATING' | 'STOPPED';
   repository_url?: string;
   branch?: string;
   internal_port?: number;
@@ -449,8 +450,9 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/stop/`);
     return response.data;
   },
-  delete: async (id: string): Promise<void> => {
-    await api.delete(`/services/${id}/`);
+  delete: async (id: string, force: boolean = false): Promise<void> => {
+    const url = force ? `/services/${id}/?force=true` : `/services/${id}/`;
+    await api.delete(url);
   },
 
   // Deployment Management

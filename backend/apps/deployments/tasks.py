@@ -785,7 +785,7 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
-        if service.server:
+        if service.server and not service.server.is_primary:
             _handle_remote_deployment(deployment, service.server)
             return
 
@@ -845,7 +845,7 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
-        if service.server:
+        if service.server and not service.server.is_primary:
             _handle_remote_deployment(deployment, service.server)
             return
 
@@ -1391,6 +1391,7 @@ def _deploy_container(deployment, provider, image_name):
             restart_policy=service.restart_policy,
             command=(service.start_command or None),
             vpa_enabled=service.vpa_enabled,
+            service_id=str(service.id),
         )
 
         deployment.status = Deployment.Status.HEALTH_CHECK
@@ -2504,7 +2505,20 @@ def run_maintenance_task(self, command_flag: str):
                     except Exception as e:
                         logger.warning(f"Failed to remove {name}: {e}")
 
-            # 3. Clean caches (only if mounted)
+            # 3. Clean platform repository cache (build artifacts)
+            repo_cache = "/app/repo_cache"
+            if os.path.exists(repo_cache):
+                for item in os.listdir(repo_cache):
+                    item_path = os.path.join(repo_cache, item)
+                    try:
+                        if os.path.isfile(item_path) or os.path.islink(item_path):
+                            os.unlink(item_path)
+                        elif os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to clear repo cache item {item_path}: {e}")
+
+            # 4. Clean system caches (only if mounted)
             cache_dir = "/opt/smsly-cache"
             if os.path.exists(cache_dir):
                 for item in os.listdir(cache_dir):
@@ -2517,7 +2531,7 @@ def run_maintenance_task(self, command_flag: str):
                     except Exception as e:
                         logger.warning(f"Failed to clear cache item {item_path}: {e}")
 
-            return {"status": "success", "message": f"Cleared unused Docker resources and removed {len(removed)} orphaned containers."}
+            return {"status": "success", "message": f"Cleared unused Docker resources, removed {len(removed)} orphaned containers, and flushed repository cache."}
 
         elif command_flag == '--refresh':
             # Restart caddy via the shared volume .reload flag
@@ -2536,14 +2550,23 @@ def run_maintenance_task(self, command_flag: str):
                 return {"status": "error", "message": result.get('message', 'Failed to write proxy reload flag.')}
 
         elif command_flag == '--update':
-            return {"status": "warning", "message": "Platform updates must be triggered via the host terminal (sudo bash install.sh --update) for safety."}
+            # Signal the host-side watcher to run install.sh --update
+            update_flag = os.path.join(settings.CADDY_CONFIG_DIR, ".update")
+            try:
+                with open(update_flag, "w", encoding="utf-8") as f:
+                    f.write("update")
+                logger.info("Platform update flag written to shared volume.")
+                return {"status": "success", "message": "Platform update initiated. The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect."}
+            except Exception as e:
+                logger.error(f"Failed to write update flag: {e}")
+                return {"status": "error", "message": f"Failed to initiate update: {e}"}
 
     except Exception as e:
         logger.exception(f"Exception during maintenance {command_flag}: {e}")
         return {"status": "error", "reason": str(e)}
 
 @shared_task(bind=True, max_retries=3)
-def delete_service_task(self, service_id: str):
+def delete_service_task(self, service_id: str, force: bool = False):
     """Async reliable deletion of a Service"""
     from apps.deployments.models_core import Service
     from apps.deployments.services.deletion_orchestrator import DeletionOrchestrator
@@ -2562,20 +2585,23 @@ def delete_service_task(self, service_id: str):
             logger.info("Decommissioning service %s on remote node %s", service.name, service.server.host)
             remote = RemoteOrchestrator(service.server)
             # Find the remote service ID (matching by name is the most reliable if ID not stored)
-            # For now, we assume the remote server uses the same name-based lookups
             success = remote.delete_service(str(service.id))
+            
+            # If force=True, we proceed even if remote call fails (best-effort local cleanup)
+            if force:
+                success = True
         except Exception as exc:
-            logger.warning("Remote deletion failed for service %s: %s. Falling back to local/DB cleanup.", service.name, exc)
-            success = False
+            logger.warning("Remote deletion failed for service %s: %s.", service.name, exc)
+            success = force
     else:
         # 2. Local cleanup
         orchestrator = DeletionOrchestrator()
-        success = orchestrator.delete_service_resources(service)
+        success = orchestrator.delete_service_resources(service, force=force)
         
         # 3. Resilience: If local docker client is missing but service is unassigned, 
-        # allow DB deletion to proceed so it doesn't get "stuck" in the UI.
+        # allow DB deletion to proceed.
         if not success and not service.server and not orchestrator.docker_client:
-            logger.warning("Docker client unavailable for unassigned service %s. Forcing database-only deletion.", service.name)
+            logger.warning("Docker client unavailable for service %s. Forcing database-only deletion.", service.name)
             success = True
 
     if success:

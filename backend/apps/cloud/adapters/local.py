@@ -373,6 +373,7 @@ class LocalAdapter(BaseCloudAdapter):
         router_name = name.replace('.', '-').replace('_', '-')
         labels = {
             'managed_by': 'smsly-hosting',
+            'smsly.service_id': kwargs.get('service_id', ''),
             'smsly.blue_green.canonical_name': name,
             'smsly.blue_green.is_public': str(is_public),
             'smsly.blue_green.port': port,

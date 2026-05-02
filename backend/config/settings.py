@@ -256,6 +256,7 @@ INSTALLED_APPS = [
 ]
 
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
+CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -459,6 +460,7 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
     default=True,
     cast=bool,
 )
+CELERY_TASK_ALWAYS_EAGER = IS_TESTING
 
 # Django cache: use Redis (needed for accurate /health cache checks + rate limits).
 # Use a dedicated DB index (2) to avoid colliding with Celery (0) / Channels (1).

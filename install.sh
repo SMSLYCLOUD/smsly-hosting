@@ -3218,6 +3218,29 @@ WATCHEREOF
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 
+# ─── Install update-watcher service (picks up UI-driven platform updates) ─────
+if [ -f "$INSTALL_DIR/scripts/platform-update.sh" ]; then
+    chmod +x "$INSTALL_DIR/scripts/platform-update.sh"
+    cat > /etc/systemd/system/smsly-update-watcher.service <<UPDATEWATCHEREOF
+[Unit]
+Description=Platform Update Watcher (SMSLY)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/platform-update.sh /opt/smsly-hosting/caddy-config
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UPDATEWATCHEREOF
+    systemctl daemon-reload
+    systemctl enable smsly-update-watcher >/dev/null 2>&1
+    systemctl restart smsly-update-watcher
+    echo -e "${GREEN}  ✓ Platform update watcher service installed and running${NC}"
+fi
+
 # Kill non-Caddy/non-Docker processes holding port 80/443 before Caddy binds
 for port in 80 443; do
     PID=$(lsof -ti :$port 2>/dev/null || ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' || true)

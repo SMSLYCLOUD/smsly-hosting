@@ -96,6 +96,24 @@ export function ServicesGrid({ services }: ServicesGridProps) {
       setActionLoading(null);
     }
   };
+  
+  const handleForceDelete = async (service: Service) => {
+    if (!await confirm({ 
+      title: 'Force Delete?', 
+      message: `CAUTION: This will purge "${service.name}" from the database even if cloud resources cannot be removed. Use this for stuck services only.`, 
+      variant: 'destructive', 
+      confirmText: 'Force Purge' 
+    })) return;
+    
+    setActionLoading(service.id);
+    try {
+      await servicesApi.delete(service.id, true);
+    } catch (err) {
+      console.error('Force delete failed:', err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   if (!services || services.length === 0) {
     return <EmptyServicesState />;
@@ -262,6 +280,18 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               >
                 <Trash2 size={12} />
               </Button>
+              {service.status === 'DELETION_FAILED' && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-red-500 hover:bg-red-500/10"
+                  title="Force Purge (stuck)"
+                  disabled={actionLoading === service.id}
+                  onClick={() => handleForceDelete(service)}
+                >
+                  <RefreshCw size={12} className="text-red-500" />
+                </Button>
+              )}
             </div>
           </div>
         </Card>

@@ -133,14 +133,24 @@ def _has_active_deployment(service):
     ).order_by('-created_at').first()
 
 
-def _resolve_provider_for_service(service: Service):
+def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     """
     Resolve provider for deployment in a fail-closed way.
     - If service has an assigned provider, it must be active.
-    - Otherwise, fall back to the first active global provider.
+    - Otherwise, if prefer_local is true, try to find an active LOCAL provider.
+    - Fall back to the first active global provider.
     """
     if service.provider:
         return service.provider if service.provider.is_active else None
+
+    if prefer_local:
+        local = CloudProvider.objects.filter(
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True
+        ).first()
+        if local:
+            return local
+
     return CloudProvider.objects.filter(is_active=True).first()
 
 
@@ -332,18 +342,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        self.perform_destroy(instance)
+        force = _parse_bool(request.query_params.get('force'))
+        self.perform_destroy(instance, force=force)
         return Response(
             {
                 "ok": True,
                 "status": "deletion_pending",
                 "message": "Deletion has started.",
                 "resource_id": str(instance.id),
+                "force": force
             },
             status=status.HTTP_202_ACCEPTED
         )
 
-    def perform_destroy(self, instance):
+    def perform_destroy(self, instance, force=False):
         """Set status to pending and queue async deletion."""
         from .tasks import delete_service_task
         from .models_core import Service
@@ -361,15 +373,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'service_name': instance.name,
                 'user_id': str(self.request.user.id),
                 'ip': self.request.META.get('REMOTE_ADDR'),
+                'force': force,
             },
         )
 
-        delete_service_task.delay(str(instance.id))
+        delete_service_task.delay(str(instance.id), force=force)
         self._sync_caddy()
 
     @action(detail=True, methods=['post'], url_path='retry-delete')
     def retry_delete(self, request, pk=None):
         instance = self.get_object()
+        force = _parse_bool(request.data.get('force') or request.query_params.get('force'))
         from .models_core import Service
         if instance.status not in [Service.Status.DELETION_FAILED, Service.Status.DELETION_PENDING]:
             return Response({"error": "Service is not in a failed or pending deletion state."}, status=status.HTTP_400_BAD_REQUEST)
@@ -377,9 +391,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
         instance.status = Service.Status.DELETION_PENDING
         instance.save(update_fields=['status'])
         from .tasks import delete_service_task
-        delete_service_task.delay(str(instance.id))
+        delete_service_task.delay(str(instance.id), force=force)
 
-        return Response({"message": "Retry cleanup initiated."}, status=status.HTTP_202_ACCEPTED)
+        return Response({"message": "Retry cleanup initiated.", "force": force}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"], url_path="hide-public-domain")
     def hide_public_domain(self, request, pk=None):
@@ -911,7 +925,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     'deployment': DeploymentSerializer(existing).data,
                 }
             else:
-                provider = _resolve_provider_for_service(service)
+                # Resolve provider for local deploy with preference for LOCAL adapter
+                provider = _resolve_provider_for_service(service, prefer_local=True)
                 if not provider:
                     results['local'] = {
                         'status': 'error',
