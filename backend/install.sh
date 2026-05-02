@@ -2503,7 +2503,13 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
             cp -rn . "$INSTALL_DIR/" 2>/dev/null || cp -r . "$INSTALL_DIR/"
         fi
     else
-        if [ ! -d "$INSTALL_DIR/.git" ]; then
+        if [ -d "$INSTALL_DIR/.git" ]; then
+             echo -e "${BLUE}  → Updating existing repository...${NC}"
+             cd "$INSTALL_DIR"
+             git fetch origin main >/dev/null 2>&1 || true
+             git reset --hard origin/main
+        else
+             echo -e "${BLUE}  → Cloning repository...${NC}"
              git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
         fi
     fi
