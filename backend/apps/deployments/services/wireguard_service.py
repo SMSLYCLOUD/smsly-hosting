@@ -6,6 +6,7 @@ of WireGuard configurations across the server fleet.
 """
 
 import logging
+import re
 import subprocess
 import shlex
 import textwrap
@@ -18,6 +19,30 @@ logger = logging.getLogger(__name__)
 
 class WireGuardService:
     """Manage WireGuard mesh network across CloudNeuron servers."""
+
+    INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+
+    @classmethod
+    def validate_interface_name(cls, iface: str) -> str:
+        """Reject interface names that WireGuard or the shell should not receive."""
+        value = str(iface or "").strip()
+        if not cls.INTERFACE_RE.fullmatch(value):
+            raise ValueError("Invalid WireGuard interface name.")
+        return value
+
+    @staticmethod
+    def validate_wg_config(config: str) -> None:
+        """Validate the minimum WireGuard config shape before applying it."""
+        if not isinstance(config, str) or "\x00" in config:
+            raise ValueError("Invalid WireGuard config.")
+        required_patterns = [
+            r"(?m)^\s*\[Interface\]\s*$",
+            r"(?m)^\s*PrivateKey\s*=\s*\S+",
+            r"(?m)^\s*Address\s*=\s*\S+",
+        ]
+        for pattern in required_patterns:
+            if not re.search(pattern, config):
+                raise ValueError("WireGuard config is missing required interface fields.")
 
     # ── Key Generation ───────────────────────────────────────────────────
 
@@ -217,7 +242,8 @@ class WireGuardService:
         """
         config = cls.build_wg_config(peer)
         mesh = peer.mesh
-        iface = mesh.interface_name
+        iface = cls.validate_interface_name(mesh.interface_name)
+        cls.validate_wg_config(config)
 
         if peer.is_local:
             # Local deployment — write directly
@@ -239,6 +265,8 @@ class WireGuardService:
         """
         import docker
         import os
+        iface = cls.validate_interface_name(iface)
+        cls.validate_wg_config(config)
         client = docker.from_env()
         docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
 
@@ -291,6 +319,8 @@ class WireGuardService:
     @classmethod
     def _deploy_remote(cls, server, config: str, iface: str):
         """Deploy WireGuard config on a remote server via SSH."""
+        iface = cls.validate_interface_name(iface)
+        cls.validate_wg_config(config)
         safe_iface = shlex.quote(iface)
         import base64
         b64_config = base64.b64encode(config.encode()).decode()

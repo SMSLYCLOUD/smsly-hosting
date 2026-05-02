@@ -1,23 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-
-sys.modules["django"] = MagicMock()
-sys.modules["django.db"] = MagicMock()
-sys.modules['django.conf'] = MagicMock()
-sys.modules['django.core.management.base'] = MagicMock()
-sys.modules['apps.deployments.models'] = MagicMock()
-sys.modules['apps.cloud.models'] = MagicMock()
-
-class MockBaseCommand:
-    def __init__(self):
-        self.style = MagicMock()
-        self.stdout = MagicMock()
-sys.modules['django.core.management.base'].BaseCommand = MockBaseCommand
 
 from apps.deployments.management.commands.repair_ecosystem_deploy import Command
+
 
 class TestRepairCommand(unittest.TestCase):
     @patch('apps.deployments.management.commands.repair_ecosystem_deploy.Service')
@@ -26,6 +11,7 @@ class TestRepairCommand(unittest.TestCase):
     @patch('apps.deployments.management.commands.repair_ecosystem_deploy.bulk_persist_and_verify_ecosystem_env')
     def test_dry_run(self, mock_env, mock_node, mock_deployment, mock_service):
         cmd = Command()
+        cmd.stdout = MagicMock()
         mock_qs = MagicMock()
         mock_qs.exists.return_value = True
         mock_svc = MagicMock()

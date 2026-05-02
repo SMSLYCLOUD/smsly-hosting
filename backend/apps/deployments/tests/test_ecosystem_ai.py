@@ -1,12 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../')))
-
-# Mock apps.intelligence
-sys.modules['apps.intelligence'] = MagicMock()
-sys.modules['apps.intelligence.providers'] = MagicMock()
+from unittest.mock import patch
 
 from apps.deployments.services.ecosystem_ai import EcosystemDeploymentSenate
 from apps.deployments.services.ecosystem_graph import build_ecosystem_graph

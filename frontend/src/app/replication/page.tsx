@@ -41,6 +41,9 @@ interface MeshNetwork {
     name: string;
     subnet: string;
     peer_count: number;
+    replication_status?: 'DISABLED' | 'DEPLOYING' | 'ACTIVE' | 'FAILED';
+    replication_last_error?: string;
+    replication_updated_at?: string | null;
 }
 
 export default function ReplicationPage() {
@@ -54,8 +57,10 @@ export default function ReplicationPage() {
     const [showDeployForm, setShowDeployForm] = useState(false);
     const [dbPassword, setDbPassword] = useState('');
     const [adminPassword, setAdminPassword] = useState('');
-    const [replPassword, setReplPassword] = useState('repl_pass');
+    const [replPassword, setReplPassword] = useState('');
     const [oneClicking, setOneClicking] = useState(false);
+    const [syncing, setSyncing] = useState(false);
+    const [disabling, setDisabling] = useState(false);
 
     // Scale out states
     const [availablePeers, setAvailablePeers] = useState<MeshPeer[]>([]);
@@ -176,10 +181,10 @@ export default function ReplicationPage() {
     };
 
     const deployReplication = async () => {
-        if (!selectedMesh || !dbPassword || !adminPassword) return;
+        if (!selectedMesh || !dbPassword || !adminPassword || !replPassword || replPassword === 'repl_pass') return;
         setDeploying(true);
         try {
-            await api.post('/replication/deploy/', {
+            await api.post('/replication/enable/', {
                 mesh_id: selectedMesh,
                 db_password: dbPassword,
                 admin_password: adminPassword,
@@ -187,7 +192,9 @@ export default function ReplicationPage() {
             });
             toast({ title: 'Deployment Started', description: 'Patroni cluster is being deployed to all peers.' });
             setShowDeployForm(false);
-            setDbPassword(''); setAdminPassword('');
+            setDbPassword(''); setAdminPassword(''); setReplPassword('');
+            fetchMeshes();
+            setTimeout(checkHealth, 3000);
         } catch (err: any) {
             toast({ title: 'Error', description: err?.response?.data?.error || 'Deploy failed', variant: 'destructive' });
         } finally {
@@ -230,11 +237,43 @@ export default function ReplicationPage() {
 
             toast({ title: 'Replication Started', description: 'One-click deploy kicked off for this mesh.' });
             setShowDeployForm(false);
+            fetchMeshes();
             checkHealth();
         } catch (err: any) {
             toast({ title: 'Error', description: err?.response?.data?.error || err?.message || 'One-click replication failed', variant: 'destructive' });
         } finally {
             setOneClicking(false);
+        }
+    };
+
+    const syncNow = async () => {
+        if (!selectedMesh) return;
+        setSyncing(true);
+        try {
+            const res = await api.post('/replication/sync-now/', { mesh_id: selectedMesh });
+            setHealth(res.data.health || null);
+            await fetchMeshes();
+            toast({ title: 'Replication Synced', description: `Status: ${res.data.status || 'updated'}` });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'Sync failed', variant: 'destructive' });
+        } finally {
+            setSyncing(false);
+        }
+    };
+
+    const disableReplication = async () => {
+        if (!selectedMesh) return;
+        if (!confirm('Disable replication on this mesh?')) return;
+        setDisabling(true);
+        try {
+            const res = await api.post('/replication/disable/', { mesh_id: selectedMesh });
+            setHealth(null);
+            await fetchMeshes();
+            toast({ title: 'Replication Disabled', description: `Status: ${res.data.status}` });
+        } catch (err: any) {
+            toast({ title: 'Error', description: err?.response?.data?.error || 'Disable failed', variant: 'destructive' });
+        } finally {
+            setDisabling(false);
         }
     };
 
@@ -278,6 +317,7 @@ export default function ReplicationPage() {
         if (bytes > 1024 * 1024) return 'text-amber-500';
         return 'text-emerald-500';
     };
+    const selectedMeshObj = meshes.find(mesh => mesh.id === selectedMesh);
 
     return (
         <DashboardShell>
@@ -302,6 +342,22 @@ export default function ReplicationPage() {
                             >
                                 {checking ? <Loader2 size={14} className="animate-spin mr-1" /> : <RefreshCw size={14} className="mr-1" />}
                                 Check Health
+                            </Button>
+                            <Button
+                                variant="outline" size="sm"
+                                onClick={syncNow}
+                                disabled={syncing || !selectedMesh}
+                            >
+                                {syncing ? <Loader2 size={14} className="animate-spin mr-1" /> : <RotateCcw size={14} className="mr-1" />}
+                                Sync Now
+                            </Button>
+                            <Button
+                                variant="outline" size="sm"
+                                onClick={disableReplication}
+                                disabled={disabling || !selectedMesh}
+                            >
+                                {disabling ? <Loader2 size={14} className="animate-spin mr-1" /> : <AlertTriangle size={14} className="mr-1" />}
+                                Disable
                             </Button>
                             <Button
                                 onClick={() => setShowDeployForm(!showDeployForm)}
@@ -335,6 +391,33 @@ export default function ReplicationPage() {
                                     <option key={m.id} value={m.id}>{m.name} ({m.peer_count} peers)</option>
                                 ))}
                             </select>
+                        </div>
+                    )}
+
+                    {selectedMeshObj && (
+                        <div className="bg-card border border-border rounded-xl p-4 flex items-center justify-between gap-4">
+                            <div>
+                                <p className="text-sm font-semibold">{selectedMeshObj.name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    {selectedMeshObj.peer_count} peers · {selectedMeshObj.replication_updated_at
+                                        ? `updated ${new Date(selectedMeshObj.replication_updated_at).toLocaleTimeString()}`
+                                        : 'status pending'}
+                                </p>
+                                {selectedMeshObj.replication_last_error && (
+                                    <p className="mt-1 text-xs text-red-500">{selectedMeshObj.replication_last_error}</p>
+                                )}
+                            </div>
+                            <span className={`text-xs px-2.5 py-1 rounded-full font-bold uppercase ${
+                                selectedMeshObj.replication_status === 'ACTIVE'
+                                    ? 'bg-emerald-500/10 text-emerald-500'
+                                    : selectedMeshObj.replication_status === 'FAILED'
+                                      ? 'bg-red-500/10 text-red-500'
+                                      : selectedMeshObj.replication_status === 'DEPLOYING'
+                                        ? 'bg-blue-500/10 text-blue-500'
+                                        : 'bg-zinc-500/10 text-zinc-500'
+                            }`}>
+                                {selectedMeshObj.replication_status || 'DISABLED'}
+                            </span>
                         </div>
                     )}
 
@@ -380,7 +463,7 @@ export default function ReplicationPage() {
                             </div>
                             <div className="flex gap-2 justify-end">
                                 <Button variant="outline" onClick={() => setShowDeployForm(false)}>Cancel</Button>
-                                <Button onClick={deployReplication} disabled={deploying || !dbPassword || !adminPassword}>
+                                <Button onClick={deployReplication} disabled={deploying || !dbPassword || !adminPassword || !replPassword || replPassword === 'repl_pass'}>
                                     {deploying ? <Loader2 size={14} className="animate-spin mr-2" /> : <Zap size={14} className="mr-2" />}
                                     Deploy
                                 </Button>

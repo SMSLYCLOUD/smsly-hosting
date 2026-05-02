@@ -16,6 +16,7 @@ from .serializers import ServerTransferSerializer, ServerTransferCreateSerialize
 from .models import Service, PlatformConfig
 from .models_servers import ManagedServer
 from .tasks import execute_server_transfer_task, rollback_transfer_task
+from .services.server_guard import ServerGuard
 
 
 def is_safe_ip(ip_str, allow_private=False):
@@ -199,23 +200,19 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         payload = serializer.validated_data
 
         transfer_type = payload['transfer_type']
-        if transfer_type == 'FULL':
-            logger.warning("Transfer failed: FULL transfer not implemented yet.")
-            return Response(
-                {'error': 'FULL server transfer is not available via API yet.'},
-                status=status.HTTP_501_NOT_IMPLEMENTED,
-            )
 
-        service = Service.objects.filter(
-            id=payload.get('service_id'),
-            owner=request.user,
-        ).first()
-        if not service:
-            logger.warning(f"Transfer failed: Service {payload.get('service_id')} not found for user {request.user}")
-            return Response(
-                {'error': 'Service not found'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        service = None
+        if transfer_type == 'SERVICE':
+            service = Service.objects.filter(
+                id=payload.get('service_id'),
+                owner=request.user,
+            ).first()
+            if not service:
+                logger.warning(f"Transfer failed: Service {payload.get('service_id')} not found for user {request.user}")
+                return Response(
+                    {'error': 'Service not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         source_server_ip = payload.get('source_server_ip')
         if not source_server_ip:
@@ -245,6 +242,13 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                     {'error': 'Connected target server not found'},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            guard = ServerGuard.check_user_workload_allowed(target_server)
+            if not guard["ok"]:
+                logger.warning(
+                    "Transfer failed: target server %s is not a workload target",
+                    target_server.id,
+                )
+                return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
         target_server_ip = payload.get('target_server_ip') or (
             target_server.host if target_server else PlatformConfig.load().server_ip
