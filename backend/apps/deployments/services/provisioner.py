@@ -202,15 +202,32 @@ def _inject_repo_clone_auth(script_content: str, github_token: str | None):
         f"https://x-access-token:{encoded}@github.com/"
         "SMSLYCLOUD/smsly-hosting.git"
     )
-    pattern = (
-        r'git clone https://github\.com/SMSLYCLOUD/smsly-hosting\.git "\$INSTALL_DIR"'
-    )
+    # 1. Inject into git clone (for fresh installs)
+    pattern_clone = r'(git clone )https://github\.com/(SMSLYCLOUD/smsly-hosting\.git "\$INSTALL_DIR")'
     replaced = re.sub(
-        pattern,
-        f'git clone {auth_url} "$INSTALL_DIR"',
+        pattern_clone,
+        rf'\1{auth_url} \2',
         script_content,
-        count=1,
     )
+
+    # 2. Inject into git fetch (for updates to existing repos)
+    pattern_fetch = r'(git fetch )origin( main)'
+    replaced = re.sub(
+        pattern_fetch,
+        rf'\1{auth_url} \2',
+        replaced,
+    )
+
+    # 3. Also ensure we update the remote URL if it already exists (persistence)
+    # We inject this before the fetch/reset block
+    pattern_remote = r'(git reset --hard origin/main)'
+    remote_fix = f'git remote set-url origin {auth_url} 2>/dev/null || true\n             \\1'
+    replaced = re.sub(
+        pattern_remote,
+        remote_fix,
+        replaced,
+    )
+
     return replaced, replaced != script_content
 
 
