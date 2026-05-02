@@ -461,6 +461,103 @@ class ReplicationService:
                     except Exception:
                         replica["lag_bytes"] = None
 
+        try:
+            has_unreachable = any(
+                "UNREACHABLE" in str(node.get("status", ""))
+                for node in results["nodes"]
+            )
+            mesh.replication_last_result = results
+            mesh.replication_last_error = (
+                "One or more replication nodes are unreachable."
+                if has_unreachable else ""
+            )
+            mesh.replication_status = "FAILED" if has_unreachable else "ACTIVE"
+            mesh.replication_updated_at = timezone.now()
+            mesh.save(update_fields=[
+                "replication_status",
+                "replication_last_error",
+                "replication_last_result",
+                "replication_updated_at",
+                "updated_at",
+            ])
+        except Exception as exc:
+            logger.debug("Could not persist replication health for mesh %s: %s", mesh, exc)
+
+        return results
+
+    @classmethod
+    def sync_now(cls, mesh):
+        """
+        Trigger an immediate replication status refresh.
+
+        Patroni streaming replication is continuous; the actionable sync-now
+        operation is to poll every node, calculate lag, and persist the latest
+        DB state for operators and the UI.
+        """
+        health = cls.check_replication_health(mesh)
+        return {"status": mesh.replication_status, "health": health}
+
+    @classmethod
+    def disable_replication(cls, mesh):
+        """Stop Patroni/etcd/HAProxy containers on all mesh peers and persist state."""
+        from apps.deployments.services.wireguard_service import WireGuardService
+        import docker
+        import os
+
+        results = {"local": None, "remote": []}
+
+        for peer in mesh.peers.filter(is_active=True):
+            try:
+                if peer.is_local:
+                    client = docker.from_env()
+                    docker_host = os.environ.get("DOCKER_HOST", "tcp://socket-proxy:2375")
+                    client.containers.run(
+                        "docker:cli",
+                        command=[
+                            "sh",
+                            "-c",
+                            "docker compose -p smsly-patroni down || true && "
+                            "docker compose -p smsly-haproxy down || true",
+                        ],
+                        remove=True,
+                        environment={"DOCKER_HOST": docker_host},
+                        network_mode="host",
+                    )
+                    results["local"] = {"peer": str(peer), "status": "OK"}
+                elif peer.server:
+                    WireGuardService._ssh_run(
+                        peer.server,
+                        "cd /opt/smsly/patroni 2>/dev/null && docker compose -p smsly-patroni down || true",
+                        timeout=120,
+                    )
+                    results["remote"].append({"peer": str(peer), "status": "OK"})
+            except Exception as exc:
+                logger.warning("Failed to disable replication on %s: %s", peer, exc)
+                result = {"peer": str(peer), "status": f"FAILED: {exc}"}
+                if peer.is_local:
+                    results["local"] = result
+                else:
+                    results["remote"].append(result)
+
+        failures = []
+        if results["local"] and str(results["local"].get("status", "")).startswith("FAILED"):
+            failures.append(results["local"]["status"])
+        failures.extend(
+            item["status"] for item in results["remote"]
+            if str(item.get("status", "")).startswith("FAILED")
+        )
+
+        mesh.replication_status = "FAILED" if failures else "DISABLED"
+        mesh.replication_last_error = "; ".join(failures)
+        mesh.replication_last_result = results
+        mesh.replication_updated_at = timezone.now()
+        mesh.save(update_fields=[
+            "replication_status",
+            "replication_last_error",
+            "replication_last_result",
+            "replication_updated_at",
+            "updated_at",
+        ])
         return results
 
     @classmethod

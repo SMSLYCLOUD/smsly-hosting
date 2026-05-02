@@ -16,9 +16,14 @@ interface ManagedServer {
     id: string;
     name: string;
     host: string;
+    private_ip?: string | null;
     api_url: string;
     ssh_port: number;
+    ssh_user?: string;
+    provider_metadata?: Record<string, any>;
+    has_ssh_credentials?: boolean;
     is_primary: boolean;
+    allow_user_workloads: boolean;
     status: 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
     last_health_check: string | null;
     server_version: string;
@@ -43,7 +48,16 @@ async function apiFetch(path: string, method = 'GET', body?: object) {
         },
         body: body ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+        let message = `HTTP ${res.status}`;
+        try {
+            const data = await res.json();
+            message = data?.error?.message || data?.error || data?.detail || JSON.stringify(data);
+        } catch {
+            message = await res.text() || message;
+        }
+        throw new Error(message);
+    }
     if (res.status === 204) return {};
     return res.json();
 }
@@ -80,7 +94,9 @@ export default function ServersPage() {
 
     // Connect form
     const [connectForm, setConnectForm] = useState({
-        name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_password: '', ssh_port: 22, is_primary: false,
+        name: '', host: '', private_ip: '', api_url: '', api_token: '',
+        gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
+        ssh_port: 22, is_primary: false, allow_user_workloads: true,
     });
 
     // Provision form
@@ -88,6 +104,7 @@ export default function ServersPage() {
         name: '', host: '', ssh_port: 22, ssh_user: 'root',
         ssh_auth_method: 'password' as 'password' | 'key',
         ssh_password: '', ssh_key: '', is_primary: false,
+        allow_user_workloads: true,
     });
 
     const fetchServers = useCallback(async () => {
@@ -137,7 +154,11 @@ export default function ServersPage() {
         try {
             await apiFetch('/api/v1/servers/', 'POST', connectForm);
             setShowAdd(false);
-            setConnectForm({ name: '', host: '', api_url: '', api_token: '', gateway_secret: '', ssh_password: '', ssh_port: 22, is_primary: false });
+            setConnectForm({
+                name: '', host: '', private_ip: '', api_url: '', api_token: '',
+                gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
+                ssh_port: 22, is_primary: false, allow_user_workloads: true,
+            });
             fetchServers();
         } catch (err: any) {
             toast({ title: 'Failed to connect server', description: err.message, variant: 'destructive' });
@@ -152,7 +173,8 @@ export default function ServersPage() {
             setShowAdd(false);
             setProvisionForm({
                 name: '', host: '', ssh_port: 22, ssh_user: 'root',
-                ssh_auth_method: 'password', ssh_password: '', ssh_key: '', is_primary: false,
+                ssh_auth_method: 'password', ssh_password: '', ssh_key: '',
+                is_primary: false, allow_user_workloads: true,
             });
             fetchServers();
             // Auto-open provision logs
@@ -290,6 +312,19 @@ export default function ServersPage() {
                                                 />
                                             </div>
                                             <div>
+                                                <label className="text-xs font-medium text-muted-foreground">Workload Target</label>
+                                                <label className="mt-2 flex items-center gap-2 text-sm">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={provisionForm.allow_user_workloads}
+                                                        disabled={provisionForm.is_primary}
+                                                        onChange={e => setProvisionForm({ ...provisionForm, allow_user_workloads: e.target.checked })}
+                                                        className="rounded"
+                                                    />
+                                                    Allow user deployments
+                                                </label>
+                                            </div>
+                                            <div>
                                                 <label className="text-xs font-medium text-muted-foreground">SSH User</label>
                                                 <input
                                                     value={provisionForm.ssh_user}
@@ -359,7 +394,11 @@ export default function ServersPage() {
                                                 <input
                                                     type="checkbox"
                                                     checked={provisionForm.is_primary}
-                                                    onChange={e => setProvisionForm({ ...provisionForm, is_primary: e.target.checked })}
+                                                    onChange={e => setProvisionForm({
+                                                        ...provisionForm,
+                                                        is_primary: e.target.checked,
+                                                        allow_user_workloads: e.target.checked ? false : provisionForm.allow_user_workloads,
+                                                    })}
                                                     className="rounded"
                                                 />
                                                 Primary server
@@ -424,6 +463,33 @@ export default function ServersPage() {
                                                 />
                                             </div>
                                             <div>
+                                                <label className="text-xs font-medium text-muted-foreground">Private IP <span className="text-muted-foreground/60">(optional)</span></label>
+                                                <input
+                                                    value={connectForm.private_ip}
+                                                    onChange={e => setConnectForm({ ...connectForm, private_ip: e.target.value })}
+                                                    placeholder="172.31.0.10"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">SSH User</label>
+                                                <input
+                                                    value={connectForm.ssh_user}
+                                                    onChange={e => setConnectForm({ ...connectForm, ssh_user: e.target.value })}
+                                                    placeholder="root"
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-medium text-muted-foreground">SSH Port</label>
+                                                <input
+                                                    type="number"
+                                                    value={connectForm.ssh_port}
+                                                    onChange={e => setConnectForm({ ...connectForm, ssh_port: parseInt(e.target.value) || 22 })}
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
+                                                />
+                                            </div>
+                                            <div>
                                                 <label className="text-xs font-medium text-muted-foreground">API Token</label>
                                                 <input
                                                     type="password"
@@ -453,17 +519,43 @@ export default function ServersPage() {
                                                     className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border text-sm"
                                                 />
                                             </div>
+                                            <div className="col-span-2">
+                                                <label className="text-xs font-medium text-muted-foreground">SSH Key <span className="text-muted-foreground/60">(optional)</span></label>
+                                                <textarea
+                                                    value={connectForm.ssh_key}
+                                                    onChange={e => setConnectForm({ ...connectForm, ssh_key: e.target.value })}
+                                                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+                                                    rows={4}
+                                                    className="w-full mt-1 px-3 py-2 rounded-lg bg-background border border-border font-mono text-xs"
+                                                />
+                                            </div>
                                         </div>
                                         <div className="flex items-center justify-between">
-                                            <label className="flex items-center gap-2 text-sm">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={connectForm.is_primary}
-                                                    onChange={e => setConnectForm({ ...connectForm, is_primary: e.target.checked })}
-                                                    className="rounded"
-                                                />
-                                                Primary server
-                                            </label>
+                                            <div className="flex flex-col gap-2">
+                                                <label className="flex items-center gap-2 text-sm">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={connectForm.is_primary}
+                                                        onChange={e => setConnectForm({
+                                                            ...connectForm,
+                                                            is_primary: e.target.checked,
+                                                            allow_user_workloads: e.target.checked ? false : connectForm.allow_user_workloads,
+                                                        })}
+                                                        className="rounded"
+                                                    />
+                                                    Primary server
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={connectForm.allow_user_workloads}
+                                                        disabled={connectForm.is_primary}
+                                                        onChange={e => setConnectForm({ ...connectForm, allow_user_workloads: e.target.checked })}
+                                                        className="rounded"
+                                                    />
+                                                    Allow user deployments
+                                                </label>
+                                            </div>
                                             <div className="flex gap-2">
                                                 <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted/50">
                                                     Cancel
@@ -603,6 +695,23 @@ export default function ServersPage() {
                                                         )}
                                                     </h3>
                                                     <p className="text-xs text-muted-foreground">{server.host}</p>
+                                                    <div className="mt-1 flex flex-wrap gap-1.5">
+                                                        {!server.is_primary && server.allow_user_workloads !== false && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium">
+                                                                Workload target
+                                                            </span>
+                                                        )}
+                                                        {server.allow_user_workloads === false && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-500 font-medium">
+                                                                Workloads off
+                                                            </span>
+                                                        )}
+                                                        {server.has_ssh_credentials && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
+                                                                SSH ready
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                             <span className={`text-xs font-bold ${sc.color}`}>{sc.label}</span>

@@ -749,6 +749,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     wave_size = max(1, min(_MAX_WAVE_SIZE, requested_wave_size))
     wave_size = _env_int("ECOSYSTEM_DEPLOY_WAVE_SIZE", wave_size, minimum=1, maximum=_MAX_WAVE_SIZE)
 
+    # 1. Parse and validate manifest if provided, bulk verify env before continuing
+    manifest_content = plan.get("manifest")
+    if manifest_content:
+        from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
+        from apps.deployments.services.ecosystem_graph import build_ecosystem_graph
+        from apps.deployments.services.ecosystem_env import EcosystemEnvResolver
+        try:
+            graph = build_ecosystem_graph(manifest_content)
+            resolver = EcosystemEnvResolver(graph)
+            success, _, errors = resolver.validate_and_resolve()
+            if not success:
+                return {"error": "Environment validation failed", "details": errors}
+        except Exception as e:
+            return {"error": f"Invalid manifest: {e}"}
+
     entries_by_key: Dict[str, Dict[str, Any]] = {}
     for svc_plan in services_plan:
         if not isinstance(svc_plan, dict):
@@ -828,6 +843,19 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 server = ManagedServer.objects.filter(id=server_id, owner=user).first()
             except Exception:
                 pass
+        else:
+            from apps.deployments.services.node_selector import select_eligible_node
+            server = select_eligible_node(user)
+
+        if not server:
+            logger.error(f"No eligible deployment node available for {repo}.")
+            results.append({
+                "repo": repo,
+                "name": requested_name,
+                "status": "failed",
+                "error": "No eligible deployment node available."
+            })
+            continue
 
         try:
             service = Service.objects.filter(owner=user, name=requested_name).first()
@@ -930,6 +958,20 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 "status": "failed",
                 "error": str(exc),
             })
+
+    # Bulk persist env if using a manifest
+    if manifest_content:
+        from apps.deployments.services.ecosystem_persist import bulk_persist_and_verify_ecosystem_env
+        success, msg = bulk_persist_and_verify_ecosystem_env(manifest_content, created_services)
+        if not success:
+            logger.error(f"Bulk persistence failed: {msg}")
+            # Mark all deployments as failed
+            for repo_key, dep_id in deployment_by_repo_key.items():
+                Deployment.objects.filter(id=dep_id).update(
+                    status=Deployment.Status.FAILED,
+                    build_logs=f"Failed to persist valid environment variables: {msg}"
+                )
+            return {"error": f"Env validation failed: {msg}"}
 
     waves: List[List[str]] = []
     for wave in waves_repo_keys:

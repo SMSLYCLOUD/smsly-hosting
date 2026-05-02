@@ -310,8 +310,9 @@ class ManagedServerSerializer(serializers.ModelSerializer):
     class Meta:
         model = ManagedServer
         fields = [
-            "id", "name", "host", "api_url", "ssh_port",
-            "is_primary", "status", "last_health_check",
+            "id", "name", "host", "private_ip", "api_url", "ssh_port",
+            "ssh_user", "provider_metadata", "is_primary",
+            "allow_user_workloads", "status", "last_health_check",
             "server_version", "services_count", "created_at",
             "provision_status", "role", "wg_address", "has_ssh_credentials",
         ]
@@ -326,11 +327,18 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
     """For 'Connect Existing' mode — user provides api_url + api_token."""
     class Meta:
         model = ManagedServer
-        fields = ["name", "host", "api_url", "api_token", "gateway_secret", "ssh_password", "ssh_port", "is_primary"]
+        fields = [
+            "name", "host", "private_ip", "api_url", "api_token",
+            "gateway_secret", "ssh_user", "ssh_password", "ssh_key",
+            "ssh_port", "is_primary", "allow_user_workloads",
+            "provider_metadata",
+        ]
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
             "gateway_secret": {"write_only": True, "required": False},
+            "ssh_key": {"write_only": True, "required": False},
             "ssh_password": {"write_only": True, "required": False},
+            "provider_metadata": {"required": False},
         }
 
     def to_representation(self, instance):
@@ -363,7 +371,7 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         fields = [
             "name", "host", "ssh_port", "ssh_user",
             "ssh_password", "ssh_key", "ssh_auth_method",
-            "is_primary",
+            "is_primary", "allow_user_workloads",
         ]
         extra_kwargs = {
             "ssh_password": {"write_only": True},
@@ -403,6 +411,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         server = serializer.save(owner=self.request.user)
+        if server.is_primary and server.allow_user_workloads:
+            server.allow_user_workloads = False
+            server.save(update_fields=["allow_user_workloads", "updated_at"])
         # Attempt to auto-fetch the service count when connecting an existing server
         if server.api_url and server.api_token:
             from threading import Thread
@@ -410,6 +421,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         server = serializer.save()
+        if server.is_primary and server.allow_user_workloads:
+            server.allow_user_workloads = False
+            server.save(update_fields=["allow_user_workloads", "updated_at"])
         if server.api_url and server.api_token:
             from threading import Thread
             Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
@@ -463,6 +477,9 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             provision_status=ManagedServer.ProvisionStatus.PENDING,
             **validated,
         )
+        if server.is_primary and server.allow_user_workloads:
+            server.allow_user_workloads = False
+            server.save(update_fields=["allow_user_workloads", "updated_at"])
 
         # Kick off async provisioning
         from .services.provisioner import provision_server

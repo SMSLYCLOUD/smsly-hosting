@@ -74,7 +74,7 @@ class ServerTransferHardeningTests(APITestCase):
         delay_mock.assert_not_called()
 
     @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
-    def test_create_transfer_full_mode_not_available(self, delay_mock):
+    def test_create_transfer_full_mode_queues_transfer(self, delay_mock):
         payload = {
             'transfer_type': 'FULL',
             'source_server_ip': '10.0.0.30',
@@ -83,8 +83,11 @@ class ServerTransferHardeningTests(APITestCase):
         }
         response = self.client.post(self.url, payload, format='json')
 
-        self.assertEqual(response.status_code, status.HTTP_501_NOT_IMPLEMENTED)
-        delay_mock.assert_not_called()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        transfer = ServerTransfer.objects.get(id=response.data['id'])
+        self.assertEqual(transfer.transfer_type, 'FULL')
+        self.assertIsNone(transfer.service)
+        delay_mock.assert_called_once_with(str(transfer.id))
 
     @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
     def test_create_transfer_requires_source_ip_if_not_configured(self, delay_mock):
@@ -172,6 +175,32 @@ class ServerTransferHardeningTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('No SSH credentials', str(response.data))
+        delay_mock.assert_not_called()
+
+    @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
+    def test_create_transfer_rejects_primary_target_server(self, delay_mock):
+        cfg = PlatformConfig.load()
+        cfg.server_ip = '10.0.0.10'
+        cfg.save(update_fields=['server_ip'])
+
+        target = ManagedServer.objects.create(
+            owner=self.user,
+            name='Primary VPS',
+            host='8.8.8.62',
+            ssh_password='target-root-password',
+            is_primary=True,
+            allow_user_workloads=False,
+        )
+
+        payload = {
+            'transfer_type': 'SERVICE',
+            'service_id': str(self.service.id),
+            'target_server_id': str(target.id),
+        }
+        response = self.client.post(self.url, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['error']['code'], 'PRIMARY_SERVER_DEPLOYMENT_BLOCKED')
         delay_mock.assert_not_called()
 
     @override_settings(ALLOW_STUB_TRANSFER_PIPELINE=False)

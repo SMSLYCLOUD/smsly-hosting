@@ -39,6 +39,15 @@ def check_autoscale_task():
 
 def _evaluate_scaling(service, ServiceMetric):
     """Evaluate whether a service needs scaling."""
+    from apps.deployments.services.server_guard import ServerGuard
+
+    if ServerGuard.is_control_plane(getattr(service, "server", None)):
+        logger.warning(
+            "Autoscale skipped for %s: control-plane server is not a workload target",
+            service.name,
+        )
+        return
+
     now = timezone.now()
 
     # Cooldown enforcement

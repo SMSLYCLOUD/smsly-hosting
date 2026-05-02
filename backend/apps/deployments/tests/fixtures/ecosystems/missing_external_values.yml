@@ -1,0 +1,8 @@
+version: "1"
+mode: "production"
+services:
+  gateway:
+    env:
+      STRIPE_SECRET_KEY:
+        source: external_required
+        required: true
