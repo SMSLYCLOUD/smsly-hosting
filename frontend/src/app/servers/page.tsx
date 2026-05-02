@@ -590,12 +590,23 @@ export default function ServersPage() {
                                         <Terminal size={16} className="text-emerald-500" />
                                         <span className="text-sm font-bold text-zinc-200">Provisioning Terminal</span>
                                         {provisionStatus && PROVISION_STATUS_CONFIG[provisionStatus] && (
-                                            <span className={`text-xs font-medium ${PROVISION_STATUS_CONFIG[provisionStatus].color} flex items-center gap-1`}>
+                                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${PROVISION_STATUS_CONFIG[provisionStatus].color.replace('text-', 'bg-').split(' ')[0]}/10 ${PROVISION_STATUS_CONFIG[provisionStatus].color} border border-${PROVISION_STATUS_CONFIG[provisionStatus].color.split('-')[1]}-500/20 flex items-center gap-1.5`}>
                                                 {PROVISION_STATUS_CONFIG[provisionStatus].animate && (
                                                     <Loader2 size={10} className="animate-spin" />
                                                 )}
                                                 {PROVISION_STATUS_CONFIG[provisionStatus].label}
                                             </span>
+                                        )}
+                                        {provisionStatus === 'FAILED' && (
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => handleProvisionServer(servers.find(s => s.id === viewingLogs)!)}
+                                                className="h-6 px-2 text-[10px] bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
+                                            >
+                                                <RefreshCcw size={10} className="mr-1" />
+                                                Retry Provisioning
+                                            </Button>
                                         )}
                                     </div>
                                     <button
