@@ -1,6 +1,6 @@
 import uuid
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rest_framework.test import APIClient
 from django.urls import reverse
@@ -57,6 +57,27 @@ def test_replication_configs_bind_to_wireguard_addresses(mesh):
     assert "0.0.0.0:5432" not in local_config
     assert "bind 10.100.0.1:5000" in haproxy_config
     assert "bind *:5000" not in haproxy_config
+
+
+def test_helper_network_prefers_network_shared_with_socket_proxy():
+    client = MagicMock()
+    container = MagicMock()
+    container.attrs = {
+        "NetworkSettings": {
+            "Networks": {
+                "smsly-net": {},
+                "socket-proxy": {},
+            }
+        }
+    }
+    client.containers.list.return_value = [container]
+
+    with patch.dict("os.environ", {
+        "DOCKER_HOST": "tcp://socket-proxy:2375",
+        "DOCKER_NETWORK": "smsly-net",
+        "DOCKER_HELPER_NETWORK": "",
+    }):
+        assert ReplicationService._helper_network_for_docker_host(client) == "smsly-net"
 
 
 @pytest.mark.django_db

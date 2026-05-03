@@ -97,10 +97,24 @@ def deploy_replication_task(self, mesh_id: str, db_password: str,
             if str(node.get("status", "")).startswith("FAILED")
         ]
         haproxy_failed = str(results.get("haproxy", "")).startswith("FAILED")
-        mesh.replication_status = "FAILED" if failed or haproxy_failed else "ACTIVE"
+        if failed or haproxy_failed:
+            readiness = {
+                "status": "SKIPPED",
+                "reason": "deployment step failed",
+            }
+        else:
+            readiness = ReplicationService.wait_for_cluster_ready(
+                mesh,
+                timeout_seconds=180,
+                poll_seconds=5,
+            )
+        results["readiness"] = readiness
+        readiness_failed = readiness.get("status") != "READY"
+        mesh.replication_status = "FAILED" if failed or haproxy_failed or readiness_failed else "ACTIVE"
         mesh.replication_last_error = "; ".join(
             [str(node.get("status")) for node in failed]
             + ([str(results.get("haproxy"))] if haproxy_failed else [])
+            + (["Replication did not become ready before timeout."] if readiness_failed else [])
         )
         mesh.replication_last_result = results
         mesh.replication_updated_at = timezone.now()
