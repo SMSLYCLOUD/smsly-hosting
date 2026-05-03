@@ -83,7 +83,7 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const handleRestore = async (id: string) => {
         if (!await confirm({ title: 'Restore backup?', message: 'Are you sure? This will overwrite the current service state.', variant: 'destructive', confirmText: 'Restore' })) return;
         try {
-            await api.post(`/backups/${id}/restore/`);
+            await api.post(`/backups/${id}/restore/`, { confirm: true });
             toast({ title: "Restore Started", description: "Service will restart once restored." });
         } catch (err) {
             toast({ title: "Error", description: "Failed to trigger restore.", variant: "destructive" });
@@ -189,7 +189,11 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                                 </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => {
                                                     const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
-                                                    window.location.href = `/api/v1/backups/${backup.id}/download/?token=${token}`;
+                                                    if (!token) {
+                                                        toast({ title: "Download failed", description: "Authentication token is missing.", variant: "destructive" });
+                                                        return;
+                                                    }
+                                                    window.location.href = `/api/v1/backups/${backup.id}/download/?token=${encodeURIComponent(token)}`;
                                                 }} title="Download">
                                                     <Download className="w-4 h-4" />
                                                 </Button>

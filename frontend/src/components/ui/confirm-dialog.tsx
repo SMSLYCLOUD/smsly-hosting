@@ -30,7 +30,7 @@ interface ConfirmOptions {
   message: string;
   confirmText?: string;
   cancelText?: string;
-  variant?: 'default' | 'destructive';
+  variant?: 'default' | 'destructive' | 'warning';
 }
 
 type ConfirmFn = (opts: ConfirmOptions | string) => Promise<boolean>;
@@ -69,6 +69,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const isDestructive = opts.variant === 'destructive';
+  const isWarning = opts.variant === 'warning';
 
   return (
     <ConfirmContext.Provider value={confirm}>
@@ -80,9 +81,11 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
               <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
                 isDestructive
                   ? 'bg-red-500/10 text-red-400'
+                  : isWarning
+                  ? 'bg-amber-500/10 text-amber-400'
                   : 'bg-cyan-500/10 text-cyan-400'
               }`}>
-                {isDestructive ? <AlertTriangle size={20} /> : <Info size={20} />}
+                {isDestructive ? <AlertTriangle size={20} /> : isWarning ? <AlertTriangle size={20} /> : <Info size={20} />}
               </div>
               <DialogTitle className="text-base text-white">
                 {opts.title || (isDestructive ? 'Are you sure?' : 'Confirm Action')}
@@ -103,9 +106,12 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
             <Button
               variant={isDestructive ? 'destructive' : 'default'}
               onClick={() => handleClose(true)}
-              className={isDestructive
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-cyan-600 hover:bg-cyan-700 text-white'
+              className={
+                isDestructive
+                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                  : isWarning
+                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                  : 'bg-cyan-600 hover:bg-cyan-700 text-white'
               }
             >
               {opts.confirmText || (isDestructive ? 'Delete' : 'Confirm')}

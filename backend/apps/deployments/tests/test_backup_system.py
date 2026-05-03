@@ -1,9 +1,11 @@
 import os
 import uuid
+import tempfile
 from django.test import TestCase
 from django.utils import timezone
 from datetime import timedelta
 from unittest.mock import patch, MagicMock
+from cryptography.fernet import Fernet
 from apps.deployments.models import Service, Project
 from apps.deployments.models_backup import ServiceBackup, BackupSchedule
 from apps.deployments.tasks import cleanup_old_backups_task
@@ -72,3 +74,47 @@ class BackupSystemTest(TestCase):
             # The failed one should be deleted since retain=1 and backup2 is the most recent
             self.assertFalse(ServiceBackup.objects.filter(id=backup1.id).exists())
             self.assertTrue(ServiceBackup.objects.filter(id=backup2.id).exists())
+
+    def test_chunked_backup_encryption_round_trip(self):
+        key = Fernet.generate_key().decode()
+        payload = (b"0123456789abcdef" * 128 * 1024) + b"tail"
+        source = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
+        source_path = source.name
+        source.write(payload)
+        source.close()
+        encrypted_path = None
+        decrypted_path = None
+        try:
+            with patch.dict('os.environ', {
+                'BACKUP_ENCRYPTION_KEY': key,
+                'BACKUP_CRYPTO_CHUNK_SIZE': str(128 * 1024),
+            }):
+                encrypted_path = BackupService()._maybe_encrypt(source_path)
+            self.assertTrue(encrypted_path.endswith(".enc"))
+            self.assertTrue(os.path.exists(encrypted_path))
+
+            decrypted_path = BackupService.decrypt_backup(encrypted_path, key)
+            with open(decrypted_path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            for path in [source_path, encrypted_path, decrypted_path]:
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+    def test_legacy_fernet_backup_decrypt_round_trip(self):
+        key = Fernet.generate_key()
+        payload = (b"legacy-backup" * 256 * 1024) + b"end"
+        encrypted = Fernet(key).encrypt(payload)
+        source = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz.enc")
+        source_path = source.name
+        source.write(encrypted)
+        source.close()
+        decrypted_path = None
+        try:
+            decrypted_path = BackupService.decrypt_backup(source_path, key.decode())
+            with open(decrypted_path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            for path in [source_path, decrypted_path]:
+                if path and os.path.exists(path):
+                    os.remove(path)

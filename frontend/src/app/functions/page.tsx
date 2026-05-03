@@ -14,6 +14,8 @@ import { servicesApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 
+const DEFAULT_NODE_CODE = '// Write your function here\nexports.handler = async (req, res) => {\n  res.json({ message: "Hello from Edge!" });\n};';
+
 export default function FunctionsPage() {
   const { toast } = useToast();
   const router = useRouter();
@@ -25,7 +27,7 @@ export default function FunctionsPage() {
   // Editor State
   const [name, setName] = useState('');
   const [runtime, setRuntime] = useState('nodejs18');
-  const [code, setCode] = useState('// Write your function here\nexports.handler = async (req, res) => {\n  res.send({ message: "Hello from Edge!" });\n};');
+  const [code, setCode] = useState(DEFAULT_NODE_CODE);
   const [deploying, setDeploying] = useState(false);
 
   useEffect(() => {
@@ -65,13 +67,18 @@ export default function FunctionsPage() {
     setSelectedFunction(null);
     setIsCreating(true);
     setName('');
-    setCode('// Write your function here\nexports.handler = async (req, res) => {\n  res.json({ message: "Hello from Edge!" });\n};');
+    setCode(DEFAULT_NODE_CODE);
     setRuntime('nodejs18');
   };
 
   const handleDeploy = async () => {
-    if (!name) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       toast({ title: "Name required", variant: "destructive" });
+      return;
+    }
+    if (!code.trim()) {
+      toast({ title: "Code required", variant: "destructive" });
       return;
     }
     setDeploying(true);
@@ -92,15 +99,18 @@ export default function FunctionsPage() {
           return;
         }
         toast({ title: "Function updated", description: "Deployment triggered." });
+        fetchFunctions();
       } else {
         // Create new
         const newService = await servicesApi.create({
-            name,
+            name: trimmedName,
             deploy_type: 'FUNCTION',
             function_code: code,
             function_runtime: runtime,
             cpu_cores: 0.25,
-            memory_mb: 128
+            memory_mb: 128,
+            internal_port: 8000,
+            health_check_path: '/health'
         });
         // Trigger deploy
         const deployResult = await servicesApi.deploy(newService.id);
@@ -117,9 +127,14 @@ export default function FunctionsPage() {
         setIsCreating(false);
         fetchFunctions();
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      toast({ title: "Deploy failed", variant: "destructive" });
+      const message = e?.response?.data?.error?.message
+        || e?.response?.data?.error
+        || e?.response?.data?.detail
+        || e?.message
+        || "Unable to deploy this function.";
+      toast({ title: "Deploy failed", description: String(message), variant: "destructive" });
     } finally {
       setDeploying(false);
     }
@@ -195,7 +210,7 @@ export default function FunctionsPage() {
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        {selectedFunction && (
+                        {selectedFunction?.public_domain && (
                             <Button variant="outline" size="sm" asChild>
                                 <a href={`https://${selectedFunction.public_domain}`} target="_blank" rel="noreferrer">
                                     <ExternalLink className="h-4 w-4 mr-2" />

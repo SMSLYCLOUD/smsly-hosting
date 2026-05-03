@@ -2514,7 +2514,7 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              git reset --hard origin/main
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
-             git clone https://github.com/SMSLYCLOUD/smsly-hosting.git "$INSTALL_DIR"
+             git clone "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
         fi
     fi
 fi

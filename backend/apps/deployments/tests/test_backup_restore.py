@@ -1,9 +1,12 @@
 import unittest
+import os
+import tempfile
 from django.test import TestCase
 from unittest.mock import patch
 from rest_framework.test import APIClient
 from django.urls import reverse
 from django.contrib.auth import get_user_model
+from rest_framework.authtoken.models import Token
 from apps.deployments.models import Service, Project
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
 import uuid
@@ -55,3 +58,27 @@ class BackupRestoreTest(TestCase):
         response = self.client.post(url, {"confirm": True}, format='json')
         self.assertEqual(response.status_code, 200)
         mock_task.assert_called_once()
+
+    def test_server_backup_download_supports_byte_ranges(self):
+        admin_user = User.objects.create_superuser("download-admin", "download@test.com", "pwd")
+        token = Token.objects.create(user=admin_user)
+        payload = b"0123456789" * 1024
+        backup_file = tempfile.NamedTemporaryFile(delete=False, suffix=".tar.gz")
+        backup_file.write(payload)
+        backup_file.close()
+        try:
+            backup = ServerBackup.objects.create(
+                status="COMPLETED",
+                file_path=backup_file.name,
+                size_bytes=len(payload),
+            )
+            url = reverse('server-backup-download', args=[backup.id]) + f"?token={token.key}"
+            response = self.client.get(url, HTTP_RANGE="bytes=10-19")
+
+            self.assertEqual(response.status_code, 206)
+            self.assertEqual(response["Content-Range"], f"bytes 10-19/{len(payload)}")
+            self.assertEqual(response["Accept-Ranges"], "bytes")
+            self.assertEqual(b"".join(response.streaming_content), payload[10:20])
+        finally:
+            if os.path.exists(backup_file.name):
+                os.remove(backup_file.name)
