@@ -15,6 +15,8 @@ import logging
 import base64
 import shlex
 import textwrap
+import time
+from urllib.parse import urlparse
 
 from django.utils import timezone
 
@@ -96,9 +98,9 @@ class ReplicationService:
                       ETCD3_HOSTS: "{etcd_endpoints}"
                       PATRONI_NAME: {node_name}
                       PATRONI_RESTAPI_CONNECT_ADDRESS: "{wg_ip}:8008"
-                      PATRONI_RESTAPI_LISTEN: "0.0.0.0:8008"
+                      PATRONI_RESTAPI_LISTEN: "{wg_ip}:8008"
                       PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:5432"
-                      PATRONI_POSTGRESQL_LISTEN: "0.0.0.0:5432"
+                      PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:5432"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
                       PATRONI_REPLICATION_PASSWORD: "{replication_password}"
@@ -327,6 +329,53 @@ class ReplicationService:
         return results
 
     @classmethod
+    def wait_for_cluster_ready(cls, mesh, timeout_seconds=180, poll_seconds=5):
+        """Poll Patroni until every peer is reachable and a primary is present."""
+        deadline = time.monotonic() + timeout_seconds
+        last_health = None
+        while time.monotonic() < deadline:
+            last_health = cls.check_replication_health(mesh)
+            nodes = last_health.get("nodes", [])
+            if nodes:
+                unreachable = [
+                    node for node in nodes
+                    if "UNREACHABLE" in str(node.get("status", ""))
+                ]
+                if not unreachable and last_health.get("primary"):
+                    return {"status": "READY", "health": last_health}
+            time.sleep(poll_seconds)
+        return {"status": "TIMEOUT", "health": last_health or {}}
+
+    @classmethod
+    def _helper_network_for_docker_host(cls, client):
+        """Pick a Docker network where helper containers can resolve DOCKER_HOST."""
+        import os
+        explicit = str(os.environ.get("DOCKER_HELPER_NETWORK", "")).strip()
+        if explicit:
+            return explicit
+
+        docker_host = os.environ.get("DOCKER_HOST", "")
+        parsed = urlparse(docker_host)
+        host = parsed.hostname or ""
+        preferred = os.environ.get("DOCKER_NETWORK", "").strip()
+        if host and host not in {"127.0.0.1", "localhost"}:
+            try:
+                matches = client.containers.list(all=True, filters={"name": host})
+                for container in matches:
+                    networks = (
+                        container.attrs
+                        .get("NetworkSettings", {})
+                        .get("Networks", {})
+                    )
+                    if preferred and preferred in networks:
+                        return preferred
+                    if networks:
+                        return next(iter(networks))
+            except Exception as exc:
+                logger.warning("Could not inspect Docker host helper network: %s", exc)
+        return preferred or None
+
+    @classmethod
     def _deploy_patroni_local(cls, compose_content: str):
         """Deploy Patroni containers on the local server."""
         import docker
@@ -341,13 +390,20 @@ class ReplicationService:
             f"printf %s {shlex.quote(compose_b64)} | base64 -d > /tmp/smsly-patroni/docker-compose.yml",
             "cd /tmp/smsly-patroni && docker compose -p smsly-patroni up -d --pull always",
         ]
-        
+        run_kwargs = {
+            "image": "docker:cli",
+            "command": ["sh", "-c", " && ".join(commands)],
+            "remove": True,
+            "environment": {"DOCKER_HOST": docker_host},
+        }
+        helper_network = cls._helper_network_for_docker_host(client)
+        if helper_network:
+            run_kwargs["network"] = helper_network
+        elif urlparse(docker_host).hostname in {"127.0.0.1", "localhost"}:
+            run_kwargs["network_mode"] = "host"
+
         client.containers.run(
-            "docker:cli",
-            command=["sh", "-c", " && ".join(commands)],
-            remove=True,
-            environment={"DOCKER_HOST": docker_host},
-            network_mode="host",
+            **run_kwargs,
         )
 
     @classmethod
@@ -378,14 +434,19 @@ class ReplicationService:
             f"printf %s {shlex.quote(compose_b64)} | base64 -d > /tmp/smsly-haproxy/docker-compose.yml",
             "cd /tmp/smsly-haproxy && docker compose -p smsly-haproxy up -d --pull always",
         ]
-        
-        client.containers.run(
-            "docker:cli",
-            command=["sh", "-c", " && ".join(commands)],
-            remove=True,
-            environment={"DOCKER_HOST": docker_host},
-            network_mode="host",
-        )
+        run_kwargs = {
+            "image": "docker:cli",
+            "command": ["sh", "-c", " && ".join(commands)],
+            "remove": True,
+            "environment": {"DOCKER_HOST": docker_host},
+        }
+        helper_network = cls._helper_network_for_docker_host(client)
+        if helper_network:
+            run_kwargs["network"] = helper_network
+        elif urlparse(docker_host).hostname in {"127.0.0.1", "localhost"}:
+            run_kwargs["network_mode"] = "host"
+
+        client.containers.run(**run_kwargs)
 
     # ── Health & Monitoring ──────────────────────────────────────────────
 
@@ -481,12 +542,16 @@ class ReplicationService:
                 "UNREACHABLE" in str(node.get("status", ""))
                 for node in results["nodes"]
             )
+            missing_primary = bool(results["nodes"]) and not results["primary"]
             mesh.replication_last_result = results
             mesh.replication_last_error = (
                 "One or more replication nodes are unreachable."
-                if has_unreachable else ""
+                if has_unreachable else (
+                    "No Patroni primary detected."
+                    if missing_primary else ""
+                )
             )
-            mesh.replication_status = "FAILED" if has_unreachable else "ACTIVE"
+            mesh.replication_status = "FAILED" if has_unreachable or missing_primary else "ACTIVE"
             mesh.replication_updated_at = timezone.now()
             mesh.save(update_fields=[
                 "replication_status",

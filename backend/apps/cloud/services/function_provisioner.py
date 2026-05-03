@@ -17,7 +17,10 @@ class FunctionProvisioner:
         """
         runtime = str(getattr(service, 'function_runtime', 'nodejs18') or 'nodejs18').strip()
         code = getattr(service, 'function_code', '') or '// No code provided'
-        max_code_bytes = int(os.environ.get("FUNCTION_MAX_CODE_BYTES", str(256 * 1024)))
+        try:
+            max_code_bytes = int(os.environ.get("FUNCTION_MAX_CODE_BYTES", str(256 * 1024)))
+        except (TypeError, ValueError):
+            max_code_bytes = 256 * 1024
         if len(code.encode("utf-8")) > max_code_bytes:
             raise ValueError(f"Function code exceeds {max_code_bytes} bytes")
 
@@ -157,7 +160,15 @@ const server = http.createServer(async (req, res) => {
       body,
     };
     const out = createResponse(res);
-    const result = fn.length >= 2 ? await fn({ ...req, body, query: event.query }, out) : await fn(event);
+    const requestLike = {
+      method: req.method,
+      path: parsedUrl.pathname,
+      query: event.query,
+      headers: req.headers,
+      body,
+      raw: req,
+    };
+    const result = fn.length >= 2 ? await fn(requestLike, out) : await fn(event);
     if (!out.headersSent && !res.headersSent) {
       out.json(result === undefined ? null : result);
     }
