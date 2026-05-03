@@ -2520,6 +2520,17 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
 fi
 cd "$INSTALL_DIR"
 
+# ─── Git Initialization (for bundled installs) ──────────────────────────────
+if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
+    echo -e "${BLUE}  -> Initializing Git repository...${NC}"
+    git init -q
+    git remote add origin "$SMSLY_GIT_REMOTE"
+    git fetch origin main -q --depth=1 || true
+    # We don't reset --hard here to avoid losing the bundled files we just copied,
+    # but the repo is now linked for future updates.
+    echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
+fi
+
 # ─── BLINDSPOT FIX: Validate required deployment files ──────────────────────
 echo -e "${BLUE}  → Validating deployment files...${NC}"
 MISSING_FILES=()
@@ -3665,7 +3676,11 @@ echo -e "${YELLOW}  Wipe install:       sudo bash install.sh --wipe${NC}"
 # ─── Conditional Auto-Reboot (only if ALL checks passed) ────────────────────
 if [ "$VERIFY_PASS_COUNT" -eq "$VERIFY_TOTAL" ]; then
     echo -e "\n${GREEN}  ✓ All $VERIFY_TOTAL/$VERIFY_TOTAL verification checks passed.${NC}"
-    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ] && [ "$NON_INTERACTIVE" != "true" ]; then
+    # Normalize NON_INTERACTIVE to true/false for easier shell testing
+    _IS_NON_INTERACTIVE=false
+    if [[ "${NON_INTERACTIVE:-}" =~ ^(1|true|yes)$ ]]; then _IS_NON_INTERACTIVE=true; fi
+
+    if [ -e /dev/tty ] && [ -z "${SKIP_REBOOT:-}" ] && [ "$_IS_NON_INTERACTIVE" != "true" ]; then
         echo -e "${YELLOW}  System will reboot in 30 seconds to apply sysctl changes.${NC}"
         echo -e "${YELLOW}  Press Ctrl+C to cancel, or wait...${NC}"
         for i in $(seq 30 -1 1); do

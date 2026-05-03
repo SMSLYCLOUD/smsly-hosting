@@ -97,6 +97,7 @@ export default function ServerDetailPage() {
     const [editName, setEditName] = useState('');
     const [saving, setSaving] = useState(false);
     const [checking, setChecking] = useState(false);
+    const [updating, setUpdating] = useState(false);
 
     // Services state
     const [services, setServices] = useState<RemoteService[]>([]);
@@ -191,6 +192,29 @@ export default function ServerDetailPage() {
             toast({ title: 'Health check failed', variant: 'destructive' });
         }
         setChecking(false);
+    };
+
+    const handleUpdateServer = async () => {
+        if (!await confirm({
+            title: 'Update CloudNeuron?',
+            message: 'This will pull the latest code from GitHub and restart the services on the remote VPS. Your services may be briefly unavailable during restart.',
+            variant: 'warning',
+            confirmText: 'Update Now'
+        })) return;
+
+        setUpdating(true);
+        try {
+            await serversApi.updateServer(serverId);
+            toast({
+                title: 'Update Started',
+                description: 'The server is pulling the latest code and rebuilding services in the background.',
+            });
+            // Show overview tab to see logs
+            setActiveTab('overview');
+        } catch {
+            toast({ title: 'Failed to trigger update', variant: 'destructive' });
+        }
+        setUpdating(false);
     };
 
     const handleSaveName = async () => {
@@ -377,14 +401,22 @@ export default function ServerDetailPage() {
                             <p className="text-sm text-muted-foreground mt-0.5">{server.host}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button
-                                onClick={handleHealthCheck}
-                                disabled={checking}
-                                className="px-3 py-2 rounded-lg border border-border text-sm flex items-center gap-2 hover:bg-muted/50 transition-colors"
-                            >
-                                {checking ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                                Health Check
-                            </button>
+                                <button
+                                    onClick={handleHealthCheck}
+                                    disabled={checking}
+                                    className="px-3 py-2 rounded-lg border border-border text-sm flex items-center gap-2 hover:bg-muted/50 transition-colors"
+                                >
+                                    {checking ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                                    Health Check
+                                </button>
+                                <button
+                                    onClick={handleUpdateServer}
+                                    disabled={updating || server.status === 'OFFLINE'}
+                                    className="px-3 py-2 rounded-lg border border-blue-500/30 text-blue-500 text-sm flex items-center gap-2 hover:bg-blue-500/10 transition-colors disabled:opacity-50"
+                                >
+                                    {updating ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
+                                    Update CloudNeuron
+                                </button>
                             {server.api_url && (
                                 <a
                                     href={server.api_url}
@@ -536,26 +568,48 @@ function OverviewTab({ server }: { server: ManagedServer }) {
             </div>
 
             {/* Server Details */}
-            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-                <h3 className="font-bold text-sm uppercase text-muted-foreground">Connection Details</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                        <p className="text-muted-foreground text-xs">Host</p>
-                        <p className="font-mono">{server.host}</p>
-                    </div>
-                    <div>
-                        <p className="text-muted-foreground text-xs">API URL</p>
-                        <p className="font-mono truncate">{server.api_url || '—'}</p>
-                    </div>
-                    <div>
-                        <p className="text-muted-foreground text-xs">Created</p>
-                        <p>{new Date(server.created_at).toLocaleDateString()}</p>
-                    </div>
-                    <div>
-                        <p className="text-muted-foreground text-xs">SSH Port</p>
-                        <p className="font-mono">{server.ssh_port}</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+                    <h3 className="font-bold text-sm uppercase text-muted-foreground">Connection Details</h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <p className="text-muted-foreground text-xs">Host</p>
+                            <p className="font-mono">{server.host}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted-foreground text-xs">API URL</p>
+                            <p className="font-mono truncate">{server.api_url || '—'}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted-foreground text-xs">Created</p>
+                            <p>{new Date(server.created_at).toLocaleDateString()}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted-foreground text-xs">SSH Port</p>
+                            <p className="font-mono">{server.ssh_port}</p>
+                        </div>
                     </div>
                 </div>
+
+                {server.provision_logs && (
+                    <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-bold text-sm uppercase text-muted-foreground">Console Logs</h3>
+                            {server.provision_status && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    server.provision_status === 'DONE' ? 'bg-emerald-500/10 text-emerald-500' :
+                                    server.provision_status === 'FAILED' ? 'bg-red-500/10 text-red-500' :
+                                    'bg-blue-500/10 text-blue-500'
+                                }`}>
+                                    {server.provision_status}
+                                </span>
+                            )}
+                        </div>
+                        <div className="bg-black/50 rounded-lg p-3 font-mono text-[10px] leading-relaxed max-h-[160px] overflow-y-auto whitespace-pre-wrap text-zinc-300">
+                            {server.provision_logs}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

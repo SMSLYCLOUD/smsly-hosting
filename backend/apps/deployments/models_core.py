@@ -26,6 +26,7 @@ class ManagedServer(models.Model):
         NONE = "NONE", "Not provisioned"
         PENDING = "PENDING", "Pending"
         PROVISIONING = "PROVISIONING", "Provisioning"
+        UPDATING = "UPDATING", "Updating"
         DONE = "DONE", "Done"
         FAILED = "FAILED", "Failed"
 
