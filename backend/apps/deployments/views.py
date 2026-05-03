@@ -44,9 +44,31 @@ import os
 import uuid
 import logging
 import re
+from celery.result import AsyncResult
 from apps.cloud.docker_client import get_docker_client
 
 logger = logging.getLogger(__name__)
+
+MAINTENANCE_ACTIONS = {
+    "clear": {
+        "flag": "--clear",
+        "label": "Clear orphaned containers",
+        "queued_message": "Cleanup queued. Stale containers and caches will be cleared in the background.",
+        "lock_ttl": 900,
+    },
+    "refresh": {
+        "flag": "--refresh",
+        "label": "Sync proxy routing",
+        "queued_message": "Proxy sync queued. Caddy will reload from the latest routing config shortly.",
+        "lock_ttl": 600,
+    },
+    "update": {
+        "flag": "--update",
+        "label": "Update platform",
+        "queued_message": "Platform update queued. The host updater will pull and rebuild shortly.",
+        "lock_ttl": 1800,
+    },
+}
 
 
 def _error_response(code: str, message: str, *, details=None, user_action="", retryable=False, http_status_code=400):
@@ -2900,7 +2922,63 @@ class SystemConfigView(GenericAPIView):
     serializer_class = EmptySerializer
     permission_classes = [permissions.IsAdminUser]
 
+    def _maintenance_task_response(self, task_id: str):
+        task_id = str(task_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", task_id):
+            return Response(
+                {"error": "Invalid maintenance task id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = AsyncResult(task_id)
+        payload = {
+            "task_id": task_id,
+            "state": result.state,
+            "status": "running",
+            "message": "Maintenance task is still running.",
+        }
+
+        if result.state == "PENDING":
+            payload["status"] = "queued"
+            payload["message"] = "Maintenance task is queued or waiting for a worker."
+        elif result.state == "STARTED":
+            payload["status"] = "running"
+        elif result.state == "SUCCESS":
+            task_result = result.result or {}
+            if isinstance(task_result, dict):
+                payload.update({
+                    "status": task_result.get("status", "success"),
+                    "message": task_result.get("message", "Maintenance task completed."),
+                    "result": task_result,
+                })
+            else:
+                payload.update({
+                    "status": "success",
+                    "message": "Maintenance task completed.",
+                    "result": task_result,
+                })
+        elif result.state == "FAILURE":
+            payload.update({
+                "status": "error",
+                "message": str(result.result or "Maintenance task failed."),
+            })
+        elif isinstance(result.info, dict):
+            payload.update({
+                "status": result.info.get("status", payload["status"]),
+                "message": result.info.get("message", payload["message"]),
+                "meta": result.info,
+            })
+
+        return Response(payload)
+
     def get(self, request):
+        task_id = (
+            request.query_params.get("maintenance_task_id")
+            or request.query_params.get("task_id")
+        )
+        if task_id:
+            return self._maintenance_task_response(task_id)
+
         return Response({
             # General
             'VERSION': '3.0.0',
@@ -2973,25 +3051,78 @@ class SystemConfigView(GenericAPIView):
             }
 
     def post(self, request):
-        """Trigger a maintenance script task via the API."""
-        action = request.data.get('action')
+        """Queue a maintenance task via the API."""
+        action = str(request.data.get('action') or '').strip().lower()
+        action_spec = MAINTENANCE_ACTIONS.get(action)
+        if not action_spec:
+            return Response(
+                {"error": "Invalid maintenance action specified. Use clear, update, or refresh."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         from .tasks import run_maintenance_task
 
-        if action == 'clear':
-            res = run_maintenance_task.apply(kwargs={'command_flag': '--clear'}).get()
-            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
-            return Response(res, status=status_code)
-        elif action == 'update':
-            res = run_maintenance_task.apply(kwargs={'command_flag': '--update'}).get()
-            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
-            return Response(res, status=status_code)
-        elif action == 'refresh':
-            res = run_maintenance_task.apply(kwargs={'command_flag': '--refresh'}).get()
-            status_code = status.HTTP_200_OK if res.get('status') == 'success' else status.HTTP_500_INTERNAL_SERVER_ERROR
-            return Response(res, status=status_code)
+        lock_key = f"smsly:maintenance:{action}:lock"
+        task_id = str(uuid.uuid4())
+        if not cache.add(lock_key, task_id, timeout=action_spec["lock_ttl"]):
+            existing_task_id = cache.get(lock_key)
+            return Response(
+                {
+                    "status": "running",
+                    "action": action,
+                    "task_id": existing_task_id,
+                    "message": f"{action_spec['label']} is already running.",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        return Response({"error": "Invalid maintenance action specified. Use clear, update, or refresh."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            task = run_maintenance_task.apply_async(
+                kwargs={
+                    "command_flag": action_spec["flag"],
+                    "lock_key": lock_key,
+                },
+                task_id=task_id,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            cache.delete(lock_key)
+            logger.exception("Failed to queue maintenance action %s: %s", action, exc)
+            return Response(
+                {
+                    "status": "error",
+                    "action": action,
+                    "message": "Failed to queue maintenance task. Check Celery/RabbitMQ availability.",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload = {
+            "status": "queued",
+            "action": action,
+            "task_id": task.id or task_id,
+            "message": action_spec["queued_message"],
+        }
+
+        if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False) and task.ready():
+            cache.delete(lock_key)
+            task_result = task.result or {}
+            if isinstance(task_result, dict):
+                payload.update({
+                    "status": task_result.get("status", "success"),
+                    "message": task_result.get("message", payload["message"]),
+                    "result": task_result,
+                })
+                status_code = (
+                    status.HTTP_200_OK
+                    if task_result.get("status") == "success"
+                    else status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            else:
+                payload.update({"status": "success", "result": task_result})
+                status_code = status.HTTP_200_OK
+            return Response(payload, status=status_code)
+
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
 
 
 class DomainConfigView(GenericAPIView):

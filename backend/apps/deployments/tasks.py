@@ -18,6 +18,7 @@ import requests
 from celery import shared_task
 
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 from django.db.models import Sum
 
@@ -2470,65 +2471,178 @@ def platform_rollback_task(self, update_id: str):
 
     _rollback(update)
 
+
+def _clear_directory_contents(path: str) -> dict:
+    """Clear direct children of a known cache directory."""
+    root = os.path.abspath(path)
+    if root in {"/", "/app", "/opt", "/opt/smsly-hosting"}:
+        raise ValueError(f"Refusing to clear unsafe directory: {root}")
+
+    result = {"path": root, "removed": 0, "missing": False, "errors": []}
+    if not os.path.isdir(root):
+        result["missing"] = True
+        return result
+
+    for item in os.listdir(root):
+        item_path = os.path.abspath(os.path.join(root, item))
+        if os.path.commonpath([root, item_path]) != root:
+            result["errors"].append(f"Skipped unsafe path: {item_path}")
+            continue
+        try:
+            if os.path.isfile(item_path) or os.path.islink(item_path):
+                os.unlink(item_path)
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+            result["removed"] += 1
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to clear cache item %s: %s", item_path, exc)
+            result["errors"].append(f"{item_path}: {exc}")
+    return result
+
+
+def _extract_addon_id_from_name(name: str) -> str:
+    prefix = "smsly-addon-"
+    if not name.startswith(prefix):
+        return ""
+    remainder = name[len(prefix):]
+    parts = remainder.split("-", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def _is_stale_maintenance_container(
+    container,
+    *,
+    active_service_ids: set,
+    active_addon_ids: set,
+    active_service_names: set,
+) -> tuple[bool, str]:
+    name = str(getattr(container, "name", "") or "")
+    labels = getattr(container, "labels", None) or {}
+    status_value = str(getattr(container, "status", "") or "").lower()
+    if status_value not in {"exited", "created", "dead"}:
+        return False, "container is not stopped"
+
+    service_id = str(labels.get("smsly.service_id") or "").strip()
+    addon_id = str(labels.get("smsly.addon_id") or "").strip()
+    canonical_name = str(labels.get("smsly.blue_green.canonical_name") or "").strip()
+
+    if "-green-" in name:
+        return True, "stale blue-green candidate"
+
+    if addon_id:
+        return addon_id not in active_addon_ids, "addon missing from DB"
+
+    if service_id:
+        return service_id not in active_service_ids, "service missing from DB"
+
+    inferred_addon_id = _extract_addon_id_from_name(name)
+    if inferred_addon_id:
+        return inferred_addon_id not in active_addon_ids, "addon name missing from DB"
+
+    if name.startswith("ai-router"):
+        if canonical_name and canonical_name in active_service_names:
+            return False, "active AI router service"
+        return name not in active_service_names, "stale AI router"
+
+    if labels.get("managed_by") == "smsly-hosting" and canonical_name:
+        return canonical_name not in active_service_names, "managed service missing from DB"
+
+    return False, "not a managed stale container"
+
+
+def _clear_orphaned_runtime_resources() -> dict:
+    client = docker.from_env()
+    active_service_ids = set(
+        str(value)
+        for value in Service.objects.exclude(status__in=["DELETED", "DELETION_PENDING"]).values_list("id", flat=True)
+    )
+    active_service_names = set(
+        str(value)
+        for value in Service.objects.exclude(status__in=["DELETED", "DELETION_PENDING"]).values_list("name", flat=True)
+    )
+    active_addon_ids = set(
+        str(value)
+        for value in Addon.objects.exclude(status="DELETED").values_list("id", flat=True)
+    )
+
+    removed = []
+    skipped = []
+    errors = []
+    containers = client.containers.list(
+        all=True,
+        filters={"status": ["exited", "created", "dead"]},
+    )
+    for container in containers:
+        should_remove, reason = _is_stale_maintenance_container(
+            container,
+            active_service_ids=active_service_ids,
+            active_addon_ids=active_addon_ids,
+            active_service_names=active_service_names,
+        )
+        if not should_remove:
+            skipped.append({"name": container.name, "reason": reason})
+            continue
+
+        try:
+            container.remove(force=True)
+            removed.append({"name": container.name, "reason": reason})
+            logger.info("Removed orphaned container %s: %s", container.name, reason)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to remove orphaned container %s: %s", container.name, exc)
+            errors.append({"name": container.name, "error": str(exc)})
+
+    image_prune = {}
+    try:
+        image_prune = client.images.prune(filters={"dangling": True}) or {}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to prune dangling images: %s", exc)
+        errors.append({"name": "dangling-images", "error": str(exc)})
+
+    cache_results = [
+        _clear_directory_contents("/app/repo_cache"),
+        _clear_directory_contents("/opt/smsly-cache"),
+    ]
+
+    return {
+        "removed": removed,
+        "removed_count": len(removed),
+        "skipped_count": len(skipped),
+        "errors": errors,
+        "cache": cache_results,
+        "images_reclaimed_bytes": image_prune.get("SpaceReclaimed", 0),
+    }
+
+
 @shared_task(bind=True, soft_time_limit=300, time_limit=360)
-def run_maintenance_task(self, command_flag: str):
+def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
     """
     Run maintenance commands via the Docker API from inside the Celery container.
     Valid flags: --clear, --update, --refresh
     """
     if command_flag not in ['--clear', '--update', '--update-frontend', '--refresh']:
         logger.error(f"Invalid maintenance command: {command_flag}")
-        return {"status": "error", "reason": "invalid_command"}
+        return {"status": "error", "reason": "invalid_command", "message": "Invalid maintenance command."}
 
     try:
         logger.info(f"Running maintenance command: {command_flag}")
+        self.update_state(
+            state="STARTED",
+            meta={
+                "status": "running",
+                "message": f"Running maintenance command {command_flag}.",
+            },
+        )
 
         if command_flag == '--clear':
-            client = docker.from_env()
-
-            # 1. Prune unused docker resources
-            client.containers.prune()
-            client.images.prune(filters={'dangling': False})
-
-            # 2. Remove stale/orphaned service addons and green deployment containers
-            removed = []
-            for c in client.containers.list(all=True, filters={'status': ['exited', 'created', 'dead']}):
-                name = c.name
-                if 'smsly-addon-' in name or '-green-' in name or 'ai-router-' in name:
-                    try:
-                        c.remove(force=True)
-                        removed.append(name)
-                        logger.info(f"Removed orphaned container: {name}")
-                    except Exception as e:
-                        logger.warning(f"Failed to remove {name}: {e}")
-
-            # 3. Clean platform repository cache (build artifacts)
-            repo_cache = "/app/repo_cache"
-            if os.path.exists(repo_cache):
-                for item in os.listdir(repo_cache):
-                    item_path = os.path.join(repo_cache, item)
-                    try:
-                        if os.path.isfile(item_path) or os.path.islink(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    except Exception as e:
-                        logger.warning(f"Failed to clear repo cache item {item_path}: {e}")
-
-            # 4. Clean system caches (only if mounted)
-            cache_dir = "/opt/smsly-cache"
-            if os.path.exists(cache_dir):
-                for item in os.listdir(cache_dir):
-                    item_path = os.path.join(cache_dir, item)
-                    try:
-                        if os.path.isfile(item_path) or os.path.islink(item_path):
-                            os.unlink(item_path)
-                        elif os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                    except Exception as e:
-                        logger.warning(f"Failed to clear cache item {item_path}: {e}")
-
-            return {"status": "success", "message": f"Cleared unused Docker resources, removed {len(removed)} orphaned containers, and flushed repository cache."}
+            details = _clear_orphaned_runtime_resources()
+            return {
+                "status": "success",
+                "message": (
+                    "Cleanup complete. Removed "
+                    f"{details['removed_count']} orphaned container(s) and flushed cache directories."
+                ),
+                "details": details,
+            }
 
         elif command_flag == '--refresh':
             # Restart caddy via the shared volume .reload flag
@@ -2542,27 +2656,44 @@ def run_maintenance_task(self, command_flag: str):
             result = apply_caddyfile(content, cloudflare_token=cf_token)
             if result.get('ok'):
                 logger.info("Proxy refresh flag written to shared volume successfully.")
-                return {"status": "success", "message": "Proxy refresh flag written. The host will reload Caddy shortly."}
+                return {
+                    "status": "success",
+                    "message": "Proxy refresh flag written. The host will reload Caddy shortly.",
+                    "details": result,
+                }
             else:
-                return {"status": "error", "message": result.get('message', 'Failed to write proxy reload flag.')}
+                return {
+                    "status": "error",
+                    "message": result.get('message', 'Failed to write proxy reload flag.'),
+                    "details": result,
+                }
 
         elif command_flag in ['--update', '--update-frontend']:
             # Signal the host-side watcher to run install.sh --update
             update_flag = os.path.join(settings.CADDY_CONFIG_DIR, ".update")
             mode = "update" if command_flag == '--update' else "frontend"
             try:
-                with open(update_flag, "w", encoding="utf-8") as f:
+                os.makedirs(settings.CADDY_CONFIG_DIR, exist_ok=True)
+                tmp_flag = f"{update_flag}.tmp.{self.request.id or os.getpid()}"
+                with open(tmp_flag, "w", encoding="utf-8") as f:
                     f.write(mode)
+                os.replace(tmp_flag, update_flag)
                 logger.info(f"Platform {mode} update flag written to shared volume.")
                 msg = "Platform update initiated." if mode == "update" else "Platform frontend update initiated."
-                return {"status": "success", "message": f"{msg} The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect."}
+                return {
+                    "status": "success",
+                    "message": f"{msg} The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect.",
+                }
             except Exception as e:
                 logger.error(f"Failed to write update flag: {e}")
                 return {"status": "error", "message": f"Failed to initiate update: {e}"}
 
     except Exception as e:
         logger.exception(f"Exception during maintenance {command_flag}: {e}")
-        return {"status": "error", "reason": str(e)}
+        return {"status": "error", "reason": str(e), "message": f"Maintenance failed: {e}"}
+    finally:
+        if lock_key:
+            cache.delete(lock_key)
 
 @shared_task(bind=True, max_retries=3)
 def delete_service_task(self, service_id: str, force: bool = False):

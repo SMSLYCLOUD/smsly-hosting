@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,7 @@ import { OAuthTab } from "@/components/settings/OAuthTab";
 import { GitHubIntegrationCard } from "@/components/settings/GitHubIntegrationCard";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 interface CloudProvider {
   id: string;
@@ -27,6 +28,45 @@ interface CloudProvider {
   is_active: boolean;
   created_at: string;
 }
+
+type MaintenanceAction = "clear" | "refresh" | "update";
+type MaintenanceState = "idle" | "queued" | "running" | "success" | "error";
+
+interface MaintenanceTaskState {
+  status: MaintenanceState;
+  taskId?: string | null;
+  message?: string;
+}
+
+const INITIAL_MAINTENANCE_STATE: Record<MaintenanceAction, MaintenanceTaskState> = {
+  clear: { status: "idle" },
+  refresh: { status: "idle" },
+  update: { status: "idle" },
+};
+
+const MAINTENANCE_COPY: Record<MaintenanceAction, {
+  title: string;
+  message: string;
+  confirmText: string;
+  variant?: "default" | "destructive";
+}> = {
+  clear: {
+    title: "Clear Orphaned Containers?",
+    message: "This removes stopped orphaned platform containers and clears build caches. Running services and databases are left alone.",
+    confirmText: "Clear System",
+    variant: "destructive",
+  },
+  refresh: {
+    title: "Sync Proxy Routing?",
+    message: "This regenerates the proxy configuration and asks the host watcher to reload Caddy.",
+    confirmText: "Sync Proxy",
+  },
+  update: {
+    title: "Update Platform?",
+    message: "This asks the host updater to pull the latest code and rebuild services. The dashboard may briefly disconnect.",
+    confirmText: "Update Platform",
+  },
+};
 
 const SETTINGS_ROUTE_LINKS = [
   { href: "/settings", label: "General", icon: SettingsIcon, match: (pathname: string) => pathname === "/settings" },
@@ -51,12 +91,15 @@ const SETTINGS_SECTIONS = [
 
 export default function SettingsPage() {
   const { toast } = useToast();
+  const confirm = useConfirm();
   const pathname = usePathname();
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<CloudProvider[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [newProvider, setNewProvider] = useState({ name: "", api_key: "", provider_type: "hetzner" });
   const [addingProvider, setAddingProvider] = useState(false);
+  const [maintenanceTasks, setMaintenanceTasks] = useState<Record<MaintenanceAction, MaintenanceTaskState>>(INITIAL_MAINTENANCE_STATE);
+  const maintenancePollers = useRef<Partial<Record<MaintenanceAction, ReturnType<typeof setInterval>>>>({});
 
   // Profile state
   const [firstName, setFirstName] = useState("");
@@ -188,6 +231,153 @@ export default function SettingsPage() {
         setNotifPrefs(prefs);
       } catch (err) { console.error(err); }
   }, []);
+
+  const updateMaintenanceTask = useCallback((action: MaintenanceAction, patch: Partial<MaintenanceTaskState>) => {
+    setMaintenanceTasks((prev) => ({
+      ...prev,
+      [action]: { ...prev[action], ...patch },
+    }));
+  }, []);
+
+  const stopMaintenancePolling = useCallback((action: MaintenanceAction) => {
+    const poller = maintenancePollers.current[action];
+    if (poller) {
+      clearInterval(poller);
+      delete maintenancePollers.current[action];
+    }
+  }, []);
+
+  const getMaintenanceErrorMessage = useCallback((err: any) => (
+    err?.response?.data?.message
+    || err?.response?.data?.error?.message
+    || err?.response?.data?.error
+    || err?.message
+    || "Failed to trigger maintenance."
+  ), []);
+
+  const finishMaintenanceTask = useCallback((action: MaintenanceAction, response: any) => {
+    const result = response?.result && typeof response.result === "object" ? response.result : response;
+    const resultStatus = String(result?.status || response?.status || "").toLowerCase();
+    const ok = resultStatus === "success" || response?.state === "SUCCESS";
+    const message = result?.message || response?.message || (ok ? "Maintenance task completed." : "Maintenance task failed.");
+
+    updateMaintenanceTask(action, {
+      status: ok ? "success" : "error",
+      taskId: response?.task_id || response?.taskId || null,
+      message,
+    });
+    toast({
+      title: ok ? "Maintenance completed" : "Maintenance failed",
+      description: message,
+      variant: ok ? "success" : "destructive",
+    });
+  }, [toast, updateMaintenanceTask]);
+
+  const startMaintenancePolling = useCallback((action: MaintenanceAction, taskId: string) => {
+    stopMaintenancePolling(action);
+
+    const poll = async () => {
+      try {
+        const response = await systemApi.getMaintenanceTask(taskId);
+        const state = String(response?.state || "").toUpperCase();
+        const statusValue = String(response?.status || "").toLowerCase();
+
+        if (state === "SUCCESS" || state === "FAILURE" || statusValue === "success" || statusValue === "error") {
+          stopMaintenancePolling(action);
+          finishMaintenanceTask(action, response);
+          return;
+        }
+
+        updateMaintenanceTask(action, {
+          status: statusValue === "queued" ? "queued" : "running",
+          taskId,
+          message: response?.message || "Maintenance task is running.",
+        });
+      } catch (err) {
+        updateMaintenanceTask(action, {
+          status: "running",
+          taskId,
+          message: action === "update" ? "Waiting for the backend to reconnect..." : "Waiting for task status...",
+        });
+      }
+    };
+
+    void poll();
+    maintenancePollers.current[action] = setInterval(poll, 3000);
+  }, [finishMaintenanceTask, stopMaintenancePolling, updateMaintenanceTask]);
+
+  useEffect(() => () => {
+    Object.values(maintenancePollers.current).forEach((poller) => {
+      if (poller) clearInterval(poller);
+    });
+  }, []);
+
+  const handleMaintenanceAction = useCallback(async (action: MaintenanceAction) => {
+    const copy = MAINTENANCE_COPY[action];
+    const confirmed = await confirm({
+      title: copy.title,
+      message: copy.message,
+      confirmText: copy.confirmText,
+      variant: copy.variant,
+    });
+    if (!confirmed) return;
+
+    updateMaintenanceTask(action, {
+      status: "queued",
+      taskId: null,
+      message: "Queueing maintenance task...",
+    });
+
+    try {
+      const response = await systemApi.runMaintenance(action);
+      const taskId = response?.task_id || response?.taskId;
+      if (response?.result || response?.status === "success" || response?.status === "error") {
+        finishMaintenanceTask(action, response);
+        return;
+      }
+
+      updateMaintenanceTask(action, {
+        status: "queued",
+        taskId,
+        message: response?.message || "Task queued successfully.",
+      });
+      toast({ title: "Maintenance queued", description: response?.message || "Task queued successfully." });
+      if (taskId) {
+        startMaintenancePolling(action, taskId);
+      }
+    } catch (err: any) {
+      const data = err?.response?.data;
+      const taskId = data?.task_id || data?.taskId;
+      if (err?.response?.status === 409 && taskId) {
+        updateMaintenanceTask(action, {
+          status: "running",
+          taskId,
+          message: data?.message || "This maintenance task is already running.",
+        });
+        startMaintenancePolling(action, taskId);
+        toast({ title: "Already running", description: data?.message || "This maintenance task is already running." });
+        return;
+      }
+
+      updateMaintenanceTask(action, {
+        status: "error",
+        taskId: null,
+        message: getMaintenanceErrorMessage(err),
+      });
+      toast({ title: "Error", description: getMaintenanceErrorMessage(err), variant: "destructive" });
+    }
+  }, [confirm, finishMaintenanceTask, getMaintenanceErrorMessage, startMaintenancePolling, toast, updateMaintenanceTask]);
+
+  const renderMaintenanceButtonContent = (action: MaintenanceAction, label: string) => {
+    const task = maintenanceTasks[action];
+    if (task.status === "queued" || task.status === "running") {
+      return <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {task.status === "queued" ? "Queued" : "Running"}</>;
+    }
+    if (task.status === "success") {
+      return <><Check className="mr-2 h-4 w-4" /> Done</>;
+    }
+    return label;
+  };
 
   useEffect(() => {
     fetchProviders();
@@ -1104,41 +1294,62 @@ export default function SettingsPage() {
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="flex flex-col gap-4 rounded-lg border p-4 bg-muted/20">
-                  <div className="flex flex-row justify-between items-center gap-4">
+                  <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                     <div className="space-y-1">
                       <h4 className="text-sm font-medium">Clear Orphaned Containers</h4>
                       <p className="text-xs text-muted-foreground">Forcefully delete all stale deployment containers, old AI routers, and unused project addons to free up server RAM and CPU. This will NOT affect running databases.</p>
+                      {maintenanceTasks.clear.message && (
+                        <p className={cn("text-xs", maintenanceTasks.clear.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+                          {maintenanceTasks.clear.message}
+                        </p>
+                      )}
                     </div>
-                    <Button variant="destructive" onClick={() => {
-                      toast({ title: "Initiating Clear", description: "Cleaning up system caches and docker containers..." });
-                      api.post('/system/config/', { action: 'clear' })
-                        .then(() => toast({ title: "Clear Triggered", description: "Task queued successfully." }))
-                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
-                    }}>Clear System</Button>
+                    <Button
+                      variant="destructive"
+                      disabled={maintenanceTasks.clear.status === "queued" || maintenanceTasks.clear.status === "running"}
+                      onClick={() => handleMaintenanceAction("clear")}
+                      className="w-full sm:w-auto"
+                    >
+                      {renderMaintenanceButtonContent("clear", "Clear System")}
+                    </Button>
                   </div>
-                  <div className="flex flex-row justify-between items-center gap-4 border-t pt-4">
+                  <div className="flex flex-col justify-between gap-4 border-t pt-4 sm:flex-row sm:items-center">
                     <div className="space-y-1">
                       <h4 className="text-sm font-medium">Sync Proxy Routing</h4>
                       <p className="text-xs text-muted-foreground">Force Traefik/Caddy to reload their configurations and discover new backend IP addresses. Useful if you are encountering 502 Bad Gateway errors.</p>
+                      {maintenanceTasks.refresh.message && (
+                        <p className={cn("text-xs", maintenanceTasks.refresh.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+                          {maintenanceTasks.refresh.message}
+                        </p>
+                      )}
                     </div>
-                    <Button variant="outline" onClick={() => {
-                      toast({ title: "Syncing Proxy", description: "Restarting Caddy and proxy watchers..." });
-                      api.post('/system/config/', { action: 'refresh' })
-                        .then(() => toast({ title: "Proxy Synced", description: "Task queued successfully." }))
-                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
-                    }}>Sync Proxy</Button>
+                    <Button
+                      variant="outline"
+                      disabled={maintenanceTasks.refresh.status === "queued" || maintenanceTasks.refresh.status === "running"}
+                      onClick={() => handleMaintenanceAction("refresh")}
+                      className="w-full sm:w-auto"
+                    >
+                      {renderMaintenanceButtonContent("refresh", "Sync Proxy")}
+                    </Button>
                   </div>
-                  <div className="flex flex-row justify-between items-center gap-4 border-t pt-4">
+                  <div className="flex flex-col justify-between gap-4 border-t pt-4 sm:flex-row sm:items-center">
                     <div className="space-y-1">
                       <h4 className="text-sm font-medium">Update Platform</h4>
                       <p className="text-xs text-muted-foreground">Pull the latest code from GitHub and restart the backend. (Warning: Causes a few seconds of downtime).</p>
+                      {maintenanceTasks.update.message && (
+                        <p className={cn("text-xs", maintenanceTasks.update.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+                          {maintenanceTasks.update.message}
+                        </p>
+                      )}
                     </div>
-                    <Button variant="default" onClick={() => {
-                      toast({ title: "Initiating Update", description: "Pulling latest code..." });
-                      api.post('/system/config/', { action: 'update' })
-                        .then(() => toast({ title: "Update Triggered", description: "Task queued successfully." }))
-                        .catch(() => toast({ variant: "destructive", title: "Error", description: "Failed to trigger maintenance." }));
-                    }}>Update Platform</Button>
+                    <Button
+                      variant="default"
+                      disabled={maintenanceTasks.update.status === "queued" || maintenanceTasks.update.status === "running"}
+                      onClick={() => handleMaintenanceAction("update")}
+                      className="w-full sm:w-auto"
+                    >
+                      {renderMaintenanceButtonContent("update", "Update Platform")}
+                    </Button>
                   </div>
                 </div>
               </CardContent>
