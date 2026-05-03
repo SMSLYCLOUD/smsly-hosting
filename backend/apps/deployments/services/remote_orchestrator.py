@@ -170,7 +170,7 @@ class RemoteOrchestrator:
         for index, mode in enumerate(modes):
             headers = self._get_headers(
                 method,
-                request_path,
+                path, # Use base path for signing, NOT request_path (no query string)
                 body=body,
                 auth_mode=None if mode == "none" else mode,
             )

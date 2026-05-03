@@ -172,7 +172,7 @@ class SecurityMiddleware:
 
         # 2. Compute Hash
         method = request.method
-        path = request.get_full_path() # Includes query string
+        path = request.path # Use path without query string for deterministic signing
         body = request.body
         body_hash = hashlib.sha256(body).hexdigest()
 
@@ -190,7 +190,11 @@ class SecurityMiddleware:
         ).hexdigest()
 
         if not hmac.compare_digest(expected_signature, signature):
-            logger.warning(f"Invalid signature for {request.path}")
+            logger.warning(
+                f"Invalid signature for {request.path}. "
+                f"Payload: {payload[:100]}... "
+                f"Secret-configured: {bool(getattr(settings, 'GATEWAY_SECRET', None))}"
+            )
             return False
 
         return True

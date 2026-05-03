@@ -69,6 +69,20 @@ class Command(BaseCommand):
         for server in servers:
             has_token = bool(str(server.api_token or "").strip())
             has_secret = bool(str(server.gateway_secret or "").strip())
+            
+            # --- Auto-fix Missing Tokens via SSH ---
+            if fix and not has_token:
+                if server.ssh_key or server.ssh_password:
+                    self.stdout.write(f"   Attempting SSH auto-authentication for {server.name}...")
+                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    orch = RemoteOrchestrator(server)
+                    if orch.auto_authenticate():
+                        self.stdout.write(self.style.SUCCESS(f"     ✅ Successfully retrieved API token via SSH!"))
+                        server.refresh_from_db()
+                        has_token = True
+                else:
+                    self.stdout.write(self.style.WARNING(f"     ⚠️  Cannot auto-fix {server.name}: No SSH credentials stored."))
+
             token_preview = (str(server.api_token or "")[:12] + "...") if has_token else "MISSING"
             secret_preview = "SET" if has_secret else "MISSING"
 
@@ -90,9 +104,8 @@ class Command(BaseCommand):
         self.stdout.write("If you see 401/403 errors above, the fix is:\n")
         self.stdout.write("  1. On the TARGET server, run: docker compose exec backend python manage.py diagnose_nodes --fix\n")
         self.stdout.write("     This creates an admin API token.\n")
-        self.stdout.write("  2. Copy the printed token.\n")
-        self.stdout.write("  3. On the SOURCE server's dashboard, edit the remote server and paste the token in 'API Token'.\n")
-        self.stdout.write("  4. Alternatively, run this on the SOURCE server: docker compose exec backend python manage.py diagnose_nodes --fix to auto-populate tokens.\n")
+        self.stdout.write("  2. Alternatively, run this on the SOURCE server: docker compose exec backend python manage.py diagnose_nodes --fix\n")
+        self.stdout.write("     It will auto-SSH into remote nodes and pull tokens if credentials exist.\n")
 
     def _test_connectivity(self, server: ManagedServer, has_token: bool, has_secret: bool):
         base = server.api_url.rstrip("/")
@@ -125,7 +138,7 @@ class Command(BaseCommand):
                 resp = requests.get(url, headers=headers, timeout=10)
                 if resp.status_code == 200:
                     self.stdout.write(self.style.SUCCESS(
-                        f"     ✅ GET /api/v1/services/ → HTTP 200 (TOKEN AUTH WORKS)"
+                        f"     ✅ GET {api_path} → HTTP 200 (TOKEN AUTH WORKS)"
                     ))
                     try:
                         data = resp.json()
@@ -135,7 +148,7 @@ class Command(BaseCommand):
                         pass
                 else:
                     self.stdout.write(self.style.ERROR(
-                        f"     ❌ GET /api/v1/services/ → HTTP {resp.status_code} with TOKEN auth"
+                        f"     ❌ GET {api_path} → HTTP {resp.status_code} with TOKEN auth"
                     ))
                     self.stdout.write(f"        Response: {resp.text[:300]}")
             except Exception as e:
@@ -146,6 +159,7 @@ class Command(BaseCommand):
             gw_secret = str(server.gateway_secret).strip()
             ts = str(int(time.time()))
             body_hash = hashlib.sha256(b"").hexdigest()
+            # Standardized payload: excludes query string
             payload_str = f"GET|{api_path}|{ts}|{body_hash}"
             sig = hmac.new(gw_secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
             headers["X-Gateway-Signature-V2"] = sig
@@ -155,11 +169,11 @@ class Command(BaseCommand):
                 resp = requests.get(url, headers=headers, timeout=10)
                 if resp.status_code == 200:
                     self.stdout.write(self.style.SUCCESS(
-                        f"     ✅ GET /api/v1/services/ → HTTP 200 (HMAC AUTH WORKS)"
+                        f"     ✅ GET {api_path} → HTTP 200 (HMAC AUTH WORKS)"
                     ))
                 else:
                     self.stdout.write(self.style.ERROR(
-                        f"     ❌ GET /api/v1/services/ → HTTP {resp.status_code} with HMAC auth"
+                        f"     ❌ GET {api_path} → HTTP {resp.status_code} with HMAC auth"
                     ))
                     self.stdout.write(f"        Response: {resp.text[:300]}")
             except Exception as e:
