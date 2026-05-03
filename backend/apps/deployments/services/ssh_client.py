@@ -179,3 +179,41 @@ class SSHClient:
 
         cmd = "curl -fsSL https://get.docker.com | sh"
         self.exec_command(cmd)
+
+    def find_hosting_path(self):
+        """Try to find the SMSLY Hosting installation directory on the remote."""
+        candidates = ["/opt/smsly-hosting", "/opt/smsly", "/app"]
+        for path in candidates:
+            try:
+                # Check if docker-compose.prod.yml or .env exists in this path
+                self.exec_command(f"ls {path}/.env")
+                return path
+            except Exception:
+                continue
+        
+        # Fallback: try to find it via locate or find if available
+        try:
+            path = self.exec_command("find /opt -name '.env' -maxdepth 3 | xargs dirname | head -n 1").strip()
+            if path:
+                return path
+        except Exception:
+            pass
+            
+        return candidates[0]  # Default to /opt/smsly-hosting
+
+    def run_diagnose_nodes_fix(self, hosting_path):
+        """Run the diagnose_nodes --fix command and return the output."""
+        # Try both 'docker compose' and 'docker-compose'
+        cmd = f"cd {hosting_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
+        return self.exec_command(cmd)
+
+    def get_gateway_secret(self, hosting_path):
+        """Extract the GATEWAY_SECRET from the remote .env file."""
+        try:
+            cmd = f"grep GATEWAY_SECRET {hosting_path}/.env | cut -d= -f2"
+            secret = self.exec_command(cmd).strip().strip("'\"")
+            if secret:
+                return secret
+        except Exception:
+            pass
+        return None

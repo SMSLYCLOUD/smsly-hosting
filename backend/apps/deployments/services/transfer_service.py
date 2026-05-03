@@ -80,6 +80,16 @@ class ServerTransferService:
         try:
             path = "/api/v1/transfers/register-incoming/"
             server = self._target_server_record()
+            
+            # If token is missing, attempt auto-authentication via SSH
+            if server and not server.api_token:
+                from .remote_orchestrator import RemoteOrchestrator
+                self._log("Target API token missing. Attempting SSH auto-authentication...")
+                orch = RemoteOrchestrator(server)
+                if orch.auto_authenticate():
+                    self._log("SSH auto-authentication successful. Credentials updated.")
+                    server.refresh_from_db()
+
             if server and server.api_url:
                 target_url = f"{str(server.api_url).rstrip('/')}{path}"
             else:
@@ -317,7 +327,9 @@ import sys
 import django
 import logging
 
-sys.path.append('/app/backend')
+for candidate in ('/app', '/app/backend'):
+    if os.path.isdir(candidate) and candidate not in sys.path:
+        sys.path.insert(0, candidate)
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
