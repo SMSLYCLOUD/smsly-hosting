@@ -381,11 +381,15 @@ if __name__ == '__main__':
         if "RESTORE_FAILED" in result or "ERROR:" in result:
             raise RuntimeError(f"Remote service hydration failed: {result}")
             
-        # Cleanup
+        # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
         self.ssh.exec_command(
-            f"docker exec {safe_backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py"
+            f"docker exec {safe_backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py",
+            raise_on_error=False
         )
-        self.ssh.exec_command(f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}")
+        self.ssh.exec_command(
+            f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}",
+            raise_on_error=False
+        )
 
         self._update(90, 'Starting service container on target...')
         # After restoration, the container exists but is not running. 

@@ -125,7 +125,7 @@ class SSHClient:
         self.sftp = None
         self.client = None
 
-    def exec_command(self, command, timeout=None):
+    def exec_command(self, command, timeout=None, raise_on_error=True):
         if not self.client:
             self.connect()
 
@@ -137,7 +137,7 @@ class SSHClient:
         out = stdout.read().decode('utf-8', errors='replace')
         err = stderr.read().decode('utf-8', errors='replace')
 
-        if exit_status != 0:
+        if exit_status != 0 and raise_on_error:
             raise SSHConnectionError(f"Command failed (exit {exit_status}): {err or out}")
 
         return out
