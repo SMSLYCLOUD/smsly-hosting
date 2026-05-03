@@ -51,7 +51,7 @@ class ServerTransferServiceTest(TestCase):
         mock_backup = ServiceBackup.objects.create(
             service=self.service,
             file_path='/tmp/backup.tar.gz',
-            metadata={'volumes': []},
+            metadata={'volumes': [], 'docker_image': 'test-service:latest'},
             status='COMPLETED'
         )
         mock_backup_svc.backup_service.return_value = mock_backup

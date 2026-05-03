@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class ReplicationService:
     """Manage PostgreSQL streaming replication via Patroni."""
 
-    PATRONI_IMAGE = "ghcr.io/zalando/spilo-16:3.0-p1"
+    PATRONI_IMAGE = "ghcr.io/zalando/spilo-16:3.3-p3"
     ETCD_IMAGE = "quay.io/coreos/etcd:v3.5.9"
     HAPROXY_IMAGE = "haproxy:2.8"
 
@@ -90,6 +90,8 @@ class ReplicationService:
                     image: {cls.PATRONI_IMAGE}
                     container_name: {node_name}
                     hostname: {node_name}
+                    extra_hosts:
+                      - "{node_name}:{wg_ip}"
                     restart: unless-stopped
                     network_mode: host
                     environment:

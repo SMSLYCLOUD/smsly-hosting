@@ -329,11 +329,16 @@ class BackupService:
                     images = self.docker_client.images.load(f)
                     if images:
                         loaded_image = images[0]
-                        # If the image has tags, use the first one.
-                        # If not, we might need to tag it?
-                        # Usually load() restores tags.
+                        restored_image = None
                         if loaded_image.tags:
-                            target_service.docker_image = loaded_image.tags[0]
+                            restored_image = loaded_image.tags[0]
+                        elif metadata.get('docker_image'):
+                            restored_image = metadata['docker_image']
+                            repo, tag = self._split_image_reference(restored_image)
+                            loaded_image.tag(repository=repo, tag=tag)
+
+                        if restored_image:
+                            target_service.docker_image = restored_image
                             target_service.deploy_type = 'DOCKER' # Switch to docker deploy
                             target_service.save()
 
@@ -414,6 +419,17 @@ class BackupService:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+
+    @staticmethod
+    def _split_image_reference(image_ref):
+        """Split docker image reference into repository and tag."""
+        image_ref = str(image_ref or '').strip()
+        if not image_ref:
+            return '', 'latest'
+        last_segment = image_ref.rsplit('/', 1)[-1]
+        if ':' in last_segment:
+            return image_ref.rsplit(':', 1)
+        return image_ref, 'latest'
 
     def backup_server(self, backup_id=None):
         """

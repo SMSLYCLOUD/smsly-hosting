@@ -261,8 +261,11 @@ class ServerTransferService:
         backend_container = self._find_remote_backend_container(required=True)
 
         safe_backend_container = shlex.quote(backend_container)
+        container_backup_path = f"/tmp/transfer_backup_{self.transfer.id}.tar.gz"
+        container_script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
         self.ssh.exec_command(
-            f"docker cp {shlex.quote(remote_backup_path)} {safe_backend_container}:/tmp/transfer_backup.tar.gz"
+            f"docker cp {shlex.quote(remote_backup_path)} "
+            f"{safe_backend_container}:{shlex.quote(container_backup_path)}"
         )
 
         self._update(75, 'Hydrating Service via remote Django ORM...')
@@ -271,7 +274,7 @@ class ServerTransferService:
         # and calls BackupService to properly inflate the database models and Volumes.
         owner_email = self.transfer.service.owner.email if self.transfer.service and self.transfer.service.owner else None
         
-        restore_script = self._build_restore_trigger_script(owner_email)
+        restore_script = self._build_restore_trigger_script(owner_email, container_backup_path)
         script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
         import tempfile
         local_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
@@ -282,7 +285,8 @@ class ServerTransferService:
             self.ssh.upload_file(local_script.name, script_path)
             # Copy into container
             self.ssh.exec_command(
-                f"docker cp {shlex.quote(script_path)} {safe_backend_container}:/tmp/restore_trigger.py"
+                f"docker cp {shlex.quote(script_path)} "
+                f"{safe_backend_container}:{shlex.quote(container_script_path)}"
             )
         finally:
             os.unlink(local_script.name)
@@ -290,15 +294,20 @@ class ServerTransferService:
         self._update(85, 'Running database and volume migrations on target...')
         # Execute the python script inside the remote container
         result = self.ssh.exec_command(
-            f"docker exec {safe_backend_container} python3 /tmp/restore_trigger.py"
+            f"docker exec {safe_backend_container} python3 {shlex.quote(container_script_path)}"
         )
         if "RESTORE_FAILED" in result or "ERROR:" in result:
             raise RuntimeError(f"Remote service hydration failed: {result}")
+
+        self._load_service_image_on_target(remote_backup_path)
             
         # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
         self.ssh.exec_command(
             f"docker exec -u 0 {safe_backend_container} sh -lc "
-            + shlex.quote("rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py || true"),
+            + shlex.quote(
+                f"rm -f {shlex.quote(container_backup_path)} "
+                f"{shlex.quote(container_script_path)} || true"
+            ),
             raise_on_error=False
         )
         self.ssh.exec_command(
@@ -312,6 +321,53 @@ class ServerTransferService:
         metadata = self.transfer.source_backup.metadata
         run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
         self.ssh.exec_command(run_cmd)
+
+    def _load_service_image_on_target(self, remote_backup_path):
+        """Load the service image archive on the target Docker host.
+
+        The remote Django restore hydrates database and volume state from inside
+        the platform container. Loading the image from the host as well makes
+        the final container start independent of the target container's Docker
+        socket proxy behavior.
+        """
+        self._update(88, 'Loading service image on target Docker host...')
+        extract_dir = f"/tmp/transfer_image_{self.transfer.id}"
+        image_path = f"{extract_dir}/image.tar"
+        metadata_path = f"{extract_dir}/metadata.json"
+        read_image_ref = (
+            "target_image=$(python3 -c "
+            + shlex.quote(
+                "import json,sys; "
+                "print((json.load(open(sys.argv[1])).get('docker_image') or '').strip())"
+            )
+            + f" {shlex.quote(metadata_path)})"
+        )
+        load_image = (
+            f"if [ -s {shlex.quote(image_path)} ]; then "
+            f"load_output=$(docker load -i {shlex.quote(image_path)} 2>&1); "
+            "printf '%s\\n' \"$load_output\"; "
+            "loaded_ref=$(printf '%s\\n' \"$load_output\" | sed -n 's/^Loaded image: //p' | tail -n 1); "
+            "loaded_id=$(printf '%s\\n' \"$load_output\" | sed -n 's/^Loaded image ID: //p' | tail -n 1); "
+            "loaded_source=\"${loaded_ref:-$loaded_id}\"; "
+            "if [ -n \"$target_image\" ] && [ -n \"$loaded_source\" ] "
+            "&& ! docker image inspect \"$target_image\" >/dev/null 2>&1; then "
+            "docker tag \"$loaded_source\" \"$target_image\"; "
+            "fi; "
+            "else echo 'No image.tar found in backup archive'; fi"
+        )
+        cmd = " && ".join([
+            f"rm -rf {shlex.quote(extract_dir)}",
+            f"mkdir -p {shlex.quote(extract_dir)}",
+            f"tar -xzf {shlex.quote(remote_backup_path)} -C {shlex.quote(extract_dir)} metadata.json",
+            (
+                f"tar -xzf {shlex.quote(remote_backup_path)} -C {shlex.quote(extract_dir)} "
+                "image.tar || true"
+            ),
+            read_image_ref,
+            load_image,
+            f"rm -rf {shlex.quote(extract_dir)}",
+        ])
+        self.ssh.exec_command(cmd, timeout=1200)
 
     def _find_remote_backend_container(self, required=False):
         """Return the best matching CloudNeuron backend container name on the target."""
@@ -360,13 +416,11 @@ class ServerTransferService:
         self.ssh.exec_command(cmd, timeout=timeout)
 
     def _wait_for_remote_backend_ready(self, backend_container):
-        """Wait until target Django can reach its database before restore starts."""
-        safe_backend_container = shlex.quote(backend_container)
+        """Wait until target platform health confirms backend dependencies."""
         command = (
             "for i in $(seq 1 60); do "
-            "curl -fsS -m 5 http://127.0.0.1:8090/health >/dev/null 2>&1 "
-            "&& docker exec "
-            f"{safe_backend_container} python3 manage.py check --database default >/dev/null 2>&1 "
+            "curl -fsS -m 5 http://127.0.0.1:8090/health 2>/dev/null "
+            "| grep -q '\"status\": \"healthy\"' "
             "&& echo READY && exit 0; "
             "sleep 5; "
             "done; echo NOT_READY; exit 1"
@@ -376,7 +430,7 @@ class ServerTransferService:
             raise RuntimeError("Target CloudNeuron backend did not become ready before restore.")
 
     @staticmethod
-    def _build_restore_trigger_script(owner_email):
+    def _build_restore_trigger_script(owner_email, backup_path='/tmp/transfer_backup.tar.gz'):
         return f"""import os
 import sys
 import time
@@ -450,7 +504,7 @@ def run_restore():
     try:
         svc = BackupService()
         # Restore and capture result
-        svc._restore_service_from_file('/tmp/transfer_backup.tar.gz', owner=target_user)
+        svc._restore_service_from_file({repr(backup_path)}, owner=target_user)
         print("SUCCESS")
     except Exception as e:
         print(f"RESTORE_FAILED: {{str(e)}}", file=sys.stderr)
@@ -781,6 +835,11 @@ if os.path.exists(services_dir):
     def _generate_docker_run_command(self, service, metadata):
         name = service.name
         image = metadata.get('docker_image') or service.docker_image
+        if not image:
+            raise RuntimeError(
+                f"No Docker image was available in the backup for service {service.name}. "
+                "Use remote Git deployment or provide service.docker_image for this service."
+            )
 
         config = PlatformConfig.load()
 
@@ -840,7 +899,11 @@ if os.path.exists(services_dir):
         # Construct final command string safely
         safe_run = " ".join(shlex.quote(arg) for arg in run_args)
 
-        net_cmd = f"docker network create {shlex.quote(net)} || true"
+        safe_net = shlex.quote(net)
+        net_cmd = (
+            f"docker network inspect {safe_net} >/dev/null 2>&1 "
+            f"|| docker network create {safe_net} >/dev/null"
+        )
         rm_cmd = f"docker rm -f {shlex.quote(name)} || true"
 
         return f"{net_cmd} && {rm_cmd} && {safe_run}"
