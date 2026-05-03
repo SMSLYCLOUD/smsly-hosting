@@ -203,10 +203,10 @@ def _inject_repo_clone_auth(script_content: str, github_token: str | None):
         "SMSLYCLOUD/smsly-hosting.git"
     )
     # 1. Inject into git clone (for fresh installs)
-    pattern_clone = r'(git clone )https://github\.com/(SMSLYCLOUD/smsly-hosting\.git "\$INSTALL_DIR")'
+    pattern_clone = r'git clone "\$\{SMSLY_GIT_REMOTE:-https://github\.com/SMSLYCLOUD/smsly-hosting\.git\}" ("\$INSTALL_DIR")'
     replaced = re.sub(
         pattern_clone,
-        rf'\1{auth_url} \2',
+        rf'git clone {auth_url} \1',
         script_content,
     )
 

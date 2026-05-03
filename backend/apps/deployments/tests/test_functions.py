@@ -29,6 +29,12 @@ class FunctionProvisionerTest(TestCase):
         with open(os.path.join(self.build_dir, "Dockerfile"), "r") as f:
             content = f.read()
             self.assertIn("USER node", content) # Security check for non-root user
+            self.assertNotIn("npm install", content)
+
+        with open(os.path.join(self.build_dir, "server.js"), "r") as f:
+            content = f.read()
+            self.assertIn("/health", content)
+            self.assertNotIn("require('express')", content)
 
     def test_prepare_python_context(self):
         service = MockService(runtime="python3.9", code="def handler(event):\n    return 'ok'")
@@ -37,8 +43,12 @@ class FunctionProvisionerTest(TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "Dockerfile")))
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "main.py")))
         self.assertTrue(os.path.exists(os.path.join(self.build_dir, "server.py")))
-        self.assertTrue(os.path.exists(os.path.join(self.build_dir, "requirements.txt")))
-
         with open(os.path.join(self.build_dir, "Dockerfile"), "r") as f:
             content = f.read()
             self.assertIn("USER function_user", content) # Security check for non-root user
+            self.assertNotIn("pip install", content)
+
+        with open(os.path.join(self.build_dir, "server.py"), "r") as f:
+            content = f.read()
+            self.assertIn("/health", content)
+            self.assertIn("ThreadingHTTPServer", content)

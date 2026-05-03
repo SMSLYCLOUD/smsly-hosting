@@ -53,7 +53,7 @@ export default function ServerBackupsPage() {
         if (!await confirm({ title: 'Restore server backup?', message: 'This will overwrite current state. Are you sure?', variant: 'destructive', confirmText: 'Restore' })) return;
         setRestoringId(backupId);
         try {
-            await api.post(`/server/backups/${backupId}/restore/`);
+            await api.post(`/server/backups/${backupId}/restore/`, { confirm: true });
             toast({ title: "Restore Started", description: "Server will restart once restore is complete." });
         } catch (err: any) {
             const msg = err?.response?.data?.error || "Failed to trigger restore.";
@@ -191,7 +191,11 @@ export default function ServerBackupsPage() {
                                                     </Button>
                                                     <Button variant="ghost" size="sm" onClick={() => {
                                                         const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
-                                                        window.location.href = `/api/v1/server/backups/${backup.id}/download/?token=${token}`;
+                                                        if (!token) {
+                                                            toast({ title: "Download failed", description: "Authentication token is missing.", variant: "destructive" });
+                                                            return;
+                                                        }
+                                                        window.location.href = `/api/v1/server/backups/${backup.id}/download/?token=${encodeURIComponent(token)}`;
                                                     }} title="Download">
                                                         <Download className="w-4 h-4" />
                                                     </Button>

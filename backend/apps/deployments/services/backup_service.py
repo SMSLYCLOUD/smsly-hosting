@@ -8,16 +8,29 @@ import shutil
 import traceback
 import docker
 import tempfile
+import base64
+import binascii
+import struct
 from django.core.exceptions import PermissionDenied, ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.text import slugify
 from django.conf import settings
+from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes, hmac, padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from apps.deployments.models import Service, EnvironmentVariable
 from apps.deployments.models_backup import ServiceBackup, ServerBackup
 from apps.deployments.models_storage import Volume
 
 logger = logging.getLogger(__name__)
+
+_CHUNKED_BACKUP_MAGIC = b"SMSLY-BACKUP-AESGCM-V1\n"
+_CHUNKED_BACKUP_NONCE_PREFIX_BYTES = 8
+_DEFAULT_CRYPTO_CHUNK_SIZE = 4 * 1024 * 1024
+_FERNET_HEADER_SIZE = 1 + 8 + 16
+_FERNET_HMAC_SIZE = 32
 
 class BackupService:
     def __init__(self):
@@ -652,28 +665,64 @@ class BackupService:
     # ------------------------------------------------------------------
     # Hardening helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _crypto_chunk_size() -> int:
+        try:
+            value = int(os.environ.get("BACKUP_CRYPTO_CHUNK_SIZE", _DEFAULT_CRYPTO_CHUNK_SIZE))
+        except (TypeError, ValueError):
+            value = _DEFAULT_CRYPTO_CHUNK_SIZE
+        return max(64 * 1024, value)
+
+    @staticmethod
+    def _decode_backup_key(key: str) -> bytes:
+        try:
+            raw = base64.urlsafe_b64decode(str(key).encode("ascii"))
+        except (binascii.Error, UnicodeEncodeError) as exc:
+            raise ValueError("BACKUP_ENCRYPTION_KEY must be a valid Fernet key") from exc
+        if len(raw) != 32:
+            raise ValueError("BACKUP_ENCRYPTION_KEY must decode to 32 bytes")
+        return raw
+
+    @staticmethod
+    def _read_exact(file_obj, size: int) -> bytes:
+        data = file_obj.read(size)
+        if len(data) != size:
+            raise ValueError("Encrypted backup is truncated")
+        return data
+
     def _maybe_encrypt(self, path: str) -> str:
         """
         Optionally encrypt backup archive at rest when BACKUP_ENCRYPTION_KEY is set.
-        Uses Fernet (AES-CBC + HMAC). Returns path to encrypted file.
-        Memory-efficient: avoids keeping multiple copies of data in RAM.
+        Uses chunked AES-GCM with the existing Fernet key material. Returns path
+        to encrypted file and never loads the archive into memory.
         """
         key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
         if not key:
             return path
 
-        fernet = Fernet(key)
+        enc_path = path + ".enc"
         try:
-            with open(path, "rb") as f:
-                data = f.read()
-            # Encrypt and immediately write to disk to free 'data' sooner
-            enc = fernet.encrypt(data)
-            del data # Explicitly help GC
+            raw_key = self._decode_backup_key(key)
+            aesgcm = AESGCM(raw_key)
+            nonce_prefix = os.urandom(_CHUNKED_BACKUP_NONCE_PREFIX_BYTES)
+            chunk_size = self._crypto_chunk_size()
 
-            enc_path = path + ".enc"
-            with open(enc_path, "wb") as f:
-                f.write(enc)
-            del enc # Explicitly help GC
+            with open(path, "rb") as source, open(enc_path, "wb") as encrypted:
+                encrypted.write(_CHUNKED_BACKUP_MAGIC)
+                encrypted.write(nonce_prefix)
+                chunk_index = 0
+                while True:
+                    chunk = source.read(chunk_size)
+                    if not chunk:
+                        break
+                    if chunk_index > 0xFFFFFFFF:
+                        raise ValueError("Backup is too large for chunked encryption")
+                    nonce = nonce_prefix + struct.pack(">I", chunk_index)
+                    ciphertext = aesgcm.encrypt(nonce, chunk, None)
+                    encrypted.write(struct.pack(">I", len(ciphertext)))
+                    encrypted.write(ciphertext)
+                    chunk_index += 1
+                encrypted.write(struct.pack(">I", 0))
 
             try:
                 os.remove(path)
@@ -681,6 +730,11 @@ class BackupService:
                 pass
             return enc_path
         except Exception as e:
+            try:
+                if os.path.exists(enc_path):
+                    os.remove(enc_path)
+            except OSError:
+                pass
             logger.error(f"Encryption failed for {path}: {e}")
             return path
 
@@ -689,23 +743,154 @@ class BackupService:
         """
         Decrypt an encrypted backup to a temp file and return its path.
         Caller is responsible for deleting the temp file.
-        Memory-efficient: releases encrypted data from RAM as soon as decrypted.
+        Supports the current chunked AES-GCM format and legacy Fernet archives
+        without loading the encrypted or decrypted backup into process memory.
         """
-        fernet = Fernet(key)
-        with open(path, "rb") as f:
-            enc = f.read()
-        try:
-            data = fernet.decrypt(enc)
-            del enc # Free encrypted copy immediately
-        except InvalidToken as e:
-            raise ValueError("Failed to decrypt backup archive: invalid token") from e
+        with open(path, "rb") as source:
+            magic = source.read(len(_CHUNKED_BACKUP_MAGIC))
+        if magic == _CHUNKED_BACKUP_MAGIC:
+            return BackupService._decrypt_chunked_backup(path, key)
+        return BackupService._decrypt_legacy_fernet_backup(path, key)
+
+    @staticmethod
+    def _decrypt_chunked_backup(path: str, key: str) -> str:
+        raw_key = BackupService._decode_backup_key(key)
+        aesgcm = AESGCM(raw_key)
 
         fd, tmp_path = tempfile.mkstemp(prefix="backup_dec_", suffix=".tar.gz")
         os.close(fd)
-        with open(tmp_path, "wb") as f:
-            f.write(data)
-        del data # Free decrypted copy
-        return tmp_path
+        try:
+            with open(path, "rb") as source, open(tmp_path, "wb") as target:
+                magic = BackupService._read_exact(source, len(_CHUNKED_BACKUP_MAGIC))
+                if magic != _CHUNKED_BACKUP_MAGIC:
+                    raise ValueError("Unsupported encrypted backup format")
+                nonce_prefix = BackupService._read_exact(
+                    source, _CHUNKED_BACKUP_NONCE_PREFIX_BYTES
+                )
+                chunk_index = 0
+                while True:
+                    length_raw = BackupService._read_exact(source, 4)
+                    chunk_length = struct.unpack(">I", length_raw)[0]
+                    if chunk_length == 0:
+                        break
+                    ciphertext = BackupService._read_exact(source, chunk_length)
+                    nonce = nonce_prefix + struct.pack(">I", chunk_index)
+                    target.write(aesgcm.decrypt(nonce, ciphertext, None))
+                    chunk_index += 1
+            return tmp_path
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _decode_fernet_token_to_file(path: str) -> str:
+        fd, token_path = tempfile.mkstemp(prefix="backup_token_", suffix=".bin")
+        os.close(fd)
+        remainder = b""
+        try:
+            with open(path, "rb") as source, open(token_path, "wb") as target:
+                while True:
+                    encoded = source.read(1024 * 1024)
+                    if not encoded:
+                        break
+                    encoded = remainder + b"".join(encoded.split())
+                    usable = (len(encoded) // 4) * 4
+                    if usable:
+                        target.write(base64.urlsafe_b64decode(encoded[:usable]))
+                    remainder = encoded[usable:]
+                if remainder:
+                    padding_len = (-len(remainder)) % 4
+                    target.write(base64.urlsafe_b64decode(remainder + (b"=" * padding_len)))
+            return token_path
+        except Exception:
+            try:
+                os.remove(token_path)
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def _decrypt_legacy_fernet_backup(path: str, key: str) -> str:
+        # Validate key using Fernet too, so legacy key errors retain the same behavior.
+        try:
+            Fernet(key)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("BACKUP_ENCRYPTION_KEY must be a valid Fernet key") from exc
+
+        raw_key = BackupService._decode_backup_key(key)
+        signing_key = raw_key[:16]
+        encryption_key = raw_key[16:]
+
+        token_path = BackupService._decode_fernet_token_to_file(path)
+        fd, tmp_path = tempfile.mkstemp(prefix="backup_dec_", suffix=".tar.gz")
+        os.close(fd)
+        try:
+            token_size = os.path.getsize(token_path)
+            min_size = _FERNET_HEADER_SIZE + _FERNET_HMAC_SIZE + 16
+            if token_size < min_size:
+                raise ValueError("Failed to decrypt backup archive: invalid token")
+
+            signed_size = token_size - _FERNET_HMAC_SIZE
+            verifier = hmac.HMAC(signing_key, hashes.SHA256())
+            with open(token_path, "rb") as token_file:
+                remaining = signed_size
+                while remaining:
+                    chunk = token_file.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("Encrypted backup is truncated")
+                    verifier.update(chunk)
+                    remaining -= len(chunk)
+                expected_signature = BackupService._read_exact(token_file, _FERNET_HMAC_SIZE)
+            try:
+                verifier.verify(expected_signature)
+            except InvalidSignature as exc:
+                raise ValueError("Failed to decrypt backup archive: invalid token") from exc
+
+            with open(token_path, "rb") as token_file:
+                version = BackupService._read_exact(token_file, 1)
+                if version != b"\x80":
+                    raise ValueError("Failed to decrypt backup archive: invalid token")
+                BackupService._read_exact(token_file, 8)  # timestamp
+                iv = BackupService._read_exact(token_file, 16)
+                ciphertext_size = signed_size - _FERNET_HEADER_SIZE
+                decryptor = Cipher(
+                    algorithms.AES(encryption_key),
+                    modes.CBC(iv),
+                ).decryptor()
+                unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+
+                with open(tmp_path, "wb") as target:
+                    remaining = ciphertext_size
+                    while remaining:
+                        chunk = token_file.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            raise ValueError("Encrypted backup is truncated")
+                        remaining -= len(chunk)
+                        plaintext = decryptor.update(chunk)
+                        if plaintext:
+                            target.write(unpadder.update(plaintext))
+                    plaintext = decryptor.finalize()
+                    if plaintext:
+                        target.write(unpadder.update(plaintext))
+                    target.write(unpadder.finalize())
+
+            return tmp_path
+        except InvalidToken as e:
+            raise ValueError("Failed to decrypt backup archive: invalid token") from e
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+        finally:
+            try:
+                os.remove(token_path)
+            except OSError:
+                pass
 
     @staticmethod
     def _prune_old_backups(model_cls, service_id=None):

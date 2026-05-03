@@ -8,13 +8,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.utils import timezone
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse, StreamingHttpResponse
 from django.db.models import Prefetch
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import DataError, IntegrityError, transaction
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
+from django.utils.http import content_disposition_header
 from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
 from apps.licensing.models import PlatformLicense
@@ -94,9 +95,9 @@ class CleanupFileResponse(FileResponse):
     """FileResponse that deletes the underlying file when closed."""
     def __init__(self, *args, **kwargs):
         self._file_path = kwargs.pop('file_path', None)
-        # Larger blksize for better performance with large backups
-        kwargs.setdefault('blksize', 65536)
+        block_size = kwargs.pop('block_size', None) or kwargs.pop('blksize', None)
         super().__init__(*args, **kwargs)
+        self.block_size = block_size or _BACKUP_DOWNLOAD_BLOCK_SIZE
 
     def close(self):
         super().close()
@@ -105,6 +106,93 @@ class CleanupFileResponse(FileResponse):
                 os.remove(self._file_path)
             except OSError:
                 pass
+
+
+_BACKUP_DOWNLOAD_BLOCK_SIZE = 1024 * 1024
+_BACKUP_DOWNLOAD_CONTENT_TYPE = "application/gzip"
+
+
+def _backup_download_headers(response, file_size: int, filename: str):
+    response['Content-Type'] = _BACKUP_DOWNLOAD_CONTENT_TYPE
+    response['Accept-Ranges'] = 'bytes'
+    response['X-Accel-Buffering'] = 'no'
+    response['Cache-Control'] = 'private, no-store'
+    response['Content-Disposition'] = content_disposition_header(True, filename)
+    if file_size is not None:
+        response['Content-Length'] = str(file_size)
+    return response
+
+
+def _parse_single_range(range_header: str, file_size: int):
+    if not range_header or not range_header.startswith('bytes='):
+        return None
+    raw_range = range_header.split('=', 1)[1].strip()
+    if ',' in raw_range or '-' not in raw_range:
+        raise ValueError("Only a single byte range is supported")
+    start_raw, end_raw = raw_range.split('-', 1)
+    if not start_raw:
+        suffix_length = int(end_raw)
+        if suffix_length <= 0:
+            raise ValueError("Invalid suffix range")
+        start = max(file_size - suffix_length, 0)
+        end = file_size - 1
+    else:
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else file_size - 1
+    if start < 0 or end < start or start >= file_size:
+        raise ValueError("Requested range is not satisfiable")
+    return start, min(end, file_size - 1)
+
+
+def _file_iterator(file_path: str, start: int = 0, end: int | None = None, cleanup_path: str | None = None):
+    try:
+        with open(file_path, 'rb') as file_obj:
+            file_obj.seek(start)
+            remaining = None if end is None else end - start + 1
+            while remaining is None or remaining > 0:
+                read_size = _BACKUP_DOWNLOAD_BLOCK_SIZE if remaining is None else min(_BACKUP_DOWNLOAD_BLOCK_SIZE, remaining)
+                chunk = file_obj.read(read_size)
+                if not chunk:
+                    break
+                if remaining is not None:
+                    remaining -= len(chunk)
+                yield chunk
+    finally:
+        if cleanup_path and os.path.exists(cleanup_path):
+            try:
+                os.remove(cleanup_path)
+            except OSError:
+                pass
+
+
+def _open_backup_download_response(request, file_path: str, filename: str, cleanup_path: str | None = None):
+    file_size = os.path.getsize(file_path)
+    range_header = request.headers.get('Range') or request.META.get('HTTP_RANGE')
+    if range_header:
+        try:
+            start, end = _parse_single_range(range_header, file_size)
+        except (TypeError, ValueError):
+            response = HttpResponse(status=416)
+            response['Content-Range'] = f'bytes */{file_size}'
+            response['Accept-Ranges'] = 'bytes'
+            return response
+        response = StreamingHttpResponse(
+            _file_iterator(file_path, start, end, cleanup_path),
+            status=206,
+            content_type=_BACKUP_DOWNLOAD_CONTENT_TYPE,
+        )
+        response['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+        response['Content-Length'] = str(end - start + 1)
+        return _backup_download_headers(response, None, filename)
+
+    response = CleanupFileResponse(
+        open(file_path, 'rb'),
+        as_attachment=True,
+        filename=filename,
+        file_path=cleanup_path,
+        block_size=_BACKUP_DOWNLOAD_BLOCK_SIZE,
+    )
+    return _backup_download_headers(response, file_size, filename)
 
 
 class EmptySerializer(serializers.Serializer):
@@ -3559,9 +3647,6 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        import os
-        from django.http import FileResponse
-
         backup = self.get_object()
         file_path = backup.file_path
 
@@ -3574,33 +3659,23 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         # If the file is encrypted, we must decrypt it for the user to download
         if file_path.endswith('.enc') and key:
             try:
-                # Decrypt to a temporary file
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                
-                # Use CleanupFileResponse to ensure the temp file is deleted after download
-                response = CleanupFileResponse(
-                    open(decrypted_path, 'rb'),
-                    as_attachment=True,
-                    filename=os.path.basename(file_path).replace(".enc", ""),
-                    file_path=decrypted_path
+                return _open_backup_download_response(
+                    request,
+                    decrypted_path,
+                    os.path.basename(file_path).replace(".enc", ""),
+                    cleanup_path=decrypted_path,
                 )
-                response['Content-Length'] = os.path.getsize(decrypted_path)
-                response['Content-Type'] = 'application/x-tar'
-                return response
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        response = FileResponse(
-            open(file_path, 'rb'),
-            as_attachment=True,
-            filename=os.path.basename(file_path),
-            blksize=65536
+        return _open_backup_download_response(
+            request,
+            file_path,
+            os.path.basename(file_path),
         )
-        response['Content-Length'] = os.path.getsize(file_path)
-        response['Content-Type'] = 'application/x-tar'
-        return response
 
 
 class ServerBackupViewSet(viewsets.ModelViewSet):
@@ -3646,9 +3721,6 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         elif not request.user.is_authenticated:
             return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        import os
-        from django.http import FileResponse
-
         backup = self.get_object()
         file_path = backup.file_path
 
@@ -3662,31 +3734,23 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         if file_path.endswith('.enc') and key:
             try:
                 decrypted_path = BackupService.decrypt_backup(file_path, key)
-                
-                response = CleanupFileResponse(
-                    open(decrypted_path, 'rb'),
-                    as_attachment=True,
-                    filename=os.path.basename(file_path).replace(".enc", ""),
-                    file_path=decrypted_path
+
+                return _open_backup_download_response(
+                    request,
+                    decrypted_path,
+                    os.path.basename(file_path).replace(".enc", ""),
+                    cleanup_path=decrypted_path,
                 )
-                # Ensure proxy (Traefik/Nginx) knows exact size to prevent ERR_HTTP2_PROTOCOL_ERROR
-                response['Content-Length'] = os.path.getsize(decrypted_path)
-                response['Content-Type'] = 'application/x-tar' # or similar
-                return response
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to decrypt backup for download: {e}")
                 return Response({'error': 'Failed to decrypt backup for download.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        response = FileResponse(
-            open(file_path, 'rb'),
-            as_attachment=True,
-            filename=os.path.basename(file_path),
-            blksize=65536
+        return _open_backup_download_response(
+            request,
+            file_path,
+            os.path.basename(file_path),
         )
-        response['Content-Length'] = os.path.getsize(file_path)
-        response['Content-Type'] = 'application/x-tar'
-        return response
 
     @action(detail=False, methods=['post'], url_path='upload-restore',
             parser_classes=[parsers.MultiPartParser])

@@ -938,6 +938,10 @@ def _build_function(deployment, service) -> str:
         deployment.save()
         broadcast_status(deployment)
 
+        if (service.health_check_path or '').strip() in {'', '/health'}:
+            service.health_check_path = '/health'
+            service.save(update_fields=['health_check_path', 'updated_at'])
+
         build_dir = tempfile.mkdtemp(prefix=f"func_{deployment.id}_")
         FunctionProvisioner.prepare_context(service, build_dir)
 
@@ -948,7 +952,35 @@ def _build_function(deployment, service) -> str:
         append_log(deployment, f"Building function {tag}...\n")
 
         cmd = ["docker", "build", "-t", tag, build_dir]
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=300)
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            build_output = "\n".join(
+                part for part in [result.stdout, result.stderr] if part
+            ).strip()
+            if build_output:
+                append_log(deployment, f"{build_output[-4000:]}\n")
+        except subprocess.TimeoutExpired as exc:
+            append_log(deployment, "\n[FUNCTION-BUILD] Docker build timed out after 300s.\n")
+            partial = "\n".join(
+                str(part) for part in [exc.stdout, exc.stderr] if part
+            ).strip()
+            if partial:
+                append_log(deployment, f"{partial[-4000:]}\n")
+            raise
+        except subprocess.CalledProcessError as exc:
+            append_log(deployment, "\n[FUNCTION-BUILD] Docker build failed.\n")
+            output = "\n".join(
+                part for part in [exc.stdout, exc.stderr] if part
+            ).strip()
+            if output:
+                append_log(deployment, f"{output[-8000:]}\n")
+            raise
 
         registry = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
         if registry:
