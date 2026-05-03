@@ -2794,3 +2794,75 @@ def auto_authenticate_nodes_task():
     if count > 0:
         logger.info("Auto-Auth Task completed: Fixed %d node(s)", count)
     return count
+
+
+@shared_task(name="apps.deployments.tasks.update_remote_server_task")
+def update_remote_server_task(server_id: str):
+    """
+    SSH into a remote server and trigger a git pull + docker compose restart.
+    """
+    from apps.deployments.models import ManagedServer
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+
+    try:
+        server = ManagedServer.objects.get(id=server_id)
+    except ManagedServer.DoesNotExist:
+        logger.error("Update Task: Server %s not found", server_id)
+        return False
+
+    logger.info("Update Task: Starting update for server %s (%s)", server.name, server.host)
+    
+    # Track progress in provision_logs
+    server.provision_status = ManagedServer.ProvisionStatus.UPDATING
+    server.provision_logs = (server.provision_logs or "") + f"\n--- Update started at {timezone.now()} ---\n"
+    server.save(update_fields=["provision_status", "provision_logs"])
+
+    try:
+        orch = RemoteOrchestrator(server)
+        
+        # 1. Pull latest code
+        # We use git stash to prevent local changes (unlikely on remote) from blocking pull
+        cmd_pull = "cd /opt/smsly-hosting && git stash && git pull origin main"
+        logger.info("Update Task: Pulling code on %s", server.host)
+        server.provision_logs += "> git pull origin main\n"
+        server.save(update_fields=["provision_logs"])
+        
+        stdout, stderr, code = orch.ssh.exec_command(cmd_pull, raise_on_error=False)
+        server.provision_logs += stdout + stderr
+        server.save(update_fields=["provision_logs"])
+        
+        if code != 0:
+            logger.error("Update Task: Git pull failed on %s", server.host)
+            server.provision_logs += f"\nERROR: Git pull failed with exit code {code}\n"
+            server.save(update_fields=["provision_logs"])
+            return False
+
+        # 2. Restart services
+        cmd_restart = "cd /opt/smsly-hosting && docker compose -f docker-compose.prod.yml up -d"
+        logger.info("Update Task: Restarting services on %s", server.host)
+        server.provision_logs += "> docker compose up -d\n"
+        server.save(update_fields=["provision_logs"])
+        
+        stdout, stderr, code = orch.ssh.exec_command(cmd_restart, raise_on_error=False)
+        server.provision_logs += stdout + stderr
+        server.save(update_fields=["provision_logs"])
+        
+        if code != 0:
+            logger.error("Update Task: Docker compose restart failed on %s", server.host)
+            server.provision_logs += f"\nERROR: Docker compose up failed with exit code {code}\n"
+            server.save(update_fields=["provision_logs"])
+            return False
+
+        server.provision_status = ManagedServer.ProvisionStatus.DONE
+        server.provision_logs += f"\n--- Update completed successfully at {timezone.now()} ---\n"
+        server.save(update_fields=["provision_status", "provision_logs"])
+        logger.info("Update Task: Finished successfully for %s", server.host)
+        return True
+
+    except Exception as e:
+        error_msg = f"Update Task failed for {server.host}: {str(e)}"
+        logger.error(error_msg)
+        server.provision_status = ManagedServer.ProvisionStatus.FAILED
+        server.provision_logs += f"\nFATAL ERROR: {str(e)}\n"
+        server.save(update_fields=["provision_status", "provision_logs"])
+        return False

@@ -935,6 +935,7 @@ export interface ManagedServer {
   server_version: string;
   services_count: number;
   provision_status?: 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
+  provision_logs?: string;
   created_at: string;
 }
 
@@ -1028,6 +1029,10 @@ export const serversApi = {
   },
   provisionLogs: async (id: string): Promise<any> => {
     const res = await api.get(`/servers/${id}/provision-logs/`);
+    return res.data;
+  },
+  updateServer: async (id: string): Promise<any> => {
+    const res = await api.post(`/servers/${id}/update-server/`);
     return res.data;
   },
 };

@@ -351,7 +351,7 @@ def provision_server(self, server_id: str):
         except Exception as token_exc:  # pragma: no cover
             logger.debug("Could not resolve GitHub token for provisioning: %s", token_exc)
         prefer_local_bundle = str(
-            os.environ.get("SMSLY_PROVISION_USE_LOCAL_BUNDLE", "true")
+            os.environ.get("SMSLY_PROVISION_USE_LOCAL_BUNDLE", "false")
         ).strip().lower() not in ("0", "false", "no", "off")
         token_known_invalid = (
             _is_github_token_known_invalid(github_token)
@@ -433,6 +433,7 @@ def provision_server(self, server_id: str):
         env_vars = (
             "NON_INTERACTIVE=1 "
             "SKIP_SCREEN=1 "
+            "SKIP_REBOOT=1 "
             "SMSLY_STRICT_VERIFY=1 "
             f"USE_SSL=false DOMAIN={server.host}"
         )
@@ -440,8 +441,16 @@ def provision_server(self, server_id: str):
             env_vars = (
                 "SMSLY_FORCE_SOURCE_SYNC=1 "
                 "SMSLY_INSTALL_WORKDIR=/tmp/smsly-hosting-src "
+                f"SMSLY_GIT_REMOTE='https://github.com/SMSLYCLOUD/smsly-hosting.git' "
                 f"{env_vars}"
             )
+            if github_token and not token_known_invalid:
+                encoded = quote(github_token, safe="")
+                auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
+                env_vars = env_vars.replace(
+                    "SMSLY_GIT_REMOTE='https://github.com/SMSLYCLOUD/smsly-hosting.git'",
+                    f"SMSLY_GIT_REMOTE='{auth_url}'"
+                )
         cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh 2>&1"
 
         # Execute with a channel for streaming output
@@ -499,8 +508,21 @@ def provision_server(self, server_id: str):
         exit_code = channel.recv_exit_status()
         _append_log(server, f"\n[installer] Install script exited with code: {exit_code}")
 
+        # If exit code is -1 (SSH disconnected) but logs show success, treat as success
+        is_success_in_logs = (
+            "INSTALLATION SUCCESSFUL!" in server.provision_logs
+            or "All 6/6 verification checks passed" in server.provision_logs
+        )
+
         if exit_code != 0:
-            raise RuntimeError(f"Install script failed with exit code {exit_code}")
+            if exit_code == -1 and is_success_in_logs:
+                _append_log(server, "✅ SSH disconnected during final phase (likely reboot), but logs confirm success.")
+                server.provision_status = ManagedServer.ProvisionStatus.DONE
+                server.save(update_fields=["provision_status"])
+            else:
+                server.provision_status = ManagedServer.ProvisionStatus.FAILED
+                server.save(update_fields=["provision_status"])
+                raise RuntimeError(f"Install script failed with exit code {exit_code}")
 
         # Scrub installer artifacts (may contain injected tokens)
         try:

@@ -26,7 +26,7 @@ from .models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
 
-MANAGED_SERVER_HEALTH_TIMEOUT = 5
+MANAGED_SERVER_HEALTH_TIMEOUT = 10
 
 
 def _append_unique(values: list[str], value: str):
@@ -457,7 +457,7 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "ssh_user", "provider_metadata", "is_primary",
             "allow_user_workloads", "status", "last_health_check",
             "server_version", "services_count", "created_at",
-            "provision_status", "role", "wg_address", "has_ssh_credentials",
+            "provision_status", "provision_logs", "role", "wg_address", "has_ssh_credentials",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
@@ -658,6 +658,29 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             ManagedServerSerializer(server).data,
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=True, methods=["post"], url_path="update-server")
+    def update_server(self, request, pk=None):
+        """
+        Trigger a remote update (git pull + restart) on a managed server.
+        """
+        server = self.get_object()
+        
+        # We only allow updates on nodes that have been provisioned or have SSH access
+        if not (server.ssh_key or server.ssh_password):
+             return Response(
+                 {"error": "Server has no SSH credentials configured for updates."},
+                 status=status.HTTP_400_BAD_REQUEST,
+             )
+
+        from .tasks import update_remote_server_task
+        update_remote_server_task.delay(str(server.id))
+
+        return Response({
+            "success": True,
+            "message": "Update task queued. Progress will be visible in provision logs.",
+            "server_id": str(server.id),
+        })
 
     # ── Health Check ─────────────────────────────────────────────────────
 
