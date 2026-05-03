@@ -96,9 +96,9 @@ class ReplicationService:
                       ETCD3_HOSTS: "{etcd_endpoints}"
                       PATRONI_NAME: {node_name}
                       PATRONI_RESTAPI_CONNECT_ADDRESS: "{wg_ip}:8008"
-                      PATRONI_RESTAPI_LISTEN: "{wg_ip}:8008"
+                      PATRONI_RESTAPI_LISTEN: "0.0.0.0:8008"
                       PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:5432"
-                      PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:5432"
+                      PATRONI_POSTGRESQL_LISTEN: "0.0.0.0:5432"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
                       PATRONI_REPLICATION_PASSWORD: "{replication_password}"
@@ -403,11 +403,12 @@ class ReplicationService:
         Returns health report.
         """
         import requests
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
         results = {"nodes": [], "primary": None, "replicas": []}
 
-        for idx, peer in enumerate(peers, 1):
+        def _check_node(idx, peer):
             wg_ip = peer.wg_address
             try:
                 resp = requests.get(
@@ -415,7 +416,7 @@ class ReplicationService:
                     timeout=5,
                 )
                 data = resp.json()
-                node_info = {
+                return {
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
                     "server": peer.server.name if peer.server else "local",
@@ -428,21 +429,35 @@ class ReplicationService:
                     "pg_version": data.get("server_version"),
                     "status": "OK",
                 }
-
-                if node_info["role"] == "master":
-                    results["primary"] = node_info
-                else:
-                    results["replicas"].append(node_info)
-
-                results["nodes"].append(node_info)
-
             except Exception as e:
-                results["nodes"].append({
+                return {
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
                     "server": peer.server.name if peer.server else "local",
                     "status": f"UNREACHABLE: {e}",
-                })
+                }
+
+        # Check all nodes in parallel to prevent UI timeouts (502)
+        with ThreadPoolExecutor(max_workers=len(peers) or 1) as executor:
+            future_to_node = {
+                executor.submit(_check_node, i, p): p 
+                for i, p in enumerate(peers, 1)
+            }
+            
+            node_results = []
+            for future in as_completed(future_to_node):
+                node_results.append(future.result())
+        
+        # Sort node results back into original order
+        node_results.sort(key=lambda x: x["wg_address"])
+        results["nodes"] = node_results
+
+        for node_info in node_results:
+            if node_info.get("status") == "OK":
+                if node_info.get("role") == "master":
+                    results["primary"] = node_info
+                else:
+                    results["replicas"].append(node_info)
 
         # Calculate replication lag
         if results["primary"] and results["replicas"]:
@@ -700,7 +715,12 @@ class ReplicationService:
     @staticmethod
     def _parse_lsn(lsn_str: str) -> int:
         """Parse PostgreSQL LSN string (e.g. '0/16B5D48') to integer."""
+        if not isinstance(lsn_str, str) or not lsn_str:
+            return 0
         parts = lsn_str.split("/")
         if len(parts) == 2:
-            return int(parts[0], 16) * (2 ** 32) + int(parts[1], 16)
+            try:
+                return int(parts[0], 16) * (2 ** 32) + int(parts[1], 16)
+            except (ValueError, TypeError):
+                return 0
         return 0
