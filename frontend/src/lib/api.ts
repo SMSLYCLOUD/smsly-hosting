@@ -657,6 +657,16 @@ export const systemApi = {
     const response = await api.get('/system/config/');
     return response.data;
   },
+  runMaintenance: async (action: 'clear' | 'refresh' | 'update'): Promise<any> => {
+    const response = await api.post('/system/config/', { action });
+    return response.data;
+  },
+  getMaintenanceTask: async (taskId: string): Promise<any> => {
+    const response = await api.get('/system/config/', {
+      params: { maintenance_task_id: taskId },
+    });
+    return response.data;
+  },
   getDomainConfig: async (): Promise<any> => {
     const response = await api.get('/system/domain-config/');
     return response.data;
