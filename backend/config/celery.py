@@ -141,6 +141,11 @@ app.conf.beat_schedule = {
         'task': 'apps.intelligence.tasks.proactive_health_scan_task',
         'schedule': 300.0,
     },
+    # Auto-repair inter-node auth every 5 minutes
+    'auto-auth-nodes-every-5m': {
+        'task': 'apps.deployments.tasks.auto_authenticate_nodes_task',
+        'schedule': 300.0,
+    },
 }
 
 

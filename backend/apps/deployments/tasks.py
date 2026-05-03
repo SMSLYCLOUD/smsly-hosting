@@ -2767,3 +2767,30 @@ def delete_addon_task(self, addon_id: str):
         addon.status = Addon.Status.DELETION_FAILED
         addon.deletion_error = "Failed to remove some runtime resources. If the system is offline, use manual DB cleanup."
         addon.save(update_fields=['status', 'deletion_error'])
+@shared_task(name="apps.deployments.tasks.auto_authenticate_nodes_task")
+def auto_authenticate_nodes_task():
+    """
+    Periodic task to automatically repair inter-node authentication.
+    
+    Checks for ManagedServer records missing API tokens and attempts to
+    retrieve them via SSH using RemoteOrchestrator.
+    """
+    from apps.deployments.models import ManagedServer
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    
+    # Target nodes missing tokens but having SSH access
+    servers = ManagedServer.objects.filter(api_token='')
+    count = 0
+    for server in servers:
+        if server.ssh_key or server.ssh_password:
+            try:
+                logger.info("Auto-Auth Task: Attempting SSH retrieval for %s", server.host)
+                orch = RemoteOrchestrator(server)
+                if orch.auto_authenticate():
+                    count += 1
+            except Exception as e:
+                logger.warning("Auto-Auth Task failed for %s: %s", server.host, e)
+    
+    if count > 0:
+        logger.info("Auto-Auth Task completed: Fixed %d node(s)", count)
+    return count
