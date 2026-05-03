@@ -26,8 +26,16 @@ def _sync_caddy_once(delay: float = 3.0):
         token = (getattr(cfg, "cloudflare_api_token", "") or "").strip()
         result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
         logger.info("Startup Caddy sync: %s", result.get("message", "ok"))
+
+        # 2. Trigger Auto-Authentication for nodes missing API tokens
+        try:
+            from apps.deployments.tasks import auto_authenticate_nodes_task
+            auto_authenticate_nodes_task.delay()
+            logger.info("Startup: Triggered auto-authentication task for nodes.")
+        except Exception as e:
+            logger.warning("Startup: Failed to trigger auto-auth task: %s", e)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Startup Caddy sync skipped: %s", exc)
+        logger.warning("Startup background tasks failed: %s", exc)
 
 
 def schedule_startup_caddy_sync():
