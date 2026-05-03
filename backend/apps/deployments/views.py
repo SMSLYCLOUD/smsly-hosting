@@ -313,6 +313,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return qs.all().order_by('-created_at')
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
+    def _is_remote_sync_request(self):
+        token = getattr(self.request, 'auth', None)
+        return (
+            self.request.headers.get('X-SMSLY-Remote-Sync') == '1'
+            or (
+                hasattr(token, 'prefix')
+                and str(getattr(token, 'name', '') or '').startswith('node:')
+            )
+        )
+
     def perform_create(self, serializer):
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
@@ -329,8 +339,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         service = serializer.save(owner=self.request.user, server=server)
 
-        # Setup GitHub Webhook if applicable
-        if service.deploy_type == 'GIT' and service.repository_url:
+        # Setup GitHub Webhook only for direct user actions. Node-to-node
+        # remote sync uses APIToken auth and should not mutate repo webhooks.
+        if (
+            not self._is_remote_sync_request()
+            and service.deploy_type == 'GIT'
+            and service.repository_url
+        ):
             threading.Thread(
                 target=setup_github_webhook,
                 args=(self.request.user, service.repository_url),
@@ -354,7 +369,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # Setup GitHub Webhook if repo URL changed or was newly set
         new_repo_url = service.repository_url
-        if service.deploy_type == 'GIT' and new_repo_url and new_repo_url != old_repo_url:
+        if (
+            not self._is_remote_sync_request()
+            and service.deploy_type == 'GIT'
+            and new_repo_url
+            and new_repo_url != old_repo_url
+        ):
             threading.Thread(
                 target=setup_github_webhook,
                 args=(self.request.user, new_repo_url),
@@ -3575,8 +3595,13 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         response = FileResponse(
             open(file_path, 'rb'),
             as_attachment=True,
-            filename=os.path.basename(file_path)
+            filename=os.path.basename(file_path),
+            blksize=65536
         )
+        response['Content-Length'] = os.path.getsize(file_path)
+        response['Content-Type'] = 'application/x-tar'
+        return response
+
 
 class ServerBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServerBackupSerializer
@@ -3656,7 +3681,8 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
         response = FileResponse(
             open(file_path, 'rb'),
             as_attachment=True,
-            filename=os.path.basename(file_path)
+            filename=os.path.basename(file_path),
+            blksize=65536
         )
         response['Content-Length'] = os.path.getsize(file_path)
         response['Content-Type'] = 'application/x-tar'
