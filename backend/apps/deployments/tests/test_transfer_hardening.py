@@ -132,12 +132,19 @@ class ServerTransferHardeningTests(APITestCase):
         cfg = PlatformConfig.load()
         cfg.server_ip = '10.0.0.10'
         cfg.save(update_fields=['server_ip'])
+        ManagedServer.objects.create(
+            owner=self.user,
+            name='Worker VPS',
+            host='8.8.8.63',
+            status=ManagedServer.Status.ONLINE,
+        )
 
         target = ManagedServer.objects.create(
             owner=self.user,
             name='Target VPS',
             host='8.8.8.60',
             ssh_password='target-root-password',
+            status=ManagedServer.Status.ONLINE,
         )
 
         payload = {
@@ -164,6 +171,7 @@ class ServerTransferHardeningTests(APITestCase):
             owner=self.user,
             name='Target VPS',
             host='8.8.8.61',
+            status=ManagedServer.Status.ONLINE,
         )
 
         payload = {
@@ -182,6 +190,12 @@ class ServerTransferHardeningTests(APITestCase):
         cfg = PlatformConfig.load()
         cfg.server_ip = '10.0.0.10'
         cfg.save(update_fields=['server_ip'])
+        ManagedServer.objects.create(
+            owner=self.user,
+            name='Worker VPS',
+            host='8.8.8.63',
+            status=ManagedServer.Status.ONLINE,
+        )
 
         target = ManagedServer.objects.create(
             owner=self.user,
@@ -190,6 +204,7 @@ class ServerTransferHardeningTests(APITestCase):
             ssh_password='target-root-password',
             is_primary=True,
             allow_user_workloads=False,
+            status=ManagedServer.Status.ONLINE,
         )
 
         payload = {

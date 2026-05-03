@@ -108,6 +108,7 @@ def node_token_exchange_via_gateway(request):
 
     signature = request.headers.get("X-Gateway-Signature-V2", "")
     timestamp = request.headers.get("X-Request-Timestamp", "")
+    raw_body = request.body
     node_name = request.data.get("node_name", "Remote Node").strip()
 
     if not signature or not timestamp:
@@ -128,7 +129,7 @@ def node_token_exchange_via_gateway(request):
     gw_secret = getattr(settings, "GATEWAY_SECRET", settings.SECRET_KEY)
     method = request.method
     path = request.get_full_path()
-    body_hash = hashlib.sha256(request.body).hexdigest()
+    body_hash = hashlib.sha256(raw_body).hexdigest()
     payload = f"{method}|{path}|{timestamp}|{body_hash}"
     expected = hmac.new(gw_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 

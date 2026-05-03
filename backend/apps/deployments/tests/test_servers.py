@@ -1,10 +1,15 @@
 # pylint: disable=invalid-name
 """Tests for ManagedServer model and views."""
 
+import hashlib
+import hmac
+import json
+import time
 from unittest.mock import patch, MagicMock
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.urls import reverse
 from rest_framework.test import APIClient
 
 from ..models_servers import ManagedServer
@@ -79,6 +84,45 @@ class ManagedServerModelTests(TestCase):
             _build_remote_headers(prefixed_server)["Authorization"],
             "Token already_prefixed",
         )
+
+
+class NodeTokenExchangeTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        User.objects.create_superuser(
+            username="admin",
+            email="admin@example.com",
+            password="testpass123",
+        )
+
+    @override_settings(GATEWAY_SECRET="node-secret")
+    def test_hmac_exchange_uses_raw_body_before_request_data(self):
+        url = reverse("node-token-exchange-hmac")
+        body = json.dumps(
+            {"node_name": "Primary"},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        timestamp = str(int(time.time()))
+        body_hash = hashlib.sha256(body).hexdigest()
+        payload = f"POST|{url}|{timestamp}|{body_hash}"
+        signature = hmac.new(
+            b"node-secret",
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        response = self.client.generic(
+            "POST",
+            url,
+            body,
+            content_type="application/json",
+            HTTP_X_GATEWAY_SIGNATURE_V2=signature,
+            HTTP_X_REQUEST_TIMESTAMP=timestamp,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["token"].startswith("smsly_"))
 
 
 class ManagedServerViewTests(TestCase):

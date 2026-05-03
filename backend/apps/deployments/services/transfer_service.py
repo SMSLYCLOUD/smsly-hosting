@@ -171,21 +171,16 @@ class ServerTransferService:
 
         # Pre-flight: for SERVICE transfers, verify CloudNeuron backend is running
         if self.transfer.transfer_type == 'SERVICE':
-            backend_container = getattr(
-                settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1"
-            )
-            check_cmd = f"docker ps -q -f name={backend_container}"
-            b_id = self.ssh.exec_command(check_cmd).strip()
-            if not b_id:
-                # Fallback: look for any container with 'backend' in name
-                b_id = self.ssh.exec_command(
-                    "docker ps -q -f name=backend"
-                ).strip().split('\n')[0]
-            if not b_id:
+            backend_container = self._find_remote_backend_container(required=False)
+            if not backend_container:
+                self._ensure_target_platform_started()
+                backend_container = self._find_remote_backend_container(required=False)
+            if not backend_container:
                 raise RuntimeError(
                     "CloudNeuron backend container not found on target server. "
                     "Please install CloudNeuron on the target before transferring services."
                 )
+            self._wait_for_remote_backend_ready(backend_container)
 
         self._update(10, 'Creating backup on source server...')
 
@@ -263,39 +258,7 @@ class ServerTransferService:
         # 1. We must execute the restoration inside the remote server's CloudNeuron
         # backend container so it registers the Service in the remote database!
         # First, copy the tarball into the backend container.
-        backend_container = getattr(settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1")
-        
-        # Check if remote container exists; fallback to finding it
-        # We try to be more robust here: search for containers with 'backend' and 'hosting'
-        # or just 'backend' if that fails.
-        find_cmd = "docker ps -q -f name=backend --format '{{.Names}}'"
-        candidates = self.ssh.exec_command(find_cmd).strip().split('\n')
-        
-        backend_container = None
-        for name in candidates:
-            name = name.strip("'\" ")
-            if not name: continue
-            if 'hosting' in name and 'backend' in name:
-                backend_container = name
-                break
-        
-        if not backend_container and candidates:
-            # Pick the first one that looks like a backend
-            for name in candidates:
-                name = name.strip("'\" ")
-                if 'backend' in name:
-                    backend_container = name
-                    break
-                    
-        if not backend_container:
-            # Absolute fallback to the setting or default
-            backend_container = getattr(settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1")
-            check_cmd = f"docker ps -q -f name={backend_container}"
-            if not self.ssh.exec_command(check_cmd).strip():
-                 raise RuntimeError(
-                     f"Could not locate CloudNeuron backend container on target server. "
-                     f"Searched for: {candidates} and {backend_container}"
-                 )
+        backend_container = self._find_remote_backend_container(required=True)
 
         safe_backend_container = shlex.quote(backend_container)
         self.ssh.exec_command(
@@ -308,23 +271,163 @@ class ServerTransferService:
         # and calls BackupService to properly inflate the database models and Volumes.
         owner_email = self.transfer.service.owner.email if self.transfer.service and self.transfer.service.owner else None
         
-        restore_script = f"""import os
+        restore_script = self._build_restore_trigger_script(owner_email)
+        script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
+        import tempfile
+        local_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+        try:
+            local_script.write(restore_script)
+            local_script.close()
+            # Upload to host
+            self.ssh.upload_file(local_script.name, script_path)
+            # Copy into container
+            self.ssh.exec_command(
+                f"docker cp {shlex.quote(script_path)} {safe_backend_container}:/tmp/restore_trigger.py"
+            )
+        finally:
+            os.unlink(local_script.name)
+
+        self._update(85, 'Running database and volume migrations on target...')
+        # Execute the python script inside the remote container
+        result = self.ssh.exec_command(
+            f"docker exec {safe_backend_container} python3 /tmp/restore_trigger.py"
+        )
+        if "RESTORE_FAILED" in result or "ERROR:" in result:
+            raise RuntimeError(f"Remote service hydration failed: {result}")
+            
+        # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
+        self.ssh.exec_command(
+            f"docker exec -u 0 {safe_backend_container} sh -lc "
+            + shlex.quote("rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py || true"),
+            raise_on_error=False
+        )
+        self.ssh.exec_command(
+            f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}",
+            raise_on_error=False
+        )
+
+        self._update(90, 'Starting service container on target...')
+        # After restoration, the container exists but is not running. 
+        # We use the metadata from the source backup to generate the run command.
+        metadata = self.transfer.source_backup.metadata
+        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
+        self.ssh.exec_command(run_cmd)
+
+    def _find_remote_backend_container(self, required=False):
+        """Return the best matching CloudNeuron backend container name on the target."""
+        configured = getattr(
+            settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1"
+        )
+        candidates = []
+
+        for cmd in (
+            "docker ps --filter name=backend --format '{{.Names}}'",
+            f"docker ps --filter name={shlex.quote(configured)} --format '{{{{.Names}}}}'",
+        ):
+            output = self.ssh.exec_command(cmd, raise_on_error=False).strip()
+            for raw_name in output.splitlines():
+                name = raw_name.strip("'\" ")
+                if name and name not in candidates:
+                    candidates.append(name)
+
+        for name in candidates:
+            if 'hosting' in name and 'backend' in name:
+                return name
+        for name in candidates:
+            if 'backend' in name:
+                return name
+
+        if required:
+            raise RuntimeError(
+                "Could not locate CloudNeuron backend container on target server. "
+                f"Searched for: {candidates or [configured]}"
+            )
+        return None
+
+    def _ensure_target_platform_started(self):
+        """Start an installed CloudNeuron target when Docker is up but the stack is down."""
+        hosting_path = self.ssh.find_hosting_path()
+        safe_path = shlex.quote(hosting_path)
+        timeout = int(getattr(settings, "TRANSFER_TARGET_START_TIMEOUT", 1200))
+        cmd = " && ".join([
+            f"cd {safe_path}",
+            "mkdir -p caddy-config /opt/smsly-cache",
+            "docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null",
+            "docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null",
+            "(test -f docker-compose.prod.yml && docker compose -f docker-compose.prod.yml up -d --build || docker compose up -d --build)",
+        ])
+        self._update(8, 'Starting CloudNeuron platform on target server...')
+        self.ssh.exec_command(cmd, timeout=timeout)
+
+    def _wait_for_remote_backend_ready(self, backend_container):
+        """Wait until target Django can reach its database before restore starts."""
+        safe_backend_container = shlex.quote(backend_container)
+        command = (
+            "for i in $(seq 1 60); do "
+            "curl -fsS -m 5 http://127.0.0.1:8090/health >/dev/null 2>&1 "
+            "&& docker exec "
+            f"{safe_backend_container} python3 manage.py check --database default >/dev/null 2>&1 "
+            "&& echo READY && exit 0; "
+            "sleep 5; "
+            "done; echo NOT_READY; exit 1"
+        )
+        output = self.ssh.exec_command(command, timeout=330)
+        if "READY" not in output:
+            raise RuntimeError("Target CloudNeuron backend did not become ready before restore.")
+
+    @staticmethod
+    def _build_restore_trigger_script(owner_email):
+        return f"""import os
 import sys
+import time
 import django
 import logging
+from urllib.parse import quote_plus
 
-for candidate in ('/app', '/app/backend'):
+for candidate in (os.getcwd(), '/app', '/app/backend'):
     if os.path.isdir(candidate) and candidate not in sys.path:
         sys.path.insert(0, candidate)
+
+def configure_direct_database_url():
+    user = os.environ.get('POSTGRES_USER')
+    password = os.environ.get('POSTGRES_PASSWORD')
+    db_name = os.environ.get('POSTGRES_DB')
+    if user and password and db_name:
+        os.environ['DATABASE_URL'] = (
+            'postgresql://'
+            + quote_plus(user)
+            + ':'
+            + quote_plus(password)
+            + '@db:5432/'
+            + quote_plus(db_name)
+        )
+
+configure_direct_database_url()
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 from apps.deployments.services.backup_service import BackupService
 from django.contrib.auth import get_user_model
+from django.db import connections
 
 logger = logging.getLogger(__name__)
 
+def wait_for_database():
+    last_error = None
+    for attempt in range(30):
+        try:
+            with connections['default'].cursor() as cursor:
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+            return
+        except Exception as exc:
+            last_error = exc
+            connections.close_all()
+            time.sleep(2)
+    raise RuntimeError(f"Database did not become ready for restore: {{last_error}}")
+
 def run_restore():
+    wait_for_database()
     User = get_user_model()
     owner_email = {repr(owner_email)}
     
@@ -358,45 +461,6 @@ def run_restore():
 if __name__ == '__main__':
     run_restore()
 """
-        script_path = f"/tmp/restore_trigger_{self.transfer.id}.py"
-        import tempfile
-        local_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
-        try:
-            local_script.write(restore_script)
-            local_script.close()
-            # Upload to host
-            self.ssh.upload_file(local_script.name, script_path)
-            # Copy into container
-            self.ssh.exec_command(
-                f"docker cp {shlex.quote(script_path)} {safe_backend_container}:/tmp/restore_trigger.py"
-            )
-        finally:
-            os.unlink(local_script.name)
-
-        self._update(85, 'Running database and volume migrations on target...')
-        # Execute the python script inside the remote container
-        result = self.ssh.exec_command(
-            f"docker exec {safe_backend_container} python3 /tmp/restore_trigger.py"
-        )
-        if "RESTORE_FAILED" in result or "ERROR:" in result:
-            raise RuntimeError(f"Remote service hydration failed: {result}")
-            
-        # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
-        self.ssh.exec_command(
-            f"docker exec {safe_backend_container} rm -f /tmp/transfer_backup.tar.gz /tmp/restore_trigger.py",
-            raise_on_error=False
-        )
-        self.ssh.exec_command(
-            f"rm -f {shlex.quote(script_path)} {shlex.quote(remote_backup_path)}",
-            raise_on_error=False
-        )
-
-        self._update(90, 'Starting service container on target...')
-        # After restoration, the container exists but is not running. 
-        # We use the metadata from the source backup to generate the run command.
-        metadata = self.transfer.source_backup.metadata
-        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
-        self.ssh.exec_command(run_cmd)
 
     def _restore_full_server(self, remote_backup_path):
         self._update(60, 'Installing CloudNeuron platform on target...')
