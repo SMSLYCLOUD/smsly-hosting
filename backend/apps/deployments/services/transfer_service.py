@@ -80,20 +80,12 @@ class ServerTransferService:
         try:
             path = "/api/v1/transfers/register-incoming/"
             server = self._target_server_record()
-            
-            # If token is missing, attempt auto-authentication via SSH
-            if server and not server.api_token:
-                from .remote_orchestrator import RemoteOrchestrator
-                self._log("Target API token missing. Attempting SSH auto-authentication...")
-                orch = RemoteOrchestrator(server)
-                if orch.auto_authenticate():
-                    self._log("SSH auto-authentication successful. Credentials updated.")
-                    server.refresh_from_db()
+            if not server:
+                self._log(f"Warning: No ManagedServer record found for {self.transfer.target_server_ip}. Sync skipped.")
+                return
 
-            if server and server.api_url:
-                target_url = f"{str(server.api_url).rstrip('/')}{path}"
-            else:
-                target_url = f"https://{self.transfer.target_server_ip}{path}"
+            from .remote_orchestrator import RemoteOrchestrator
+            orch = RemoteOrchestrator(server)
             
             payload = {
                 'source_ip': self.transfer.source_server_ip,
@@ -101,21 +93,15 @@ class ServerTransferService:
                 'transfer_type': self.transfer.transfer_type,
                 'service_name': self.transfer.service.name if self.transfer.service else None
             }
-            body = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode()
-            headers = self._build_sync_auth_headers(body, path)
             
-            verify_tls = bool(getattr(settings, "TRANSFER_SYNC_VERIFY_TLS", True))
-            resp = requests.post(
-                target_url,
-                data=body,
-                headers=headers,
-                timeout=5,
-                verify=verify_tls,
-            )
-            if resp.status_code in (200, 201):
+            # RemoteOrchestrator._request handles Token/HMAC auth and auto-auth via SSH
+            resp = orch._request("POST", path, payload=payload, timeout=10)
+            
+            if resp and resp.status_code in (200, 201):
                 self._log("Target dashboard synchronized successfully.")
             else:
-                self._log(f"Warning: Could not sync target dashboard (HTTP {resp.status_code}).")
+                code = resp.status_code if resp else "timeout"
+                self._log(f"Warning: Could not sync target dashboard (HTTP {code}).")
         except Exception as e:
             self._log(f"Warning: Target dashboard sync skipped: {e}")
 

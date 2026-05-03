@@ -131,8 +131,11 @@ except Exception:
 
 def _patch_allowed_hosts_from_db():
     """Called from AppConfig.ready() to add PlatformConfig.domain."""
-    # Ensure IS_TESTING is detected here as well if needed, though settings load first.
-    # Do not patch anything during tests to ensure predictable environment.
+    import sys
+    # Avoid DB access during migrations or common management tasks to prevent RuntimeWarning
+    if any(arg in sys.argv for arg in ('makemigrations', 'migrate', 'collectstatic', 'test', 'check')):
+        return
+
     if IS_TESTING:
         return
 
@@ -282,6 +285,13 @@ SITE_ID = 1
 # Allow signing in with either username or email.
 ACCOUNT_LOGIN_METHODS = {'username', 'email'}
 ACCOUNT_SIGNUP_FIELDS = ['email*', 'username*', 'password1*', 'password2*']
+# Fix dj-rest-auth deprecation warnings
+REST_AUTH = {
+    'SIGNUP_FIELDS': {
+        'username': {'required': True},
+        'email': {'required': True},
+    },
+}
 
 # Store social OAuth tokens (required for private-repo deploys via linked GitHub accounts).
 # Explicitly set to avoid relying on allauth defaults.
