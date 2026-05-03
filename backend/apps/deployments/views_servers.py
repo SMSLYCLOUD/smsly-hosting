@@ -7,6 +7,7 @@ remote SMSLY Hosting instances.
 
 import hashlib
 import hmac as hmac_mod
+import ipaddress
 import json as json_mod
 import logging
 import time
@@ -24,6 +25,148 @@ from rest_framework.response import Response
 from .models_servers import ManagedServer
 
 logger = logging.getLogger(__name__)
+
+MANAGED_SERVER_HEALTH_TIMEOUT = 5
+
+
+def _append_unique(values: list[str], value: str):
+    normalized = str(value or "").strip().rstrip("/")
+    if normalized and normalized not in values:
+        values.append(normalized)
+
+
+def _server_host_port(server) -> str:
+    value = str(server.host or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" in value:
+        parsed = urlparse(value)
+        value = parsed.netloc or parsed.path
+    return value.split("/")[0].strip()
+
+
+def _server_host_is_ip(host_port: str) -> bool:
+    host = host_port.rsplit(":", 1)[0] if host_port.count(":") == 1 else host_port
+    host = host.strip("[]")
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _candidate_api_urls(server) -> list[str]:
+    """Return likely API base URLs in the order we should probe."""
+    urls: list[str] = []
+    current = str(server.api_url or "").strip()
+    _append_unique(urls, current)
+
+    host_port = _server_host_port(server)
+    if not host_port:
+        return urls
+
+    has_explicit_port = host_port.count(":") == 1
+    if _server_host_is_ip(host_port):
+        _append_unique(urls, f"http://{host_port}")
+        _append_unique(urls, f"https://{host_port}")
+    else:
+        _append_unique(urls, f"https://{host_port}")
+        _append_unique(urls, f"http://{host_port}")
+
+    if not has_explicit_port:
+        _append_unique(urls, f"http://{host_port}:8090")
+
+    return urls
+
+
+def _extract_health_version(response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    version = payload.get("version")
+    return str(version).strip() if version else ""
+
+
+def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
+    """Probe candidate base URLs and return the first one with a non-5xx /health."""
+    for base_url in _candidate_api_urls(server):
+        try:
+            response = requests.get(
+                f"{base_url}/health",
+                timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
+            )
+        except requests.RequestException:
+            continue
+
+        if response.status_code < 500:
+            return base_url, response
+
+    return None, None
+
+
+def _refresh_managed_server_health(server):
+    """
+    Detect a reachable API URL, update server health fields, and sync service count.
+    """
+    base, health_response = _detect_reachable_api_url(server)
+    update_fields = {"status", "last_health_check", "services_count"}
+
+    if base:
+        if server.api_url != base:
+            server.api_url = base
+            update_fields.add("api_url")
+
+        server.status = ManagedServer.Status.ONLINE
+
+        version = _extract_health_version(health_response)
+        if version and server.server_version != version:
+            server.server_version = version
+            update_fields.add("server_version")
+
+        api_path = "/api/v1/services/"
+        headers = _build_remote_headers(server, method="GET", path=api_path)
+        try:
+            resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                services = data.get("results", data) if isinstance(data, dict) else data
+                server.services_count = len(services) if isinstance(services, list) else 0
+        except requests.RequestException:
+            pass
+    else:
+        server.status = ManagedServer.Status.OFFLINE
+
+    server.last_health_check = timezone.now()
+    server.save(update_fields=list(update_fields))
+
+    if server.status == ManagedServer.Status.ONLINE:
+        has_token = bool(str(server.api_token or "").strip())
+        if not has_token or server.services_count == 0:
+            new_token = _try_auto_token_exchange(server, server.api_url.rstrip("/"))
+            if new_token:
+                server.api_token = new_token
+                server.save(update_fields=["api_token", "updated_at"])
+
+                api_path = "/api/v1/services/"
+                headers = _build_remote_headers(server, method="GET", path=api_path)
+                try:
+                    resp = requests.get(
+                        f"{server.api_url.rstrip('/')}{api_path}",
+                        headers=headers,
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        services = data.get("results", data) if isinstance(data, dict) else data
+                        server.services_count = len(services) if isinstance(services, list) else 0
+                        server.save(update_fields=["services_count"])
+                except requests.RequestException:
+                    pass
+
+    return server
 
 
 def _try_auto_token_exchange(server, base_url: str) -> str | None:
@@ -522,98 +665,16 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
     def health_check(self, request, pk=None):
         """Ping a remote server's API to check if it's online."""
         server = self.get_object()
-
-        if not server.api_url:
-            return Response(
-                {"error": "Server has no API URL yet (provisioning may still be in progress)."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        base = server.api_url.rstrip('/')
-
-        # Step 1: unauthenticated /health check — determines online/offline
-        try:
-            resp = requests.get(f"{base}/health", timeout=10)
-            if resp.status_code < 500:
-                server.status = ManagedServer.Status.ONLINE
-            else:
-                server.status = ManagedServer.Status.OFFLINE
-        except requests.RequestException:
-            server.status = ManagedServer.Status.OFFLINE
-
-        # Step 2: if online, try authenticated call for service count
-        if server.status == ManagedServer.Status.ONLINE:
-            api_path = "/api/v1/services/"
-            headers = _build_remote_headers(server, method="GET", path=api_path)
-            try:
-                resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    services = data.get("results", data) if isinstance(data, dict) else data
-                    server.services_count = len(services) if isinstance(services, list) else 0
-            except requests.RequestException:
-                pass  # Online but can't fetch services — token might be wrong
-
-        server.last_health_check = timezone.now()
-        server.save(update_fields=["status", "last_health_check", "services_count"])
-
-        # ── Auto-token exchange: if online but no valid token, try to get one ──
-        if server.status == ManagedServer.Status.ONLINE:
-            has_token = bool(str(server.api_token or "").strip())
-            if not has_token or server.services_count == 0:
-                # Token might be missing or invalid - try auto-exchange
-                new_token = _try_auto_token_exchange(server, base)
-                if new_token:
-                    server.api_token = new_token
-                    server.save(update_fields=["api_token", "updated_at"])
-                    # Retry service count with new token
-                    api_path = "/api/v1/services/"
-                    headers = _build_remote_headers(server, method="GET", path=api_path)
-                    try:
-                        resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            services = data.get("results", data) if isinstance(data, dict) else data
-                            server.services_count = len(services) if isinstance(services, list) else 0
-                            server.save(update_fields=["services_count"])
-                    except requests.RequestException:
-                        pass
-
+        server = _refresh_managed_server_health(server)
         return Response(ManagedServerSerializer(server).data)
 
     @action(detail=False, methods=["post"])
     def check_all(self, request):
         """Health check all servers at once."""
-        servers = self.get_queryset().exclude(api_url="")
+        servers = self.get_queryset()
         results = []
         for server in servers:
-            base = server.api_url.rstrip('/')
-
-            # Step 1: unauthenticated /health check
-            try:
-                resp = requests.get(f"{base}/health", timeout=10)
-                if resp.status_code < 500:
-                    server.status = ManagedServer.Status.ONLINE
-                else:
-                    server.status = ManagedServer.Status.OFFLINE
-            except requests.RequestException:
-                server.status = ManagedServer.Status.OFFLINE
-
-            # Step 2: if online, try authenticated call for service count
-            if server.status == ManagedServer.Status.ONLINE:
-                api_path = "/api/v1/services/"
-                headers = _build_remote_headers(server, method="GET", path=api_path)
-                try:
-                    resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        services = data.get("results", data) if isinstance(data, dict) else data
-                        server.services_count = len(services) if isinstance(services, list) else 0
-                except requests.RequestException:
-                    pass
-
-            server.last_health_check = timezone.now()
-            server.save(update_fields=["status", "last_health_check", "services_count"])
+            server = _refresh_managed_server_health(server)
             results.append(ManagedServerSerializer(server).data)
 
         return Response({"servers": results})

@@ -156,6 +156,67 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["status"], "ONLINE")
 
     @patch("apps.deployments.views_servers.requests.get")
+    def test_health_check_auto_detects_blank_api_url(self, mock_get):
+        def fake_get(url, *args, **kwargs):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            if url.endswith("/health"):
+                mock_resp.json.return_value = {"status": "healthy", "version": "2.0.0"}
+            else:
+                mock_resp.json.return_value = {"results": [{"id": "1"}, {"id": "2"}]}
+            return mock_resp
+
+        mock_get.side_effect = fake_get
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Auto URL",
+            host="10.0.0.6",
+            api_url="",
+            api_token="tok",
+        )
+
+        resp = self.client.post(f"/api/v1/servers/{server.id}/health_check/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "ONLINE")
+        self.assertEqual(resp.data["api_url"], "http://10.0.0.6")
+        self.assertEqual(resp.data["server_version"], "2.0.0")
+        self.assertEqual(resp.data["services_count"], 2)
+
+        server.refresh_from_db()
+        self.assertEqual(server.api_url, "http://10.0.0.6")
+
+    @patch("apps.deployments.views_servers.requests.get")
+    def test_health_check_repairs_stale_https_api_url(self, mock_get):
+        import requests as req
+
+        def fake_get(url, *args, **kwargs):
+            if url.startswith("https://"):
+                raise req.ConnectionError("443 closed")
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            if url.endswith("/health"):
+                mock_resp.json.return_value = {"status": "healthy"}
+            else:
+                mock_resp.json.return_value = []
+            return mock_resp
+
+        mock_get.side_effect = fake_get
+
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Stale URL",
+            host="10.0.0.7",
+            api_url="https://10.0.0.7",
+            api_token="tok",
+        )
+
+        resp = self.client.post(f"/api/v1/servers/{server.id}/health_check/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status"], "ONLINE")
+        self.assertEqual(resp.data["api_url"], "http://10.0.0.7")
+
+    @patch("apps.deployments.views_servers.requests.get")
     def test_health_check_offline(self, mock_get):
         import requests as req
         mock_get.side_effect = req.ConnectionError("Connection refused")
