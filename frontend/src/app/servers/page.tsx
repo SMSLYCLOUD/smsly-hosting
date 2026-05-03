@@ -9,7 +9,6 @@ import {
     Terminal, Key, Lock, Zap, Link2
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
-import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
@@ -612,16 +611,15 @@ export default function ServersPage() {
                                                 {PROVISION_STATUS_CONFIG[provisionStatus].label}
                                             </span>
                                         )}
-                                        {provisionStatus === 'FAILED' && (
-                                            <Button
-                                                size="sm"
-                                                variant="outline"
+                                        {provisionStatus === 'FAILED' && viewingLogs && (
+                                            <button
+                                                type="button"
                                                 onClick={() => handleRetryProvision(viewingLogs)}
-                                                className="h-6 px-2 text-[10px] bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20"
+                                                className="inline-flex h-6 items-center justify-center rounded-md border border-red-500/30 bg-red-500/10 px-2 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-500/20 disabled:pointer-events-none disabled:opacity-50"
                                             >
                                                 <RefreshCcw size={10} className="mr-1" />
                                                 Retry Provisioning
-                                            </Button>
+                                            </button>
                                         )}
                                     </div>
                                     <button
