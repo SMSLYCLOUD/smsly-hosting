@@ -34,6 +34,7 @@ if not _FIELD_ENCRYPTION_KEY_RAW:
 
 SECRET_KEY = _SECRET_KEY_RAW or 'smsly-self-host-fallback-secret-key-change-me'
 FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW or 'T6bKnU4z9gSMGFsQ2B054nIyrkJslnyWgI6djrtbORQ='
+GATEWAY_SECRET = str(config('GATEWAY_SECRET', default=SECRET_KEY)).strip() or SECRET_KEY
 
 # Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
 try:

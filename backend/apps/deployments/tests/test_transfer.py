@@ -35,6 +35,10 @@ class ServerTransferServiceTest(TestCase):
         mock_ssh.check_docker.return_value = True
 
         def _exec_side_effect(cmd, *args, **kwargs):
+            if "docker ps --filter name=backend" in cmd:
+                return "smsly-hosting-backend-1"
+            if "curl -fsS -m 5 http://127.0.0.1:8090/health" in cmd:
+                return "READY"
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
             if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:

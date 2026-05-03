@@ -194,7 +194,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
 
             resp = requests.post(
                 f"{base_url}{path}",
-                json={"node_name": f"Node-{server.host}"},
+                data=body,
                 headers={
                     "Content-Type": "application/json",
                     "X-Gateway-Signature-V2": sig,
@@ -764,7 +764,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             resp = requests.request(
                 method, url,
                 headers=headers,
-                json=body if body else None,
+                data=body_bytes if body is not None else None,
                 timeout=30,
             )
             try:
