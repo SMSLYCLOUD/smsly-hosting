@@ -10,21 +10,29 @@ import ipaddress
 import logging
 import os
 import re
+import shlex
+import time
 import tarfile
 import tempfile
-import time
 import hashlib
-from datetime import timedelta
-from urllib.parse import quote
-
-import paramiko
 import requests
+from urllib.parse import quote, urlparse
+from datetime import timedelta
+
+from django.conf import settings
+from django.utils import timezone
+
+from apps.deployments.utils import (
+    get_github_oauth_token_for_user,
+    build_local_source_bundle as utils_build_bundle,
+    get_source_root_dir as utils_get_source_root,
+)
+import paramiko
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.db import transaction
-from django.utils import timezone
 
 from apps.deployments.models_servers import ManagedServer
 
@@ -48,11 +56,7 @@ PROVISION_TIMEOUT_SECONDS = _env_int(
 
 def _source_root_dir() -> str:
     """Return container path to smsly-hosting source root."""
-    mounted_root = os.environ.get("SMSLY_PROVISION_SOURCE_ROOT", "/platform-src")
-    if mounted_root and os.path.isdir(mounted_root):
-        return os.path.abspath(mounted_root)
-    # Fallback to backend container project root when full source is unavailable.
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+    return utils_get_source_root()
 
 
 def _build_local_source_bundle() -> str:
@@ -61,43 +65,7 @@ def _build_local_source_bundle() -> str:
 
     Returns local temporary file path.
     """
-    source_root = _source_root_dir()
-    if not os.path.isdir(source_root):
-        raise FileNotFoundError(f"Source root not found: {source_root}")
-
-    fd, archive_path = tempfile.mkstemp(prefix="smsly-src-", suffix=".tar.gz")
-    os.close(fd)
-
-    excluded = {
-        ".git",
-        "node_modules",
-        ".next",
-        "__pycache__",
-        ".venv",
-        "venv",
-        ".env",
-        ".credentials",
-        ".git-credentials",
-    }
-
-    with tarfile.open(archive_path, mode="w:gz") as tar:
-        for root, dirs, files in os.walk(source_root, topdown=True):
-            dirs[:] = [d for d in dirs if d not in excluded]
-            rel_root = os.path.relpath(root, source_root)
-            rel_root = "" if rel_root == "." else rel_root
-
-            for filename in files:
-                if filename in excluded:
-                    continue
-                local_path = os.path.join(root, filename)
-                rel_path = os.path.join(rel_root, filename) if rel_root else filename
-                try:
-                    tar.add(local_path, arcname=rel_path, recursive=False)
-                except (PermissionError, FileNotFoundError, OSError):
-                    # Skip unreadable/transient files in host-mounted source root.
-                    continue
-
-    return archive_path
+    return utils_build_bundle()
 
 
 def _is_github_token_known_invalid(token: str | None) -> bool:
@@ -202,31 +170,38 @@ def _inject_repo_clone_auth(script_content: str, github_token: str | None):
         f"https://x-access-token:{encoded}@github.com/"
         "SMSLYCLOUD/smsly-hosting.git"
     )
-    # 1. Inject into git clone (for fresh installs)
-    pattern_clone = r'git clone "\$\{SMSLY_GIT_REMOTE:-https://github\.com/SMSLYCLOUD/smsly-hosting\.git\}" ("\$INSTALL_DIR")'
+    
+    # 1. Inject into git clone
     replaced = re.sub(
-        pattern_clone,
-        rf'git clone {auth_url} \1',
+        r'git clone (?:-b "\$SMSLY_BRANCH" )?"\$SMSLY_GIT_REMOTE" ("\$INSTALL_DIR")',
+        rf'git clone -b "$SMSLY_BRANCH" {auth_url} \1',
         script_content,
     )
-
-    # 2. Inject into git fetch (for updates to existing repos)
-    pattern_fetch = r'(git fetch )origin( main)'
+    # Support older patterns just in case
     replaced = re.sub(
-        pattern_fetch,
-        rf'\1{auth_url} \2',
+        r'git clone "\$\{SMSLY_GIT_REMOTE:-https://github\.com/SMSLYCLOUD/smsly-hosting\.git\}" ("\$INSTALL_DIR")',
+        rf'git clone {auth_url} \1',
         replaced,
     )
 
-    # 3. Also ensure we update the remote URL if it already exists (persistence)
-    # We inject this before the fetch/reset block
-    pattern_remote = r'(git reset --hard origin/main)'
-    remote_fix = f'git remote set-url origin {auth_url} 2>/dev/null || true\n             \\1'
+    # 2. Inject into git fetch
     replaced = re.sub(
-        pattern_remote,
-        remote_fix,
+        r'git fetch origin ("\$SMSLY_BRANCH"|main)',
+        rf'git fetch {auth_url} \1',
         replaced,
     )
+
+    # 3. Persistence: Ensure we update the remote URL if it already exists
+    # Inject after the header in the new install.sh
+    header = "# ─── Git Initialization & Sync ──────────────────────────────────────────────"
+    if header in replaced:
+        persistence = f'{header}\n    git remote set-url origin "{auth_url}" 2>/dev/null || true'
+        replaced = replaced.replace(header, persistence)
+    else:
+        # Fallback for update mode section
+        pattern_remote = r'(git reset --hard origin/("\$SMSLY_BRANCH"|main))'
+        remote_fix = f'git remote set-url origin {auth_url} 2>/dev/null || true\n             \\1'
+        replaced = re.sub(pattern_remote, remote_fix, replaced)
 
     return replaced, replaced != script_content
 
@@ -435,6 +410,7 @@ def provision_server(self, server_id: str):
             "SKIP_SCREEN=1 "
             "SKIP_REBOOT=1 "
             "SMSLY_STRICT_VERIFY=1 "
+            f"SMSLY_BRANCH={os.environ.get('SMSLY_BRANCH', 'main')} "
             f"USE_SSL=false DOMAIN={server.host}"
         )
 
