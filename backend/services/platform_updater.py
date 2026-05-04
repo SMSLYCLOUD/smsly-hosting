@@ -197,6 +197,9 @@ def perform_update(update_record) -> bool:
         update_record.progress_percent = 20
         update_record.save()
 
+        # Fix dubious ownership error in containers
+        _run(['git', 'config', '--global', '--add', 'safe.directory', INSTALL_DIR])
+
         ok, output = _run(['git', 'pull', '--ff-only', 'origin', 'main'])
         if not ok:
             raise PlatformUpdateError(f"Git pull failed: {output}")
