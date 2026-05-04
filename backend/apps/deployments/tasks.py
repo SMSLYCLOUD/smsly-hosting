@@ -3135,8 +3135,9 @@ def update_remote_server_task(server_id: str):
                 if os.path.exists(bundle_path):
                     os.remove(bundle_path)
 
-        # 2. Restart services
-        cmd_restart = "cd /opt/smsly-hosting && docker compose -f docker-compose.prod.yml up -d"
+        # 2. Restart services (calling install.sh --refresh handles Docker mirror config)
+        master_ip = os.environ.get('PUBLIC_IP') or '127.0.0.1'
+        cmd_restart = f"cd /opt/smsly-hosting && MASTER_IP={master_ip} NON_INTERACTIVE=1 bash install.sh --refresh"
         logger.info("Update Task: Restarting services on %s", server.host)
         server.provision_logs += "> docker compose up -d\n"
         server.save(update_fields=["provision_logs"])
