@@ -3023,16 +3023,23 @@ def update_remote_server_task(server_id: str):
     server.save(update_fields=["provision_status", "provision_logs"])
 
     try:
-        orch = RemoteOrchestrator(server)
+        from apps.deployments.services.ssh_client import SSHClient
+        ssh = SSHClient(
+            ip=server.host,
+            key_content=server.ssh_key,
+            password=server.ssh_password,
+            user=server.ssh_user,
+            port=server.ssh_port
+        )
         
         # 1. Pull latest code
         # We use git stash to prevent local changes (unlikely on remote) from blocking pull
-        cmd_pull = "cd /opt/smsly-hosting && git stash && git pull origin main"
+        cmd_pull = "cd /opt/smsly-hosting && sudo git config --global --add safe.directory /opt/smsly-hosting && sudo git pull origin main"
         logger.info("Update Task: Pulling code on %s", server.host)
         server.provision_logs += "> git pull origin main\n"
         server.save(update_fields=["provision_logs"])
         
-        stdout, stderr, code = orch.ssh.exec_command(cmd_pull, raise_on_error=False)
+        stdout, stderr, code = ssh.exec_command(cmd_pull, raise_on_error=False)
         server.provision_logs += stdout + stderr
         server.save(update_fields=["provision_logs"])
         
@@ -3048,7 +3055,7 @@ def update_remote_server_task(server_id: str):
         server.provision_logs += "> docker compose up -d\n"
         server.save(update_fields=["provision_logs"])
         
-        stdout, stderr, code = orch.ssh.exec_command(cmd_restart, raise_on_error=False)
+        stdout, stderr, code = ssh.exec_command(cmd_restart, raise_on_error=False)
         server.provision_logs += stdout + stderr
         server.save(update_fields=["provision_logs"])
         
@@ -3057,6 +3064,10 @@ def update_remote_server_task(server_id: str):
             server.provision_logs += f"\nERROR: Docker compose up failed with exit code {code}\n"
             server.save(update_fields=["provision_logs"])
             return False
+
+        finally:
+            if 'ssh' in locals():
+                ssh.close()
 
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.provision_logs += f"\n--- Update completed successfully at {timezone.now()} ---\n"

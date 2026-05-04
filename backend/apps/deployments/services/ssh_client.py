@@ -140,7 +140,7 @@ class SSHClient:
         if exit_status != 0 and raise_on_error:
             raise SSHConnectionError(f"Command failed (exit {exit_status}): {err or out}")
 
-        return out
+        return out, err, exit_status
 
     def upload_file(self, local_path, remote_path):
         if not self.client:
@@ -162,8 +162,8 @@ class SSHClient:
 
     def check_docker(self):
         try:
-            self.exec_command("docker --version")
-            return True
+            out, err, code = self.exec_command("docker --version")
+            return code == 0
         except Exception:
             return False
 
@@ -205,13 +205,15 @@ class SSHClient:
         """Run the diagnose_nodes --fix command and return the output."""
         # Try both 'docker compose' and 'docker-compose'
         cmd = f"cd {hosting_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
-        return self.exec_command(cmd)
+        out, err, code = self.exec_command(cmd)
+        return out + err
 
     def get_gateway_secret(self, hosting_path):
         """Extract the GATEWAY_SECRET from the remote .env file."""
         try:
             cmd = f"grep GATEWAY_SECRET {hosting_path}/.env | cut -d= -f2"
-            secret = self.exec_command(cmd).strip().strip("'\"")
+            out, err, code = self.exec_command(cmd)
+            secret = out.strip().strip("'\"")
             if secret:
                 return secret
         except Exception:
