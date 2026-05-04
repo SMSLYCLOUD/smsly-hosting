@@ -34,9 +34,11 @@ set -euo pipefail
 
 # ─── Parse flags early ───────────────────────────────────────────────────────
 NON_INTERACTIVE=false
+MODE_AGENT_LITE=false
 for arg in "$@"; do
   case "$arg" in
     --non-interactive) NON_INTERACTIVE=true ;;
+    --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
   esac
 done
 
@@ -137,6 +139,36 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "tr
         else
             export USE_SSL="false"
             export DOMAIN="$_PUB_IP"
+        fi
+
+        # ── Agent Lite Selection ──────────────────────────────────────────
+        if [ "$MODE_AGENT_LITE" = "true" ]; then
+            echo ""
+            echo -e "\033[1;35m═══════════════════════════════════════════════════════════"
+            echo "  CONFIGURING LITE AGENT NODE"
+            echo "═══════════════════════════════════════════════════════════\033[0m"
+            
+            _M_IP=""
+            while [ -z "$_M_IP" ]; do
+                read -p "  Enter Master VPS IP Address: " _M_IP < /dev/tty
+            done
+            export MASTER_IP="$_M_IP"
+
+            _M_DB_PASS=""
+            while [ -z "$_M_DB_PASS" ]; do
+                read -sp "  Enter Master Database Password: " _M_DB_PASS < /dev/tty
+                echo ""
+            done
+            export MASTER_DB_PASSWORD="$_M_DB_PASS"
+
+            _M_MQ_PASS=""
+            while [ -z "$_M_MQ_PASS" ]; do
+                read -sp "  Enter Master RabbitMQ Password: " _M_MQ_PASS < /dev/tty
+                echo ""
+            done
+            export MASTER_MQ_PASSWORD="$_M_MQ_PASS"
+            
+            export COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
         fi
     fi
 
@@ -2796,6 +2828,20 @@ EOF
     fi
     echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$INSTALL_DIR/.env"
 
+    # ── Agent Lite Overrides ──────────────────────────────────────
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        echo "MODE=agent" >> "$INSTALL_DIR/.env"
+        echo "MASTER_IP=$MASTER_IP" >> "$INSTALL_DIR/.env"
+        # Force Agent to use Master VPS for DB/Redis/RabbitMQ
+        env_set_value "$INSTALL_DIR/.env" "DATABASE_URL" "postgresql://smsly_admin:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
+        env_set_value "$INSTALL_DIR/.env" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//"
+        env_set_value "$INSTALL_DIR/.env" "REDIS_URL" "redis://${MASTER_IP}:6379/1"
+        # Disable local DB/Registry requirements in the app
+        echo "SMSLY_DISABLE_LOCAL_SERVICES=true" >> "$INSTALL_DIR/.env"
+    else
+        echo "MODE=master" >> "$INSTALL_DIR/.env"
+    fi
+
     chmod 600 "$INSTALL_DIR/.env"
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
@@ -2946,8 +2992,9 @@ CREDS
 else
     # Production hardening: never ship with a default admin password.
     # Use a shell-safe hex password (avoids quoting issues in manage.py shell).
-    ADMIN_PASS="$(gen_hex_secret 16)"
-    echo "
+    if [ "$MODE_AGENT_LITE" = "false" ]; then
+        ADMIN_PASS="$(gen_hex_secret 16)"
+        echo "
 from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
 User = get_user_model()
@@ -2955,25 +3002,24 @@ admin = User.objects.create_superuser('admin', 'admin@smsly.cloud', '$ADMIN_PASS
 token = Token.objects.create(user=admin)
 print(token.key)
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 > "$INSTALL_DIR/.token"
-    echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
-    chmod 600 "$INSTALL_DIR/.token"
+        echo -e "${GREEN}  ✓ Admin user created with API Token${NC}"
+        chmod 600 "$INSTALL_DIR/.token"
 
-    # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
-    cat > "$CREDENTIALS_FILE" <<CREDS
+        # ─── Save credentials to secure file (NOT echoed to terminal) ───────────────
+        cat > "$CREDENTIALS_FILE" <<CREDS
 # SMSLY Hosting Admin Credentials
 # Generated: $(date -Iseconds)
 # KEEP THIS FILE SECURE
 Username: admin
 Password: $ADMIN_PASS
 CREDS
-    chmod 600 "$CREDENTIALS_FILE"
-fi
+        chmod 600 "$CREDENTIALS_FILE"
 
-# -----------------------------------------------------------------------------
-# 6b. Ensure Local Cloud Provider exists (required for deployments)
-# -----------------------------------------------------------------------------
-echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
-echo "
+        # -----------------------------------------------------------------------------
+        # 6b. Ensure Local Cloud Provider exists (required for deployments)
+        # -----------------------------------------------------------------------------
+        echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
+        echo "
 from apps.cloud.models import CloudProvider
 cp, created = CloudProvider.objects.get_or_create(
     provider_type='LOCAL',
@@ -2984,7 +3030,9 @@ if not created and not cp.is_active:
     cp.save()
 print('CREATED' if created else 'EXISTS')
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
-echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
+        echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
+    fi
+fi
 
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
