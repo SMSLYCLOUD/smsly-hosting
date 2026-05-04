@@ -225,11 +225,11 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 </Button>
               )}
             </div>
-            <div className="grid grid-cols-4 gap-0.5 shrink-0 ml-auto">
+            <div className="grid grid-cols-4 gap-1 shrink-0 ml-auto">
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-cyan-500"
+                className="h-7 w-7 text-muted-foreground hover:text-cyan-500"
                 title="Recheck Health"
                 disabled={actionLoading === service.id}
                 onClick={() => handleRecheck(service.id)}
@@ -239,7 +239,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-emerald-500"
+                className="h-7 w-7 text-muted-foreground hover:text-emerald-500"
                 title="Redeploy"
                 disabled={actionLoading === service.id}
                 onClick={() => handleDeploy(service.id)}
@@ -250,7 +250,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-yellow-500"
+                  className="h-7 w-7 text-muted-foreground hover:text-yellow-500"
                   title="Restart"
                   disabled={actionLoading === service.id}
                   onClick={() => handleRestart(service.id)}
@@ -262,7 +262,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                  className="h-7 w-7 text-muted-foreground hover:text-red-500"
                   title="Stop"
                   disabled={actionLoading === service.id}
                   onClick={() => handleStop(service.id)}
@@ -273,7 +273,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
                 title="Service Details"
                 onClick={() => router.push(`/services/${service.id}`)}
               >
@@ -282,7 +282,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                className="h-7 w-7 text-muted-foreground hover:text-red-500"
                 title="Delete Service"
                 disabled={actionLoading === service.id}
                 onClick={() => handleDelete(service)}
@@ -293,12 +293,12 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-red-500 hover:bg-red-500/10"
+                  className="h-7 w-7 text-red-500 hover:bg-red-500/10"
                   title="Force Purge (stuck)"
                   disabled={actionLoading === service.id}
                   onClick={() => handleForceDelete(service)}
                 >
-                  <RefreshCw size={12} className="text-red-500" />
+                  <ShieldAlert size={12} />
                 </Button>
               )}
             </div>
