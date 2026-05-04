@@ -3,12 +3,14 @@
 import React, { useState } from 'react';
 import Editor from "@monaco-editor/react";
 import { Service, servicesApi } from '@/lib/api';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { Save, AlertTriangle, Check, Loader2 } from 'lucide-react';
 
 export function AdvancedTab({ service }: { service: Service }) {
+    const confirm = useConfirm();
     const [config, setConfig] = useState<{ docker_image: string; start_command: string; restart_policy: string }>({
         docker_image: service.docker_image || `registry.smsly.cloud/${service.name}`,
         start_command: service.start_command || '',
@@ -33,6 +35,24 @@ export function AdvancedTab({ service }: { service: Service }) {
         } catch (err: any) {
             setError(err?.response?.data?.detail || 'Failed to save configuration');
         } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!await confirm({ 
+            title: 'Delete Service?', 
+            message: `Are you sure you want to delete "${service.name}"? This action is irreversible.`,
+            variant: 'destructive',
+            confirmText: 'Delete Forever'
+        })) return;
+
+        setSaving(true);
+        try {
+            await servicesApi.delete(service.id);
+            window.location.href = '/dashboard';
+        } catch (err: any) {
+            setError(err?.response?.data?.detail || 'Failed to delete service');
             setSaving(false);
         }
     };
@@ -147,8 +167,11 @@ export function AdvancedTab({ service }: { service: Service }) {
                     Irreversible actions that affect your service availability.
                 </p>
                 <div className="flex gap-4">
-                    <Button variant="destructive">Force Redeploy</Button>
-                    <Button variant="destructive" className="bg-red-600 hover:bg-red-700">Delete Service</Button>
+                    <Button variant="outline" className="border-destructive text-destructive hover:bg-destructive/10">Force Redeploy</Button>
+                    <Button variant="destructive" className="bg-red-600 hover:bg-red-700" onClick={handleDelete} disabled={saving}>
+                        {saving ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+                        Delete Service
+                    </Button>
                 </div>
             </Card>
         </div>
