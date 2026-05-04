@@ -188,7 +188,10 @@ class ServerTransferService:
         if self.transfer.transfer_type == 'SERVICE':
             if not self.transfer.service:
                 raise ValueError("Service ID required for SERVICE transfer.")
-            backup = backup_svc.backup_service(self.transfer.service.id)
+            backup = backup_svc.backup_service(
+                self.transfer.service.id,
+                backup_type='TRANSFER',
+            )
             self.transfer.source_backup = backup
             self.transfer.save(update_fields=['source_backup'])
         else:
@@ -300,6 +303,7 @@ class ServerTransferService:
             raise RuntimeError(f"Remote service hydration failed: {result}")
 
         self._load_service_image_on_target(remote_backup_path)
+        self._remap_target_platform_env(backend_container)
             
         # Cleanup (Best effort, don't fail the transfer if rm fails due to permissions)
         self.ssh.exec_command(
@@ -321,6 +325,151 @@ class ServerTransferService:
         metadata = self.transfer.source_backup.metadata
         run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
         self.ssh.exec_command(run_cmd)
+        self._seed_target_deployment_record(backend_container, metadata)
+
+    def _remap_target_platform_env(self, backend_container):
+        """
+        Replace source-local platform URLs that cannot resolve on the target.
+
+        Service backups preserve env vars for faithful restores, but addon
+        hostnames such as redis-<service> and postgres-<service> may only
+        exist on the source server. If a restored platform URL host cannot
+        resolve from the target backend, point common runtime URL keys at the
+        target platform services instead.
+        """
+        if not self.transfer.service or not self.ssh:
+            return
+
+        payload = {'service_name': self.transfer.service.name}
+        remap_code = """
+import json
+import os
+import socket
+from urllib.parse import urlparse
+from apps.deployments.models import Service, EnvironmentVariable
+
+payload = json.loads(%r)
+svc = Service.objects.filter(name=payload["service_name"]).first()
+platform_database_url = os.environ.get("DATABASE_URL", "").strip()
+platform_redis_url = os.environ.get("REDIS_URL", "").strip()
+if svc:
+    url_remaps = {
+        "DATABASE_URL": platform_database_url,
+        "MARKETER_DATABASE_URL": platform_database_url,
+        "REDIS_URL": platform_redis_url,
+        "RATE_LIMIT_REDIS_URL": platform_redis_url,
+        "CACHE_URL": platform_redis_url,
+        "CELERY_BROKER_URL": platform_redis_url,
+        "CELERY_RESULT_BACKEND": platform_redis_url,
+    }
+    for key, replacement_url in url_remaps.items():
+        if not replacement_url:
+            continue
+        env = EnvironmentVariable.objects.filter(service=svc, key=key).first()
+        value = str(env.value or "").strip() if env else ""
+        parsed = urlparse(value)
+        host = parsed.hostname
+        should_remap = value == "********"
+        if host and host not in {"redis", "localhost", "127.0.0.1"}:
+            try:
+                socket.getaddrinfo(host, parsed.port or 6379)
+            except OSError:
+                should_remap = True
+        if should_remap:
+            EnvironmentVariable.objects.update_or_create(
+                service=svc,
+                key=key,
+                defaults={"value": replacement_url, "is_secret": True, "source": "SYSTEM"},
+            )
+""".strip() % json.dumps(payload)
+
+        cmd = (
+            f"docker exec -i {shlex.quote(backend_container)} "
+            "python manage.py shell <<'PY'\n"
+            f"{remap_code}\n"
+            "PY"
+        )
+        try:
+            self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
+        except Exception as exc:
+            logger.warning("Failed to remap target platform env vars: %s", exc)
+
+    def _seed_target_deployment_record(self, backend_container, metadata):
+        """Create a deployment row on the target so remote dashboards are seeded."""
+        if not self.transfer.service or not self.ssh:
+            return
+
+        service_name = self.transfer.service.name
+        image_ref = (
+            str((metadata or {}).get('docker_image') or '').strip()
+            or str(self.transfer.service.docker_image or '').strip()
+            or 'backup-restore'
+        )
+
+        try:
+            container_id = self.ssh.exec_command(
+                "docker inspect -f '{{.Id}}' "
+                f"{shlex.quote(service_name)}",
+                raise_on_error=False,
+            ).strip().splitlines()[-1]
+        except Exception:
+            container_id = ''
+
+        payload = {
+            'service_name': service_name,
+            'image_ref': image_ref,
+            'container_id': container_id,
+            'source_node': str(self.transfer.source_server_ip or ''),
+        }
+        restore_code = """
+import json
+from django.utils import timezone
+from apps.deployments.models import Service, Deployment
+
+payload = json.loads(%r)
+service_name = payload["service_name"]
+svc = Service.objects.filter(name=service_name).first()
+if svc:
+    latest = Deployment.objects.filter(service=svc).order_by("-created_at").first()
+    if not latest:
+        now = timezone.now()
+        container_id = payload.get("container_id") or None
+        status = Deployment.Status.ACTIVE if container_id else Deployment.Status.FAILED
+        Deployment.objects.create(
+            service=svc,
+            status=status,
+            commit_hash=(payload.get("image_ref") or "backup-restore")[-40:],
+            commit_message="Seeded from interserver backup restore on target server",
+            build_logs=(
+                "Seeded after backup restore. "
+                f"Container: {container_id or 'missing'} "
+                f"Image: {payload.get('image_ref') or 'unknown'}"
+            ),
+            container_id=container_id,
+            started_at=now,
+            finished_at=now,
+            source_node=payload.get("source_node") or "",
+            pipeline_stages=[
+                {"name": "Backup restore", "status": "done", "duration": 0},
+                {
+                    "name": "Target container verification",
+                    "status": "done" if container_id else "failed",
+                    "duration": 0,
+                },
+            ],
+        )
+""".strip() % json.dumps(payload)
+
+        cmd = (
+            f"docker exec -i {shlex.quote(backend_container)} "
+            "python manage.py shell <<'PY'\n"
+            f"{restore_code}\n"
+            "PY"
+        )
+        try:
+            self.ssh.exec_command(cmd, timeout=60, raise_on_error=False)
+        except Exception as exc:
+            logger.warning("Failed to seed target deployment record: %s", exc)
 
     def _load_service_image_on_target(self, remote_backup_path):
         """Load the service image archive on the target Docker host.

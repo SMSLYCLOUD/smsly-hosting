@@ -787,7 +787,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
         # 0. Remote Delegation
         if service.server and not service.server.is_primary:
-            _handle_remote_deployment(deployment, service.server)
+            if deployment.remote_deployment_id:
+                _resume_remote_deployment(deployment, service.server)
+            else:
+                _handle_remote_deployment(deployment, service.server)
             return
 
         # 1. Build Phase (Pipeline)
@@ -847,7 +850,10 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
 
         # 0. Remote Delegation
         if service.server and not service.server.is_primary:
-            _handle_remote_deployment(deployment, service.server)
+            if deployment.remote_deployment_id:
+                _resume_remote_deployment(deployment, service.server)
+            else:
+                _handle_remote_deployment(deployment, service.server)
             return
 
         # Build phase
@@ -863,7 +869,7 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         _handle_failure(self, deployment, str(e), "System Failure")
 
 
-def _handle_remote_deployment(deployment, server):
+def _handle_remote_deployment_legacy(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
@@ -921,6 +927,159 @@ def _handle_remote_deployment(deployment, server):
             update_stage(deployment, 'Remote Deploy', 'success')
             broadcast_status(deployment)
             append_log(deployment, "✅ Remote deployment successful!\n")
+            return
+
+        if status in (Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED, Deployment.Status.CANCELLED):
+            _handle_failure(None, deployment, f"Remote deployment failed with status: {status}", "Remote Execution Failure")
+            return
+
+    _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
+
+
+def _handle_remote_deployment(deployment, server):
+    """Delegate deployment to a remote server and poll for status."""
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    from apps.deployments.services.server_guard import ServerGuard
+
+    service = deployment.service
+    guard = ServerGuard.check_user_workload_allowed(server)
+    if not guard["ok"]:
+        _handle_failure(
+            None,
+            deployment,
+            guard["error"]["message"],
+            "Placement Guard",
+        )
+        return
+
+    orchestrator = RemoteOrchestrator(server)
+
+    append_log(deployment, f"Delegating deployment to remote server: {server.name} ({server.host})\n")
+    update_stage(deployment, 'Remote Sync', 'running')
+
+    remote_svc_id = orchestrator.sync_service(service)
+    if not remote_svc_id:
+        _handle_failure(None, deployment, "Failed to sync service to remote server", "Remote Sync Failure")
+        return
+
+    update_stage(deployment, 'Remote Sync', 'success')
+    update_stage(deployment, 'Remote Deploy', 'running')
+
+    remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id)
+    if not remote_dep_id:
+        _handle_failure(None, deployment, "Failed to trigger deployment on remote server", "Remote Deploy Failure")
+        return
+
+    deployment.remote_deployment_id = remote_dep_id
+    deployment.status = Deployment.Status.DEPLOYING
+    deployment.started_at = deployment.started_at or timezone.now()
+    deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
+    append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
+    _poll_remote_deployment(deployment, orchestrator, remote_dep_id)
+
+
+def _resume_remote_deployment(deployment, server):
+    """Approve/resume an existing remote deployment and keep polling it."""
+    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+    from apps.deployments.services.server_guard import ServerGuard
+
+    service = deployment.service
+    guard = ServerGuard.check_user_workload_allowed(server)
+    if not guard["ok"]:
+        _handle_failure(
+            None,
+            deployment,
+            guard["error"]["message"],
+            "Placement Guard",
+        )
+        return
+
+    orchestrator = RemoteOrchestrator(server)
+    remote_dep_id = deployment.remote_deployment_id
+    append_log(deployment, f"Resuming remote deployment: {remote_dep_id}\n")
+    update_stage(deployment, 'Remote Approval', 'running')
+
+    remote_svc_id = orchestrator.sync_service(service)
+    if remote_svc_id:
+        orchestrator.sync_env_vars(service, remote_svc_id)
+
+    payload = {
+        "cpu_cores": str(service.cpu_cores),
+        "memory_mb": service.memory_mb,
+    }
+    if not orchestrator.approve_deployment(remote_dep_id, payload=payload):
+        _handle_failure(None, deployment, "Failed to approve remote deployment", "Remote Approval Failure")
+        return
+
+    update_stage(deployment, 'Remote Approval', 'success')
+    update_stage(deployment, 'Remote Deploy', 'running')
+    _poll_remote_deployment(deployment, orchestrator, remote_dep_id)
+
+
+def _copy_remote_deployment_fields(deployment, remote_status: dict):
+    """Mirror useful remote deployment fields onto the controller row."""
+    update_fields = []
+    if remote_status.get("build_logs") and remote_status.get("build_logs") != deployment.build_logs:
+        deployment.build_logs = remote_status.get("build_logs") or ""
+        update_fields.append("build_logs")
+    if remote_status.get("review_summary") and remote_status.get("review_summary") != deployment.review_summary:
+        deployment.review_summary = remote_status.get("review_summary") or {}
+        update_fields.append("review_summary")
+    if remote_status.get("commit_hash") and remote_status.get("commit_hash") != deployment.commit_hash:
+        deployment.commit_hash = remote_status.get("commit_hash")
+        update_fields.append("commit_hash")
+    if remote_status.get("commit_message") and remote_status.get("commit_message") != deployment.commit_message:
+        deployment.commit_message = remote_status.get("commit_message")
+        update_fields.append("commit_message")
+    if update_fields:
+        update_fields.append("updated_at")
+        deployment.save(update_fields=update_fields)
+
+
+def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
+    """Poll a delegated deployment until it reaches REVIEW or a terminal state."""
+    max_retries = 90  # 15 minutes (10s intervals)
+    for _ in range(max_retries):
+        time.sleep(10)
+        remote_status = orchestrator.poll_deployment(remote_dep_id)
+        if not remote_status:
+            continue
+
+        status = remote_status.get("status")
+        _copy_remote_deployment_fields(deployment, remote_status)
+        if status:
+            append_log(deployment, f"[Remote] Status: {status}\n")
+
+        if status == Deployment.Status.REVIEW:
+            deployment.status = Deployment.Status.REVIEW
+            deployment.save(update_fields=['status', 'updated_at'])
+            update_stage(deployment, 'Remote Review', 'waiting')
+            broadcast_status(deployment)
+            append_log(deployment, "Remote deployment paused for review. Approve to continue.\n")
+            return
+
+        if status in (
+            Deployment.Status.BUILDING,
+            Deployment.Status.BACKUP_RUNNING,
+            Deployment.Status.MIGRATION_PLANNING,
+            Deployment.Status.MIGRATION_RUNNING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+            Deployment.Status.TRAFFIC_SHIFTING,
+            Deployment.Status.MONITORING,
+            Deployment.Status.STAGED,
+        ) and deployment.status != status:
+            deployment.status = status
+            deployment.save(update_fields=['status', 'updated_at'])
+            broadcast_status(deployment)
+
+        if status == Deployment.Status.ACTIVE:
+            deployment.status = Deployment.Status.ACTIVE
+            deployment.finished_at = timezone.now()
+            deployment.save(update_fields=['status', 'finished_at'])
+            update_stage(deployment, 'Remote Deploy', 'success')
+            broadcast_status(deployment)
+            append_log(deployment, "Remote deployment successful.\n")
             return
 
         if status in (Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED, Deployment.Status.CANCELLED):

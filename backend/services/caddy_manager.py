@@ -23,7 +23,49 @@ CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 
 
-def _build_service_domain_block(domain: str, upstream_host: str) -> str:
+def _remote_server_mesh_ip(server) -> str:
+    """Return the best WireGuard address for a remote service server."""
+    if not server or getattr(server, "is_primary", False):
+        return ""
+
+    address = str(getattr(server, "wg_address", "") or "").strip()
+    if address:
+        return address
+
+    try:
+        peer = server.wg_peers.filter(is_active=True).order_by("-updated_at").first()
+        if peer and peer.wg_address:
+            return str(peer.wg_address)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
+
+    return ""
+
+
+def _remote_upstream_url_for_service(service) -> str:
+    mesh_ip = _remote_server_mesh_ip(getattr(service, "server", None))
+    if not mesh_ip:
+        return ""
+    return f"https://{mesh_ip}"
+
+
+def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
+    """Append a Caddy reverse_proxy stanza, including remote TLS transport if needed."""
+    upstream_url = upstream_url or "localhost:8081"
+    if upstream_host:
+        lines.append(f"    reverse_proxy {upstream_url} {{")
+        lines.append(f"        header_up Host {upstream_host}")
+        if upstream_url.startswith("https://") and upstream_host:
+            lines.append("        transport http {")
+            lines.append("            tls")
+            lines.append(f"            tls_server_name {upstream_host}")
+            lines.append("        }")
+        lines.append("    }")
+    else:
+        lines.append(f"    reverse_proxy {upstream_url}")
+
+
+def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: str = "") -> str:
     """
     Build a Caddy site block for a service domain routed via Traefik.
 
@@ -33,16 +75,12 @@ def _build_service_domain_block(domain: str, upstream_host: str) -> str:
     """
     lines = [f"{domain} {{"]
 
-    if upstream_host and upstream_host != domain:
-        lines.extend(
-            [
-                "    reverse_proxy localhost:8081 {",
-                f"        header_up Host {upstream_host}",
-                "    }",
-            ]
-        )
+    if upstream_url:
+        _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
+    elif upstream_host and upstream_host != domain:
+        _append_reverse_proxy(lines, "localhost:8081", upstream_host)
     else:
-        lines.append("    reverse_proxy localhost:8081")
+        _append_reverse_proxy(lines, "localhost:8081")
 
     lines.extend(
         [
@@ -68,7 +106,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     try:
         from apps.deployments.models import Service
 
-        for service in Service.objects.all().order_by("id"):
+        for service in Service.objects.all().select_related("server").order_by("id"):
             raw_public = (
                 str(service.public_domain or "").strip().lower()
                 if isinstance(service.public_domain, str)
@@ -101,7 +139,11 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 else:
                     seen.add(public_domain)
                     blocks.append(
-                        _build_service_domain_block(public_domain, public_domain)
+                        _build_service_domain_block(
+                            public_domain,
+                            public_domain,
+                            upstream_url=_remote_upstream_url_for_service(service),
+                        )
                     )
 
             from apps.domains.models import Domain, DomainStatus
@@ -127,12 +169,13 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 lines.append("        on_demand")
                 lines.append("    }")
                 
-                if target_host and target_host != value:
-                    lines.append("    reverse_proxy localhost:8081 {")
-                    lines.append(f"        header_up Host {target_host}")
-                    lines.append("    }")
+                upstream_url = _remote_upstream_url_for_service(service)
+                if upstream_url:
+                    _append_reverse_proxy(lines, upstream_url, target_host or value)
+                elif target_host and target_host != value:
+                    _append_reverse_proxy(lines, "localhost:8081", target_host)
                 else:
-                    lines.append("    reverse_proxy localhost:8081")
+                    _append_reverse_proxy(lines, "localhost:8081")
                 lines.append("}")
                 blocks.append("\n".join(lines))
 
@@ -233,6 +276,58 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
     return sorted(hosts)
 
 
+def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
+    """
+    Return wildcard-covered service hosts that live on remote mesh nodes.
+
+    The result maps upstream URL (https://wg-ip) to hostnames. Caddy can then
+    keep public DNS pointed at the controller while proxying remote services
+    over WireGuard.
+    """
+    remote_hosts: dict[str, set[str]] = {}
+    if not wildcard_domain:
+        return {}
+
+    try:
+        from apps.deployments.models import Service
+
+        suffix = f".{wildcard_domain}"
+        for service in Service.objects.select_related("server").all():
+            upstream_url = _remote_upstream_url_for_service(service)
+            if not upstream_url:
+                continue
+
+            service_hosts = set()
+            if not getattr(service, "public_domain_hidden", False):
+                raw_public = str(service.public_domain or "").strip()
+                if raw_public:
+                    try:
+                        public_domain = normalize_domain(raw_public)
+                        if public_domain.endswith(suffix):
+                            service_hosts.add(public_domain)
+                    except ValueError:
+                        pass
+
+            for item in (service.custom_domains or []):
+                raw_value = item.strip() if isinstance(item, str) else ""
+                if not raw_value:
+                    continue
+                try:
+                    value = normalize_domain(raw_value)
+                except ValueError:
+                    continue
+                if value.endswith(suffix):
+                    service_hosts.add(value)
+
+            if service_hosts:
+                remote_hosts.setdefault(upstream_url, set()).update(service_hosts)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not load remote wildcard service domains: %s", exc)
+        return {}
+
+    return {upstream: sorted(hosts) for upstream, hosts in remote_hosts.items()}
+
+
 def generate_caddyfile(config) -> str:
     """
     Generate Caddyfile content from a PlatformConfig instance.
@@ -292,12 +387,32 @@ def generate_caddyfile(config) -> str:
         # raw token to match install.sh and avoid embedding secrets in files.
         if config.wildcard_subdomains and cloudflare_token:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
+            wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
             wildcard_lines = [
                 f"*.{domain} {{",
                 "    tls {",
                 "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
                 "    }",
             ]
+
+            for index, (upstream_url, hosts) in enumerate(sorted(wildcard_remote_hosts.items())):
+                if not hosts:
+                    continue
+                matcher = f"@remote_hosts_{index}"
+                wildcard_lines.extend(
+                    [
+                        f"    {matcher} host {' '.join(hosts)}",
+                        f"    handle {matcher} {{",
+                        f"        reverse_proxy {upstream_url} {{",
+                        "            header_up Host {host}",
+                        "            transport http {",
+                        "                tls",
+                        "                tls_server_name {host}",
+                        "            }",
+                        "        }",
+                        "    }",
+                    ]
+                )
 
             if wildcard_known_hosts:
                 wildcard_lines.extend(

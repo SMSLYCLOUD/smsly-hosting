@@ -53,7 +53,7 @@ def _record_exists(token: str, zone_id: str, name: str, record_type: str) -> boo
     return bool(_get_records(token, zone_id, name, record_type))
 
 
-def _create_record(token: str, zone_id: str, name: str, content: str, proxied: bool = True) -> Tuple[bool, str]:
+def _create_record(token: str, zone_id: str, name: str, content: str, proxied: bool = False) -> Tuple[bool, str]:
     url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"type": "A", "name": name, "content": content, "proxied": proxied, "ttl": 120}
@@ -69,7 +69,7 @@ def _create_record(token: str, zone_id: str, name: str, content: str, proxied: b
         return False, str(exc)
 
 
-def _update_record(token: str, zone_id: str, record_id: str, name: str, content: str, proxied: bool = True) -> Tuple[bool, str]:
+def _update_record(token: str, zone_id: str, record_id: str, name: str, content: str, proxied: bool = False) -> Tuple[bool, str]:
     url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     payload = {"type": "A", "name": name, "content": content, "proxied": proxied, "ttl": 120}
@@ -104,6 +104,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
     for domain in domains:
         zone_name = _guess_zone_name(domain)
         zone_id = _get_zone_id(token, zone_name)
+        desired_proxied = False
         if not zone_id:
             result["ok"] = False
             result["errors"].append(f"{domain}: zone not found")
@@ -113,7 +114,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
         if records:
             changed = False
             for record in records:
-                if record.get("content") == server_ip:
+                if record.get("content") == server_ip and bool(record.get("proxied", False)) == desired_proxied:
                     continue
                 updated, msg = _update_record(
                     token,
@@ -121,7 +122,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
                     record.get("id", ""),
                     domain,
                     server_ip,
-                    proxied=bool(record.get("proxied", True)),
+                    proxied=desired_proxied,
                 )
                 if updated:
                     changed = True
@@ -142,7 +143,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
                 cname_records[0].get("id", ""),
                 domain,
                 server_ip,
-                proxied=bool(cname_records[0].get("proxied", True)),
+                proxied=desired_proxied,
             )
             if updated:
                 result["updated"].append(domain)
@@ -151,7 +152,7 @@ def ensure_dns_records(domains: Iterable[str], server_ip: str, token: str) -> di
                 result["errors"].append(f"{domain}: {msg}")
             continue
 
-        created, msg = _create_record(token, zone_id, domain, server_ip, proxied=True)
+        created, msg = _create_record(token, zone_id, domain, server_ip, proxied=desired_proxied)
         if created:
             result["created"].append(domain)
         else:

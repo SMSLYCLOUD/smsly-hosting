@@ -104,6 +104,10 @@ class ManagedServer(models.Model):
         protocol="IPv4", null=True, blank=True)
 
     # ── Provisioning ──
+    is_lite_agent = models.BooleanField(
+        default=False,
+        help_text="If true, this server is a lightweight node connecting to the Master's DB/Redis.",
+    )
     provision_status = models.CharField(
         max_length=20, choices=ProvisionStatus.choices, default=ProvisionStatus.NONE)
     provision_logs = models.TextField(blank=True, default="")
@@ -619,6 +623,12 @@ class Deployment(TimeStampedModel):
         default=dict, blank=True, help_text="Trivy scan results")
 
     container_id = models.CharField(max_length=255, blank=True, null=True)
+    remote_deployment_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        help_text="Deployment ID on a delegated remote server.",
+    )
 
     # Blue-green bake: stores the new (green) container ID while STAGED
     green_container_id = models.CharField(

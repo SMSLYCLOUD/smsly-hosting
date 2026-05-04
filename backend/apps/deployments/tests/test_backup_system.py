@@ -1,12 +1,15 @@
 import os
 import uuid
 import tempfile
+import json
+import tarfile
+import docker
 from django.test import TestCase
 from django.utils import timezone
 from datetime import timedelta
 from unittest.mock import patch, MagicMock
 from cryptography.fernet import Fernet
-from apps.deployments.models import Service, Project
+from apps.deployments.models import Service, Project, EnvironmentVariable
 from apps.deployments.models_backup import ServiceBackup, BackupSchedule
 from apps.deployments.tasks import cleanup_old_backups_task
 from apps.deployments.services.backup_service import BackupService
@@ -116,5 +119,53 @@ class BackupSystemTest(TestCase):
                 self.assertEqual(f.read(), payload)
         finally:
             for path in [source_path, decrypted_path]:
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+    @patch('apps.cloud.docker_client.get_docker_client')
+    def test_service_backup_masks_secrets_unless_transfer_backup(self, mock_get_docker_client):
+        EnvironmentVariable.objects.create(
+            service=self.service,
+            key='PUBLIC_VALUE',
+            value='visible',
+            is_secret=False,
+        )
+        EnvironmentVariable.objects.create(
+            service=self.service,
+            key='SECRET_VALUE',
+            value='real-secret-value',
+            is_secret=True,
+        )
+
+        docker_client = MagicMock()
+        docker_client.containers.get.side_effect = docker.errors.NotFound('missing')
+        mock_get_docker_client.return_value = docker_client
+
+        backup_paths = []
+        try:
+            manual = BackupService().backup_service(self.service.id)
+            transfer = BackupService().backup_service(
+                self.service.id,
+                backup_type='TRANSFER',
+            )
+            backup_paths.extend([manual.file_path, transfer.file_path])
+
+            def metadata_for(backup):
+                with tarfile.open(backup.file_path, 'r:gz') as tar:
+                    return json.load(tar.extractfile('metadata.json'))
+
+            manual_meta = metadata_for(manual)
+            transfer_meta = metadata_for(transfer)
+
+            manual_env = {item['key']: item['value'] for item in manual_meta['env_vars']}
+            transfer_env = {item['key']: item['value'] for item in transfer_meta['env_vars']}
+
+            self.assertEqual(manual_env['PUBLIC_VALUE'], 'visible')
+            self.assertEqual(manual_env['SECRET_VALUE'], '********')
+            self.assertFalse(manual_meta['secrets_included'])
+            self.assertEqual(transfer_env['SECRET_VALUE'], 'real-secret-value')
+            self.assertTrue(transfer_meta['secrets_included'])
+        finally:
+            for path in backup_paths:
                 if path and os.path.exists(path):
                     os.remove(path)

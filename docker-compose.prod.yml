@@ -51,6 +51,8 @@ services:
       start_period: 30s
     networks:
     - smsly-net
+    ports:
+    - "5432:5432"
   redis:
     image: redis:7-alpine
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
@@ -67,6 +69,8 @@ services:
       start_period: 30s
     networks:
     - smsly-net
+    ports:
+    - "6379:6379"
   registry:
     image: registry:2
     restart: unless-stopped
@@ -259,7 +263,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --concurrency=32 -Q deploy
+    command: celery -A config worker -l info --pool=solo --concurrency=1 -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
     environment:
@@ -288,8 +292,8 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - celery -A config inspect ping --timeout 10 2>/dev/null | grep -q pong || exit
-        1
+      - celery -A config inspect ping -d deploy@$$(hostname) --timeout 10 2>/dev/null
+        | grep -q pong || exit 1
       interval: 30s
       timeout: 20s
       retries: 5
@@ -436,6 +440,8 @@ services:
       start_period: 30s
     networks:
     - smsly-net
+    ports:
+    - "5672:5672"
 networks:
   smsly-net:
     external: true
