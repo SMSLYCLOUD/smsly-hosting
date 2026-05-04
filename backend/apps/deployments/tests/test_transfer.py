@@ -66,7 +66,10 @@ class ServerTransferServiceTest(TestCase):
         self.assertEqual(self.transfer.target_ssh_key, '')
 
         mock_ssh.connect.assert_called()
-        mock_backup_svc.backup_service.assert_called_with(self.service.id)
+        mock_backup_svc.backup_service.assert_called_with(
+            self.service.id,
+            backup_type='TRANSFER',
+        )
         mock_ssh.upload_file.assert_called()
 
     @patch('apps.deployments.services.transfer_service.SSHClient')

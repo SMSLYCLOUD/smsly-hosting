@@ -94,12 +94,18 @@ class BackupService:
 
         temp_dir = None
         try:
-            # Snapshot env vars — mask secrets to prevent credential leakage
+            # Snapshot env vars. Operator/downloadable backups mask secrets, but
+            # transfer backups must preserve them so restored services can boot.
+            include_secret_values = str(backup_type or '').upper() in {
+                'TRANSFER',
+                'SERVICE_TRANSFER',
+                'SERVER_TRANSFER',
+            }
             env_vars_raw = list(EnvironmentVariable.objects.filter(service=service).values('key', 'value', 'is_secret'))
             env_vars = []
             for ev in env_vars_raw:
                 entry = dict(ev)
-                if entry.get('is_secret'):
+                if entry.get('is_secret') and not include_secret_values:
                     entry['value'] = '********'
                 env_vars.append(entry)
 
@@ -109,6 +115,7 @@ class BackupService:
                 'service_id': str(service.id),
                 'deploy_type': service.deploy_type,
                 'env_vars': env_vars,
+                'secrets_included': include_secret_values,
                 'git_url': service.repository_url,
                 'created_at': str(timezone.now()),
                 'volumes': []

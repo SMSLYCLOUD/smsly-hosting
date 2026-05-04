@@ -52,10 +52,12 @@ def test_replication_configs_bind_to_wireguard_addresses(mesh):
     haproxy_config = ReplicationService.generate_haproxy_config(mesh)
 
     assert "--listen-client-urls http://10.100.0.1:2379" in local_config
-    assert 'PATRONI_POSTGRESQL_LISTEN: "10.100.0.1:5432"' in local_config
+    assert 'ETCD3_HOSTS: "10.100.0.1:2379,10.100.0.2:2379"' in local_config
+    assert 'PATRONI_POSTGRESQL_LISTEN: "10.100.0.1:55432"' in local_config
     assert 'PATRONI_RESTAPI_LISTEN: "10.100.0.1:8008"' in local_config
     assert "0.0.0.0:5432" not in local_config
     assert "bind 10.100.0.1:5000" in haproxy_config
+    assert "server patroni1 10.100.0.1:55432" in haproxy_config
     assert "bind *:5000" not in haproxy_config
 
 

@@ -222,6 +222,9 @@ CRYPTOMUS_MERCHANT_ID = config('CRYPTOMUS_MERCHANT_ID', default='')
 CRYPTOMUS_API_KEY = config('CRYPTOMUS_API_KEY', default='')
 
 
+# Agent Mode Optimization: Prune apps and middleware to save RAM
+IS_AGENT_MODE = os.environ.get('MODE') == 'agent'
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -258,6 +261,16 @@ INSTALLED_APPS = [
     'apps.autoscaler',
     'apps.licensing',
 ]
+
+if IS_AGENT_MODE:
+    # Remove Master-only apps to save memory on 2GB nodes
+    APPS_TO_REMOVE = {
+        'apps.billing',      # Nodes don't handle billing
+        'apps.licensing',    # Nodes don't verify licenses (Master does)
+        'apps.intelligence', # Heavy AI/NLP can be disabled on Lite nodes
+        'django.contrib.admin', # Optional: Disable admin UI on nodes
+    }
+    INSTALLED_APPS = [app for app in INSTALLED_APPS if app not in APPS_TO_REMOVE]
 
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")

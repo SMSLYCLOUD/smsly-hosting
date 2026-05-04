@@ -29,6 +29,7 @@ class ReplicationService:
     PATRONI_IMAGE = "ghcr.io/zalando/spilo-16:3.3-p3"
     ETCD_IMAGE = "quay.io/coreos/etcd:v3.5.9"
     HAPROXY_IMAGE = "haproxy:2.8"
+    PATRONI_POSTGRES_PORT = 55432
 
     # ── Config Generation ────────────────────────────────────────────────
 
@@ -53,10 +54,10 @@ class ReplicationService:
             f"etcd{i}=http://{p.wg_address}:2380"
             for i, p in enumerate(peers, 1)
         )
-        etcd_endpoints = ",".join(
-            f"http://{p.wg_address}:2379"
-            for p in peers
-        )
+        # Spilo's ETCD3_HOSTS is parsed by Patroni as host:port entries.
+        # Including URL schemes makes Patroni treat the comma-delimited value
+        # as an invalid URL and crash during DCS initialization.
+        etcd_endpoints = ",".join(f"{p.wg_address}:2379" for p in peers)
 
         configs = {}
         for idx, peer in enumerate(peers, 1):
@@ -101,8 +102,8 @@ class ReplicationService:
                       PATRONI_NAME: {node_name}
                       PATRONI_RESTAPI_CONNECT_ADDRESS: "{wg_ip}:8008"
                       PATRONI_RESTAPI_LISTEN: "{wg_ip}:8008"
-                      PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:5432"
-                      PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:5432"
+                      PATRONI_POSTGRESQL_CONNECT_ADDRESS: "{wg_ip}:{cls.PATRONI_POSTGRES_PORT}"
+                      PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:{cls.PATRONI_POSTGRES_PORT}"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
                       PATRONI_REPLICATION_PASSWORD: "{replication_password}"
@@ -139,13 +140,13 @@ class ReplicationService:
         bind_ip = local_peer.wg_address if local_peer else "127.0.0.1"
 
         master_servers = "\n".join(
-            f"    server patroni{i} {p.wg_address}:5432 "
+            f"    server patroni{i} {p.wg_address}:{cls.PATRONI_POSTGRES_PORT} "
             f"maxconn 100 check port 8008"
             for i, p in enumerate(peers, 1)
         )
 
         replica_servers = "\n".join(
-            f"    server patroni{i} {p.wg_address}:5432 "
+            f"    server patroni{i} {p.wg_address}:{cls.PATRONI_POSTGRES_PORT} "
             f"maxconn 100 check port 8008"
             for i, p in enumerate(peers, 1)
         )
@@ -243,17 +244,17 @@ class ReplicationService:
             # 2. SSH check and system checks
             try:
                 # Check memory (>1GB) and disk (>2GB) and docker
-                # ALSO check if port 5432 is already taken (most common cause of Patroni failure)
+                # ALSO check if Patroni's mesh-only postgres port is already taken
                 script = """
                 free -m | awk '/^Mem:/ {if ($2 < 1000) exit 1}';
                 df -m /opt | awk 'NR==2 {if ($4 < 2000) exit 1}';
                 command -v docker >/dev/null 2>&1 || exit 1;
-                ss -tulpn | grep :5432 >/dev/null 2>&1 && exit 2 || exit 0;
+                ss -tulpn | grep :55432 >/dev/null 2>&1 && exit 2 || exit 0;
                 """
                 WireGuardService._ssh_run(target_peer.server, script, timeout=10)
             except Exception as e:
                 if "exit 2" in str(e):
-                    raise RuntimeError(f"Port conflict detected: Port 5432 is already in use on {target_wg_address}. Patroni requires this port to be free.")
+                    raise RuntimeError(f"Port conflict detected: Port 55432 is already in use on {target_wg_address}. Patroni requires this port to be free.")
                 raise RuntimeError(f"System requirement check failed: Ensure target has >1GB RAM, >2GB Disk, and Docker installed. ({e})")
 
         # 3. Dry run config generation to catch template errors
@@ -468,11 +469,23 @@ class ReplicationService:
         import requests
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
+        peers = list(
+            mesh.peers.filter(is_active=True)
+            .select_related("server")
+            .order_by("wg_address")
+        )
         results = {"nodes": [], "primary": None, "replicas": []}
 
-        def _check_node(idx, peer):
-            wg_ip = peer.wg_address
+        node_specs = [
+            (
+                idx,
+                peer.wg_address,
+                peer.server.name if peer.server_id and peer.server else "local",
+            )
+            for idx, peer in enumerate(peers, 1)
+        ]
+
+        def _check_node(idx, wg_ip, server_name):
             try:
                 resp = requests.get(
                     f"http://{wg_ip}:8008/patroni",
@@ -482,7 +495,7 @@ class ReplicationService:
                 return {
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
-                    "server": peer.server.name if peer.server else "local",
+                    "server": server_name,
                     "role": data.get("role", "unknown"),
                     "state": data.get("state", "unknown"),
                     "timeline": data.get("timeline"),
@@ -496,15 +509,15 @@ class ReplicationService:
                 return {
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
-                    "server": peer.server.name if peer.server else "local",
+                    "server": server_name,
                     "status": f"UNREACHABLE: {e}",
                 }
 
         # Check all nodes in parallel to prevent UI timeouts (502)
         with ThreadPoolExecutor(max_workers=len(peers) or 1) as executor:
             future_to_node = {
-                executor.submit(_check_node, i, p): p 
-                for i, p in enumerate(peers, 1)
+                executor.submit(_check_node, idx, wg_ip, server_name): wg_ip
+                for idx, wg_ip, server_name in node_specs
             }
             
             node_results = []

@@ -13,7 +13,7 @@ from rest_framework.test import APITestCase
 
 from apps.billing.models import PricingPlan, UserSubscription
 from apps.cloud.models import CloudProvider
-from apps.deployments.models import Deployment, Service
+from apps.deployments.models import Deployment, ManagedServer, Service
 from apps.licensing.models import PlatformLicense, PlatformTier
 from services.caddy_manager import generate_caddyfile
 
@@ -121,6 +121,34 @@ class CaddyCustomDomainRoutingTests(TestCase):
         self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
         self.assertIn('handle @known_hosts {\n        reverse_proxy localhost:8081', caddyfile)
         self.assertIn('reverse_proxy localhost:8090', caddyfile)
+
+    def test_remote_service_routes_through_wireguard_mesh(self):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name='remote-worker',
+            host='203.0.113.50',
+            wg_address='10.150.0.2',
+        )
+        Service.objects.create(
+            name='remote-wildcard-service',
+            owner=self.user,
+            provider=self.provider,
+            server=server,
+            public_domain='remote-api.cloud.smsly.cloud',
+        )
+        config = SimpleNamespace(
+            domain='cloud.smsly.cloud',
+            use_ssl=True,
+            wildcard_subdomains=True,
+            cloudflare_api_token='token-123',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn('@remote_hosts_0 host remote-api.cloud.smsly.cloud', caddyfile)
+        self.assertIn('reverse_proxy https://10.150.0.2 {', caddyfile)
+        self.assertIn('header_up Host {host}', caddyfile)
+        self.assertIn('tls_server_name {host}', caddyfile)
 
 
 class InstantCustomDomainApiTests(APITestCase):

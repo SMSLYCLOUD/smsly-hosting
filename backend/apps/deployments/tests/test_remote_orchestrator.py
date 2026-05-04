@@ -70,3 +70,21 @@ class RemoteOrchestratorTests(TestCase):
         self.assertEqual(payload["ref"], "abc123")
         self.assertEqual(payload["source_node"], "198.51.100.20")
         self.assertNotIn("commit_hash", payload)
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_approve_deployment_posts_to_remote_approval_endpoint(self, request_mock):
+        response = Mock(status_code=200)
+        request_mock.return_value = response
+
+        ok = RemoteOrchestrator(self.server).approve_deployment(
+            "remote-deployment-id",
+            payload={"memory_mb": 512},
+        )
+
+        self.assertTrue(ok)
+        self.assertIn(
+            "/api/v1/deployments/remote-deployment-id/approve/",
+            request_mock.call_args.args[1],
+        )
+        payload = json.loads(request_mock.call_args.kwargs["data"].decode())
+        self.assertEqual(payload["memory_mb"], 512)

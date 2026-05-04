@@ -22,6 +22,16 @@ cloud.smsly.cloud {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
+    @remote_hosts_0 host friend-maker-bc8a2b.cloud.smsly.cloud smsly-frontend-0b774a.cloud.smsly.cloud smsly-helper-dbc499.cloud.smsly.cloud smsly-marketer-77887a.cloud.smsly.cloud smsly-rate-limit-service-a6c030.cloud.smsly.cloud
+    handle @remote_hosts_0 {
+        reverse_proxy https://10.150.0.2 {
+            header_up Host {host}
+            transport http {
+                tls
+                tls_server_name {host}
+            }
+        }
+    }
     @known_hosts host addon-minio-2bd08022.cloud.smsly.cloud addon-minio-a4f58193.cloud.smsly.cloud addon-rabbitmq-24f2b594.cloud.smsly.cloud friend-maker-bc8a2b.cloud.smsly.cloud ignite-85cd2f.cloud.smsly.cloud smsly-frontend-0b774a.cloud.smsly.cloud smsly-helper-dbc499.cloud.smsly.cloud smsly-marketer-77887a.cloud.smsly.cloud smsly-rate-limit-service-a6c030.cloud.smsly.cloud smsly-security-gateway-62100d.cloud.smsly.cloud
     handle @known_hosts {
         reverse_proxy localhost:8081
@@ -43,8 +53,12 @@ azabtc.online {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8081 {
+    reverse_proxy https://10.150.0.2 {
         header_up Host friend-maker-bc8a2b.cloud.smsly.cloud
+        transport http {
+            tls
+            tls_server_name friend-maker-bc8a2b.cloud.smsly.cloud
+        }
     }
 }
 
@@ -52,8 +66,12 @@ ignite.smsly.cloud {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8081 {
+    reverse_proxy https://10.150.0.2 {
         header_up Host smsly-marketer-77887a.cloud.smsly.cloud
+        transport http {
+            tls
+            tls_server_name smsly-marketer-77887a.cloud.smsly.cloud
+        }
     }
 }
 
@@ -61,8 +79,12 @@ smsly.cloud {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8081 {
+    reverse_proxy https://10.150.0.2 {
         header_up Host smsly-frontend-0b774a.cloud.smsly.cloud
+        transport http {
+            tls
+            tls_server_name smsly-frontend-0b774a.cloud.smsly.cloud
+        }
     }
 }
 
@@ -70,7 +92,11 @@ intelliphoton.com {
     tls {
         on_demand
     }
-    reverse_proxy localhost:8081 {
+    reverse_proxy https://10.150.0.2 {
         header_up Host smsly-helper-dbc499.cloud.smsly.cloud
+        transport http {
+            tls
+            tls_server_name smsly-helper-dbc499.cloud.smsly.cloud
+        }
     }
 }

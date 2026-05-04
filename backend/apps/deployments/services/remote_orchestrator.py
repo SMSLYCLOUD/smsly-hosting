@@ -315,6 +315,23 @@ class RemoteOrchestrator:
             
         return None
 
+    def approve_deployment(self, remote_deployment_id: str, payload: dict | None = None) -> bool:
+        """Approve a paused remote REVIEW deployment."""
+        path = f"/api/v1/deployments/{remote_deployment_id}/approve/"
+
+        try:
+            resp = self._request("POST", path, payload=payload or {}, timeout=15)
+            if resp and resp.status_code in (200, 202):
+                return True
+            logger.error(
+                "Failed to approve remote deploy: %s",
+                resp.text if resp is not None else "no response",
+            )
+        except Exception as e:
+            logger.error("Error approving remote deploy: %s", e)
+
+        return False
+
     def poll_deployment(self, remote_deployment_id: str) -> dict:
         """Fetch the current status and logs of a remote deployment."""
         path = f"/api/v1/deployments/{remote_deployment_id}/"
