@@ -12,6 +12,7 @@ class CloudProvider(models.Model):
         RAILWAY = 'RAILWAY', 'Railway'
         VERCEL = 'VERCEL', 'Vercel'
         LOCAL = 'LOCAL', 'Local / K3s'
+        REMOTE = 'REMOTE', 'Remote Node'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(
