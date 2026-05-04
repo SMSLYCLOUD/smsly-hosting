@@ -1,23 +1,19 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
-# ─── PgCat entrypoint ────────────────────────────────────────────────────────
-# Templates environment variables into pgcat.toml and starts PgCat.
-
-: "${POSTGRES_USER:?POSTGRES_USER required}"
-: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}"
-: "${POSTGRES_DB:?POSTGRES_DB required}"
-
-CONFIG_SRC="/etc/pgcat/pgcat.toml"
+# Render the PgCat config dynamically based on environment variables
 CONFIG_RUNTIME="/tmp/pgcat.toml"
 
-# Template env vars into config
-sed \
-    -e "s|\${POSTGRES_PASSWORD}|${POSTGRES_PASSWORD}|g" \
-    -e "s|\"smsly_admin\"|\"${POSTGRES_USER}\"|g" \
-    -e "s|\"smsly_hosting\"|\"${POSTGRES_DB}\"|g" \
-    "$CONFIG_SRC" > "$CONFIG_RUNTIME"
+echo "Rendering PgCat configuration..."
+# Map general environment to expected script vars
+export DB_HOST=${POSTGRES_HOST:-db}
+export DB_PORT=${POSTGRES_PORT:-5432}
+export DB_USER=${POSTGRES_USER:-smsly_admin}
+export DB_PASSWORD=${POSTGRES_PASSWORD}
+export DB_NAME=${POSTGRES_DB:-smsly_hosting}
 
-echo "PgCat starting: pool_mode=transaction, pool_size=15, db=${POSTGRES_DB}"
+python3 /scripts/render_pgcat_config.py "$CONFIG_RUNTIME"
 
+# Start PgCat
+echo "Starting PgCat..."
 exec pgcat "$CONFIG_RUNTIME"

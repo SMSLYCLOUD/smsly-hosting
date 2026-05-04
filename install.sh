@@ -714,10 +714,10 @@ ensure_env_runtime_defaults() {
             echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
         fi
 
-        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432
-        if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
-            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
-            local migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+        # Migrate legacy @pgcat:5432 URLs to @pgcat:5432
+        if [[ "$current_database_url" =~ @pgcat:5432 ]]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgcat to pgcat${NC}"
+            local migrated_url="${current_database_url/@pgcat:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
             current_database_url="$migrated_url"
             echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
@@ -1244,7 +1244,7 @@ restart_edge_stack() {
 
 refresh_runtime_services() {
     local app_services_requested=(
-        pgbouncer
+        pgcat
         backend
         celery
         celery-deploy
@@ -1295,7 +1295,7 @@ refresh_runtime_services() {
             docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
-    ensure_container_on_network "smsly-net" "smsly-hosting-pgbouncer-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-backend-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-beat-1"
@@ -1405,9 +1405,9 @@ recover_runtime_stack() {
     fi
 
     echo -e "${BLUE}    -> Starting dependency services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy registry || true
+    docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy registry || true
     wait_for_container_ready "smsly-hosting-db-1" 120 || true
-    wait_for_container_ready "smsly-hosting-pgbouncer-1" 120 || true
+    wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
     wait_for_container_ready "smsly-hosting-redis-1" 120 || true
 
     if command -v caddy >/dev/null 2>&1; then
@@ -1452,11 +1452,11 @@ debug_platform_status() {
     echo ""
 
     echo "---- Backend DNS Checks ----"
-    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgbouncer redis 2>/dev/null || echo "backend DNS check failed"
+    docker compose -f "$COMPOSE_FILE" exec -T backend getent hosts db pgcat redis 2>/dev/null || echo "backend DNS check failed"
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
-    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx traefik pgbouncer redis 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx traefik pgcat redis 2>/dev/null || true
     echo -e "${YELLOW}=== END DEBUG SNAPSHOT ===${NC}\n"
     set -e
 }
@@ -1805,7 +1805,7 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
             docker compose -f "$COMPOSE_FILE" build backend celery
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
+            docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -1872,7 +1872,7 @@ if [ -n "$UPDATE_MODE" ]; then
             # 8. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgbouncer redis socket-proxy
+            docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             sleep 10
             # Note: Do NOT run makemigrations — migrations are committed in the repo.
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
@@ -2396,7 +2396,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
+    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
@@ -2801,7 +2801,7 @@ FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
-DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgbouncer:5432/smsly_hosting
+DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgcat:5432/smsly_hosting
 
 REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
@@ -3532,13 +3532,13 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
+for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
+echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgcat)${NC}"
 
 echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
 
