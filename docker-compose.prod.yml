@@ -427,8 +427,6 @@ services:
       start_period: 30s
     networks:
     - smsly-net
-    ports:
-    - "5672:5672"
 networks:
   smsly-net:
     external: true
