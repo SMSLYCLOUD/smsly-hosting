@@ -152,3 +152,14 @@ app.conf.beat_schedule = {
 @app.task(bind=True, ignore_result=True)
 def debug_task(self):
     print(f'Request: {self.request!r}')
+
+# Prevent Celery database connection leaks (especially for PgCat)
+from django.db import close_old_connections
+
+@signals.task_prerun.connect
+def on_task_prerun(**kwargs):
+    close_old_connections()
+
+@signals.task_postrun.connect
+def on_task_postrun(**kwargs):
+    close_old_connections()

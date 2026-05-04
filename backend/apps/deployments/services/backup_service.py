@@ -468,7 +468,7 @@ class BackupService:
             # If DB is in a container, we use docker exec.
             db_file = os.path.join(temp_dir, "db_dump.sql")
 
-            # Find the actual postgres container (not pgbouncer)
+            # Find the actual postgres container (not pgcat)
             try:
                 db_url = settings.DATABASES['default']
                 host = db_url.get('HOST', 'localhost')
@@ -481,7 +481,7 @@ class BackupService:
                 env['PGPASSWORD'] = password
 
                 # Smart container discovery: find the actual postgres container
-                # The DB HOST in settings is often 'pgbouncer', but pg_dump
+                # The DB HOST in settings is often 'pgcat', but pg_dump
                 # must run inside the real postgres container.
                 pg_container = None
                 try:
@@ -489,12 +489,12 @@ class BackupService:
                         c_name = c.name.lower()
                         c_image = (c.image.tags[0] if c.image.tags else '').lower()
                         # Match containers with 'db' in name and postgres image
-                        if ('postgres' in c_image and 'pgbouncer' not in c_name):
+                        if ('postgres' in c_image and 'pgcat' not in c_name):
                             pg_container = c
                             break
                         # Fallback: match '-db-' in container name
                         if (('-db-' in c_name or c_name.endswith('-db'))
-                                and 'pgbouncer' not in c_name
+                                and 'pgcat' not in c_name
                                 and 'redis' not in c_name):
                             pg_container = c
                 except Exception:
@@ -517,7 +517,7 @@ class BackupService:
                     else:
                         raise Exception(f"pg_dump failed: {res.output}")
 
-                elif host not in ('pgbouncer', 'localhost', '127.0.0.1'):
+                elif host not in ('pgcat', 'localhost', '127.0.0.1'):
                     # Host is a remote address, try direct pg_dump
                     try:
                         self.docker_client.containers.get(host)
@@ -534,7 +534,7 @@ class BackupService:
                         with open(db_file, 'w') as f:
                             subprocess.run(cmd, env=env, stdout=f, check=True)
                 else:
-                    # Fallback: run pg_dump locally via pgbouncer's upstream
+                    # Fallback: run pg_dump locally via pgcat's upstream
                     import subprocess
                     cmd = ["pg_dump", "-h", host, "-p", str(port), "-U", user, name]
                     with open(db_file, 'w') as f:
