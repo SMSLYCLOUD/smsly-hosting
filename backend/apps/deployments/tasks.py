@@ -2919,9 +2919,12 @@ def delete_service_task(self, service_id: str, force: bool = False):
         orchestrator = DeletionOrchestrator()
         success = orchestrator.delete_service_resources(service, force=force)
         
-        # 3. Resilience: If local docker client is missing but service is unassigned, 
-        # allow DB deletion to proceed.
-        if not success and not service.server and not orchestrator.docker_client:
+        # 3. Resilience: If force=True, we proceed regardless of resource cleanup success.
+        # This ensures the DB record is purged when the user explicitly requests a force-delete.
+        if force:
+            logger.info("Force-purging service %s from database after best-effort cleanup.", service.name)
+            success = True
+        elif not success and not service.server and not orchestrator.docker_client:
             logger.warning("Docker client unavailable for service %s. Forcing database-only deletion.", service.name)
             success = True
 
