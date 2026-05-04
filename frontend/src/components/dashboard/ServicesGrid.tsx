@@ -84,11 +84,20 @@ export function ServicesGrid({ services }: ServicesGridProps) {
     }
   };
 
-  const handleDelete = async (service: Service) => {
-    if (!await confirm({ title: 'Delete service?', message: `Are you sure you want to delete "${service.name}"? This cannot be undone.`, variant: 'destructive', confirmText: 'Delete' })) return;
+  const handleDelete = async (service: any) => {
+    const isAddon = service.isAddon;
+    const title = isAddon ? 'Delete addon?' : 'Delete service?';
+    const message = `Are you sure you want to delete "${service.name}"? This cannot be undone.`;
+    
+    if (!await confirm({ title, message, variant: 'destructive', confirmText: 'Delete' })) return;
+    
     setActionLoading(service.id);
     try {
-      await servicesApi.delete(service.id);
+      if (isAddon) {
+        await addonsApi.delete(service.id);
+      } else {
+        await servicesApi.delete(service.id);
+      }
       // Parent page polls every 5s — no reload needed
     } catch (err) {
       console.error('Delete failed:', err);
