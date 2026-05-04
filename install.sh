@@ -258,8 +258,12 @@ detect_public_ip() {
 }
 
 configure_docker_mirror() {
+    # Ensure COMPOSE_FILE is defined for this scope
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    
     # Option B: Pull-Through Cache
     if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
+        # This is a Follower node
         echo -e "${BLUE}  → Configuring Docker pull-through cache mirror (Master: $MASTER_IP)...${NC}"
         mkdir -p /etc/docker
         
@@ -272,6 +276,13 @@ configure_docker_mirror() {
 EOF
         systemctl restart docker || true
         echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
+    else
+        # This is the Master node (or MASTER_IP matches local IP)
+        # Ensure the mirror service is UP if it exists in the compose file
+        if [ -f "$compose_f" ] && grep -q "docker-mirror:" "$compose_f"; then
+            echo -e "${BLUE}  → Ensuring Docker pull-through cache mirror is running...${NC}"
+            docker compose -f "$compose_f" up -d docker-mirror >/dev/null 2>&1 || true
+        fi
     fi
 }
 
