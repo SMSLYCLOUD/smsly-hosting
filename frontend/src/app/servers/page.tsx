@@ -203,6 +203,18 @@ export default function ServersPage() {
         }
     };
 
+    const handleUpdateServer = async (id: string) => {
+        try {
+            await apiFetch(`/api/v1/servers/${id}/update-server/`, 'POST');
+            setViewingLogs(id);
+            setProvisionLogs('');
+            setProvisionStatus('PENDING');
+            toast({ title: 'Update started', description: 'Remote update task has been queued.' });
+        } catch (err: any) {
+            toast({ title: 'Failed to start update', description: err.message, variant: 'destructive' });
+        }
+    };
+
     const deleteServer = async (id: string) => {
         if (!await confirm({ title: 'Remove server?', message: 'Are you sure you want to remove this server?', variant: 'destructive', confirmText: 'Remove' })) return;
         try {
@@ -621,6 +633,17 @@ export default function ServersPage() {
                                                 Retry Provisioning
                                             </button>
                                         )}
+                                        {viewingLogs && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleUpdateServer(viewingLogs)}
+                                                className="inline-flex h-6 items-center justify-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2 text-[10px] font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:pointer-events-none disabled:opacity-50"
+                                            >
+                                                <Zap size={10} className="mr-1" />
+                                                Update Server
+                                            </button>
+                                        )}
+
                                     </div>
                                     <button
                                         onClick={() => { setViewingLogs(null); setProvisionLogs(''); }}
@@ -762,6 +785,17 @@ export default function ServersPage() {
                                             </button>
                                         )}
 
+                                        {server.provision_status === 'NONE' && (
+                                            <button
+                                                onClick={() => handleRetryProvision(server.id)}
+                                                className="w-full text-left px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-amber-500 flex items-center gap-2 hover:bg-amber-500/10 transition-colors"
+                                            >
+                                                <Zap size={12} />
+                                                Ready to provision — click to start
+                                            </button>
+                                        )}
+
+
                                         {/* Stats */}
                                         {!isProvisioning && (
                                             <div className="grid grid-cols-3 gap-3 text-center">
@@ -811,7 +845,16 @@ export default function ServersPage() {
                                                 >
                                                     <Terminal size={12} /> Logs
                                                 </button>
+                                                {server.has_ssh_credentials && (
+                                                    <button
+                                                        onClick={() => server.provision_status === 'DONE' ? handleUpdateServer(server.id) : handleRetryProvision(server.id)}
+                                                        className="text-xs px-2.5 py-1.5 rounded-lg border border-blue-500/30 bg-blue-500/5 text-blue-500 hover:bg-blue-500/10 flex items-center gap-1.5"
+                                                    >
+                                                        <Zap size={12} /> {server.provision_status === 'DONE' ? 'Update' : 'Provision'}
+                                                    </button>
+                                                )}
                                             </div>
+
                                             <button
                                                 onClick={() => deleteServer(server.id)}
                                                 className="text-xs px-2.5 py-1.5 rounded-lg text-red-500 hover:bg-red-500/10 flex items-center gap-1.5"
