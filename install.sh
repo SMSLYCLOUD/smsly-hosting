@@ -3601,6 +3601,12 @@ ensure_sysctl() {
 ensure_sysctl "vm.overcommit_memory" "1" "Redis background save fix"
 ensure_sysctl "vm.swappiness" "10" "Prefer RAM over swap"
 ensure_sysctl "net.core.somaxconn" "511" "Redis connection backlog"
+# Security Hardening
+ensure_sysctl "net.ipv4.conf.all.rp_filter" "1" "IP spoofing protection"
+ensure_sysctl "net.ipv4.conf.default.rp_filter" "1" "IP spoofing protection"
+ensure_sysctl "net.ipv4.icmp_echo_ignore_broadcasts" "1" "ICMP flood protection"
+ensure_sysctl "net.ipv4.conf.all.accept_source_route" "0" "Disable source routing"
+ensure_sysctl "net.ipv4.tcp_syncookies" "1" "SYN flood protection"
 
 if [ "$SYSCTL_UPDATED" = "false" ]; then
     echo -e "${GREEN}  ✓ Sysctl settings already optimal${NC}"
@@ -3616,7 +3622,23 @@ for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-
 done
 echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgcat)${NC}"
 
-echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
+# ─── Firewall Hardening (UFW) ────────────────────────────────────────────────
+if command -v ufw >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Configuring UFW firewall...${NC}"
+    ufw default deny incoming >/dev/null 2>&1 || true
+    ufw default allow outgoing >/dev/null 2>&1 || true
+    ufw allow ssh >/dev/null 2>&1 || true
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 443/tcp >/dev/null 2>&1 || true
+    # Allow FRP if active
+    if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
+        ufw allow 7000/tcp >/dev/null 2>&1 || true
+    fi
+    echo "y" | ufw enable >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
+fi
+
+echo -e "${GREEN}  ✓ System security hardening complete${NC}"
 
 # -----------------------------------------------------------------------------
 # 9. Verification
