@@ -2860,24 +2860,35 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
                 }
 
         elif command_flag in ['--update', '--update-frontend']:
-            # Signal the host-side watcher to run install.sh --update
-            update_flag = os.path.join(settings.CADDY_CONFIG_DIR, ".update")
-            mode = "update" if command_flag == '--update' else "frontend"
-            try:
-                os.makedirs(settings.CADDY_CONFIG_DIR, exist_ok=True)
-                tmp_flag = f"{update_flag}.tmp.{self.request.id or os.getpid()}"
-                with open(tmp_flag, "w", encoding="utf-8") as f:
-                    f.write(mode)
-                os.replace(tmp_flag, update_flag)
-                logger.info(f"Platform {mode} update flag written to shared volume.")
-                msg = "Platform update initiated." if mode == "update" else "Platform frontend update initiated."
+            from .models_updates import PlatformUpdate
+            from .tasks import platform_update_task
+
+            # Check if an update is already in progress
+            in_progress = PlatformUpdate.objects.filter(
+                status__in=['PENDING', 'PULLING', 'BACKING_UP', 'RESTARTING', 'HEALTH_CHECK', 'MIGRATING']
+            ).exists()
+
+            if in_progress:
                 return {
-                    "status": "success",
-                    "message": f"{msg} The host will pull latest code and rebuild services shortly. This may cause a temporary dashboard disconnect.",
+                    "status": "error",
+                    "message": "A platform update is already in progress.",
                 }
-            except Exception as e:
-                logger.error(f"Failed to write update flag: {e}")
-                return {"status": "error", "message": f"Failed to initiate update: {e}"}
+
+            # Create the update record
+            update = PlatformUpdate.objects.create(
+                initiated_by='system_maintenance',
+                current_step='Initiating via maintenance task'
+            )
+
+            # Trigger the resilient update task
+            platform_update_task.delay(update_id=str(update.id))
+
+            logger.info(f"Platform update {update.id} initiated via maintenance action.")
+            return {
+                "status": "success",
+                "message": "Platform update initiated using the resilient updater. You can track progress in the Platform Updates log.",
+                "task_id": str(update.id)
+            }
 
     except Exception as e:
         logger.exception(f"Exception during maintenance {command_flag}: {e}")
