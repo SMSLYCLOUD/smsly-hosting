@@ -429,7 +429,7 @@ def generate_caddyfile(config) -> str:
                     # Default: forward other *.domain traffic to Traefik so
                     # services stay reachable while DNS sync/verification catches up.
                     "    handle {",
-                    "        reverse_proxy localhost:8081",
+                    "        respond \"Service Not Found\" 404",
                     "    }",
                     "}",
                 ]
