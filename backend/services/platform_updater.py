@@ -249,7 +249,7 @@ def perform_update(update_record) -> bool:
         update_record.save()
 
         restart_order = [
-            'db', 'redis', 'pgbouncer', 'socket-proxy', 'registry',
+            'db', 'redis', 'pgcat', 'socket-proxy', 'registry',
             'backend', 'celery', 'celery-beat',
             'frontend', 'nginx',
         ]
@@ -265,7 +265,7 @@ def perform_update(update_record) -> bool:
                 raise PlatformUpdateError(f"Failed to restart {svc}: {output[-300:]}")
 
             # Wait for health before moving to next service
-            if svc in ('db', 'redis', 'pgbouncer', 'backend', 'frontend', 'nginx'):
+            if svc in ('db', 'redis', 'pgcat', 'backend', 'frontend', 'nginx'):
                 svc_healthy = False
                 for attempt in range(HEALTH_CHECK_RETRIES):
                     ok, ps_output = _run([

@@ -121,7 +121,7 @@ def _safe_float(s):
 
 INFRA_PREFIXES = (
     'smsly-hosting-db', 'smsly-hosting-redis', 'smsly-hosting-traefik',
-    'smsly-hosting-nginx', 'smsly-hosting-pgbouncer', 'smsly-hosting-registry',
+    'smsly-hosting-nginx', 'smsly-hosting-pgcat', 'smsly-hosting-registry',
     'smsly-hosting-socket-proxy', 'smsly-hosting-route-fallback',
 )
 
