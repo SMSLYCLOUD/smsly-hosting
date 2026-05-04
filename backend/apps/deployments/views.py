@@ -2776,6 +2776,44 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         tail = int(request.query_params.get('tail', 200))
         tail = min(tail, 1000)  # Cap at 1000 lines
 
+        service = deployment.service
+        
+        # [FIX] Proxy to remote node if service is assigned remotely
+        if service.server and not service.server.is_primary:
+            if not deployment.remote_deployment_id:
+                return Response({
+                    'id': str(deployment.id),
+                    'runtime_logs': '',
+                    'message': 'No remote deployment ID found. The deployment may not have successfully synced to the remote node.',
+                })
+            try:
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                orchestrator = RemoteOrchestrator(service.server)
+                resp = orchestrator._request(
+                    method='GET',
+                    path=f"/api/v1/deployments/{deployment.remote_deployment_id}/runtime-logs/",
+                    params={'tail': tail},
+                    timeout=15,
+                )
+                if resp and resp.status_code == 200:
+                    data = resp.json()
+                    # Re-map ID back to local deployment ID for frontend consistency
+                    data['id'] = str(deployment.id)
+                    return Response(data)
+                
+                return Response({
+                    'id': str(deployment.id),
+                    'runtime_logs': '',
+                    'message': f"Failed to fetch logs from remote node: HTTP {resp.status_code if resp else 'None'}",
+                })
+            except Exception as e:
+                logger.warning("Failed to proxy runtime logs to remote node: %s", e)
+                return Response({
+                    'id': str(deployment.id),
+                    'runtime_logs': '',
+                    'message': f"Remote proxy error: {str(e)}",
+                })
+
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
