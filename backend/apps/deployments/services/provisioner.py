@@ -437,6 +437,22 @@ def provision_server(self, server_id: str):
             "SMSLY_STRICT_VERIFY=1 "
             f"USE_SSL=false DOMAIN={server.host}"
         )
+
+        install_args = ""
+        if getattr(server, "is_lite_agent", False):
+            # Lite Agent Node: connect back to this Master node
+            master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1" # Master node IP
+            master_db_pass = os.environ.get("POSTGRES_PASSWORD", "")
+            master_mq_pass = os.environ.get("RABBITMQ_PASSWORD", "")
+            
+            env_vars = (
+                f"{env_vars} "
+                f"MASTER_IP={master_ip} "
+                f"MASTER_DB_PASSWORD={master_db_pass} "
+                f"MASTER_MQ_PASSWORD={master_mq_pass}"
+            )
+            install_args = "--mode agent-lite"
+
         if use_local_bundle:
             env_vars = (
                 "SMSLY_FORCE_SOURCE_SYNC=1 "
@@ -451,7 +467,7 @@ def provision_server(self, server_id: str):
                     "SMSLY_GIT_REMOTE='https://github.com/SMSLYCLOUD/smsly-hosting.git'",
                     f"SMSLY_GIT_REMOTE='{auth_url}'"
                 )
-        cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh 2>&1"
+        cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh {install_args} 2>&1"
 
         # Execute with a channel for streaming output
         transport = ssh.get_transport()

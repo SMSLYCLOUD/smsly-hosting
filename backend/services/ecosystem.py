@@ -11,6 +11,9 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import tempfile
+import subprocess
+import shutil
 
 from apps.intelligence.providers import ask_with_fallback
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
@@ -410,15 +413,17 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
-ECOSYSTEM_PROMPT = """You are the Lead DevOps Architect of the AI Senate. Your mission is to produce a 100% complete, zero-config deployment plan for an interconnected ecosystem of microservices.
+ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI Senate. Your mission is to architect a 100% stable, zero-config, high-performance ecosystem of microservices.
     
-    CRITICAL RULES:
-    1. EXHAUSTIVENESS: Identify and resolve EVERY environment variable detected in the codebase context. Never return empty values.
+    ### ARCHITECTURAL REASONING PROCESS:
+    1. IDENTIFY THE CORE: Locate the "Platform API" or "Core" service. Everything else usually depends on this.
+    2. MAP THE FLOW: Trace how data flows between services. If Service A has an "API_URL" or "BACKEND_URL" env var, it depends on Service B.
+    3. INFRASTRUCTURE FIRST: Identify shared addons (Postgres, Redis, etc.). Shared databases are preferred for unified ecosystems.
+    4. GATEWAY AWARENESS: Identify which services are "Frontends" (public-facing) and which are "Internal" (API-only).
+    
+    ### CRITICAL RULES:
+    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. If you find a var like `STRIPE_KEY` and it's not provided, use `{{GENERATE}}` if it's internal, or mark it as `USER_REQUIRED`.
     2. DETERMINISTIC LINKING:
-       - Use {{SERVICE:repo-name}} for internal cross-service URLs.
-       - Use {{POSTGRES_URL}}, {{REDIS_URL}}, etc., for shared infrastructure.
-       - Use {{GENERATE}} for all secrets, keys, and tokens.
-    3. DEPENDENCY GRAPH: Correcty map depends_on based on URL usage (e.g., if A calls B's URL, A depends on B).
     4. DEPLOY ORDER: Services that provide APIs (backends) must deploy before consumers (frontends).
     
     Return ONLY valid JSON matching this structure:
@@ -448,44 +453,107 @@ ECOSYSTEM_PROMPT = """You are the Lead DevOps Architect of the AI Senate. Your m
     """
 
 
-def analyze_ecosystem(repos_data: List[dict]) -> dict:
+def analyze_ecosystem(repos_data: List[dict], github_token: str = None) -> dict:
     """
-    Use AI Senate to analyze all repos together and produce an exhaustive deploy plan.
+    Use AI Senate to analyze all repos together in a temporary workspace.
+    Clones repos, scans for cross-repo dependencies, and produces a plan.
     """
-    # 1. Enhance repo data with environment context for the Senate
-    for rd in repos_data:
-        # If we have a clone_dir, use the aggressive scanner logic
-        clone_dir = rd.get('clone_dir')
-        if clone_dir:
-            from apps.intelligence.scanner import RepoScanner
-            scanner = RepoScanner(clone_dir)
-            scan = scanner.scan()
-            rd['env_vars_context'] = scan.get('env_vars_context', {})
-            rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
-
-    # 2. Build the ecosystem brief for the AI Senate
-    repo_summaries = []
-    for rd in repos_data:
-        summary = f"\n### {rd['repo']}\n"
-        summary += f"Description: {rd.get('description', 'No description')}\n"
-        summary += f"Stack: {rd.get('stack', 'unknown')}\n"
-        
-        # Include env var context if available
-        if rd.get('env_vars_context'):
-            summary += "Required Env Vars (with Context):\n"
-            for var, ctxs in rd['env_vars_context'].items():
-                summary += f"- {var}: {' | '.join(ctxs[:1])}\n"
-        
-        repo_summaries.append(summary)
-
-    full_prompt = "Here are all the repositories to analyze for a cluster deployment:\n" + "\n".join(repo_summaries)
-
-    # 3. Call the AI Senate with the exhaustive ecosystem prompt
-    response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT)
-
-    # 4. Parse and structure the plan
     import json
     import re as _re
+
+    # 1. Create a temporary workspace for the analysis
+    with tempfile.TemporaryDirectory(prefix="smsly-ecosystem-") as workspace_dir:
+        logger.info(f"Created ecosystem workspace: {workspace_dir}")
+        
+        # 2. Clone all repos into the workspace
+        for rd in repos_data:
+            repo_full = rd.get('repo')
+            if not repo_full:
+                continue
+            
+            repo_name = repo_full.split('/')[-1]
+            target_dir = os.path.join(workspace_dir, repo_name)
+            
+            success = _clone_repo(repo_full, target_dir, github_token)
+            if success:
+                rd['clone_dir'] = target_dir
+                rd['repo_name_short'] = repo_name
+            else:
+                logger.warning(f"Failed to clone {repo_full} for analysis")
+
+        # 3. Aggressive Multi-Repo Scanning
+        for rd in repos_data:
+            clone_dir = rd.get('clone_dir')
+            if clone_dir:
+                from apps.intelligence.scanner import RepoScanner
+                scanner = RepoScanner(clone_dir)
+                scan = scanner.scan()
+                rd['env_vars_context'] = scan.get('env_vars_context', {})
+                rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
+                rd['configs_summary'] = {k: v[:500] for k, v in scan.get('configs', {}).items()}
+                rd['structure'] = scan.get('structure', '')
+
+        # 4. Build the Cross-Repo Intelligence Brief
+        repo_summaries = []
+        for rd in repos_data:
+            summary = f"\n### REPO: {rd['repo']} (Name: {rd.get('repo_name_short', 'unknown')})\n"
+            summary += f"Description: {rd.get('description', 'No description')}\n"
+            summary += f"Stack: {rd.get('stack', 'unknown')}\n"
+            
+            # Detect resource intensity
+            is_heavy = False
+            for file_path, content in rd.get('configs_summary', {}).items():
+                if any(lib in content.lower() for lib in ['torch', 'tensorflow', 'nvidia', 'java', 'spring', 'elasticsearch']):
+                    is_heavy = True
+                    break
+            rd['is_heavy'] = is_heavy
+            summary += f"Resource Intensity: {'HEAVY (Requires 2GB+ RAM)' if is_heavy else 'STANDARD'}\n"
+
+            if rd.get('env_vars_context'):
+                summary += "Expected Env Vars (with Logic Hints):\n"
+                for var, ctxs in rd['env_vars_context'].items():
+                    ctx = ctxs[0] if ctxs else "No context"
+                    summary += f"- {var}: {ctx}\n"
+            
+            if rd.get('configs_summary'):
+                summary += "Critical Config Analysis:\n"
+                for path, snippet in rd['configs_summary'].items():
+                    if any(p in path for p in ['Dockerfile', 'compose', 'package', 'requirements', 'settings', 'config', 'urls']):
+                        summary += f"#### FILE: {path}\n```\n{snippet}\n```\n"
+
+            repo_summaries.append(summary)
+
+        # 5. Global Linkage & Discovery Analysis
+        cross_links = []
+        repo_names = [rd.get('repo_name_short') for rd in repos_data if rd.get('repo_name_short')]
+        for rd in repos_data:
+            cd = rd.get('clone_dir')
+            if not cd: continue
+            
+            # Look for environment variable overlaps
+            current_vars = set(rd.get('env_vars_context', {}).keys())
+            for other_rd in repos_data:
+                if other_rd['repo'] == rd['repo']: continue
+                other_vars = set(other_rd.get('env_vars_context', {}).keys())
+                common = current_vars.intersection(other_vars)
+                if common:
+                    cross_links.append(f"SHARED STATE: {rd['repo']} and {other_rd['repo']} share env keys: {list(common)}")
+
+            # Grep for other repo names in this repo's configs/env (Service Discovery)
+            for other in repo_names:
+                if other == rd.get('repo_name_short'): continue
+                for path, content in rd.get('configs_summary', {}).items():
+                    if other in content.lower():
+                        cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path} (Potential URL target)")
+
+        brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links)) if cross_links else ""
+        full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
+        full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
+
+        # 6. Call AI Senate
+        response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT)
+
+    # 7. Parse and structure the plan (Workspace is now deleted)
     try:
         json_match = _re.search(r'\{.*\}', response_text, _re.DOTALL)
         if not json_match:
@@ -988,3 +1056,27 @@ def sync_ecosystem_envs(project_id: str) -> dict:
     except Exception as e:
         logger.exception("Failed to sync ecosystem envs: %s", e)
         return {"status": "error", "message": str(e)}
+def _clone_repo(repo_full: str, target_dir: str, token: str = None) -> bool:
+    """Clone a repository into a target directory using Git."""
+    try:
+        # Construct clone URL with token if provided
+        clone_url = f"https://github.com/{repo_full}.git"
+        if token:
+            clone_url = f"https://x-access-token:{token}@github.com/{repo_full}.git"
+        
+        # Run git clone --depth 1 for speed
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", clone_url, target_dir],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            return True
+        else:
+            logger.error(f"Git clone failed for {repo_full}: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.error(f"Error cloning {repo_full}: {e}")
+        return False
