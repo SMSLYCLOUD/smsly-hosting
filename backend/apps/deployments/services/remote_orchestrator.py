@@ -351,8 +351,8 @@ class RemoteOrchestrator:
         
         try:
             resp = self._request("DELETE", path, timeout=20)
-            # 202 Accepted or 204 No Content
-            return bool(resp and resp.status_code in (202, 204, 200))
+            # 202 Accepted, 204 No Content, 200 OK, or 404 Not Found (already gone)
+            return bool(resp and resp.status_code in (202, 204, 200, 404))
         except Exception as e:
             logger.error("Error deleting service on remote: %s", e)
             return False

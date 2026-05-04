@@ -37,8 +37,10 @@ class DeploymentsConfig(AppConfig):
             pass
 
         # Fire a one-time startup Caddy sync so SSL/DNS "just work" after boot.
-        try:
-            from .startup import schedule_startup_caddy_sync
-            schedule_startup_caddy_sync()
-        except Exception:
-            pass
+        from django.conf import settings
+        if not getattr(settings, 'IS_TESTING', False):
+            try:
+                from .startup import schedule_startup_caddy_sync
+                schedule_startup_caddy_sync()
+            except Exception:
+                pass
