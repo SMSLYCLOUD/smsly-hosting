@@ -261,6 +261,14 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
         if local:
             return local
 
+    # Global preference: Remote nodes first, then Local as last resort
+    remote = CloudProvider.objects.filter(
+        provider_type=CloudProvider.ProviderType.REMOTE,
+        is_active=True
+    ).first()
+    if remote:
+        return remote
+
     return CloudProvider.objects.filter(is_active=True).first()
 
 
