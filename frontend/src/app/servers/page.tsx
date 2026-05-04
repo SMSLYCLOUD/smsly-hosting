@@ -805,14 +805,12 @@ export default function ServersPage() {
                                                         </a>
                                                     </>
                                                 )}
-                                                {(isProvisioning || provFailed) && (
-                                                    <button
-                                                        onClick={() => { setViewingLogs(server.id); setProvisionLogs(''); setProvisionStatus(server.provision_status); }}
-                                                        className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 flex items-center gap-1.5"
-                                                    >
-                                                        <Terminal size={12} /> Logs
-                                                    </button>
-                                                )}
+                                                <button
+                                                    onClick={() => { setViewingLogs(server.id); setProvisionLogs(''); setProvisionStatus(server.provision_status); }}
+                                                    className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 flex items-center gap-1.5"
+                                                >
+                                                    <Terminal size={12} /> Logs
+                                                </button>
                                             </div>
                                             <button
                                                 onClick={() => deleteServer(server.id)}
