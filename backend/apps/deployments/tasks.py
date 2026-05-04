@@ -3065,10 +3065,6 @@ def update_remote_server_task(server_id: str):
             server.save(update_fields=["provision_logs"])
             return False
 
-    finally:
-        if 'ssh' in locals():
-            ssh.close()
-
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.provision_logs += f"\n--- Update completed successfully at {timezone.now()} ---\n"
         server.save(update_fields=["provision_status", "provision_logs"])
@@ -3082,3 +3078,7 @@ def update_remote_server_task(server_id: str):
         server.provision_logs += f"\nFATAL ERROR: {str(e)}\n"
         server.save(update_fields=["provision_status", "provision_logs"])
         return False
+
+    finally:
+        if 'ssh' in locals():
+            ssh.close()
