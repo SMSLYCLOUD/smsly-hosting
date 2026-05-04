@@ -1150,7 +1150,7 @@ def _build_function(deployment, service) -> str:
 
         append_log(deployment, f"Building function {tag}...\n")
 
-        cmd = ["docker", "build", "-t", tag, build_dir]
+        cmd = ["docker", "build", "-t", tag, "--load", build_dir]
         try:
             result = subprocess.run(
                 cmd,
@@ -1226,7 +1226,7 @@ def _build_uploaded_source(deployment, service) -> str:
             append_log(deployment, "Building uploaded source with Dockerfile...\n")
             try:
                 subprocess.run(
-                    ["docker", "build", "-t", image_name, "-f", dockerfile_path, source_dir],
+                    ["docker", "build", "-t", image_name, "--load", "-f", dockerfile_path, source_dir],
                     check=True,
                     capture_output=True,
                     text=True,
