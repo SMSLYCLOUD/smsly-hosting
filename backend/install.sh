@@ -1010,7 +1010,7 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
 
     # 2. Handle Named Volumes (repo_cache_data, backups_data)
-    # We use a one-off container to safely chown existing named volumes.
+        # We use a one-off container to safely chown existing named volumes.
     if command -v docker >/dev/null 2>&1; then
         for vol in repo_cache_data backups_data; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
