@@ -6,6 +6,9 @@ import logging
 import os
 import re
 import secrets
+import tarfile
+import tempfile
+import hashlib
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -421,3 +424,54 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
         return '4', True
 
     return None, False
+
+
+def get_source_root_dir() -> str:
+    """Detect local source root relative to the codebase."""
+    # utils.py is in apps/deployments/
+    # target: / (project root)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+
+def build_local_source_bundle() -> str:
+    """
+    Build a temporary tar.gz bundle of source code for tokenless provisioning.
+    Returns local temporary file path.
+    """
+    source_root = get_source_root_dir()
+    if not os.path.isdir(source_root):
+        raise FileNotFoundError(f"Source root not found: {source_root}")
+
+    fd, archive_path = tempfile.mkstemp(prefix="smsly-src-", suffix=".tar.gz")
+    os.close(fd)
+
+    excluded = {
+        ".git",
+        "node_modules",
+        ".next",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".env",
+        ".credentials",
+        ".git-credentials",
+    }
+
+    with tarfile.open(archive_path, mode="w:gz") as tar:
+        for root, dirs, files in os.walk(source_root, topdown=True):
+            dirs[:] = [d for d in dirs if d not in excluded]
+            rel_root = os.path.relpath(root, source_root)
+            rel_root = "" if rel_root == "." else rel_root
+
+            for filename in files:
+                if filename in excluded:
+                    continue
+                local_path = os.path.join(root, filename)
+                rel_path = os.path.join(rel_root, filename) if rel_root else filename
+                try:
+                    tar.add(local_path, arcname=rel_path, recursive=False)
+                except (PermissionError, FileNotFoundError, OSError):
+                    # Skip unreadable/transient files in host-mounted source root.
+                    continue
+
+    return archive_path

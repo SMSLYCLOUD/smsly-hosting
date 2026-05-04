@@ -58,6 +58,7 @@ servers = [["{db_host}", {db_port}, "primary"]]
 database = "{db_name}"
 
 [pools.smsly_hosting.users.{db_user}]
+username = "{db_user}"
 pool_size = {app_pool_size}
 password = "{db_password}"
 
@@ -69,6 +70,7 @@ servers = [["{db_host}", {db_port}, "primary"]]
 database = "{db_name}"
 
 [pools.smsly_hosting_session.users.{db_user}]
+username = "{db_user}"
 pool_size = {worker_pool_size}
 password = "{db_password}"
 """

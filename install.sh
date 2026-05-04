@@ -258,6 +258,8 @@ detect_public_ip() {
 }
 
 # ─── Constants ───────────────────────────────────────────────────────────────
+SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
 gen_hex_secret() {
     local bytes="${1:-16}"
     python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
@@ -643,6 +645,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
+    env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
@@ -1711,9 +1714,38 @@ if [ -n "$UPDATE_MODE" ]; then
         touch "$INSTALL_DIR/.git-stash-marker"
     fi
 
-    echo -e "${BLUE}  → Force-pulling latest code from GitHub...${NC}"
-    git fetch origin main >/dev/null 2>&1 || true
-    git reset --hard origin/main
+    echo -e "${BLUE}  → Force-pulling latest code from GitHub ($SMSLY_BRANCH)...${NC}"
+    
+    # Track if git update succeeded
+    GIT_UPDATE_OK=true
+    
+    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
+        GIT_UPDATE_OK=false
+    fi
+    
+    if [ "$GIT_UPDATE_OK" = "true" ]; then
+        if ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
+            GIT_UPDATE_OK=false
+        fi
+    fi
+
+    # Fallback if git failed but a local bundle was provided
+    if [ "$GIT_UPDATE_OK" = "false" ]; then
+        if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
+            echo -e "${BLUE}  → Fallback: Synchronizing from pre-uploaded source bundle...${NC}"
+            # Use rsync if available, otherwise cp. Exclude .git to preserve local repo state if any.
+            if command -v rsync >/dev/null 2>&1; then
+                rsync -rtv --exclude='.git' "${SMSLY_INSTALL_WORKDIR}/" "$INSTALL_DIR/"
+            else
+                cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+            fi
+            echo -e "${GREEN}  ✓ Fallback synchronization complete.${NC}"
+        else
+            echo -e "${RED}✗ Git update failed and no local fallback bundle available. Update may be incomplete.${NC}"
+        fi
+    fi
 
     # ─── Self-Update Check ──────────────────────────────────────────────────
     # If the installer itself was updated, we MUST re-execute it to pick up
@@ -2457,6 +2489,50 @@ if [ "$DISK_AVAIL_MB" -lt 3000 ]; then
     fi
     echo -e "${GREEN}  ✓ After cleanup: ${DISK_AVAIL_MB}MB available${NC}"
 fi
+
+# ─── Git Initialization & Sync ──────────────────────────────────────────────
+SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
+SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
+
+if [ -d "$INSTALL_DIR/.git" ]; then
+    echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
+    cd "$INSTALL_DIR"
+    if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠️ Git update failed. If this is a private repo, ensure your token is valid.${NC}"
+    fi
+else
+    echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
+    CLONE_SUCCESS=false
+    if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  → Destination not empty. Initializing git...${NC}"
+        cd "$INSTALL_DIR"
+        git init -q
+        git remote add origin "$SMSLY_GIT_REMOTE"
+        if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            CLONE_SUCCESS=true
+        fi
+    else
+        if git clone -b "$SMSLY_BRANCH" "$SMSLY_GIT_REMOTE" "$INSTALL_DIR"; then
+            CLONE_SUCCESS=true
+        fi
+    fi
+    
+    if [ "$CLONE_SUCCESS" = "false" ]; then
+        echo -e "${YELLOW}  ⚠️ Git clone/fetch failed.${NC}"
+        if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
+            echo -e "${BLUE}  → Fallback: Initializing from pre-uploaded source bundle...${NC}"
+            mkdir -p "$INSTALL_DIR"
+            cp -rv "${SMSLY_INSTALL_WORKDIR}/"* "$INSTALL_DIR/" 2>/dev/null || true
+            cd "$INSTALL_DIR"
+            if [ ! -d ".git" ]; then
+                git init -q
+                git remote add origin "$SMSLY_GIT_REMOTE"
+            fi
+            echo -e "${GREEN}  ✓ Fallback initialization complete.${NC}"
+        fi
+    fi
+fi
+
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
 
 # -----------------------------------------------------------------------------
@@ -2579,7 +2655,7 @@ if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     echo -e "${BLUE}  -> Initializing Git repository...${NC}"
     git init -q
     git remote add origin "$SMSLY_GIT_REMOTE"
-    git fetch origin main -q --depth=1 || true
+    git fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"

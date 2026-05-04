@@ -49,6 +49,8 @@ from apps.deployments.services.transfer_service import ServerTransferService
 from apps.deployments.utils import (
     append_log,
     broadcast_status,
+    build_local_source_bundle,
+    get_github_oauth_token_for_user,
     update_stage,
 )
 from services.addon_provisioner import addon_provisioner
@@ -3073,10 +3075,31 @@ def update_remote_server_task(server_id: str):
         )
         
         # 1. Pull latest code
-        # We use git stash to prevent local changes (unlikely on remote) from blocking pull
-        cmd_pull = "cd /opt/smsly-hosting && sudo git config --global --add safe.directory /opt/smsly-hosting && sudo git pull origin main"
-        logger.info("Update Task: Pulling code on %s", server.host)
-        server.provision_logs += "> git pull origin main\n"
+        # Resolve GitHub token for the server owner to handle private repos
+        github_token = get_github_oauth_token_for_user(server.owner)
+        auth_url = None
+        if github_token:
+            from urllib.parse import quote
+            encoded = quote(github_token, safe="")
+            auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
+
+        branch = os.environ.get('SMSLY_BRANCH', 'main')
+        logger.info("Update Task: Pulling code on %s (branch: %s)", server.host, branch)
+        
+        # Prepare commands
+        cmds = []
+        if auth_url:
+            # Persistence: Update the remote URL so future manual git commands also work
+            cmds.append(f"sudo git remote set-url origin {auth_url} 2>/dev/null || true")
+        
+        # We use git config safe.directory to avoid ownership issues on the remote node
+        cmds.append("sudo git config --global --add safe.directory /opt/smsly-hosting")
+        cmds.append(f"sudo git fetch origin {branch} --depth=1")
+        cmds.append(f"sudo git reset --hard origin/{branch}")
+        
+        cmd_pull = f"cd /opt/smsly-hosting && {' && '.join(cmds)}"
+        
+        server.provision_logs += f"> Updating repository (branch: {branch})...\n"
         server.save(update_fields=["provision_logs"])
         
         stdout, stderr, code = ssh.exec_command(cmd_pull, raise_on_error=False)
@@ -3084,10 +3107,33 @@ def update_remote_server_task(server_id: str):
         server.save(update_fields=["provision_logs"])
         
         if code != 0:
-            logger.error("Update Task: Git pull failed on %s", server.host)
-            server.provision_logs += f"\nERROR: Git pull failed with exit code {code}\n"
+            logger.warning("Update Task: Git update failed on %s, trying local bundle fallback", server.host)
+            server.provision_logs += "\n⚠️ Git update failed. Attempting local source bundle fallback...\n"
             server.save(update_fields=["provision_logs"])
-            return False
+            
+            # BUILD AND UPLOAD LOCAL BUNDLE
+            bundle_path = build_local_source_bundle()
+            try:
+                remote_archive = "/tmp/smsly-hosting-update.tar.gz"
+                ssh.put_file(bundle_path, remote_archive)
+                
+                cmd_fallback = (
+                    "mkdir -p /tmp/smsly-hosting-src && "
+                    f"tar -xzf {remote_archive} -C /tmp/smsly-hosting-src && "
+                    "sudo cp -rv /tmp/smsly-hosting-src/* /opt/smsly-hosting/ && "
+                    f"sudo rm -rf /tmp/smsly-hosting-src {remote_archive}"
+                )
+                stdout_f, stderr_f, code_f = ssh.exec_command(cmd_fallback, raise_on_error=False)
+                server.provision_logs += stdout_f + stderr_f
+                server.save(update_fields=["provision_logs"])
+                
+                if code_f != 0:
+                     logger.error("Update Task: Fallback synchronization failed on %s", server.host)
+                     return False
+                logger.info("Update Task: Fallback synchronization successful on %s", server.host)
+            finally:
+                if os.path.exists(bundle_path):
+                    os.remove(bundle_path)
 
         # 2. Restart services
         cmd_restart = "cd /opt/smsly-hosting && docker compose -f docker-compose.prod.yml up -d"
