@@ -1,0 +1,76 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PgCat — Production Connection Pooler for CloudNeuron
+# ═══════════════════════════════════════════════════════════════════════════════
+# Multi-threaded Rust-based PostgreSQL proxy with:
+#   • Transaction-mode pooling (Django-compatible)
+#   • Read/write query splitting (Patroni-ready)
+#   • Prometheus metrics on :9930
+#   • Automatic health checks and backend banning
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[general]
+# Bind address — 0.0.0.0 inside Docker, external access controlled by compose
+host = "0.0.0.0"
+port = 5432
+
+# ── Connection Limits ──────────────────────────────────────────────────────────
+# Right-sized for a single-primary PostgreSQL 16 instance.
+# PgBouncer had MAX_CLIENT_CONN=10000 which was wildly inflated.
+connect_timeout = 5000          # ms — fail fast if DB is unreachable
+idle_timeout = 600000           # ms — 10 min idle before server conn is closed
+shutdown_timeout = 60000        # ms — graceful drain on SIGTERM
+
+# ── Query Parser (Read/Write Splitting) ───────────────────────────────────────
+# PgCat inspects queries to route SELECTs to replicas and writes to primary.
+# When no replicas are configured, all traffic goes to primary.
+query_parser_enabled = true
+query_parser_read_write_splitting = true
+primary_reads_enabled = true    # Primary also serves reads (single-node safe)
+
+# ── Health Checks ─────────────────────────────────────────────────────────────
+healthcheck_timeout = 5000      # ms
+healthcheck_delay = 30000       # ms — interval between health checks
+
+# ── Banning ───────────────────────────────────────────────────────────────────
+# Auto-ban unhealthy backends to prevent cascading failures
+ban_time = 60                   # seconds — ban period after health check failure
+
+# ── Admin Interface ───────────────────────────────────────────────────────────
+admin_username = "pgcat_admin"
+admin_password = "pgcat_admin"  # Internal only — not exposed outside Docker
+
+# ── Prometheus Metrics ────────────────────────────────────────────────────────
+# Exposed on port 9930 for Grafana/Prometheus scraping
+prometheus_exporter_port = 9930
+
+# ── Worker Threads ────────────────────────────────────────────────────────────
+# Multi-threaded: use all available cores (0 = auto-detect)
+worker_threads = 0
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+log_client_connections = false
+log_client_disconnections = false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pool: smsly_hosting (primary database)
+# ═══════════════════════════════════════════════════════════════════════════════
+[pools.smsly_hosting]
+pool_mode = "transaction"
+
+# ── Server Definitions ────────────────────────────────────────────────────────
+# Format: [host, port, role]
+# Role: "primary" or "replica"
+# When Patroni promotes a replica, update this and send SIGHUP to reload.
+[pools.smsly_hosting.shards.0]
+servers = [
+    ["db", 5432, "primary"],
+]
+database = "smsly_hosting"
+
+[pools.smsly_hosting.users.0]
+username = "smsly_admin"
+# Password is injected via environment variable substitution at runtime.
+# PgCat reads PGCAT_PASSWORD_0 or we template it in the entrypoint.
+password = "${POSTGRES_PASSWORD}"
+pool_size = 15
+min_pool_size = 5
