@@ -257,6 +257,24 @@ detect_public_ip() {
     return 0
 }
 
+configure_docker_mirror() {
+    # Option B: Pull-Through Cache
+    if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
+        echo -e "${BLUE}  → Configuring Docker pull-through cache mirror (Master: $MASTER_IP)...${NC}"
+        mkdir -p /etc/docker
+        
+        # Build the daemon.json
+        cat > /etc/docker/daemon.json <<EOF
+{
+  "registry-mirrors": ["http://${MASTER_IP}:5001"],
+  "insecure-registries": ["${MASTER_IP}:5000", "${MASTER_IP}:5001"]
+}
+EOF
+        systemctl restart docker || true
+        echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
+    fi
+}
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
 SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
@@ -1246,6 +1264,9 @@ restart_edge_stack() {
 }
 
 refresh_runtime_services() {
+    # Ensure Docker mirror is configured (Option B)
+    configure_docker_mirror
+
     local app_services_requested=(
         pgcat
         backend
@@ -2609,6 +2630,12 @@ if ! docker compose version >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
     apt-get install -y docker-compose-plugin || true
 fi
+
+# Apply mirror config if applicable (Only if docker is now present)
+if command -v docker &> /dev/null; then
+    configure_docker_mirror
+fi
+
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 
 # -----------------------------------------------------------------------------
@@ -3633,6 +3660,10 @@ if command -v ufw >/dev/null 2>&1; then
     # Allow FRP if active
     if [ -f "$INSTALL_DIR/.env" ] && grep -q "FRP_AUTH_TOKEN" "$INSTALL_DIR/.env"; then
         ufw allow 7000/tcp >/dev/null 2>&1 || true
+    fi
+    # Allow Docker Mirror (Option B) if this is the Master/Leader
+    if [ -z "${MASTER_IP:-}" ] || [ "$MASTER_IP" = "127.0.0.1" ] || [ "$MASTER_IP" = "$(detect_public_ip)" ]; then
+        ufw allow 5001/tcp >/dev/null 2>&1 || true
     fi
     echo "y" | ufw enable >/dev/null 2>&1 || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"

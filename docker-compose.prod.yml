@@ -66,9 +66,21 @@ services:
     environment:
       REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
     volumes:
-    - registry_data:/var/lib/registry
+      - registry_data:/var/lib/registry
     networks:
-    - smsly-net
+      - smsly-net
+  docker-mirror:
+    image: registry:2
+    restart: unless-stopped
+    ports:
+      - 5001:5000
+    environment:
+      REGISTRY_PROXY_REMOTEURL: https://registry-1.docker.io
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+    volumes:
+      - docker_mirror_data:/var/lib/registry
+    networks:
+      - smsly-net
   backend:
     build:
       context: ./backend
@@ -438,6 +450,7 @@ volumes:
   postgres_data: null
   redis_data: null
   registry_data: null
+  docker_mirror_data: null
   static_volume: null
   media_volume: null
   caddy_config:

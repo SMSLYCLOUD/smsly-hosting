@@ -405,25 +405,25 @@ def provision_server(self, server_id: str):
         _append_log(server, "⚙️ Running CloudNeuron installer (this may take 5-15 minutes)...")
 
         # Build non-interactive environment
+        master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
         env_vars = (
             "NON_INTERACTIVE=1 "
             "SKIP_SCREEN=1 "
             "SKIP_REBOOT=1 "
             "SMSLY_STRICT_VERIFY=1 "
+            f"MASTER_IP={master_ip} "
             f"SMSLY_BRANCH={os.environ.get('SMSLY_BRANCH', 'main')} "
             f"USE_SSL=false DOMAIN={server.host}"
         )
 
         install_args = ""
         if getattr(server, "is_lite_agent", False):
-            # Lite Agent Node: connect back to this Master node
-            master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1" # Master node IP
+            # Lite Agent Node: additional credentials for database/queue
             master_db_pass = os.environ.get("POSTGRES_PASSWORD", "")
             master_mq_pass = os.environ.get("RABBITMQ_PASSWORD", "")
             
             env_vars = (
                 f"{env_vars} "
-                f"MASTER_IP={master_ip} "
                 f"MASTER_DB_PASSWORD={master_db_pass} "
                 f"MASTER_MQ_PASSWORD={master_mq_pass}"
             )
