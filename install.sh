@@ -701,26 +701,39 @@ ensure_env_runtime_defaults() {
     fi
 
     if [ -n "$postgres_password" ]; then
-        # Route through PgBouncer for connection pooling
-        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgbouncer:5432/smsly_hosting"
+        # Route through PgCat for connection pooling
+        expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
         current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
 
-        # Migrate legacy @db:5432 URLs to @pgbouncer:5432
+        # Migrate legacy @db:5432 URLs to @pgcat:5432
         if [[ "$current_database_url" =~ @db:5432 ]]; then
-            echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgbouncer${NC}"
-            local migrated_url="${current_database_url/@db:5432/@pgbouncer:5432}"
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
+            local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
             current_database_url="$migrated_url"
-            echo -e "${GREEN}  OK DATABASE_URL migrated to pgbouncer${NC}"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
+        fi
+
+        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432
+        if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
+            local migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
+            current_database_url="$migrated_url"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
         fi
 
         if [ -z "$current_database_url" ]; then
-            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgBouncer)"
-        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgbouncer:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
+            env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
+        elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgcat:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
             echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             echo -e "${GREEN}  OK DATABASE_URL password synced${NC}"
         fi
+
+        # Direct DB connection for migrations (bypasses PgCat transaction pooling)
+        local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+        env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct PostgreSQL connection (migrations only)"
     fi
 
     return 0

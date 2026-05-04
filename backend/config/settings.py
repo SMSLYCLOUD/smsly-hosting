@@ -390,13 +390,25 @@ _DATABASE_DEFAULT = (
 DATABASES = {
     'default': dj_database_url.config(
         default=config('DATABASE_URL', default=_DATABASE_DEFAULT),
-        # PgBouncer (transaction pooling) requires conn_max_age=0
+        # PgCat (transaction pooling) requires conn_max_age=0
         # so Django returns connections to the pool after each request.
         conn_max_age=0,
         conn_health_checks=False,
     )
 }
-# Disable server-side cursors – incompatible with PgBouncer transaction pooling
+
+# Direct connection for migrations — bypasses PgCat transaction pooling.
+# Without this, Django migrations hang because PgCat's transaction mode
+# doesn't support the SET/SAVEPOINT statements that Django emits.
+_DIRECT_DB_URL = config('DIRECT_DATABASE_URL', default='')
+if _DIRECT_DB_URL:
+    DATABASES['direct'] = dj_database_url.config(
+        default=_DIRECT_DB_URL,
+        conn_max_age=0,
+        conn_health_checks=False,
+    )
+
+# Disable server-side cursors – incompatible with PgCat transaction pooling
 DISABLE_SERVER_SIDE_CURSORS = True
 
 AUTH_PASSWORD_VALIDATORS = [
