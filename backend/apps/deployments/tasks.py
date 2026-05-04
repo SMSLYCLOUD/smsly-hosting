@@ -936,12 +936,40 @@ def _handle_remote_deployment_legacy(deployment, server):
     _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
 
 
+def _stop_local_service_container(service_name: str):
+    """
+    Proactively stop and remove any local container on the Master VPS.
+    Used during remote delegation to prevent 'ghost' containers.
+    """
+    try:
+        from apps.cloud.docker_client import get_docker_client
+        import docker
+        client = get_docker_client()
+        try:
+            container = client.containers.get(service_name)
+            logger.info(f"Stopping ghost container {service_name} on Master VPS...")
+            container.stop(timeout=10)
+            container.remove(force=True)
+            logger.info(f"Successfully removed ghost container {service_name}")
+        except docker.errors.NotFound:
+            pass
+        except Exception as e:
+            logger.warning(f"Failed to stop ghost container {service_name}: {e}")
+    except Exception as e:
+        logger.warning(f"Docker client unavailable on Master: {e}")
+
+
 def _handle_remote_deployment(deployment, server):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
     service = deployment.service
+
+    # [FIX] Proactively stop any existing local container on Master VPS
+    # if this service is being delegated to a remote node.
+    _stop_local_service_container(service.name)
+
     guard = ServerGuard.check_user_workload_allowed(server)
     if not guard["ok"]:
         _handle_failure(
