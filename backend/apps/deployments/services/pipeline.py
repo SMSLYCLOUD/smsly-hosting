@@ -308,11 +308,9 @@ class PipelineManager:
 
     def _setup(self):
         """Initialize build environment."""
-        # Deterministic path keyed by deployment ID — survives OS temp cleanup
-        # and can be found again by _setup_for_resume() without glob.
-        self.build_dir = os.path.join(_BUILDS_ROOT, f"build_{self.deployment.id}")
-        if os.path.exists(self.build_dir):
-            shutil.rmtree(self.build_dir)  # Clean slate for fresh build
+        # Use a persistent path keyed by service ID to enable "git pull" for redeployments.
+        self.build_dir = os.path.join(_BUILDS_ROOT, f"svc_{self.service.id}")
+        # Ensure directory exists but do NOT wipe it (to allow git pull)
         os.makedirs(self.build_dir, exist_ok=True)
         self.deployment.pipeline_stages = []
         update_stage(self.deployment, 'Clone', 'pending')
@@ -370,6 +368,7 @@ class PipelineManager:
                 repo_url=self.service.repository_url,
                 branch=requested_branch,
                 token=repo_token,
+                destination=self.build_dir,
             )
 
             # Metadata

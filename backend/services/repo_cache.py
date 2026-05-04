@@ -213,7 +213,7 @@ def _cache_path(repo_url: str) -> Path:
     return Path(CACHE_DIR) / '/'.join(parts[-3:]) if len(parts) >= 3 else Path(CACHE_DIR) / '/'.join(parts)
 
 
-def get_or_clone(repo_url: str, branch: str = 'main', token: str = None) -> str:
+def get_or_clone(repo_url: str, branch: str = 'main', token: str = None, destination: str = None) -> str:
     """
     Get cached repo or clone fresh. Returns path to worktree checkout.
 
@@ -304,12 +304,43 @@ def get_or_clone(repo_url: str, branch: str = 'main', token: str = None) -> str:
     # Touch last_used timestamp for LRU
     (cache / '.last_used').write_text(str(time.time()))
 
-    # Create a fresh worktree checkout for this build
+    # Determine worktree destination
     requested_branch = (branch or 'main').strip() or 'main'
-    worktree_dir = cache / f'worktree-{requested_branch}-{int(time.time())}'
-    if worktree_dir.exists():
-        shutil.rmtree(str(worktree_dir))
+    if destination:
+        worktree_dir = Path(destination)
+    else:
+        worktree_dir = cache / f'worktree-{requested_branch}-{int(time.time())}'
 
+    if worktree_dir.exists():
+        # If it's already a git repo, we can try to reuse it
+        if (worktree_dir / '.git').exists():
+            try:
+                logger.info(f"Reusing existing worktree at {worktree_dir}")
+                # Reset to match bare cache (which was just fetched)
+                subprocess.run(
+                    ['git', 'fetch', str(bare_dir), f'{requested_branch}:{requested_branch}'],
+                    cwd=str(worktree_dir),
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                subprocess.run(
+                    ['git', 'reset', '--hard', requested_branch],
+                    cwd=str(worktree_dir),
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                return str(worktree_dir)
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Failed to reuse worktree at {worktree_dir}: {e.stderr.decode()}")
+                # Fallback: wipe and re-clone
+                shutil.rmtree(str(worktree_dir))
+        else:
+            # Exists but not a git repo? Wipe it.
+            shutil.rmtree(str(worktree_dir))
+
+    worktree_dir.mkdir(parents=True, exist_ok=True)
     try:
         _clone_worktree(bare_dir, requested_branch, worktree_dir)
     except subprocess.CalledProcessError as clone_error:

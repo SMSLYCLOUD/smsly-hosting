@@ -1025,6 +1025,18 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
     if remote_status.get("review_summary") and remote_status.get("review_summary") != deployment.review_summary:
         deployment.review_summary = remote_status.get("review_summary") or {}
         update_fields.append("review_summary")
+    if remote_status.get("ai_diagnosis") and remote_status.get("ai_diagnosis") != deployment.ai_diagnosis:
+        deployment.ai_diagnosis = remote_status.get("ai_diagnosis") or ""
+        update_fields.append("ai_diagnosis")
+    if remote_status.get("pipeline_stages") and remote_status.get("pipeline_stages") != deployment.pipeline_stages:
+        deployment.pipeline_stages = remote_status.get("pipeline_stages") or []
+        update_fields.append("pipeline_stages")
+    if remote_status.get("vulnerability_report") and remote_status.get("vulnerability_report") != deployment.vulnerability_report:
+        deployment.vulnerability_report = remote_status.get("vulnerability_report") or {}
+        update_fields.append("vulnerability_report")
+    if remote_status.get("runtime_logs_url") and remote_status.get("runtime_logs_url") != deployment.runtime_logs_url:
+        deployment.runtime_logs_url = remote_status.get("runtime_logs_url")
+        update_fields.append("runtime_logs_url")
     if remote_status.get("commit_hash") and remote_status.get("commit_hash") != deployment.commit_hash:
         deployment.commit_hash = remote_status.get("commit_hash")
         update_fields.append("commit_hash")
