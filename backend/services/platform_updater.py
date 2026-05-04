@@ -138,8 +138,12 @@ def perform_update(update_record) -> bool:
             update_record.append_log("DIRECT_DATABASE_URL is missing. Aborting to protect database integrity.")
             raise PlatformUpdateError("DIRECT_DATABASE_URL missing")
 
-        update_record.append_log("Recording current migration state...")
-        ok, migrations_out = _run(["python", "manage.py", "showmigrations", "--plan"])
+        # Check if manage.py is in root or backend/
+        manage_py_path = "manage.py"
+        if not os.path.exists(os.path.join(INSTALL_DIR, manage_py_path)):
+            manage_py_path = "backend/manage.py"
+
+        ok, migrations_out = _run(["python", manage_py_path, "showmigrations", "--plan"])
         if ok:
             update_record.append_log("Migration state recorded.")
         else:
