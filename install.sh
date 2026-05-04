@@ -2546,7 +2546,16 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              git reset --hard origin/main
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
-             git clone "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+             if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+                 echo -e "${YELLOW}  → Destination not empty. Initializing git and pulling...${NC}"
+                 cd "$INSTALL_DIR"
+                 git init -q
+                 git remote add origin "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
+                 git fetch origin main -q >/dev/null 2>&1 || true
+                 git reset --hard origin/main
+             else
+                 git clone "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
+             fi
         fi
     fi
 fi
