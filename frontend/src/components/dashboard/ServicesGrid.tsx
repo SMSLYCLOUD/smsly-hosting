@@ -225,7 +225,7 @@ export function ServicesGrid({ services }: ServicesGridProps) {
                 </Button>
               )}
             </div>
-            <div className="flex flex-wrap justify-end gap-0.5 min-w-0">
+            <div className="grid grid-cols-4 gap-0.5 shrink-0 ml-auto">
               <Button
                 variant="ghost"
                 size="icon"
