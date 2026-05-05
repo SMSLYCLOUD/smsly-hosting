@@ -759,7 +759,16 @@ ensure_env_runtime_defaults() {
             echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
         fi
 
-        # Migrate legacy @pgcat:5432 URLs to @pgcat:5432
+        # Migrate legacy @pgbouncer:5432 URLs to @pgcat:5432
+        if [[ "$current_database_url" =~ @pgbouncer:5432 ]]; then
+            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgbouncer to pgcat${NC}"
+            local migrated_url="${current_database_url/@pgbouncer:5432/@pgcat:5432}"
+            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
+            current_database_url="$migrated_url"
+            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
+        fi
+
+        # Migrate legacy @pgcat:5432 URLs to @pgcat:5432 (sanity check)
         if [[ "$current_database_url" =~ @pgcat:5432 ]]; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from pgcat to pgcat${NC}"
             local migrated_url="${current_database_url/@pgcat:5432/@pgcat:5432}"
