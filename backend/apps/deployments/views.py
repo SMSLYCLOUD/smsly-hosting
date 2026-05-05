@@ -761,6 +761,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
+        skip_review = request.data.get('skip_review', False)
         source_node = request.data.get('source_node')
 
         server = getattr(service, 'server', None)
@@ -792,7 +793,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         )
 
         try:
-            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+            smart_deploy_task.delay(
+                deployment_id=str(deployment.id), 
+                provider_id=str(provider.id),
+                skip_review=skip_review
+            )
         except Exception as exc:  # pragma: no cover - broker/runtime failure
             logger.exception(
                 "Failed to enqueue deploy task for service=%s deployment=%s",
@@ -2512,7 +2517,11 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         'commit_hash', 'latest')
                 )
 
-                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+                smart_deploy_task.delay(
+                    deployment_id=str(deployment.id), 
+                    provider_id=str(provider.id),
+                    skip_review=request.data.get('skip_review', False)
+                )
 
                 return Response({
                     'message': 'Deployment triggered successfully',
