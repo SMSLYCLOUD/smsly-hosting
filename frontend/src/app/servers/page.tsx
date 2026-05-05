@@ -51,10 +51,15 @@ async function apiFetch(path: string, method = 'GET', body?: object) {
     if (!res.ok) {
         let message = `HTTP ${res.status}`;
         try {
-            const data = await res.json();
-            message = data?.error?.message || data?.error || data?.detail || JSON.stringify(data);
+            const text = await res.text();
+            try {
+                const data = JSON.parse(text);
+                message = data?.error?.message || data?.error || data?.detail || JSON.stringify(data);
+            } catch {
+                message = text || message;
+            }
         } catch {
-            message = await res.text() || message;
+            // fallback if text() fails
         }
         throw new Error(message);
     }
