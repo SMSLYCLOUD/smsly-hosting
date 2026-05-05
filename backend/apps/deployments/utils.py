@@ -455,6 +455,10 @@ def build_local_source_bundle() -> str:
         ".env",
         ".credentials",
         ".git-credentials",
+        "backups",
+        "repo_cache",
+        "scratch",
+        "media",
     }
 
     with tarfile.open(archive_path, mode="w:gz") as tar:
