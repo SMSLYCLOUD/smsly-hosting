@@ -286,20 +286,17 @@ class RemoteOrchestrator:
             except Exception:
                 pass
 
-    def trigger_deploy(self, deployment: Deployment, remote_service_id: str) -> Optional[str]:
-        """
-        Trigger a deployment on the remote server for the given service.
-        Returns the remote deployment ID on success.
-        """
+    def trigger_deploy(self, deployment, remote_service_id, skip_review=False):
+        """Trigger a deployment task on the remote server."""
+        from apps.deployments.models import PlatformConfig
         path = f"/api/v1/services/{remote_service_id}/deploy/"
-        ref = deployment.commit_hash or "HEAD"
-        if ref == "latest":
-            ref = "HEAD"
-
         config = PlatformConfig.load()
+        ref = deployment.commit_hash or "HEAD"
+
         payload = {
             "ref": ref,
             "source_node": config.server_ip or "controller",
+            "skip_review": skip_review
         }
         
         try:
