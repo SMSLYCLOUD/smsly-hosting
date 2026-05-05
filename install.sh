@@ -50,7 +50,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
 # To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]]; then
+if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]] && [ -t 0 ]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
@@ -1757,9 +1757,11 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
     
     if [ "$GIT_UPDATE_OK" = "true" ]; then
-        if ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+        if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
             echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
             GIT_UPDATE_OK=false
+        else
+            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
         fi
     fi
 
@@ -2540,7 +2542,8 @@ else
         cd "$INSTALL_DIR"
         git init -q
         git remote add origin "$SMSLY_GIT_REMOTE"
-        if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+        if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
+            git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
             CLONE_SUCCESS=true
         fi
     else
@@ -2670,7 +2673,8 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              echo -e "${BLUE}  → Updating existing repository...${NC}"
              cd "$INSTALL_DIR"
              git fetch origin main >/dev/null 2>&1 || true
-             git reset --hard origin/main
+             git checkout -B main origin/main >/dev/null 2>&1 || true
+             git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
         else
              echo -e "${BLUE}  → Cloning repository...${NC}"
              if [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
@@ -2679,7 +2683,8 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
                  git init -q
                  git remote add origin "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
                  git fetch origin main -q >/dev/null 2>&1 || true
-                 git reset --hard origin/main
+                 git checkout -B main origin/main >/dev/null 2>&1 || true
+                 git branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
              else
                  git clone "${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}" "$INSTALL_DIR"
              fi
@@ -2692,8 +2697,10 @@ cd "$INSTALL_DIR"
 if [ ! -d ".git" ] && [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
     echo -e "${BLUE}  -> Initializing Git repository...${NC}"
     git init -q
+    git checkout -b "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     git remote add origin "$SMSLY_GIT_REMOTE"
     git fetch origin "$SMSLY_BRANCH" -q --depth=1 || true
+    git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
     # We don't reset --hard here to avoid losing the bundled files we just copied,
     # but the repo is now linked for future updates.
     echo -e "${GREEN}  ✓ Git origin set to ${SMSLY_GIT_REMOTE}${NC}"
