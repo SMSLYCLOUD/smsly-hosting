@@ -189,6 +189,7 @@ class DeploymentTriggerSerializer(serializers.Serializer):
     service_id = serializers.UUIDField()
     provider_id = serializers.UUIDField()
     commit_hash = serializers.CharField(required=False, allow_blank=True)
+    skip_review = serializers.BooleanField(default=False)
 
     # Optional overrides
     cpu_cores = serializers.DecimalField(
