@@ -262,7 +262,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A config worker -l info --pool=solo --concurrency=1 -Q deploy --hostname=deploy@%h
+    command: celery -A config worker -l info --concurrency=8 -Q deploy --hostname=deploy@%h
     restart: unless-stopped
     env_file: .env
     environment:

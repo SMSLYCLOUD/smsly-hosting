@@ -788,11 +788,18 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
-        if service.server and not service.server.is_primary:
+        from apps.deployments.models import PlatformConfig
+        config = PlatformConfig.load()
+        
+        # Loop Prevention: If this is already a delegated deployment, handle it locally.
+        is_delegated = deployment.source_node is not None
+        is_local = is_delegated or (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
+
+        if not is_local:
             if deployment.remote_deployment_id:
                 _resume_remote_deployment(deployment, service.server)
             else:
-                _handle_remote_deployment(deployment, service.server)
+                _handle_remote_deployment(deployment, service.server, skip_review=skip_review)
             return
 
         # 1. Build Phase (Pipeline)
@@ -851,7 +858,14 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         provider = CloudProvider.objects.get(id=provider_id)
 
         # 0. Remote Delegation
-        if service.server and not service.server.is_primary:
+        from apps.deployments.models import PlatformConfig
+        config = PlatformConfig.load()
+        
+        # Loop Prevention: If this is already a delegated deployment, handle it locally.
+        is_delegated = deployment.source_node is not None
+        is_local = is_delegated or (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
+
+        if not is_local:
             if deployment.remote_deployment_id:
                 _resume_remote_deployment(deployment, service.server)
             else:
@@ -961,7 +975,7 @@ def _stop_local_service_container(service_name: str):
         logger.warning(f"Docker client unavailable on Master: {e}")
 
 
-def _handle_remote_deployment(deployment, server):
+def _handle_remote_deployment(deployment, server, skip_review=False):
     """Delegate deployment to a remote server and poll for status."""
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
@@ -995,13 +1009,13 @@ def _handle_remote_deployment(deployment, server):
     update_stage(deployment, 'Remote Sync', 'success')
     update_stage(deployment, 'Remote Deploy', 'running')
 
-    remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id)
+    remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id, skip_review=skip_review)
     if not remote_dep_id:
         _handle_failure(None, deployment, "Failed to trigger deployment on remote server", "Remote Deploy Failure")
         return
 
     deployment.remote_deployment_id = remote_dep_id
-    deployment.status = Deployment.Status.DEPLOYING
+    deployment.status = Deployment.Status.QUEUED  # Stay queued until follower reports a stage
     deployment.started_at = deployment.started_at or timezone.now()
     deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
