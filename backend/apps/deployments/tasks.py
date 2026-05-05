@@ -3084,72 +3084,32 @@ def update_remote_server_task(server_id: str):
             auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
 
         branch = os.environ.get('SMSLY_BRANCH', 'main')
-        logger.info("Update Task: Pulling code on %s (branch: %s)", server.host, branch)
+        logger.info("Update Task: Triggering installer update on %s (branch: %s)", server.host, branch)
         
-        # Prepare commands
-        cmds = []
-        if auth_url:
-            # Persistence: Update the remote URL so future manual git commands also work
-            cmds.append(f"sudo git remote set-url origin {auth_url} 2>/dev/null || true")
-        
-        # We use git config safe.directory to avoid ownership issues on the remote node
-        cmds.append("sudo git config --global --add safe.directory /opt/smsly-hosting")
-        cmds.append(f"sudo git fetch origin {branch} --depth=1")
-        cmds.append(f"sudo git reset --hard origin/{branch}")
-        
-        cmd_pull = f"cd /opt/smsly-hosting && {' && '.join(cmds)}"
-        
-        server.provision_logs += f"> Updating repository (branch: {branch})...\n"
-        server.save(update_fields=["provision_logs"])
-        
-        stdout, stderr, code = ssh.exec_command(cmd_pull, raise_on_error=False)
-        server.provision_logs += stdout + stderr
-        server.save(update_fields=["provision_logs"])
-        
-        if code != 0:
-            logger.warning("Update Task: Git update failed on %s, trying local bundle fallback", server.host)
-            server.provision_logs += "\n⚠️ Git update failed. Attempting local source bundle fallback...\n"
-            server.save(update_fields=["provision_logs"])
-            
-            # BUILD AND UPLOAD LOCAL BUNDLE
-            bundle_path = build_local_source_bundle()
-            try:
-                remote_archive = "/tmp/smsly-hosting-update.tar.gz"
-                ssh.put_file(bundle_path, remote_archive)
-                
-                cmd_fallback = (
-                    "mkdir -p /tmp/smsly-hosting-src && "
-                    f"tar -xzf {remote_archive} -C /tmp/smsly-hosting-src && "
-                    "sudo cp -rv /tmp/smsly-hosting-src/* /opt/smsly-hosting/ && "
-                    f"sudo rm -rf /tmp/smsly-hosting-src {remote_archive}"
-                )
-                stdout_f, stderr_f, code_f = ssh.exec_command(cmd_fallback, raise_on_error=False)
-                server.provision_logs += stdout_f + stderr_f
-                server.save(update_fields=["provision_logs"])
-                
-                if code_f != 0:
-                     logger.error("Update Task: Fallback synchronization failed on %s", server.host)
-                     return False
-                logger.info("Update Task: Fallback synchronization successful on %s", server.host)
-            finally:
-                if os.path.exists(bundle_path):
-                    os.remove(bundle_path)
-
-        # 2. Restart services (calling install.sh --refresh handles Docker mirror config)
+        # Build environment for the update
         master_ip = os.environ.get('PUBLIC_IP') or '127.0.0.1'
-        cmd_restart = f"cd /opt/smsly-hosting && MASTER_IP={master_ip} NON_INTERACTIVE=1 bash install.sh --refresh"
-        logger.info("Update Task: Restarting services on %s", server.host)
-        server.provision_logs += "> docker compose up -d\n"
+        env_vars = {
+            "NON_INTERACTIVE": "1",
+            "SKIP_SCREEN": "1",
+            "MASTER_IP": master_ip,
+            "SMSLY_BRANCH": branch,
+        }
+        
+        if auth_url:
+            env_vars["SMSLY_GIT_REMOTE"] = auth_url
+
+        env_str = " ".join([f"{k}='{v}'" for k, v in env_vars.items()])
+        cmd_update = f"cd /opt/smsly-hosting && sudo {env_str} bash install.sh --update"
+        
+        server.provision_logs += f"> Running installer update (branch: {branch})...\n"
         server.save(update_fields=["provision_logs"])
         
-        stdout, stderr, code = ssh.exec_command(cmd_restart, raise_on_error=False)
+        stdout, stderr, code = ssh.exec_command(cmd_update, raise_on_error=False)
         server.provision_logs += stdout + stderr
         server.save(update_fields=["provision_logs"])
         
         if code != 0:
-            logger.error("Update Task: Docker compose restart failed on %s", server.host)
-            server.provision_logs += f"\nERROR: Docker compose up failed with exit code {code}\n"
-            server.save(update_fields=["provision_logs"])
+            logger.error("Update Task: Installer update failed on %s", server.host)
             return False
 
         server.provision_status = ManagedServer.ProvisionStatus.DONE

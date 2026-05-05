@@ -160,50 +160,6 @@ def _load_install_script():
     return content, f"url:{script_url}"
 
 
-def _inject_repo_clone_auth(script_content: str, github_token: str | None):
-    """Inject GitHub auth into installer clone URL for private repos."""
-    if not github_token:
-        return script_content, False
-
-    encoded = quote(github_token, safe="")
-    auth_url = (
-        f"https://x-access-token:{encoded}@github.com/"
-        "SMSLYCLOUD/smsly-hosting.git"
-    )
-    
-    # 1. Inject into git clone
-    replaced = re.sub(
-        r'git clone (?:-b "\$SMSLY_BRANCH" )?"\$SMSLY_GIT_REMOTE" ("\$INSTALL_DIR")',
-        rf'git clone -b "$SMSLY_BRANCH" {auth_url} \1',
-        script_content,
-    )
-    # Support older patterns just in case
-    replaced = re.sub(
-        r'git clone "\$\{SMSLY_GIT_REMOTE:-https://github\.com/SMSLYCLOUD/smsly-hosting\.git\}" ("\$INSTALL_DIR")',
-        rf'git clone {auth_url} \1',
-        replaced,
-    )
-
-    # 2. Inject into git fetch
-    replaced = re.sub(
-        r'git fetch origin ("\$SMSLY_BRANCH"|main)',
-        rf'git fetch {auth_url} \1',
-        replaced,
-    )
-
-    # 3. Persistence: Ensure we update the remote URL if it already exists
-    # Inject after the header in the new install.sh
-    header = "# ─── Git Initialization & Sync ──────────────────────────────────────────────"
-    if header in replaced:
-        persistence = f'{header}\n    git remote set-url origin "{auth_url}" 2>/dev/null || true'
-        replaced = replaced.replace(header, persistence)
-    else:
-        # Fallback for update mode section
-        pattern_remote = r'(git reset --hard origin/("\$SMSLY_BRANCH"|main))'
-        remote_fix = f'git remote set-url origin {auth_url} 2>/dev/null || true\n             \\1'
-        replaced = re.sub(pattern_remote, remote_fix, replaced)
-
-    return replaced, replaced != script_content
 
 
 def _broadcast_provision_log(server: ManagedServer, message: str):
@@ -344,14 +300,8 @@ def provision_server(self, server_id: str):
         sftp = ssh.open_sftp()
 
         install_script_content, install_script_source = _load_install_script()
-        injected_auth = False
-        if github_token and not token_known_invalid and not use_local_bundle:
-            install_script_content, injected_auth = _inject_repo_clone_auth(
-                install_script_content,
-                github_token,
-            )
         _append_log(server, f"📥 Installer source: {install_script_source}")
-        if injected_auth:
+        if not token_known_invalid and not use_local_bundle and github_token:
             _append_log(server, "🔐 Using linked GitHub token for installer repository clone.")
         elif use_local_bundle and prefer_local_bundle:
             _append_log(
@@ -429,20 +379,19 @@ def provision_server(self, server_id: str):
             )
             install_args = "--mode agent-lite"
 
+        if github_token and not token_known_invalid:
+            from urllib.parse import quote
+            encoded = quote(github_token, safe="")
+            auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
+            env_vars = f"{env_vars} SMSLY_GIT_REMOTE='{auth_url}'"
+
         if use_local_bundle:
             env_vars = (
                 "SMSLY_FORCE_SOURCE_SYNC=1 "
                 "SMSLY_INSTALL_WORKDIR=/tmp/smsly-hosting-src "
-                f"SMSLY_GIT_REMOTE='https://github.com/SMSLYCLOUD/smsly-hosting.git' "
                 f"{env_vars}"
             )
-            if github_token and not token_known_invalid:
-                encoded = quote(github_token, safe="")
-                auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
-                env_vars = env_vars.replace(
-                    "SMSLY_GIT_REMOTE='https://github.com/SMSLYCLOUD/smsly-hosting.git'",
-                    f"SMSLY_GIT_REMOTE='{auth_url}'"
-                )
+
         cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh {install_args} 2>&1"
 
         # Execute with a channel for streaming output
