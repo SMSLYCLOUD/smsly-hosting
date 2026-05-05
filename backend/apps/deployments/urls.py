@@ -5,7 +5,7 @@ from rest_framework_nested import routers
 from .views import (
     DeploymentViewSet, ServiceViewSet, SessionTokenView, SystemConfigView, AuditLogViewSet, DomainConfigView,
     RouteRecheckView, ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
-    , PlatformResourcesView
+    , PlatformResourcesView, RemoteTriggerView
 )
 from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
@@ -130,4 +130,5 @@ urlpatterns = [
     # Node-to-node auto token exchange
     path('auth/node-token-exchange/', node_token_exchange, name='node-token-exchange'),
     path('auth/node-token-exchange-hmac/', node_token_exchange_via_gateway, name='node-token-exchange-hmac'),
+    path('deployments/remote-trigger/', RemoteTriggerView.as_view(), name='deployment-remote-trigger'),
 ]

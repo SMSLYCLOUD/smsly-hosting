@@ -48,6 +48,57 @@ import re
 from celery.result import AsyncResult
 from apps.cloud.docker_client import get_docker_client
 
+
+class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
+    """
+    Authenticate requests from peer nodes using HMAC V2.
+    Required headers: X-Gateway-Signature-V2, X-Request-Timestamp
+    """
+    def authenticate(self, request):
+        import hashlib
+        import hmac
+        import time
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        signature = request.headers.get("X-Gateway-Signature-V2", "")
+        timestamp = request.headers.get("X-Request-Timestamp", "")
+        if not signature or not timestamp:
+            return None
+
+        # Verify timestamp freshness (5 min window)
+        try:
+            req_ts = int(timestamp)
+            if abs(int(time.time()) - req_ts) > 300:
+                raise authentication.AuthenticationFailed("Timestamp expired")
+        except ValueError:
+            raise authentication.AuthenticationFailed("Invalid timestamp")
+
+        # Verify HMAC
+        gw_secret = getattr(settings, "GATEWAY_SECRET", settings.SECRET_KEY)
+        method = request.method
+        path = request.get_full_path()
+        
+        # For remote triggers, we need to handle request body carefully
+        try:
+            body = request.body
+        except Exception:
+            body = b""
+            
+        body_hash = hashlib.sha256(body).hexdigest()
+        payload = f"{method}|{path}|{timestamp}|{body_hash}"
+        expected = hmac.new(gw_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+        if not hmac.compare_digest(expected, signature):
+            raise authentication.AuthenticationFailed("Invalid HMAC signature")
+
+        # Authentication success — use the first active superuser as the actor
+        admin = User.objects.filter(is_superuser=True, is_active=True).first()
+        if not admin:
+            raise authentication.AuthenticationFailed("No admin user available")
+
+        return (admin, None)
+
 logger = logging.getLogger(__name__)
 
 MAINTENANCE_ACTIONS = {
@@ -761,6 +812,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
+        skip_review = _parse_bool(request.data.get('skip_review', False))
         source_node = request.data.get('source_node')
 
         server = getattr(service, 'server', None)
@@ -792,7 +844,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         )
 
         try:
-            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+            smart_deploy_task.delay(
+                deployment_id=str(deployment.id), 
+                provider_id=str(provider.id),
+                skip_review=skip_review
+            )
         except Exception as exc:  # pragma: no cover - broker/runtime failure
             logger.exception(
                 "Failed to enqueue deploy task for service=%s deployment=%s",
@@ -2340,6 +2396,46 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         payload["rollback_target"] = str(target_deployment.id)
         return Response(payload, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve a deployment that is waiting in REVIEW state."""
+        deployment = self.get_object()
+        if deployment.status != Deployment.Status.REVIEW:
+            return Response({"error": "Deployment is not in REVIEW state"}, status=400)
+
+        serializer = DeploymentApproveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Apply overrides if any
+        service = deployment.service
+        overrides = serializer.validated_data
+        if 'cpu_cores' in overrides:
+            service.cpu_cores = overrides['cpu_cores']
+        if 'memory_mb' in overrides:
+            service.memory_mb = overrides['memory_mb']
+        
+        env_overrides = overrides.get('env_overrides', {})
+        if env_overrides:
+            from .models import EnvironmentVariable
+            for k, v in env_overrides.items():
+                EnvironmentVariable.objects.update_or_create(
+                    service=service, key=k, defaults={'value': v, 'source': 'USER'}
+                )
+        
+        service.save()
+
+        # Resume the deployment
+        resume_deploy_task.delay(deployment_id=str(deployment.id))
+        
+        AuditLog(
+            actor=request.user.get_username(),
+            action='DEPLOYMENT_APPROVE',
+            target=f'Deployment: {deployment.id}',
+            metadata={'service_id': str(service.id), 'overrides': list(env_overrides.keys())},
+        ).save()
+
+        return Response({"message": "Deployment approved and resumed"})
+
 
 
 
@@ -2486,6 +2582,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             service_id = serializer.validated_data['service_id']
             provider_id = serializer.validated_data['provider_id']
+            skip_review = serializer.validated_data.get('skip_review', False)
 
             try:
                 # ZH-011 FIX: Verify service ownership before triggering deployment
@@ -2512,7 +2609,11 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                         'commit_hash', 'latest')
                 )
 
-                smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+                smart_deploy_task.delay(
+                    deployment_id=str(deployment.id), 
+                    provider_id=str(provider.id),
+                    skip_review=request.data.get('skip_review', False)
+                )
 
                 return Response({
                     'message': 'Deployment triggered successfully',
@@ -3912,3 +4013,61 @@ class PlatformResourcesView(GenericAPIView):
             "warnings": [],
         }]
         return Response({"nodes": nodes, "summary": {"total_nodes": len(nodes), "healthy_nodes": sum(1 for n in nodes if n["status"] == "healthy"), "critical_nodes": 0, "total_ram_mb": sum(n["memory"]["total_mb"] for n in nodes), "used_ram_mb": sum(n["memory"]["used_mb"] for n in nodes), "total_disk_gb": sum(n["disk"]["total_gb"] for n in nodes), "used_disk_gb": sum(n["disk"]["used_gb"] for n in nodes)}})
+
+
+class RemoteTriggerView(GenericAPIView):
+    """
+    Direct endpoint for node-to-node deployment triggers.
+    Authenticated via ZeroTrustHMACAuthentication.
+    """
+    authentication_classes = [ZeroTrustHMACAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from .serializers import DeploymentTriggerSerializer
+        serializer = DeploymentTriggerSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        service_id = serializer.validated_data['service_id']
+        provider_id = serializer.validated_data['provider_id']
+        skip_review = serializer.validated_data.get('skip_review', False)
+        ref = serializer.validated_data.get('commit_hash', 'HEAD')
+        source_node = request.data.get('source_node', 'remote-controller')
+
+        try:
+            service = Service.objects.get(id=service_id)
+            # Determine provider (or use the one passed in if it belongs to this node)
+            from apps.cloud.models import CloudProvider
+            provider = CloudProvider.objects.filter(id=provider_id).first()
+            if not provider:
+                # Fallback to resolving local provider
+                from .tasks import _resolve_provider_for_service
+                provider = _resolve_provider_for_service(service)
+
+            if not provider:
+                return Response({"error": "No valid cloud provider found on this node"}, status=400)
+
+            # Create deployment
+            deployment = Deployment.objects.create(
+                service=service,
+                status=Deployment.Status.QUEUED,
+                commit_hash=ref if ref != 'HEAD' else 'latest',
+                commit_message=f"Remote Trigger: {ref} (via {source_node})",
+                source_node=source_node
+            )
+
+            # Enqueue task
+            smart_deploy_task.delay(
+                deployment_id=str(deployment.id),
+                provider_id=str(provider.id),
+                skip_review=skip_review
+            )
+
+            return Response(DeploymentSerializer(deployment).data, status=status.HTTP_201_CREATED)
+
+        except Service.DoesNotExist:
+            return Response({"error": "Service not found on this node"}, status=404)
+        except Exception as e:
+            logger.exception("Remote trigger failed")
+            return Response({"error": str(e)}, status=500)
