@@ -36,7 +36,7 @@ set -euo pipefail
 LOCK_FILE="/tmp/smsly-install.lock"
 if [ -f "$LOCK_FILE" ]; then
     PID=$(cat "$LOCK_FILE")
-    if kill -0 "$PID" 2>/dev/null; then
+    if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
         echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
         echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
         exit 1
