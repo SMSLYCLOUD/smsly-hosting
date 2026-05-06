@@ -112,20 +112,16 @@ export default function RegisterPage() {
             <div className="mx-auto mb-4 flex flex-col items-center gap-2">
               <Image
                 src="/images/logo.svg"
-                alt="CloudNeuron"
-                width={48}
-                height={48}
-                className="h-12 w-12 mx-auto rounded-xl shadow-md"
+                alt="Grid"
+                width={40}
+                height={40}
+                className="h-10 w-10 brightness-0 invert"
               />
-              <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">
-                CloudNeuron
-              </span>
+              Grid
             </div>
-            <CardTitle className="text-2xl font-bold tracking-tight">
-              Create your account
-            </CardTitle>
+            <CardTitle className="text-2xl font-bold tracking-tight">Create an account</CardTitle>
             <CardDescription>
-              Sign up for CloudNeuron to deploy your applications.
+              Sign up for Grid to deploy your applications.
             </CardDescription>
           </CardHeader>
 

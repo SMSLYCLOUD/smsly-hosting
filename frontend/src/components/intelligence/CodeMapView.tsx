@@ -572,7 +572,7 @@ export default function CodeMapView() {
             Select a service to generate a live 3D architecture map of its files, imports, routes, database models, and service dependencies.
           </p>
           <p className="text-muted-foreground/80 text-xs max-w-sm mx-auto">
-            CloudNeuron clones the repo, walks the tree, extracts dependencies, and summarizes the deployable architecture.
+            Grid clones the repo, walks the tree, extracts dependencies, and summarizes the deployable architecture.
           </p>
         </div>
       )}

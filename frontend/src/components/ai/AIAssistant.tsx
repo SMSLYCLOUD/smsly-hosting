@@ -19,7 +19,7 @@ export function AIAssistant() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Hi! I'm your CloudNeuron AI Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
+      content: "Hi! I'm your Grid AI Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
       provider: 'System',
       timestamp: new Date(),
     },
@@ -152,7 +152,7 @@ export function AIAssistant() {
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">AI Assistant</h3>
-                  <p className="text-[10px] text-muted-foreground">Powered by CloudNeuron Intelligence</p>
+                  <p className="text-[10px] text-muted-foreground">Powered by Grid Intelligence</p>
                 </div>
               </div>
               <button

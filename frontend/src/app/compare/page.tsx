@@ -23,12 +23,12 @@ import { Footer } from '@/components/layout/Footer';
 // ============================================
 const battleCards = [
     {
-        name: "CloudNeuron",
+        name: "Grid",
         logo: Cloud,
         type: "Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        description: "Your infrastructure, your rules. Zero markup on compute.",
+        description: "Your infrastructure, your rules. Powered by CloudNeuron.",
         features: [
             "Self-Hosted (AWS, Hetzner, etc.)",
             "Zero Vendor Lock-in",
@@ -148,7 +148,7 @@ const comparisonRows = [
         items: [
             { name: "Git Push to Deploy", cn: true, rw: true, vc: true, rn: true },
             { name: "One-Click Blueprints", cn: "100+ Apps & Addons", rw: "Templates Available", vc: "Templates Available", rn: "Blueprints Available" },
-            { name: "CLI Tooling", cn: "cloudneuron CLI", rw: "railway CLI", vc: "vercel CLI", rn: "render CLI" },
+            { name: "CLI Tooling", cn: "grid CLI", rw: "railway CLI", vc: "vercel CLI", rn: "render CLI" },
         ]
     }
 ];
@@ -182,7 +182,7 @@ export default function ComparePage() {
 
                     <p className="text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed mb-10">
                         Why pay a 300% markup for managed services? <br className="hidden md:block" />
-                        CloudNeuron gives you the DX of Vercel with the cost of a VPS.
+                        Grid gives you the DX of Vercel with the cost of a VPS.
                     </p>
 
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -265,7 +265,7 @@ export default function ComparePage() {
                     <div className="text-center mb-16">
                         <h2 className="text-3xl md:text-5xl font-extrabold text-slate-900 dark:text-white mb-6">Feature by Feature</h2>
                         <p className="text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            See exactly what you get (and what you don&apos;t) with CloudNeuron compared to managed platforms.
+                            See exactly what you get (and what you don&apos;t) with Grid compared to managed platforms.
                         </p>
                     </div>
 
@@ -274,7 +274,7 @@ export default function ComparePage() {
                             <thead>
                                 <tr className="bg-slate-50 dark:bg-slate-950/50 border-b border-slate-200 dark:border-slate-800">
                                     <th className="p-6 text-sm font-bold text-slate-500 uppercase tracking-wider w-1/5">Feature</th>
-                                    <th className="p-6 text-lg font-bold text-emerald-600 dark:text-emerald-400 w-1/5 bg-emerald-50/50 dark:bg-emerald-900/10 border-x border-emerald-100 dark:border-emerald-900/20">CloudNeuron</th>
+                                    <th className="p-6 text-lg font-bold text-emerald-600 dark:text-emerald-400 w-1/5 bg-emerald-50/50 dark:bg-emerald-900/10 border-x border-emerald-100 dark:border-emerald-900/20">Grid</th>
                                     <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Railway</th>
                                     <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Vercel</th>
                                     <th className="p-6 text-lg font-bold text-slate-700 dark:text-slate-300 w-1/5">Render</th>

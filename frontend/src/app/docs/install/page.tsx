@@ -38,7 +38,7 @@ const tocItems = [
   { id: 'system-requirements', label: 'System Requirements', icon: Server },
   { id: 'fresh-installation', label: 'Fresh Installation', icon: Download },
   { id: 'deployment-modes', label: 'Deployment Modes', icon: Globe },
-  { id: 'updating-cloudneuron', label: 'Updating CloudNeuron', icon: RefreshCw },
+  { id: 'updating-grid', label: 'Updating Grid', icon: RefreshCw },
   { id: 'managing-services', label: 'Managing Services', icon: Terminal },
   { id: 'database-operations', label: 'Database Operations', icon: Database },
   { id: 'ssl--custom-domains', label: 'SSL & Custom Domains', icon: Key },
@@ -81,10 +81,10 @@ export default function InstallGuidePage() {
             <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Installation Guide</span>
           </div>
           <h1 className="text-3xl md:text-4xl font-extrabold text-slate-900 dark:text-white mb-3">
-            CloudNeuron — Installation & Operations Guide
+            Grid — Installation & Operations Guide
           </h1>
-          <p className="text-lg text-slate-600 dark:text-slate-400">
-            Complete guide to install, update, manage, and troubleshoot your CloudNeuron instance.
+          <p className="text-slate-500 dark:text-slate-400 text-lg md:text-xl max-w-2xl">
+            Complete guide to install, update, manage, and troubleshoot your Grid instance.
           </p>
         </div>
       </section>
@@ -236,9 +236,9 @@ sudo bash /tmp/install.sh`}</CodeBlock>
           </div>
 
 
-          {/* ──── Updating CloudNeuron ──── */}
-          <h2 id="updating-cloudneuron" className="text-2xl font-bold flex items-center gap-2">
-            <RefreshCw className="w-5 h-5 text-emerald-600" /> Updating CloudNeuron
+          {/* ──── Updating Grid ──── */}
+          <h2 id="updating-grid" className="text-2xl font-bold flex items-center gap-2">
+            <RefreshCw className="w-5 h-5 text-emerald-600" /> Updating Grid
           </h2>
 
           <h3>From the Terminal</h3>

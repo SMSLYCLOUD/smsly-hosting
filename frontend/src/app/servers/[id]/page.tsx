@@ -196,7 +196,7 @@ export default function ServerDetailPage() {
 
     const handleUpdateServer = async () => {
         if (!await confirm({
-            title: 'Update CloudNeuron?',
+            title: 'Update Grid?',
             message: 'This will pull the latest code from GitHub and restart the services on the remote VPS. Your services may be briefly unavailable during restart.',
             variant: 'warning',
             confirmText: 'Update Now'
@@ -415,7 +415,7 @@ export default function ServerDetailPage() {
                                     className="px-3 py-2 rounded-lg border border-blue-500/30 text-blue-500 text-sm flex items-center gap-2 hover:bg-blue-500/10 transition-colors disabled:opacity-50"
                                 >
                                     {updating ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
-                                    Update CloudNeuron
+                                    Update Grid
                                 </button>
                             {server.api_url && (
                                 <a

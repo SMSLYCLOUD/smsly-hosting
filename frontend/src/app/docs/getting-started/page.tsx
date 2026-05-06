@@ -2,7 +2,7 @@ export default function GettingStartedPage() {
   return (
     <div className="container mx-auto py-12 max-w-3xl prose dark:prose-invert">
       <h1>Getting Started</h1>
-      <p>Welcome to CloudNeuron! This guide will help you deploy your first application.</p>
+      <p>Welcome to Grid! This guide will help you deploy your first application.</p>
 
       <h2>Prerequisites</h2>
       <ul>
@@ -17,7 +17,7 @@ export default function GettingStartedPage() {
       <p>Click &quot;New Service&quot; on the dashboard. Select your repository.</p>
 
       <h2>Step 3: Deploy</h2>
-      <p>Click &quot;Deploy&quot;. CloudNeuron will auto-detect your framework and build your app.</p>
+      <p>Click &quot;Deploy&quot;. Grid will auto-detect your framework and build your app.</p>
     </div>
   );
 }

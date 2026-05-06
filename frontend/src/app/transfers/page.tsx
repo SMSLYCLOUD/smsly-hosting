@@ -210,7 +210,7 @@ export default function TransfersPage() {
                 <div className="mx-auto w-full max-w-[1440px] px-6 py-4 flex items-center justify-between">
                     <div className="space-y-1">
                         <div className="flex items-center gap-3">
-                            <h1 className="text-xl font-bold tracking-tight text-white">CloudNeuron Transfer Hub</h1>
+                            <h1 className="text-xl font-bold tracking-tight text-white">Grid Transfer Hub</h1>
                             <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
                                 Live Migration
                             </span>
