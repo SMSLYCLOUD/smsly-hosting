@@ -665,7 +665,24 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Trigger a remote update (git pull + restart) on a managed server.
         """
         server = self.get_object()
-        
+
+        blocked_statuses = {
+            ManagedServer.ProvisionStatus.PENDING,
+            ManagedServer.ProvisionStatus.PROVISIONING,
+            ManagedServer.ProvisionStatus.UPDATING,
+        }
+        if server.provision_status in blocked_statuses:
+            return Response(
+                {
+                    "error": (
+                        f"Server update cannot start while provision_status="
+                        f"{server.provision_status}."
+                    ),
+                    "provision_status": server.provision_status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         # We only allow updates on nodes that have been provisioned or have SSH access
         if not (server.ssh_key or server.ssh_password):
              return Response(
@@ -673,13 +690,36 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                  status=status.HTTP_400_BAD_REQUEST,
              )
 
+        server.provision_logs = (
+            (server.provision_logs or "")
+            + f"\n--- Update queued by {request.user.username} at {timezone.now()} ---\n"
+        )
+        server.save(update_fields=["provision_logs", "updated_at"])
+
         from .tasks import update_remote_server_task
-        update_remote_server_task.delay(str(server.id))
+        try:
+            update_remote_server_task.delay(str(server.id))
+        except Exception as exc:  # pragma: no cover - broker/runtime failure
+            logger.exception("Failed to queue update for server %s", server.id)
+            server.provision_status = ManagedServer.ProvisionStatus.FAILED
+            server.provision_logs = (
+                (server.provision_logs or "")
+                + f"\nFATAL ERROR: failed to queue update task: {exc}\n"
+            )
+            server.save(update_fields=["provision_status", "provision_logs", "updated_at"])
+            return Response(
+                {
+                    "error": "Failed to queue server update task. Check Celery/Redis health.",
+                    "server_id": str(server.id),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({
             "success": True,
             "message": "Update task queued. Progress will be visible in provision logs.",
             "server_id": str(server.id),
+            "provision_status": server.provision_status,
         })
 
     # ── Health Check ─────────────────────────────────────────────────────

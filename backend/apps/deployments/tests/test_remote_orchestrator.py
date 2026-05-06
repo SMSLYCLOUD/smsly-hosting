@@ -1,6 +1,7 @@
 import json
 from unittest.mock import Mock, patch
 
+import requests
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
@@ -88,3 +89,32 @@ class RemoteOrchestratorTests(TestCase):
         )
         payload = json.loads(request_mock.call_args.kwargs["data"].decode())
         self.assertEqual(payload["memory_mb"], 512)
+
+    @patch("apps.deployments.services.remote_orchestrator.time.sleep", return_value=None)
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_sync_service_preserves_remote_connection_error(self, request_mock, _sleep):
+        request_mock.side_effect = requests.exceptions.SSLError(
+            "tlsv1 alert internal error"
+        )
+
+        orchestrator = RemoteOrchestrator(self.server)
+        remote_id = orchestrator.sync_service(self.service)
+
+        self.assertIsNone(remote_id)
+        self.assertGreaterEqual(request_mock.call_count, 1)
+        self.assertIn("tlsv1 alert internal error", orchestrator.describe_last_error())
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_sync_service_does_not_create_when_search_redirects(self, request_mock):
+        redirect = Mock(status_code=308, text="")
+        redirect.headers = {"Location": "https://203.0.113.10/api/v1/services/"}
+        request_mock.return_value = redirect
+
+        orchestrator = RemoteOrchestrator(self.server)
+        remote_id = orchestrator.sync_service(self.service)
+
+        self.assertIsNone(remote_id)
+        self.assertIn("redirected", orchestrator.describe_last_error())
+        self.assertTrue(
+            all(call.args[0] == "GET" for call in request_mock.call_args_list)
+        )
