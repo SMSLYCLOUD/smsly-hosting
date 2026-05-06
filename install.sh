@@ -768,6 +768,7 @@ validate_env_file() {
         "GITHUB_WEBHOOK_SECRET"
         "FRP_AUTH_TOKEN"
         "TUNNEL_DOMAIN"
+        "PGCAT_ADMIN_PASSWORD"
     )
     local missing_vars=()
     local invalid_vars=()
@@ -803,6 +804,9 @@ validate_env_file() {
             elif [ "$var_name" = "TUNNEL_DOMAIN" ]; then
                 echo -e "${BLUE}  -> Setting missing TUNNEL_DOMAIN...${NC}"
                 env_set_value "$env_file" "TUNNEL_DOMAIN" "tunnel.localhost"
+            elif [ "$var_name" = "PGCAT_ADMIN_PASSWORD" ]; then
+                echo -e "${BLUE}  -> Generating missing PGCAT_ADMIN_PASSWORD...${NC}"
+                env_set_value "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 32)"
             else
                 missing_vars+=("$var_name")
             fi
@@ -2939,6 +2943,7 @@ gateway_secret = secrets.token_hex(32)
 webhook_secret = secrets.token_hex(32)
 autoscaler_token = secrets.token_hex(32)
 frp_token = secrets.token_hex(32)
+pgcat_admin_pass = secrets.token_hex(24)
 
 # Validate the Fernet key before outputting
 Fernet(fernet_key.encode())
@@ -2952,6 +2957,7 @@ print(f'GATEWAY_SECRET={gateway_secret}')
 print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
 print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
 print(f'FRP_AUTH_TOKEN={frp_token}')
+print(f'PGCAT_ADMIN_PASSWORD={pgcat_admin_pass}')
 " > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
         source "$INSTALL_DIR/.secrets.tmp"
         rm -f "$INSTALL_DIR/.secrets.tmp"
@@ -3014,6 +3020,9 @@ AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
 
 # FRP Tunnel Relay Authentication Token
 FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
+
+# PgCat administration password
+PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 EOF
 
     # Derive expected tunnel domain
