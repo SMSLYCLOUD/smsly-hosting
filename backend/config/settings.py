@@ -490,7 +490,7 @@ else:
     _REDIS_BASE_URL = f"{REDIS_SCHEME}://{REDIS_HOST}:{REDIS_PORT}"
 
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
-CELERY_BROKER_URL = config('CELERY_BROKER_URL', default="amqp://guest:guest@rabbitmq:5672//")
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default="amqp://smsly_user:smsly_password@rabbitmq:5672//")
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
     'CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP',
     default=True,
