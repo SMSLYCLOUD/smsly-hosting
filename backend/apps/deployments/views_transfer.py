@@ -2,6 +2,7 @@ import ipaddress
 import hashlib
 import hmac
 import json
+import logging
 import socket
 import time
 
@@ -17,6 +18,16 @@ from .models import Service, PlatformConfig
 from .models_servers import ManagedServer
 from .tasks import execute_server_transfer_task, rollback_transfer_task
 from .services.server_guard import ServerGuard
+
+logger = logging.getLogger(__name__)
+
+ACTIVE_TRANSFER_STATUSES = [
+    'PREPARING',
+    'UPLOADING',
+    'RESTORING',
+    'DNS_CUTOVER',
+    'VERIFYING',
+]
 
 
 def is_safe_ip(ip_str, allow_private=False):
@@ -158,7 +169,7 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             source_node_id=source_ip,
             target_server_ip=target_ip,
             owner=owner,
-            status__in=['PREPARING', 'UPLOADING', 'RESTORING']
+            status__in=ACTIVE_TRANSFER_STATUSES,
         ).first()
 
         if existing:
@@ -181,8 +192,6 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
         return Response({'id': str(transfer.id), 'status': transfer.status})
 
     def create(self, request, *args, **kwargs):
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info(
             "Transfer request received: transfer_type=%s service_id=%s target_server_id=%s target_ip_provided=%s auth_provided=%s",
             request.data.get('transfer_type'),
@@ -313,6 +322,27 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        existing = ServerTransfer.objects.filter(
+            owner=request.user,
+            target_server_ip=target_server_ip,
+            transfer_type=transfer_type,
+            status__in=ACTIVE_TRANSFER_STATUSES,
+        )
+        if transfer_type == 'SERVICE':
+            existing = existing.filter(service=service)
+        else:
+            existing = existing.filter(service__isnull=True)
+        existing = existing.first()
+        if existing:
+            return Response(
+                {
+                    'error': 'A transfer for this target is already running.',
+                    'id': str(existing.id),
+                    'status': existing.status,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         # Create transfer object
         transfer = ServerTransfer.objects.create(
             source_server_ip=source_server_ip,
@@ -324,7 +354,24 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
             owner=request.user,
         )
 
-        execute_server_transfer_task.delay(str(transfer.id))
+        try:
+            execute_server_transfer_task.delay(str(transfer.id))
+        except Exception as exc:
+            logger.exception("Failed to queue transfer %s: %s", transfer.id, exc)
+            transfer.status = 'FAILED'
+            transfer.error_message = 'Transfer could not be queued. Please retry after checking worker availability.'
+            transfer.target_ssh_key = ''
+            transfer.target_ssh_password = ''
+            transfer.save(update_fields=[
+                'status',
+                'error_message',
+                'target_ssh_key',
+                'target_ssh_password',
+            ])
+            return Response(
+                {'error': transfer.error_message, 'id': str(transfer.id)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(ServerTransferSerializer(transfer).data, status=status.HTTP_201_CREATED)
 

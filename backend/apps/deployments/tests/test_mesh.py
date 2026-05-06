@@ -1,5 +1,6 @@
 import uuid
 import base64
+import shlex
 from unittest.mock import patch, MagicMock
 from django.test import TestCase
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
@@ -58,19 +59,13 @@ class MeshNetworkTest(TestCase):
         WireGuardService._deploy_remote(server, config, "wg0")
 
         b64_config = base64.b64encode(config.encode()).decode()
-        expected_command = " && ".join([
-            "apt-get update > /dev/null 2>&1 || true",
-            "apt-get install -y wireguard iptables > /dev/null 2>&1 || true",
-            "mkdir -p /etc/wireguard",
-            f"echo '{b64_config}' | base64 -d > /etc/wireguard/wg0.conf",
-            "chmod 600 /etc/wireguard/wg0.conf",
-            "modprobe wireguard || true",
-            "wg-quick down wg0 2>/dev/null || true",
-            "wg-quick up wg0",
-            "systemctl enable wg-quick@wg0 2>/dev/null || true",
-        ])
-
-        mock_ssh.assert_called_once_with(server, expected_command)
+        mock_ssh.assert_called_once()
+        called_server, called_command = mock_ssh.call_args.args[:2]
+        self.assertEqual(called_server, server)
+        self.assertIn("sudo -n", called_command)
+        self.assertIn(shlex.quote(b64_config), called_command)
+        self.assertIn("wg-quick up wg0", called_command)
+        self.assertIn("wg show wg0", called_command)
 
     @patch('apps.deployments.services.wireguard_service.WireGuardService._ssh_run')
     def test_deploy_remote_rejects_incomplete_config(self, mock_ssh):

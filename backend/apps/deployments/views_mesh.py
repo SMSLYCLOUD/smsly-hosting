@@ -90,6 +90,11 @@ class MeshNetworkCreateSerializer(serializers.ModelSerializer):
         except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc
 
+    def validate_listen_port(self, value):
+        if value < 1 or value > 65535:
+            raise serializers.ValidationError("listen_port must be between 1 and 65535.")
+        return value
+
 
 # ─── ViewSets ────────────────────────────────────────────────────────────────
 
@@ -128,6 +133,9 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
             WireGuardService.add_peer_to_mesh(mesh, server=None, is_local=True)
         except Exception as e:
             logger.error(f"Failed to add local peer: {e}")
+            mesh.mesh_status = "FAILED"
+            mesh.mesh_last_error = str(e)[:2000]
+            mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
 
     def list(self, request, *args, **kwargs):
         """
@@ -172,6 +180,22 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if mesh.mesh_status == "DEPLOYING":
+            return Response(
+                {"error": "Mesh deployment already in progress."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if server.status != ManagedServer.Status.ONLINE:
+            return Response(
+                {"error": f"Server '{server.name}' is {server.status}; only ONLINE servers can join a mesh."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (server.ssh_key or server.ssh_password):
+            return Response(
+                {"error": "Server SSH credentials are required before adding it to a mesh."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
             peer = WireGuardService.add_peer_to_mesh(mesh, server=server)
             # Deploy updated configs to all peers
@@ -179,13 +203,16 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
             mesh.mesh_status = "DEPLOYING"
             mesh.mesh_last_error = ""
             mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
-            deploy_mesh_task.delay(mesh.id)
+            deploy_mesh_task.delay(str(mesh.id))
             results = {"status": "Deploying in background"}
             return Response({
                 "peer": WireGuardPeerSerializer(peer).data,
                 "deployment": results,
             }, status=status.HTTP_201_CREATED)
         except Exception as e:
+            mesh.mesh_status = "FAILED"
+            mesh.mesh_last_error = str(e)[:2000]
+            mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -235,6 +262,16 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
         """Deploy WireGuard configs to all peers in the mesh."""
         mesh = self.get_object()
         try:
+            if mesh.mesh_status == "DEPLOYING":
+                return Response(
+                    {"error": "Mesh deployment already in progress."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if mesh.peers.filter(is_active=True).count() < 2:
+                return Response(
+                    {"error": "Need at least 2 active peers to deploy a mesh."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             # Deploy via celery to avoid connection reset when interface restarts
             mesh.mesh_status = "DEPLOYING"
             mesh.mesh_last_error = ""
@@ -245,10 +282,13 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
                 "mesh_last_deployed_at",
                 "updated_at",
             ])
-            deploy_mesh_task.delay(mesh.id)
+            deploy_mesh_task.delay(str(mesh.id))
             results = {"status": "Deploying in background", "mesh_status": mesh.mesh_status}
             return Response(results)
         except Exception as e:
+            mesh.mesh_status = "FAILED"
+            mesh.mesh_last_error = str(e)[:2000]
+            mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -260,7 +300,11 @@ class MeshNetworkViewSet(viewsets.ModelViewSet):
     def health(self, request, pk=None):
         """Check connectivity between all peers in the mesh."""
         mesh = self.get_object()
-        results = WireGuardService.check_mesh_health(mesh)
+        try:
+            results = WireGuardService.check_mesh_health(mesh)
+        except Exception as exc:
+            logger.exception("Mesh health check failed for %s: %s", mesh.id, exc)
+            results = {"error": str(exc)[:2000], "peers": []}
         has_error = bool(results.get("error")) or any(
             str(peer.get("status", "")) != "OK"
             for peer in results.get("peers", [])

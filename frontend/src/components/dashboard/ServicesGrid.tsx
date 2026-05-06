@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Service, servicesApi } from '@/lib/api';
+import { Service, servicesApi, addonsApi } from '@/lib/api';
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';

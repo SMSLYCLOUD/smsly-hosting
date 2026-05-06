@@ -147,8 +147,8 @@ export function Navbar() {
 
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
-            <div className="bg-emerald-500 p-1.5 rounded-lg shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
-                <Image src="/images/logo.svg" alt="S" width={22} height={22} className="h-5.5 w-5.5 brightness-0 invert" priority />
+            <div className="rounded-md bg-white p-1 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
+                <Image src="/images/mini_logo.png" alt="Grid" width={28} height={32} className="h-8 w-auto object-contain" priority />
             </div>
             {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">Grid</span>}
         </Link>

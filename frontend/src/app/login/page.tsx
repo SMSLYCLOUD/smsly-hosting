@@ -95,8 +95,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-md card-premium rounded-2xl">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto mb-4 flex flex-col items-center gap-2">
-            <Image src="/images/logo.svg" alt="Grid" width={48} height={48} className="h-12 w-12 mx-auto rounded-xl shadow-md" />
-            <span className="font-bold text-xl tracking-tight text-slate-900 dark:text-white">Grid</span>
+            <Image src="/images/logo.png" alt="Grid" width={190} height={78} className="h-20 w-auto max-w-full rounded-xl object-contain shadow-md" />
           </div>
           <CardTitle className="text-2xl font-bold tracking-tight">
             {showEmailForm ? "Sign in with Email" : "Welcome back"}

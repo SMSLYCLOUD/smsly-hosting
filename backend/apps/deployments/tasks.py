@@ -2736,9 +2736,42 @@ def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
     from apps.deployments.services.transfer_service import ServerTransferService
 
-    transfer = TransferModel.objects.get(id=transfer_id)
-    engine = ServerTransferService(transfer)
-    engine.execute()
+    lock_key = f"server-transfer:{transfer_id}"
+    if not cache.add(lock_key, "1", timeout=7500):
+        logger.warning("Transfer Task: duplicate execution ignored for %s", transfer_id)
+        return {"status": "skipped", "reason": "already_running"}
+
+    try:
+        transfer = TransferModel.objects.get(id=transfer_id)
+    except TransferModel.DoesNotExist:
+        logger.error("Transfer Task: transfer %s not found", transfer_id)
+        cache.delete(lock_key)
+        return {"status": "missing"}
+
+    if transfer.status in {"COMPLETED", "FAILED", "ROLLED_BACK"}:
+        cache.delete(lock_key)
+        return {"status": "skipped", "reason": f"terminal:{transfer.status}"}
+
+    try:
+        engine = ServerTransferService(transfer)
+        engine.execute()
+        transfer.refresh_from_db(fields=["status"])
+        return {"status": transfer.status}
+    except Exception as exc:
+        logger.exception("Transfer Task: unhandled failure for %s: %s", transfer_id, exc)
+        transfer.status = "FAILED"
+        transfer.error_message = str(exc)[:4000]
+        transfer.target_ssh_key = ""
+        transfer.target_ssh_password = ""
+        transfer.save(update_fields=[
+            "status",
+            "error_message",
+            "target_ssh_key",
+            "target_ssh_password",
+        ])
+        return {"status": "FAILED", "error": str(exc)}
+    finally:
+        cache.delete(lock_key)
 
 
 @shared_task(bind=True)
@@ -2746,9 +2779,24 @@ def rollback_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
     from apps.deployments.services.transfer_service import ServerTransferService
 
-    transfer = TransferModel.objects.get(id=transfer_id)
-    engine = ServerTransferService(transfer)
-    engine.rollback()
+    lock_key = f"server-transfer-rollback:{transfer_id}"
+    if not cache.add(lock_key, "1", timeout=1800):
+        logger.warning("Transfer Rollback Task: duplicate rollback ignored for %s", transfer_id)
+        return {"status": "skipped", "reason": "already_running"}
+
+    try:
+        transfer = TransferModel.objects.get(id=transfer_id)
+        engine = ServerTransferService(transfer)
+        engine.rollback()
+        return {"status": "ROLLED_BACK"}
+    except TransferModel.DoesNotExist:
+        logger.error("Transfer Rollback Task: transfer %s not found", transfer_id)
+        return {"status": "missing"}
+    except Exception as exc:
+        logger.exception("Transfer Rollback Task failed for %s: %s", transfer_id, exc)
+        return {"status": "FAILED", "error": str(exc)}
+    finally:
+        cache.delete(lock_key)
 
 
 @shared_task(bind=True, max_retries=0)

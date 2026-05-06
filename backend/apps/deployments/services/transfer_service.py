@@ -9,6 +9,7 @@ import glob
 import socket
 import hashlib
 import hmac
+import re
 from datetime import timedelta
 
 from django.conf import settings
@@ -23,6 +24,37 @@ from ..models_storage import Volume
 
 logger = logging.getLogger(__name__)
 
+TRANSFER_LOG_LIMIT = 300_000
+TRANSFER_ERROR_LIMIT = 4_000
+
+
+def _command_text(result) -> str:
+    """Normalize SSHClient output while tolerating older string-returning mocks."""
+    if isinstance(result, tuple):
+        stdout = result[0] if len(result) > 0 else ""
+        stderr = result[1] if len(result) > 1 else ""
+        return (stdout or "") + (("\n" + stderr) if stderr else "")
+    return "" if result is None else str(result)
+
+
+def _redact_transfer_text(text: str) -> str:
+    """Keep persisted transfer logs useful without storing secrets."""
+    if not text:
+        return ""
+    safe = str(text).replace("\x00", "")
+    safe = re.sub(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        "-----BEGIN PRIVATE KEY-----***-----END PRIVATE KEY-----",
+        safe,
+        flags=re.DOTALL,
+    )
+    safe = re.sub(
+        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL)[A-Z0-9_]*=)([^\s]+)",
+        r"\1***",
+        safe,
+    )
+    return safe
+
 
 class ServerTransferService:
     def __init__(self, transfer):
@@ -33,10 +65,16 @@ class ServerTransferService:
     def _log(self, message):
         """Append a timestamped message to the transfer logs."""
         ts = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        line = f"[{ts}] {message}\n"
-        self.transfer.logs += line
+        line = _redact_transfer_text(f"[{ts}] {message}\n")
+        combined = (self.transfer.logs or "") + line
+        if len(combined) > TRANSFER_LOG_LIMIT:
+            combined = (
+                "--- Older transfer log output truncated to keep this record bounded ---\n"
+                + combined[-TRANSFER_LOG_LIMIT:]
+            )
+        self.transfer.logs = combined
         self.transfer.save(update_fields=['logs'])
-        logger.info(f"Transfer {self.transfer.id}: {message}")
+        logger.info("Transfer %s: %s", self.transfer.id, _redact_transfer_text(message))
 
     def _target_server_record(self):
         from ..models_core import ManagedServer
@@ -220,10 +258,11 @@ class ServerTransferService:
         remote_path = f"/tmp/{os.path.basename(local_path)}"
         self._uploaded_remote_backup_path = remote_path
 
-        self.ssh.upload_file(local_path, remote_path)
-
-        if temp_decrypted and os.path.exists(temp_decrypted):
-            os.remove(temp_decrypted)
+        try:
+            self.ssh.upload_file(local_path, remote_path)
+        finally:
+            if temp_decrypted and os.path.exists(temp_decrypted):
+                os.remove(temp_decrypted)
 
         if self.transfer.transfer_type == 'FULL':
             install_script = os.path.join(settings.BASE_DIR, '../install.sh')
@@ -234,6 +273,11 @@ class ServerTransferService:
                     raise ValueError("SMSLY_INSTALL_SCRIPT_SHA256 is required for full-server transfer.")
                 self.ssh.upload_file(install_script, "/tmp/install.sh")
                 self.ssh.exec_command("chmod +x /tmp/install.sh")
+                self.ssh.exec_command(
+                    "actual=$(sha256sum /tmp/install.sh | awk '{print $1}'); "
+                    f"[ \"$actual\" = {shlex.quote(checksum)} ] || "
+                    "{ echo 'install.sh checksum mismatch' >&2; exit 44; }"
+                )
 
             local_env_path = os.path.join(settings.BASE_DIR, '../.env')
             if os.path.exists(local_env_path):
@@ -296,9 +340,9 @@ class ServerTransferService:
 
         self._update(85, 'Running database and volume migrations on target...')
         # Execute the python script inside the remote container
-        result = self.ssh.exec_command(
+        result = _command_text(self.ssh.exec_command(
             f"docker exec {safe_backend_container} python3 {shlex.quote(container_script_path)}"
-        )
+        ))
         if "RESTORE_FAILED" in result or "ERROR:" in result:
             raise RuntimeError(f"Remote service hydration failed: {result}")
 
@@ -407,11 +451,11 @@ if svc:
         )
 
         try:
-            container_id = self.ssh.exec_command(
+            container_id = _command_text(self.ssh.exec_command(
                 "docker inspect -f '{{.Id}}' "
                 f"{shlex.quote(service_name)}",
                 raise_on_error=False,
-            ).strip().splitlines()[-1]
+            )).strip().splitlines()[-1]
         except Exception:
             container_id = ''
 
@@ -529,7 +573,9 @@ if svc:
             "docker ps --filter name=backend --format '{{.Names}}'",
             f"docker ps --filter name={shlex.quote(configured)} --format '{{{{.Names}}}}'",
         ):
-            output = self.ssh.exec_command(cmd, raise_on_error=False).strip()
+            output = _command_text(
+                self.ssh.exec_command(cmd, raise_on_error=False)
+            ).strip()
             for raw_name in output.splitlines():
                 name = raw_name.strip("'\" ")
                 if name and name not in candidates:
@@ -574,9 +620,19 @@ if svc:
             "sleep 5; "
             "done; echo NOT_READY; exit 1"
         )
-        output = self.ssh.exec_command(command, timeout=330)
+        output = _command_text(self.ssh.exec_command(command, timeout=330))
         if "READY" not in output:
             raise RuntimeError("Target Grid backend did not become ready before restore.")
+
+    def _target_hosting_path(self) -> str:
+        """Find the remote Grid install path with a stable fallback."""
+        try:
+            path = self.ssh.find_hosting_path()
+            if isinstance(path, str) and path.startswith("/"):
+                return path.rstrip("/")
+        except Exception as exc:
+            logger.warning("Could not detect target Grid install path: %s", exc)
+        return "/opt/smsly-hosting"
 
     @staticmethod
     def _build_restore_trigger_script(owner_email, backup_path='/tmp/transfer_backup.tar.gz'):
@@ -668,12 +724,23 @@ if __name__ == '__main__':
     def _restore_full_server(self, remote_backup_path):
         self._update(60, 'Installing Grid platform on target...')
 
-        self.ssh.exec_command("yes | /tmp/install.sh")
+        self.ssh.exec_command(
+            "yes | NON_INTERACTIVE=1 bash /tmp/install.sh",
+            timeout=3600,
+        )
+        hosting_path = self._target_hosting_path()
+        quoted_hosting_path = shlex.quote(hosting_path)
+        compose = (
+            f"cd {quoted_hosting_path} && "
+            "{ COMPOSE='docker compose'; "
+            "docker compose version >/dev/null 2>&1 || COMPOSE='docker-compose'; "
+            "$COMPOSE"
+        )
 
         self._update(70, 'Stopping services for data restore...')
-        self.ssh.exec_command("cd /opt/smsly && docker compose down -v")
+        self.ssh.exec_command(f"{compose} down -v; }}")
 
-        self.ssh.exec_command("cp /tmp/.env.restore /opt/smsly/.env")
+        self.ssh.exec_command(f"cp /tmp/.env.restore {quoted_hosting_path}/.env")
 
         remote_temp_dir = f"/tmp/restore_{self.transfer.id}"
         self.ssh.exec_command(f"mkdir -p {remote_temp_dir}")
@@ -682,25 +749,37 @@ if __name__ == '__main__':
         self._update(75, 'Restoring database...')
         db_dump = f"{remote_temp_dir}/db_dump.sql"
 
-        self.ssh.exec_command("cd /opt/smsly && docker compose up -d db")
+        self.ssh.exec_command(f"{compose} up -d db; }}")
         time.sleep(20)
 
         self.ssh.exec_command(f"docker cp {db_dump} smsly-db:/tmp/dump.sql")
 
-        db_user = self.ssh.exec_command("grep POSTGRES_USER /opt/smsly/.env | cut -d= -f2").strip() or 'smsly'
-        db_name = self.ssh.exec_command("grep POSTGRES_DB /opt/smsly/.env | cut -d= -f2").strip() or 'smsly'
+        db_user = _command_text(self.ssh.exec_command(
+            f"grep POSTGRES_USER {quoted_hosting_path}/.env | cut -d= -f2"
+        )).strip() or 'smsly'
+        db_name = _command_text(self.ssh.exec_command(
+            f"grep POSTGRES_DB {quoted_hosting_path}/.env | cut -d= -f2"
+        )).strip() or 'smsly'
 
-        # Use safe quoting for psql commands?
-        # db_user/name might have weird chars.
-        # But exec_command string interpolation is still used for drop/create.
-        # This is on the host shell.
-        # It's better, but let's assume they are safe-ish or use shlex if possible.
-        # Hard to use shlex for complex piped commands.
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_user):
+            raise RuntimeError("Unsafe POSTGRES_USER value in target .env.")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,62}", db_name):
+            raise RuntimeError("Unsafe POSTGRES_DB value in target .env.")
 
-        drop_cmd = f"cd /opt/smsly && docker compose exec -T db psql -U {shlex.quote(db_user)} postgres -c 'DROP DATABASE IF EXISTS {shlex.quote(db_name)}; CREATE DATABASE {shlex.quote(db_name)};'"
+        drop_cmd = (
+            f"{compose} exec -T db psql -U {shlex.quote(db_user)} postgres "
+            f"-c 'DROP DATABASE IF EXISTS \"{db_name}\"; CREATE DATABASE \"{db_name}\";'"
+            "; }"
+        )
         self.ssh.exec_command(drop_cmd)
 
-        restore_cmd = f"cd /opt/smsly && docker compose exec -T db sh -c 'psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql'"
+        restore_cmd = (
+            f"{compose} exec -T db sh -c "
+            + shlex.quote(
+                f"psql -U {shlex.quote(db_user)} -d {shlex.quote(db_name)} < /tmp/dump.sql"
+            )
+            + "; }"
+        )
         self.ssh.exec_command(restore_cmd)
 
         self._update(80, 'Restoring service data...')
@@ -766,7 +845,7 @@ if os.path.exists(services_dir):
         self.ssh.exec_command(f"python3 {shlex.quote(script_path)}")
 
         self._update(90, 'Starting platform...')
-        self.ssh.exec_command("cd /opt/smsly && docker compose up -d")
+        self.ssh.exec_command(f"{compose} up -d; }}")
 
         self.ssh.exec_command(f"rm -rf {remote_temp_dir} {remote_backup_path} {script_path} /tmp/.env.restore")
 
@@ -824,8 +903,16 @@ if os.path.exists(services_dir):
                     host=self.transfer.target_server_ip,
                     owner=owner,
                     ssh_key=self.transfer.target_ssh_key,
-                    ssh_password=self.transfer.target_ssh_password
+                    ssh_password=self.transfer.target_ssh_password,
+                    status=ManagedServer.Status.ONLINE,
                 )
+            elif target_server.status != ManagedServer.Status.ONLINE:
+                target_server.status = ManagedServer.Status.ONLINE
+                target_server.save(update_fields=['status', 'updated_at'])
+            if target_server and not (target_server.ssh_key or target_server.ssh_password):
+                target_server.ssh_key = self.transfer.target_ssh_key
+                target_server.ssh_password = self.transfer.target_ssh_password
+                target_server.save(update_fields=['ssh_key', 'ssh_password', 'updated_at'])
 
             # 4. Add remote target server to mesh
             WireGuardService.add_peer_to_mesh(mesh, server=target_server, is_local=False)
@@ -867,9 +954,9 @@ if os.path.exists(services_dir):
             # Check if the container is running on the target
             try:
                 container_name = self.transfer.service.name
-                result = self.ssh.exec_command(
+                result = _command_text(self.ssh.exec_command(
                     f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}"
-                )
+                ))
                 if result.strip() != 'true':
                     raise RuntimeError(
                         f"Service container {container_name} is not running on target"
@@ -906,7 +993,7 @@ if os.path.exists(services_dir):
                 "&& echo TRANSFER_TCP_OK || echo TRANSFER_TCP_FAIL"
             )
         )
-        remote_result = self.ssh.exec_command(tcp_check_cmd).strip()
+        remote_result = _command_text(self.ssh.exec_command(tcp_check_cmd)).strip()
         if "TRANSFER_TCP_OK" in remote_result:
             logger.info("Connectivity check passed: target -> %s:22", source_ip)
             return
@@ -975,7 +1062,7 @@ if os.path.exists(services_dir):
 
     def _handle_failure(self, error):
         self.transfer.status = 'FAILED'
-        self.transfer.error_message = str(error)
+        self.transfer.error_message = _redact_transfer_text(str(error))[:TRANSFER_ERROR_LIMIT]
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
         self.transfer.save(update_fields=['status', 'error_message', 'target_ssh_key', 'target_ssh_password'])

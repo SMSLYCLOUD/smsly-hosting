@@ -6,6 +6,7 @@ Patroni-based PostgreSQL streaming replication.
 """
 
 import logging
+import ipaddress
 
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -46,10 +47,24 @@ class ReplicationDeploySerializer(serializers.Serializer):
 class FailoverSerializer(serializers.Serializer):
     target_wg_address = serializers.CharField()
 
+    def validate_target_wg_address(self, value):
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise serializers.ValidationError("target_wg_address must be an IP address.") from exc
+        return value
+
 
 class ConnectReplicaPreflightSerializer(serializers.Serializer):
     mesh_id = serializers.UUIDField()
     target_wg_address = serializers.CharField()
+
+    def validate_target_wg_address(self, value):
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise serializers.ValidationError("target_wg_address must be an IP address.") from exc
+        return value
 
 
 class ConnectReplicaSerializer(serializers.Serializer):
@@ -61,6 +76,13 @@ class ConnectReplicaSerializer(serializers.Serializer):
         write_only=True, required=True, allow_blank=False,
         help_text="Strong unique password for replication user"
     )
+
+    def validate_target_wg_address(self, value):
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise serializers.ValidationError("target_wg_address must be an IP address.") from exc
+        return value
 
     def validate_replication_password(self, value):
         if not value or value.strip().lower() == "repl_pass":
@@ -112,6 +134,23 @@ class ReplicationViewSet(viewsets.ViewSet):
                 {"error": "Need at least 2 peers for replication"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if mesh.mesh_status != "ACTIVE":
+            return Response(
+                {"error": "WireGuard mesh must be ACTIVE before enabling replication."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if mesh.replication_status == "DEPLOYING":
+            return Response(
+                {"error": "Replication deployment already in progress."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        try:
+            ReplicationService.validate_mesh_for_replication(mesh)
+        except Exception as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Launch async deployment
         from .tasks_replication import deploy_replication_task
@@ -124,12 +163,26 @@ class ReplicationViewSet(viewsets.ViewSet):
             "replication_last_result",
             "updated_at",
         ])
-        deploy_replication_task.delay(
-            mesh_id,
-            ser.validated_data["db_password"],
-            ser.validated_data["admin_password"],
-            ser.validated_data["replication_password"],
-        )
+        try:
+            deploy_replication_task.delay(
+                mesh_id,
+                ser.validated_data["db_password"],
+                ser.validated_data["admin_password"],
+                ser.validated_data["replication_password"],
+            )
+        except Exception as exc:
+            logger.exception("Failed to queue replication deployment for mesh %s: %s", mesh.id, exc)
+            mesh.replication_status = "FAILED"
+            mesh.replication_last_error = "Replication deployment could not be queued."
+            mesh.save(update_fields=[
+                "replication_status",
+                "replication_last_error",
+                "updated_at",
+            ])
+            return Response(
+                {"error": mesh.replication_last_error},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response({
             "status": "Deployment started",
@@ -161,7 +214,11 @@ class ReplicationViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        result = ReplicationService.sync_now(mesh)
+        try:
+            result = ReplicationService.sync_now(mesh)
+        except Exception as exc:
+            logger.exception("Replication sync failed for mesh %s: %s", mesh.id, exc)
+            return Response({"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(result)
 
     @action(detail=False, methods=["post"], url_path="disable")
@@ -182,6 +239,12 @@ class ReplicationViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if mesh.replication_status == "DEPLOYING":
+            return Response(
+                {"error": "Replication deployment is in progress."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         result = ReplicationService.disable_replication(mesh)
         return Response({
             "status": mesh.replication_status,
@@ -200,7 +263,11 @@ class ReplicationViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        health = ReplicationService.check_replication_health(mesh)
+        try:
+            health = ReplicationService.check_replication_health(mesh)
+        except Exception as exc:
+            logger.exception("Replication health failed for mesh %s: %s", mesh.id, exc)
+            return Response({"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(health)
 
     @action(detail=False, methods=["post"])
@@ -223,12 +290,15 @@ class ReplicationViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        ser = FailoverSerializer(data={"target_wg_address": target})
+        ser.is_valid(raise_exception=True)
+
         from .tasks_replication import manual_failover_task
-        manual_failover_task.delay(str(mesh_id), target)
+        manual_failover_task.delay(str(mesh_id), ser.validated_data["target_wg_address"])
 
         return Response({
             "status": "Failover initiated",
-            "target": target,
+            "target": ser.validated_data["target_wg_address"],
         }, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=["post"])
@@ -271,7 +341,12 @@ class ReplicationViewSet(viewsets.ViewSet):
             )
 
         try:
-            ReplicationService.connect_replica(
+            if mesh.replication_status == "DEPLOYING":
+                return Response(
+                    {"error": "Replication deployment already in progress."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            result = ReplicationService.connect_replica(
                 mesh,
                 ser.validated_data["target_wg_address"],
                 ser.validated_data["db_password"],
@@ -279,7 +354,7 @@ class ReplicationViewSet(viewsets.ViewSet):
                 ser.validated_data["replication_password"]
             )
             return Response(
-                {"status": "Replica connected successfully"}
+                {"status": "Replica connected successfully", "result": result}
             )
         except Exception as e:
             return Response(
@@ -301,7 +376,12 @@ class ReplicationViewSet(viewsets.ViewSet):
 
         try:
             mesh = MeshNetwork.objects.get(id=mesh_id)
-            result = ReplicationService.reinitialize_replica(mesh, target)
+            ser = FailoverSerializer(data={"target_wg_address": target})
+            ser.is_valid(raise_exception=True)
+            result = ReplicationService.reinitialize_replica(
+                mesh,
+                ser.validated_data["target_wg_address"],
+            )
             return Response(result)
         except MeshNetwork.DoesNotExist:
             return Response(

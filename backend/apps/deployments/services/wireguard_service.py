@@ -6,6 +6,7 @@ of WireGuard configurations across the server fleet.
 """
 
 import logging
+import ipaddress
 import re
 import subprocess
 import shlex
@@ -15,6 +16,18 @@ from django.utils import timezone
 from apps.deployments.utils import log_event
 
 logger = logging.getLogger(__name__)
+
+
+def _command_text(result) -> str:
+    if isinstance(result, tuple):
+        stdout = result[0] if len(result) > 0 else ""
+        stderr = result[1] if len(result) > 1 else ""
+        return (stdout or "") + (("\n" + stderr) if stderr else "")
+    return "" if result is None else str(result)
+
+
+def _bounded_error(exc, limit=2000) -> str:
+    return str(exc).replace("\x00", "")[:limit]
 
 
 class WireGuardService:
@@ -29,6 +42,28 @@ class WireGuardService:
         if not cls.INTERFACE_RE.fullmatch(value):
             raise ValueError("Invalid WireGuard interface name.")
         return value
+
+    @staticmethod
+    def validate_endpoint(endpoint: str) -> str:
+        """Validate optional WireGuard endpoint host:port strings."""
+        value = str(endpoint or "").strip()
+        if not value:
+            return ""
+        if value.count(":") < 1:
+            raise ValueError("WireGuard endpoint must include a port.")
+        host, port_raw = value.rsplit(":", 1)
+        try:
+            port = int(port_raw)
+        except ValueError as exc:
+            raise ValueError("WireGuard endpoint port must be numeric.") from exc
+        if port < 1 or port > 65535:
+            raise ValueError("WireGuard endpoint port is out of range.")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host):
+                raise ValueError("WireGuard endpoint host is invalid.")
+        return f"{host}:{port}"
 
     @staticmethod
     def validate_wg_config(config: str) -> None:
@@ -78,8 +113,8 @@ class WireGuardService:
 
     # ── Config Rendering ─────────────────────────────────────────────────
 
-    @staticmethod
-    def build_wg_config(peer) -> str:
+    @classmethod
+    def build_wg_config(cls, peer) -> str:
         """
         Build a complete wg0.conf for a specific peer.
 
@@ -118,7 +153,7 @@ class WireGuardService:
                 AllowedIPs = {other.wg_address}/32
             """)
             if other.endpoint:
-                peer_section += f"    Endpoint = {other.endpoint}\n"
+                peer_section += f"    Endpoint = {cls.validate_endpoint(other.endpoint)}\n"
             # Keep-alive to maintain NAT mappings
             peer_section += "    PersistentKeepalive = 25\n"
             config += peer_section
@@ -146,6 +181,7 @@ class WireGuardService:
             WireGuardPeer instance
         """
         from apps.deployments.models_mesh import WireGuardPeer
+        from apps.deployments.models_core import ManagedServer
 
         # Check if peer already exists
         existing = WireGuardPeer.objects.filter(
@@ -154,6 +190,14 @@ class WireGuardService:
         if existing:
             logger.info(f"Peer already exists for server {server or 'local'}")
             return existing
+
+        if not is_local:
+            if not server:
+                raise ValueError("Remote mesh peers require a ManagedServer.")
+            if server.status != ManagedServer.Status.ONLINE:
+                raise ValueError(f"Server '{server.name}' is {server.status}; only ONLINE servers can join a mesh.")
+            if not (server.ssh_key or server.ssh_password):
+                raise ValueError(f"Server '{server.name}' has no SSH credentials for mesh deployment.")
 
         # Generate keys and assign IP
         private_key, public_key = cls.generate_keypair()
@@ -188,7 +232,7 @@ class WireGuardService:
             private_key=private_key,
             public_key=public_key,
             wg_address=wg_address,
-            endpoint=endpoint,
+            endpoint=cls.validate_endpoint(endpoint),
             allowed_ips=f"{wg_address}/32",
             is_active=True,
             is_local=is_local,
@@ -325,22 +369,29 @@ class WireGuardService:
         import base64
         b64_config = base64.b64encode(config.encode()).decode()
         commands = [
-            # Ensure WireGuard is installed
-            "apt-get update > /dev/null 2>&1 || true",
-            "apt-get install -y wireguard iptables > /dev/null 2>&1 || true",
-            "mkdir -p /etc/wireguard",
-            # Write config
-            f"echo '{b64_config}' | base64 -d > /etc/wireguard/{safe_iface}.conf",
-            f"chmod 600 /etc/wireguard/{safe_iface}.conf",
-            # Check kernel module
-            "modprobe wireguard || true",
-            # Restart interface
-            f"wg-quick down {safe_iface} 2>/dev/null || true",
-            f"wg-quick up {safe_iface}",
-            # Enable on boot
-            f"systemctl enable wg-quick@{safe_iface} 2>/dev/null || true",
+            "set -e",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi",
+            "if command -v apt-get >/dev/null 2>&1; then "
+            "$SUDO apt-get update >/dev/null 2>&1 || true; "
+            "$SUDO apt-get install -y wireguard iptables >/dev/null 2>&1 || true; "
+            "elif command -v yum >/dev/null 2>&1; then "
+            "$SUDO yum install -y wireguard-tools iptables >/dev/null 2>&1 || true; "
+            "fi",
+            "command -v wg-quick >/dev/null 2>&1 || { echo 'wg-quick is not installed' >&2; exit 41; }",
+            "$SUDO mkdir -p /etc/wireguard",
+            (
+                f"tmp=$($SUDO mktemp /etc/wireguard/{safe_iface}.conf.tmp.XXXXXX) && "
+                f"printf %s {shlex.quote(b64_config)} | base64 -d | $SUDO tee \"$tmp\" >/dev/null && "
+                "$SUDO chmod 600 \"$tmp\" && "
+                f"$SUDO mv \"$tmp\" /etc/wireguard/{safe_iface}.conf"
+            ),
+            "$SUDO modprobe wireguard 2>/dev/null || true",
+            f"$SUDO wg-quick down {safe_iface} >/dev/null 2>&1 || true",
+            f"$SUDO wg-quick up {safe_iface}",
+            f"$SUDO wg show {safe_iface} >/dev/null",
+            f"$SUDO systemctl enable wg-quick@{safe_iface} >/dev/null 2>&1 || true",
         ]
-        cls._ssh_run(server, " && ".join(commands))
+        cls._ssh_run(server, " && ".join(commands), timeout=180)
 
     # ── Mesh Operations ──────────────────────────────────────────────────
 
@@ -365,11 +416,11 @@ class WireGuardService:
                 )
             except Exception as e:
                 logger.error(f"Failed to deploy to {peer}: {e}")
-                results["failed"].append({"peer": str(peer), "error": str(e)})
+                results["failed"].append({"peer": str(peer), "error": _bounded_error(e)})
                 log_event(
                     action="MESH_DEPLOY_FAILED",
                     target=f"Peer: {peer.wg_address}",
-                    metadata={"peer": str(peer), "error": str(e), "mesh": mesh.name}
+                    metadata={"peer": str(peer), "error": _bounded_error(e), "mesh": mesh.name}
                 )
 
         return results
@@ -401,13 +452,14 @@ class WireGuardService:
                     "status": "OK",
                 })
             except Exception as e:
+                error = _bounded_error(e)
                 peer.latency_ms = None
                 peer.save(update_fields=["latency_ms"])
                 results.append({
                     "peer": str(peer),
                     "wg_address": peer.wg_address,
                     "latency_ms": None,
-                    "status": f"UNREACHABLE: {e}",
+                    "status": f"UNREACHABLE: {error}",
                 })
                 # Exhaustive Logging: Log the health failure
                 log_event(
@@ -416,7 +468,7 @@ class WireGuardService:
                     metadata={
                         "peer": str(peer),
                         "endpoint": peer.endpoint,
-                        "error": str(e),
+                        "error": error,
                         "mesh": mesh.name
                     }
                 )
@@ -458,6 +510,9 @@ class WireGuardService:
         """Run a command on a remote server via SSH."""
         from apps.deployments.services.ssh_client import SSHClient
 
+        if not (getattr(server, "ssh_key", "") or getattr(server, "ssh_password", "")):
+            raise ValueError(f"Server '{server.name}' has no SSH credentials configured.")
+
         ssh = SSHClient(
             host=server.host,
             port=server.ssh_port,
@@ -468,7 +523,7 @@ class WireGuardService:
         try:
             ssh.connect()
             output = ssh.exec_command(command, timeout=timeout)
-            return output
+            return _command_text(output)
         finally:
             ssh.close()
 

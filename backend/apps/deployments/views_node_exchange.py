@@ -26,6 +26,11 @@ from apps.deployments.api_token_auth import APIToken
 logger = logging.getLogger(__name__)
 
 
+def _clean_node_name(value):
+    node_name = str(value or "Remote Node").strip()
+    return node_name[:100] or "Remote Node"
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def node_token_exchange(request):
@@ -42,7 +47,7 @@ def node_token_exchange(request):
     """
     username = request.data.get("username", "").strip()
     password = request.data.get("password", "").strip()
-    node_name = request.data.get("node_name", "Remote Node").strip()
+    node_name = _clean_node_name(request.data.get("node_name", "Remote Node"))
 
     if not username or not password:
         return Response(
@@ -109,7 +114,7 @@ def node_token_exchange_via_gateway(request):
     signature = request.headers.get("X-Gateway-Signature-V2", "")
     timestamp = request.headers.get("X-Request-Timestamp", "")
     raw_body = request.body
-    node_name = request.data.get("node_name", "Remote Node").strip()
+    node_name = _clean_node_name(request.data.get("node_name", "Remote Node"))
 
     if not signature or not timestamp:
         return Response(
@@ -126,7 +131,9 @@ def node_token_exchange_via_gateway(request):
         return Response({"error": "Invalid timestamp."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Verify HMAC
-    gw_secret = getattr(settings, "GATEWAY_SECRET", settings.SECRET_KEY)
+    gw_secret = str(getattr(settings, "GATEWAY_SECRET", "") or settings.SECRET_KEY or "").strip()
+    if not gw_secret:
+        return Response({"error": "Gateway secret is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     method = request.method
     path = request.get_full_path()
     body_hash = hashlib.sha256(raw_body).hexdigest()

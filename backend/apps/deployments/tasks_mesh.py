@@ -7,8 +7,13 @@ Periodic health checks and mesh management tasks.
 import logging
 
 from celery import shared_task
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
+
+
+def _bounded_error(exc, limit=2000):
+    return str(exc).replace("\x00", "")[:limit]
 
 
 @shared_task(
@@ -78,6 +83,11 @@ def deploy_mesh_task(self, mesh_id: str):
     from apps.deployments.services.wireguard_service import WireGuardService
     from django.utils import timezone
 
+    lock_key = f"mesh-deploy:{mesh_id}"
+    if not cache.add(lock_key, "1", timeout=960):
+        logger.warning("Mesh deploy skipped for %s because another deploy is running", mesh_id)
+        return {"error": "Mesh deployment already running"}
+
     try:
         mesh = MeshNetwork.objects.get(id=mesh_id)
         mesh.mesh_status = "DEPLOYING"
@@ -112,8 +122,8 @@ def deploy_mesh_task(self, mesh_id: str):
     except Exception as e:
         try:
             mesh.mesh_status = "FAILED"
-            mesh.mesh_last_error = str(e)
-            mesh.mesh_last_result = {"error": str(e)}
+            mesh.mesh_last_error = _bounded_error(e)
+            mesh.mesh_last_result = {"error": _bounded_error(e)}
             mesh.save(update_fields=[
                 "mesh_status",
                 "mesh_last_error",
@@ -123,4 +133,6 @@ def deploy_mesh_task(self, mesh_id: str):
         except Exception:
             pass
         logger.error(f"Mesh deploy failed: {e}")
-        return {"error": str(e)}
+        return {"error": _bounded_error(e)}
+    finally:
+        cache.delete(lock_key)

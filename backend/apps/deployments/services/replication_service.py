@@ -13,6 +13,8 @@ Handles:
 
 import logging
 import base64
+import json
+import ipaddress
 import shlex
 import textwrap
 import time
@@ -21,6 +23,17 @@ from urllib.parse import urlparse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _yaml_scalar(value) -> str:
+    """Return a YAML-safe scalar using JSON string quoting."""
+    return json.dumps(str(value))
+
+
+def _bounded_error(exc, limit=2000) -> str:
+    safe = str(exc).replace("\x00", "")
+    safe = safe.replace("repl_pass", "***")
+    return safe[:limit]
 
 
 class ReplicationService:
@@ -106,13 +119,13 @@ class ReplicationService:
                       PATRONI_POSTGRESQL_LISTEN: "{wg_ip}:{cls.PATRONI_POSTGRES_PORT}"
                       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata/pgroot/data
                       PATRONI_REPLICATION_USERNAME: replicator
-                      PATRONI_REPLICATION_PASSWORD: "{replication_password}"
+                      PATRONI_REPLICATION_PASSWORD: {_yaml_scalar(replication_password)}
                       PATRONI_SUPERUSER_USERNAME: postgres
-                      PATRONI_SUPERUSER_PASSWORD: "{db_password}"
+                      PATRONI_SUPERUSER_PASSWORD: {_yaml_scalar(db_password)}
                       PGUSER_SUPERUSER: postgres
-                      PGPASSWORD_SUPERUSER: "{db_password}"
+                      PGPASSWORD_SUPERUSER: {_yaml_scalar(db_password)}
                       PGUSER_ADMIN: smsly_admin
-                      PGPASSWORD_ADMIN: "{admin_password}"
+                      PGPASSWORD_ADMIN: {_yaml_scalar(admin_password)}
                     volumes:
                       - patroni-data:/home/postgres/pgdata
                     depends_on:
@@ -278,6 +291,40 @@ class ReplicationService:
     # ── Deployment ───────────────────────────────────────────────────────
 
     @classmethod
+    def validate_mesh_for_replication(cls, mesh):
+        """Fail early when mesh/server state cannot support Patroni safely."""
+        from apps.deployments.models_core import ManagedServer
+
+        peers = list(mesh.peers.filter(is_active=True).select_related("server"))
+        if len(peers) < 2:
+            raise ValueError("Need at least 2 active peers for replication")
+        if not any(peer.is_local for peer in peers):
+            raise ValueError("Mesh must include a local peer before replication can be enabled.")
+
+        addresses = set()
+        for peer in peers:
+            try:
+                ipaddress.ip_address(peer.wg_address)
+            except ValueError as exc:
+                raise ValueError(f"Peer {peer} has an invalid WireGuard address.") from exc
+            if peer.wg_address in addresses:
+                raise ValueError(f"Duplicate WireGuard address detected: {peer.wg_address}")
+            addresses.add(peer.wg_address)
+
+            if peer.is_local:
+                continue
+            if not peer.server:
+                raise ValueError(f"Remote peer {peer.wg_address} is not linked to a server.")
+            if peer.server.status != ManagedServer.Status.ONLINE:
+                raise ValueError(
+                    f"Server '{peer.server.name}' is {peer.server.status}; replication requires ONLINE nodes."
+                )
+            if not (peer.server.ssh_key or peer.server.ssh_password):
+                raise ValueError(f"Server '{peer.server.name}' has no SSH credentials for replication.")
+
+        return peers
+
+    @classmethod
     def deploy_replication(cls, mesh, db_password, admin_password,
                             replication_password="repl_pass"):
         """
@@ -290,6 +337,8 @@ class ReplicationService:
         Returns deployment results.
         """
         from apps.deployments.services.wireguard_service import WireGuardService
+
+        cls.validate_mesh_for_replication(mesh)
 
         configs = cls.generate_patroni_compose(
             mesh, db_password, admin_password, replication_password,
@@ -318,7 +367,7 @@ class ReplicationService:
                 logger.error(f"Failed to deploy Patroni to {wg_ip}: {e}")
                 results["patroni"].append({
                     "peer": str(peer), "wg_address": wg_ip,
-                    "status": f"FAILED: {e}",
+                    "status": f"FAILED: {_bounded_error(e)}",
                 })
 
         # Deploy HAProxy on the local server
@@ -327,7 +376,7 @@ class ReplicationService:
             results["haproxy"] = "OK"
         except Exception as e:
             logger.error(f"Failed to deploy HAProxy: {e}")
-            results["haproxy"] = f"FAILED: {e}"
+            results["haproxy"] = f"FAILED: {_bounded_error(e)}"
 
         return results
 
@@ -489,14 +538,18 @@ class ReplicationService:
             try:
                 resp = requests.get(
                     f"http://{wg_ip}:8008/patroni",
-                    timeout=5,
+                    timeout=(2, 5),
+                    allow_redirects=False,
                 )
+                if resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
                 data = resp.json()
+                role = str(data.get("role", "unknown") or "unknown").lower()
                 return {
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
                     "server": server_name,
-                    "role": data.get("role", "unknown"),
+                    "role": role,
                     "state": data.get("state", "unknown"),
                     "timeline": data.get("timeline"),
                     "xlog": data.get("xlog", {}),
@@ -510,11 +563,11 @@ class ReplicationService:
                     "name": f"patroni{idx}",
                     "wg_address": wg_ip,
                     "server": server_name,
-                    "status": f"UNREACHABLE: {e}",
+                    "status": f"UNREACHABLE: {_bounded_error(e)}",
                 }
 
         # Check all nodes in parallel to prevent UI timeouts (502)
-        with ThreadPoolExecutor(max_workers=len(peers) or 1) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(peers) or 1, 16)) as executor:
             future_to_node = {
                 executor.submit(_check_node, idx, wg_ip, server_name): wg_ip
                 for idx, wg_ip, server_name in node_specs
@@ -530,7 +583,7 @@ class ReplicationService:
 
         for node_info in node_results:
             if node_info.get("status") == "OK":
-                if node_info.get("role") == "master":
+                if node_info.get("role") in {"master", "primary", "leader"}:
                     results["primary"] = node_info
                 else:
                     results["replicas"].append(node_info)
@@ -702,29 +755,40 @@ class ReplicationService:
         """
         import requests
 
+        cls.validate_mesh_for_replication(mesh)
+        peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
+        if not any(peer.wg_address == target_wg_address for peer in peers):
+            raise ValueError(f"Target {target_wg_address} not found in mesh")
+
         # Find current primary
         primary_ip = None
         primary_name = None
-        for peer in mesh.peers.filter(is_active=True):
+        for idx, peer in enumerate(peers, 1):
             try:
                 resp = requests.get(
-                    f"http://{peer.wg_address}:8008/master",
-                    timeout=3,
+                    f"http://{peer.wg_address}:8008/patroni",
+                    timeout=(2, 5),
+                    allow_redirects=False,
                 )
                 if resp.status_code == 200:
                     data = resp.json()
+                    if str(data.get("role", "")).lower() not in {"master", "primary", "leader"}:
+                        continue
                     primary_ip = peer.wg_address
-                    primary_name = data.get("patroni", {}).get("name")
+                    primary_name = (
+                        data.get("patroni", {}).get("name")
+                        or data.get("name")
+                        or f"patroni{idx}"
+                    )
                     break
             except Exception:
                 continue
 
-        if not primary_ip:
+        if not primary_ip or not primary_name:
             raise RuntimeError("Cannot find current primary")
 
         # Find target name
         target_name = None
-        peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
         for idx, peer in enumerate(peers, 1):
             if peer.wg_address == target_wg_address:
                 target_name = f"patroni{idx}"
@@ -740,18 +804,17 @@ class ReplicationService:
                 "leader": primary_name,
                 "candidate": target_name,
             },
-            timeout=30,
+            timeout=(3, 30),
+            allow_redirects=False,
         )
 
-        if resp.status_code == 200:
-            logger.info(
-                f"Failover initiated: {primary_name} → {target_name}"
-            )
+        if resp.status_code in (200, 202):
+            logger.info("Failover initiated: %s -> %s", primary_name, target_name)
             return {"status": "Failover initiated", "from": primary_name,
                     "to": target_name}
         else:
             raise RuntimeError(
-                f"Failover failed: {resp.status_code} {resp.text}"
+                f"Failover failed: HTTP {resp.status_code} {_bounded_error(resp.text)}"
             )
 
     @classmethod
@@ -762,6 +825,8 @@ class ReplicationService:
         Uses Patroni's reinit API to rebuild from the primary.
         """
         import requests
+
+        cls.validate_mesh_for_replication(mesh)
 
         # Find target name
         peers = list(mesh.peers.filter(is_active=True).order_by("wg_address"))
@@ -780,9 +845,10 @@ class ReplicationService:
                 resp = requests.post(
                     f"http://{peer.wg_address}:8008/reinitialize",
                     json={"member": target_name},
-                    timeout=30,
+                    timeout=(3, 30),
+                    allow_redirects=False,
                 )
-                if resp.status_code == 200:
+                if resp.status_code in (200, 202):
                     return {"status": "Reinitialize started",
                             "target": target_name}
             except Exception:
