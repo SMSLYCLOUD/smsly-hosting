@@ -88,6 +88,7 @@ export default function ServersPage() {
     const [loading, setLoading] = useState(true);
     const [showAdd, setShowAdd] = useState(false);
     const [checking, setChecking] = useState(false);
+    const [serverChecking, setServerChecking] = useState<Record<string, boolean>>({});
     const [addMode, setAddMode] = useState<'connect' | 'provision'>('provision');
     const [submitting, setSubmitting] = useState(false);
 
@@ -229,10 +230,12 @@ export default function ServersPage() {
     };
 
     const healthCheck = async (id: string) => {
+        setServerChecking(prev => ({ ...prev, [id]: true }));
         try {
             await apiFetch(`/api/v1/servers/${id}/health_check/`, 'POST');
-            fetchServers();
+            await fetchServers();
         } catch { /* ignore */ }
+        setServerChecking(prev => ({ ...prev, [id]: false }));
     };
 
     const checkAll = async () => {
@@ -472,7 +475,9 @@ export default function ServersPage() {
                                                     value={connectForm.host}
                                                     onChange={e => {
                                                         const rawHost = e.target.value.replace(/^https?:\/\//, '').replace(/:\d+$/, '').trim();
-                                                        const autoUrl = rawHost ? `https://${rawHost}` : '';
+                                                        // Detect IP to default to http
+                                                        const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(rawHost);
+                                                        const autoUrl = rawHost ? (isIp ? `http://${rawHost}` : `https://${rawHost}`) : '';
                                                         setConnectForm(prev => ({
                                                             ...prev,
                                                             host: rawHost,
@@ -830,9 +835,10 @@ export default function ServersPage() {
                                                     <>
                                                         <button
                                                             onClick={() => healthCheck(server.id)}
-                                                            className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 flex items-center gap-1.5"
+                                                            disabled={serverChecking[server.id] || checking}
+                                                            className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 flex items-center gap-1.5 disabled:opacity-50"
                                                         >
-                                                            <RefreshCw size={12} /> Check
+                                                            {serverChecking[server.id] ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Check
                                                         </button>
                                                         <a
                                                             href={server.api_url}

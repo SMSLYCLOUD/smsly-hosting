@@ -66,15 +66,19 @@ def _candidate_api_urls(server) -> list[str]:
         return urls
 
     has_explicit_port = host_port.count(":") == 1
+    
+    # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
     if _server_host_is_ip(host_port):
         _append_unique(urls, f"http://{host_port}")
         _append_unique(urls, f"https://{host_port}")
+        if not has_explicit_port:
+            _append_unique(urls, f"http://{host_port}:8090")
     else:
+        # Priority 2: If it's a domain, try HTTPS first
         _append_unique(urls, f"https://{host_port}")
         _append_unique(urls, f"http://{host_port}")
-
-    if not has_explicit_port:
-        _append_unique(urls, f"http://{host_port}:8090")
+        if not has_explicit_port:
+            _append_unique(urls, f"http://{host_port}:8090")
 
     return urls
 
@@ -91,16 +95,22 @@ def _extract_health_version(response) -> str:
 
 
 def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
-    """Probe candidate base URLs and return the first one with a non-5xx /health."""
+    """Probe candidate base URLs and return the first one that responds."""
     for base_url in _candidate_api_urls(server):
         try:
+            # We use verify=False because many remote nodes use self-signed certs
+            # or haven't finished provisioning SSL via Caddy yet.
             response = requests.get(
                 f"{base_url}/health",
                 timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
+                verify=False,
             )
         except requests.RequestException:
             continue
 
+        # If it's 5xx, it's a server error but the server IS reachable.
+        # However, we only mark as 'ONLINE' if it returns a non-5xx code
+        # to ensure the management layer is actually healthy.
         if response.status_code < 500:
             return base_url, response
 
@@ -496,10 +506,16 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate_api_url(self, value):
-        """Ensure api_url has a protocol prefix."""
+        """Ensure api_url has a protocol prefix. Default to HTTP for IPs."""
         value = value.strip().rstrip('/')
         if value and not value.startswith(('http://', 'https://')):
-            value = f'https://{value}'
+            # Detect bare IP and default to HTTP
+            host_part = value.split(':')[0]
+            try:
+                ipaddress.ip_address(host_part)
+                value = f'http://{value}'
+            except ValueError:
+                value = f'https://{value}'
         return value
 
 
