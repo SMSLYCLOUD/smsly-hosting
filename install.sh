@@ -348,6 +348,41 @@ check_hardware() {
     echo -e "${GREEN}  ✓ Hardware requirements met${NC}"
 }
 
+ensure_system_swap() {
+    echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 4x RAM)...${NC}"
+    local current_ram_mb
+    current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+    local target_swap_mb=$((current_ram_mb * 4))
+    local current_swap_mb
+    current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
+
+    if [ "$current_swap_mb" -lt "$target_swap_mb" ]; then
+        local needed_mb=$((target_swap_mb - current_swap_mb))
+        echo -e "${BLUE}  → Current swap: ${current_swap_mb}MB. Adding ${needed_mb}MB to reach 4x RAM (${target_swap_mb}MB)...${NC}"
+        local swapfile="/swapfile-smsly"
+
+        # If the file already exists but is too small, we need to recreate it
+        if [ -f "$swapfile" ]; then
+            swapoff "$swapfile" 2>/dev/null || true
+            rm -f "$swapfile"
+            # Since we removed the old file, we need to create the full target amount
+            needed_mb=$target_swap_mb
+        fi
+
+        fallocate -l ${needed_mb}M "$swapfile" 2>/dev/null || dd if=/dev/zero of="$swapfile" bs=1M count=$needed_mb status=none
+        chmod 600 "$swapfile"
+        mkswap "$swapfile" >/dev/null 2>&1
+        swapon "$swapfile" 2>/dev/null || true
+        # Make permanent (idempotent)
+        if ! grep -q "$swapfile" /etc/fstab 2>/dev/null; then
+            echo "$swapfile none swap sw 0 0" >> /etc/fstab
+        fi
+        echo -e "${GREEN}  ✓ Swap file created and activated (${needed_mb}MB)${NC}"
+    else
+        echo -e "${GREEN}  ✓ Swap already sufficient (${current_swap_mb}MB, >= 4x RAM)${NC}"
+    fi
+}
+
 # ─── Installation State Machine ──────────────────────────────────────────────
 STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
 
@@ -1823,6 +1858,7 @@ if [ -n "$UPDATE_MODE" ]; then
 
     check_internet
     check_hardware
+    ensure_system_swap
 
     # ─── Git Safety ──────────────────────────────────────────────────────────
     # Prevents "dubious ownership" errors on production VPS
@@ -2619,6 +2655,7 @@ fi
 
 check_internet
 check_hardware
+ensure_system_swap
 
 # Check OS
 if [ -f /etc/os-release ]; then
@@ -3644,36 +3681,8 @@ fi
 if ! is_checkpoint_done "memory_hardened"; then
     echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
 
-# ─── Swap: Ensure swap is at least 2x RAM ────────────────────────────────────
-CURRENT_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-TARGET_SWAP_MB=$((CURRENT_RAM_MB * 2))
-CURRENT_SWAP_MB=$(free -m | awk '/^Swap:/{print $2}')
-
-if [ "$CURRENT_SWAP_MB" -lt "$TARGET_SWAP_MB" ]; then
-    NEEDED_MB=$((TARGET_SWAP_MB - CURRENT_SWAP_MB))
-    echo -e "${BLUE}  → Current swap: ${CURRENT_SWAP_MB}MB. Adding ${NEEDED_MB}MB to reach 2x RAM (${TARGET_SWAP_MB}MB)...${NC}"
-    SWAPFILE="/swapfile-smsly"
-
-    # If the file already exists but is too small, we need to recreate it
-    if [ -f "$SWAPFILE" ]; then
-        swapoff "$SWAPFILE" 2>/dev/null || true
-        rm -f "$SWAPFILE"
-        # Since we removed the old file, we need to create the full target amount
-        NEEDED_MB=$TARGET_SWAP_MB
-    fi
-
-    fallocate -l ${NEEDED_MB}M "$SWAPFILE" 2>/dev/null || dd if=/dev/zero of="$SWAPFILE" bs=1M count=$NEEDED_MB status=none
-    chmod 600 "$SWAPFILE"
-    mkswap "$SWAPFILE" >/dev/null 2>&1
-    swapon "$SWAPFILE" 2>/dev/null || true
-    # Make permanent (idempotent)
-    if ! grep -q "$SWAPFILE" /etc/fstab 2>/dev/null; then
-        echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
-    fi
-    echo -e "${GREEN}  ✓ Swap file created and activated (${NEEDED_MB}MB)${NC}"
-else
-    echo -e "${GREEN}  ✓ Swap already sufficient (${CURRENT_SWAP_MB}MB, >= 2x RAM)${NC}"
-fi
+# ─── Swap: Ensure swap is at least 4x RAM ────────────────────────────────────
+ensure_system_swap
 
 # ─── Auto-Maintenance: Install OOM Swap Adjuster ─────────────────────────────
 OOM_SCRIPT="/opt/smsly/scripts/oom-swap-adjuster.sh"
