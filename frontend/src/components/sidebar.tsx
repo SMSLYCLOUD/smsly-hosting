@@ -156,7 +156,7 @@ export function Sidebar() {
       <div className="px-3 pt-3 pb-3 space-y-3">
         <Link href="/client" className="flex items-center gap-2.5 px-2">
           <div className="w-6 h-6 bg-emerald-500 rounded-lg flex items-center justify-center font-bold text-xs shrink-0">S</div>
-          <h1 className="text-base font-bold tracking-tight">CloudNeuron</h1>
+          <h1 className="text-base font-bold tracking-tight">Grid</h1>
         </Link>
         <div className="px-1">
           <TeamSwitcher className="w-full justify-between bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white" />

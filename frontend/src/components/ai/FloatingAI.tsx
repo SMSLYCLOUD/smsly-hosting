@@ -19,7 +19,7 @@ export function FloatingAI() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Hi! I'm your CloudNeuron Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
+      content: "Hi! I'm your Grid Assistant. I can help with deployments, troubleshooting, and configuration. Ask me anything!",
       provider: 'System',
       timestamp: new Date(),
     },
@@ -152,7 +152,7 @@ export function FloatingAI() {
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">Assistant</h3>
-                  <p className="text-[10px] text-muted-foreground">CloudNeuron Support</p>
+                  <p className="text-[10px] text-muted-foreground">Grid Support</p>
                 </div>
               </div>
               <button

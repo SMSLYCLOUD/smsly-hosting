@@ -11,7 +11,7 @@ export default function DocsPage() {
         </Link>
         <Link href="/docs/cli" className="p-6 border rounded-lg hover:bg-muted/50 transition block">
             <h3 className="text-xl font-bold mb-2">CLI Reference</h3>
-            <p className="text-muted-foreground">Control CloudNeuron from your terminal.</p>
+            <p className="text-muted-foreground">Control Grid from your terminal.</p>
         </Link>
         <Link href="/docs/api" className="p-6 border rounded-lg hover:bg-muted/50 transition block">
             <h3 className="text-xl font-bold mb-2">API Reference</h3>

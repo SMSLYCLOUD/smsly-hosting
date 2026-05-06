@@ -10,8 +10,8 @@ import { TierProvider } from "@/context/TierContext";
 import { PoweredByBadge } from "@/components/licensing/PoweredByBadge";
 
 export const metadata: Metadata = {
-  title: "CloudNeuron - The Intelligent Cloud Platform",
-  description: "Deploy apps in seconds. Scale globally with AI. Experience zero-config deployments and true multi-cloud freedom.",
+  title: "Grid powered by CloudNeuron — Free Open-Source PaaS for Ecosystem Deployment",
+  description: "Grid is a free, open-source PaaS powered by CloudNeuron. Deploy apps, services, databases, workers, queues, SSL, backups, and multi-server infrastructure on your own VPS.",
   icons: {
     icon: "/images/logo.svg",
   },

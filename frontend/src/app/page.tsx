@@ -54,23 +54,23 @@ const globalStats = [
 // ============================================
 const coreFeatures = [
     {
-        title: 'AI Router + Senate',
-        subtitle: 'Ollama-native',
-        description: 'Route every LLM call through LiteLLM with an AI Senate that can vote across Ollama and cloud models for safer answers.',
-        icon: Sparkles,
+        title: 'GitOps Workflow',
+        subtitle: 'GitHub-native',
+        description: 'Connect your repository, auto-provision builds, and gate releases with reviewable AI-driven deployment analysis.',
+        icon: GitBranch,
         color: 'from-indigo-500 to-sky-600',
     },
     {
-        title: 'Secure Transfers & Backups',
-        subtitle: 'Disaster-ready',
-        description: 'One-click service transfers, encrypted backups with retention pruning, and rollback windows keep migrations safe.',
+        title: 'Secure Mesh & VPN',
+        subtitle: 'WireGuard-ready',
+        description: 'Zero-config WireGuard mesh networks connect your clusters globally, securing node-to-node traffic entirely under the hood.',
         icon: Shield,
         color: 'from-emerald-500 to-teal-600',
     },
     {
-        title: 'Mesh + Replication',
-        subtitle: 'WireGuard + Patroni',
-        description: 'WireGuard VPN mesh with Patroni PostgreSQL replication and HAProxy keeps data highly available across servers.',
+        title: 'Vector-Ready Data',
+        subtitle: 'Postgres + pgvector',
+        description: 'Managed Postgres with Patroni replication and pgvector out-of-the-box for high-availability RAG and AI stacks.',
         icon: Database,
         color: 'from-blue-500 to-cyan-600',
     }
@@ -81,67 +81,46 @@ const coreFeatures = [
 // ============================================
 const features = [
     {
-        icon: GitBranch,
-        title: "GitOps Deploy",
-        description: "Connect GitHub, auto-provision builds, and gate releases with reviewable AI analysis.",
-        color: "text-yellow-500",
-        bg: "bg-yellow-500/10"
-    },
-    {
-        icon: Server,
-        title: "Server Mesh & VPN",
-        description: "WireGuard mesh networking plus automatic host key pinning for all managed servers.",
-        color: "text-emerald-500",
-        bg: "bg-emerald-500/10"
-    },
-    {
         icon: Activity,
-        title: "Autoscaler",
-        description: "Node-side autoscaler tuned for container stats with authenticated control API.",
+        title: "Predictive Autoscaling",
+        description: "HPA-style container replicas that spin up seamlessly as traffic spikes, tracked live in the dashboard.",
         color: "text-blue-500",
         bg: "bg-blue-500/10"
     },
     {
         icon: Lock,
         title: "Backups & Transfers",
-        description: "Encrypted archives, retention pruning, and guarded server-to-server transfers.",
+        description: "Encrypted archives, retention pruning, and zero-downtime server-to-server transfers via SSH.",
         color: "text-purple-500",
         bg: "bg-purple-500/10"
     },
     {
         icon: Workflow,
         title: "Templates & Blueprints",
-        description: "One-click deploys for AI router, Ollama, functions, and data stacks with secret-aware env rendering.",
+        description: "One-click deploys for AI routers, Ollama, and data stacks with secret-aware environment rendering.",
         color: "text-orange-500",
         bg: "bg-orange-500/10"
     },
     {
         icon: BarChart3,
         title: "Observability",
-        description: "Traefik, health checks, and per-service metrics feed deployment insights and autoscale decisions.",
+        description: "Traefik metrics, health checks, and per-service logs feed deployment insights and autoscale decisions.",
         color: "text-cyan-500",
         bg: "bg-cyan-500/10"
     },
     {
-        icon: Shield,
-        title: "Resilience & Alerts",
-        description: "Encrypted backups with retention pruning plus Resend email fallbacks when services crash.",
-        color: "text-rose-500",
-        bg: "bg-rose-500/10"
-    },
-    {
         icon: CheckCircle2,
         title: "Template Preflight",
-        description: "Docker image manifest checks and secret-aware env rendering stop bad one-click deploys early.",
+        description: "Docker image manifest checks and env validation stop bad one-click deploys before they hit production.",
         color: "text-indigo-500",
         bg: "bg-indigo-500/10"
     },
     {
-        icon: Database,
-        title: "Vector-Ready Data",
-        description: "Managed Postgres ships with pgvector and Patroni replication for RAG stacks like Khoj and LibreChat.",
-        color: "text-teal-500",
-        bg: "bg-teal-500/10"
+        icon: Bot,
+        title: "Auto-Remediation",
+        description: "AI-driven log analysis immediately diagnoses crash loops, suggesting fixes or auto-reverting commits.",
+        color: "text-emerald-500",
+        bg: "bg-emerald-500/10"
     }
 ];
 
@@ -149,27 +128,6 @@ const features = [
 // DATA: EXPANDED FEATURES
 // ============================================
 const expandedFeatures = [
-    {
-        title: "VPN Mesh Routing",
-        description: "Zero-config WireGuard mesh networks connect your clusters globally, securing node-to-node traffic entirely under the hood.",
-        icon: Network,
-        color: "text-emerald-500",
-        bg: "bg-emerald-500/10"
-    },
-    {
-        title: "Zero-Downtime Server Transfers",
-        description: "Move applications between regions or cloud providers seamlessly via SSH with DNS cutovers handled for you.",
-        icon: RefreshCw,
-        color: "text-blue-500",
-        bg: "bg-blue-500/10"
-    },
-    {
-        title: "HA Database Replication",
-        description: "Patroni-backed PostgreSQL replication configured across your VPN mesh for automated primary/replica failovers.",
-        icon: Database,
-        color: "text-violet-500",
-        bg: "bg-violet-500/10"
-    },
     {
         title: "AI & LLM Blueprints",
         description: "One-click templates for Ollama, DeepSeek, vLLM, and Open-WebUI running entirely on your private GPUs.",
@@ -185,22 +143,8 @@ const expandedFeatures = [
         bg: "bg-orange-500/10"
     },
     {
-        title: "Auto-Remediation",
-        description: "AI-driven log analysis immediately diagnoses crash loops, suggesting fixes or auto-reverting broken commits.",
-        icon: Bot,
-        color: "text-cyan-500",
-        bg: "bg-cyan-500/10"
-    },
-    {
-        title: "Predictive Autoscaling",
-        description: "HPA-style container replicas that spin up seamlessly as traffic spikes, tracked live in the dashboard.",
-        icon: Activity,
-        color: "text-rose-500",
-        bg: "bg-rose-500/10"
-    },
-    {
         title: "Enterprise SSO & RBAC",
-        description: "Secure your team with SAML/SSO integration, strict Audit Logs, and fine-grained Role-Based Access Controls.",
+        description: "Secure your team with SAML/SSO integration, strict Audit Logs, and fine-grained access controls.",
         icon: Key,
         color: "text-yellow-500",
         bg: "bg-yellow-500/10"
@@ -211,6 +155,13 @@ const expandedFeatures = [
         icon: Globe,
         color: "text-teal-500",
         bg: "bg-teal-500/10"
+    },
+    {
+        title: "LiteLLM AI Router",
+        description: "Connect local Ollama nodes with OpenAI fallback seamlessly, managed by an AI-aware gateway.",
+        icon: Sparkles,
+        color: "text-indigo-500",
+        bg: "bg-indigo-500/10"
     }
 ];
 
@@ -219,12 +170,12 @@ const expandedFeatures = [
 // ============================================
 const battleCards = [
     {
-        name: "CloudNeuron",
+        name: "Grid",
         logo: Cloud,
         description: "The Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        features: ["Multi Cloud Deployment", "Zero Vendor Lock in", "Observability", "100% Open Source"],
+        features: ["Full Ecosystem Deployment", "Connect Your Own VPS", "Multi-Server Control", "100% Open Source"],
         color: "bg-emerald-500",
         textColor: "text-emerald-500",
         borderColor: "border-emerald-500",
@@ -273,13 +224,13 @@ const battleCards = [
 // ============================================
 const testimonials = [
     {
-        quote: "CloudNeuron's predictive scaling handled our Black Friday traffic without a single hiccup. It felt like magic.",
+        quote: "Grid's predictive scaling handled our Black Friday traffic without a single hiccup. It felt like magic.",
         author: "Sarah Jenkins",
         role: "VP Engineering, E-Shopify",
         image: "https://ui-avatars.com/api/?name=Sarah+Jenkins&background=6366f1&color=fff&format=png"
     },
     {
-        quote: "We moved our entire microservices architecture from AWS ECS to CloudNeuron. Dev productivity is up 300%.",
+        quote: "We moved our entire microservices architecture from AWS ECS to Grid. Dev productivity is up 300%.",
         author: "David Chen",
         role: "Lead Architect, FinTech Global",
         image: "https://ui-avatars.com/api/?name=David+Chen&background=10b981&color=fff&format=png"
@@ -308,38 +259,38 @@ const complianceStandards = [
 const platformApps = [
     {
         title: 'Container Orchestration',
-        description: 'Deploy Docker containers with automatic health checks, zero downtime updates, and self healing.',
+        description: 'Deploy Docker containers with automatic health checks, zero-downtime updates, and self-healing clusters.',
         icon: Boxes,
         color: 'bg-rose-500',
     },
     {
         title: 'Serverless Functions',
-        description: 'Run code snippets on demand without provisioning servers. Pay only for execution time.',
+        description: 'Run code snippets on-demand without provisioning servers. Scalable, event-driven execution.',
         icon: Workflow,
         color: 'bg-violet-500',
     },
     {
         title: 'Static & Jamstack',
-        description: 'Ultra fast CDN backed hosting for Next.js, React, Vue, and static sites with global replication.',
+        description: 'Ultra-fast CDN-backed hosting for Next.js, React, and Vue with global edge replication.',
         icon: Globe,
         color: 'bg-blue-500',
     },
     {
-        title: 'Managed Databases',
-        description: 'Fully managed PostgreSQL, Redis, and MongoDB with automatic backups and point in time recovery.',
-        icon: Database,
+        title: 'Background Workers',
+        description: 'Manage Celery, Sidekiq, or Go workers with automatic queue monitoring and scaling.',
+        icon: Cpu,
         color: 'bg-emerald-500',
     },
     {
-        title: 'Team Collaboration',
-        description: 'Role based access control (RBAC), audit logs, and team projects for enterprise governance.',
-        icon: Users,
+        title: 'API Gateways',
+        description: 'Traefik-powered routing with automatic SSL, rate limiting, and request tracing.',
+        icon: Network,
         color: 'bg-amber-500',
     },
     {
-        title: 'Observability Suite',
-        description: 'Built in real time logging, metrics, and tracing without external dependencies.',
-        icon: BarChart3,
+        title: 'Private AI Clusters',
+        description: 'Dedicated GPU-ready nodes for hosting local LLMs and vector embedding pipelines.',
+        icon: BrainCircuit,
         color: 'bg-cyan-500',
     }
 ];
@@ -368,7 +319,7 @@ export default function Home() {
                     >
                         <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                         <span className="text-xs md:text-sm font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wide">
-                            The Intelligent Cloud Platform
+                            Powered by CloudNeuron
                         </span>
                     </motion.div>
 
@@ -378,9 +329,9 @@ export default function Home() {
                         transition={{ delay: 0.1, duration: 0.5 }}
                         className="text-4xl md:text-6xl lg:text-7xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-none mb-6"
                     >
-                        Deploy Smarter. <br className="hidden md:block" />
+                        Deploy your entire software ecosystem <br className="hidden md:block" />
                         <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-500">
-                            Scale Faster.
+                            from one control grid.
                         </span>
                     </motion.h1>
 
@@ -390,8 +341,8 @@ export default function Home() {
                         transition={{ delay: 0.2, duration: 0.5 }}
                         className="mt-6 text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto leading-relaxed font-light"
                     >
-                        Deploy like Heroku. Control like a VPS. Recover like an enterprise cloud. <br />
-                        <strong>See your infrastructure, deployments, backups, and codebase as a living system.</strong>
+                        Grid is a free, open-source PaaS powered by CloudNeuron. <br />
+                        <strong>Connect your VPS and deploy connected apps, services, databases, workers, and multi-server infrastructure without DevOps pain.</strong>
                     </motion.p>
 
                     <motion.div
@@ -401,7 +352,7 @@ export default function Home() {
                         className="mt-10 flex flex-col sm:flex-row gap-4 justify-center items-center"
                     >
                         <Link href="/register" className="group relative inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl hover:from-emerald-500 hover:to-teal-500 transition-all shadow-md shadow-emerald-500/10 hover:shadow-emerald-500/30 hover:-translate-y-0.5">
-                            Start Deploying Free <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                            Get Grid Free <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                         </Link>
                         <Link href="/docs" className="inline-flex items-center justify-center gap-2 px-8 py-4 text-base font-bold text-slate-700 dark:text-slate-200 bg-white/50 dark:bg-slate-800/50 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-white dark:hover:bg-slate-700 transition-all hover:-translate-y-0.5">
                             Read Documentation
@@ -414,8 +365,8 @@ export default function Home() {
                         transition={{ delay: 0.5 }}
                         className="mt-12 flex flex-col sm:flex-row flex-wrap justify-center gap-x-8 gap-y-3 text-xs md:text-sm font-semibold text-slate-500 dark:text-slate-400"
                     >
-                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Free Forever</span>
-                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> 100% Open Source</span>
+                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Free & Open Source</span>
+                        <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> Self-hosted on your VPS</span>
                         <span className="flex items-center justify-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> SOC2 Type II Compliant</span>
                     </motion.div>
                 </div>
@@ -468,10 +419,10 @@ export default function Home() {
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="text-center mb-16 md:mb-20">
-                        <span className="text-emerald-400 font-bold tracking-wider uppercase text-xs md:text-sm mb-4 block">Why CloudNeuron?</span>
-                        <h2 className="text-3xl md:text-5xl font-extrabold mb-4 md:mb-6 tracking-tight">Built for the Modern Stack</h2>
+                        <span className="text-emerald-400 font-bold tracking-wider uppercase text-xs md:text-sm mb-4 block">Why Grid?</span>
+                        <h2 className="text-3xl md:text-5xl font-extrabold mb-4 md:mb-6 tracking-tight">Ecosystem Deployment Simplified</h2>
                         <p className="text-base md:text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
-                            We&apos;ve reimagined cloud deployment to be <span className="text-white font-semibold">intelligent, automated, and effortless</span>.
+                            Grid is a control plane for modern software ecosystems — <span className="text-white font-semibold">free, open-source, and self-hosted</span> on your own infrastructure.
                         </p>
                     </div>
 
@@ -508,7 +459,7 @@ export default function Home() {
                     <div className="text-center mb-12 md:mb-16">
                         <h2 className="text-2xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-4 md:mb-6">Stop Paying the &quot;Cloud Tax&quot;</h2>
                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            CloudNeuron runs on <strong>your infrastructure</strong>, saving you up to 90% on compute costs compared to managed services.
+                            Grid runs on <strong>your infrastructure</strong>, saving you up to 90% on compute costs compared to managed services.
                         </p>
                     </div>
 
@@ -561,7 +512,7 @@ export default function Home() {
                                         : 'bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300'
                                     }`}
                                 >
-                                    {card.highlight ? 'Start Free Trial' : (card.name.includes("Vercel") ? 'View Comparison' : 'View Pricing')}
+                                    {card.highlight ? 'Install Grid' : (card.name.includes("Vercel") ? 'View Comparison' : 'View Pricing')}
                                 </Link>
                             </motion.div>
                         ))}
@@ -583,10 +534,10 @@ export default function Home() {
                             Everything Included
                         </div>
                         <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4 md:mb-6 text-slate-900 dark:text-white tracking-tight">
-                            More Than Just Deployments
+                            Deploy Complete Ecosystems
                         </h2>
                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            Comprehensive tooling spanning across application lifecycles, database management, high-availability replication, and AI inference.
+                            Grid handles frontends, APIs, databases, workers, queues, SSL, backups, and multi-server nodes all working together as one connected system.
                         </p>
                     </motion.div>
 
@@ -646,7 +597,7 @@ export default function Home() {
                             </div>
                             <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight">AI Infrastructure,<br/>Self-Hosted.</h2>
                             <p className="text-base md:text-lg text-slate-400 mb-8 leading-relaxed">
-                                Don&apos;t just host web apps. CloudNeuron brings the power of dedicated AI clusters directly to your personal VPS. Deploy complex RAG pipelines, fine-tuned models, and intelligent routers with a single click. No more struggling with CUDA drivers or Docker networking for AI stacks.
+                                Grid is the deployment layer for the modern web. From simple APIs to complex AI clusters, Grid handles orchestration on your private VPS. CloudNeuron is the underlying engine that manages CUDA drivers, Docker networking, and control-plane intelligence so you don&apos;t have to.
                             </p>
                             <ul className="space-y-4 mb-8">
                                 <li className="flex items-center gap-3 text-slate-300">
@@ -675,7 +626,7 @@ export default function Home() {
                             </div>
                             <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 md:mb-8 tracking-tight">Power at Your Fingertips</h2>
                             <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 md:mb-10 leading-relaxed">
-                                Control your entire infrastructure from the command line. The <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono text-emerald-600 dark:text-emerald-400">cloudneuron</code> CLI gives you instant access to logs, deployments, and secrets.
+                                Control your entire infrastructure from the command line. The <code className="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded font-mono text-emerald-600 dark:text-emerald-400">grid</code> CLI gives you instant access to logs, deployments, and secrets.
                             </p>
 
                             <div className="flex flex-col gap-6">
@@ -796,7 +747,7 @@ export default function Home() {
                     <div className="text-center mb-12 md:mb-20">
                         <h2 className="text-2xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-4 md:mb-6 tracking-tight">Trusted by Engineering Leaders</h2>
                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            Join thousands of teams shipping faster and scaling smarter with CloudNeuron.
+                            Join thousands of teams shipping faster and scaling smarter with Grid.
                         </p>
                     </div>
 
@@ -851,7 +802,7 @@ export default function Home() {
                             </div>
                             <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight text-slate-900 dark:text-white">Hardened for Production</h2>
                             <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-                                Don&apos;t compromise on compliance. CloudNeuron wraps your Docker clusters in military-grade WireGuard VPNs, enforcing strict host-key checking and AES-CBC encrypted backups at rest.
+                                Don&apos;t compromise on compliance. Grid wraps your Docker clusters in military-grade WireGuard VPNs, powered by CloudNeuron&apos;s orchestration engine.
                             </p>
                             <ul className="space-y-4 mb-8">
                                 <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">
@@ -889,20 +840,14 @@ export default function Home() {
                 <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
                     <h2 className="text-3xl md:text-5xl lg:text-6xl font-extrabold mb-6 md:mb-8 tracking-tight">Ready to Transform Your Workflow?</h2>
                     <p className="text-lg md:text-xl lg:text-2xl mb-10 md:mb-12 text-slate-400 max-w-3xl mx-auto font-light">
-                        Start deploying in minutes. No credit card required. Cancel anytime.
+                        Deploy your first cluster in minutes. 100% free and open-source.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 md:gap-6 justify-center">
                         <Link href="/register" className="inline-flex items-center justify-center gap-2 px-8 py-4 md:px-10 md:py-5 text-base md:text-lg font-bold text-slate-950 bg-emerald-400 rounded-xl md:rounded-2xl hover:bg-emerald-300 transition-all shadow-[0_0_15px_rgba(52,211,153,0.3)] hover:shadow-[0_0_25px_rgba(52,211,153,0.5)] transform hover:-translate-y-0.5">
-                            Get Started Free <ArrowRight className="w-4 h-4 md:w-5 md:h-5" />
-                        </Link>
-                        <Link href="/contact" className="inline-flex items-center justify-center gap-2 px-8 py-4 md:px-10 md:py-5 text-base md:text-lg font-bold text-white border border-slate-700 rounded-xl md:rounded-2xl hover:bg-slate-800 transition-all">
-                            Talk to Sales
+                            Install Grid Now <ArrowRight className="w-4 h-4 md:w-5 md:h-5" />
                         </Link>
                     </div>
 
-                    <p className="mt-6 md:mt-8 text-xs md:text-sm text-slate-500">
-                        Includes 14 day free trial of Pro features. No commitment.
-                    </p>
                 </div>
             </section>
 

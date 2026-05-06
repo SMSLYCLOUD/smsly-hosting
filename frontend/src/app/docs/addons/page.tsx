@@ -2,7 +2,7 @@ export default function AddonsPage() {
   return (
     <div className="container mx-auto py-12 max-w-3xl prose dark:prose-invert">
       <h1>Addons</h1>
-      <p>CloudNeuron supports managed addons for databases, caching, and storage.</p>
+      <p>Grid supports managed addons for databases, caching, and storage.</p>
 
       <h2>Supported Addons</h2>
       <ul>

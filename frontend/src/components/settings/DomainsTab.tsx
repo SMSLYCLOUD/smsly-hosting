@@ -118,7 +118,7 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 d.domain === domain ? { ...d, verified: result.verified, checking: false } : d
             ));
             if (result.verified) {
-                toast({ title: "✅ DNS Verified", description: `${domain} is correctly pointing to CloudNeuron.` });
+                toast({ title: "✅ DNS Verified", description: `${domain} is correctly pointing to Grid.` });
             } else {
                 toast({ title: "❌ DNS Not Found", description: result.message, variant: "destructive" });
             }

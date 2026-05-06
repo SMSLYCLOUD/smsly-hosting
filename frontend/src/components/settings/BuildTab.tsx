@@ -121,7 +121,7 @@ export function BuildTab({ service }: BuildTabProps) {
                   <span className="font-semibold text-sm">Single Container</span>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Build and deploy a single Dockerfile. Best for microservices and frontends deployed via CloudNeuron.
+                  Build and deploy a single Dockerfile. Best for microservices and frontends deployed via Grid.
                 </p>
                 {deployMode === 'SINGLE' && (
                   <div className="absolute top-2 right-2 h-2 w-2 rounded-full bg-primary" />

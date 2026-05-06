@@ -2,7 +2,7 @@ export default function CLIPage() {
   return (
     <div className="container mx-auto py-12 max-w-3xl prose dark:prose-invert">
       <h1>CLI Reference</h1>
-      <p>The CloudNeuron CLI allows you to manage services from your terminal.</p>
+      <p>The Grid CLI allows you to manage services from your terminal.</p>
 
       <h2>Installation</h2>
       <pre><code>npm install -g cloudneuron-cli</code></pre>

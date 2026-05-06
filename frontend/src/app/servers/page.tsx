@@ -260,7 +260,7 @@ export default function ServersPage() {
                                 Server Fleet
                             </h1>
                             <p className="text-muted-foreground mt-1">
-                                Manage multiple CloudNeuron servers from one dashboard
+                                Manage multiple Grid nodes from one dashboard
                             </p>
                         </div>
                         <div className="flex items-center gap-3">
@@ -320,7 +320,7 @@ export default function ServersPage() {
                                     <>
                                         <div>
                                             <p className="text-sm text-muted-foreground mb-4">
-                                                Enter your VPS SSH credentials. CloudNeuron will be automatically installed and configured.
+                                                Enter your VPS SSH credentials. Grid will be automatically installed and configured.
                                             </p>
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
@@ -453,7 +453,7 @@ export default function ServersPage() {
                                     <>
                                         <div>
                                             <p className="text-sm text-muted-foreground mb-4">
-                                                Connect to a server that already has CloudNeuron installed.
+                                                Connect to a server that already has Grid installed.
                                             </p>
                                         </div>
                                         <div className="grid grid-cols-2 gap-4">
@@ -682,8 +682,8 @@ export default function ServersPage() {
                             </div>
                             <h2 className="text-xl font-bold mb-2">No Servers Added</h2>
                             <p className="text-muted-foreground mb-6 max-w-md mx-auto">
-                                Add a fresh VPS and CloudNeuron will be automatically installed,
-                                or connect to an existing CloudNeuron server.
+                                Add a fresh VPS and Grid will be automatically installed,
+                                or connect to an existing Grid node.
                             </p>
                             <button
                                 onClick={() => setShowAdd(true)}
@@ -776,7 +776,7 @@ export default function ServersPage() {
                                                 className="w-full text-left px-3 py-2 rounded-lg bg-blue-500/5 border border-blue-500/20 text-xs text-blue-400 flex items-center gap-2 hover:bg-blue-500/10 transition-colors"
                                             >
                                                 <Terminal size={12} />
-                                                CloudNeuron is being installed — click to view logs
+                                                Grid is being installed — click to view logs
                                             </button>
                                         )}
 

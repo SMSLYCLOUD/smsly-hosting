@@ -114,7 +114,6 @@ export function Navbar() {
     { href: '/functions', label: 'Functions', icon: Zap, tier: 'tertiary' },
     { href: '/templates', label: 'Templates', icon: FileCode, tier: 'tertiary' },
     { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight, tier: 'tertiary' },
-    { href: '/billing', label: 'Billing', icon: CreditCard, tier: 'tertiary' },
     { href: '/settings', label: 'Settings', icon: Settings, tier: 'tertiary' },
     { href: '/status', label: 'System Status', icon: Activity, tier: 'tertiary' },
   ];
@@ -151,7 +150,7 @@ export function Navbar() {
             <div className="bg-emerald-500 p-1.5 rounded-lg shadow-lg shadow-emerald-500/20 group-hover:scale-105 transition-transform">
                 <Image src="/images/logo.svg" alt="S" width={22} height={22} className="h-5.5 w-5.5 brightness-0 invert" priority />
             </div>
-            {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">CloudNeuron</span>}
+            {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">Grid</span>}
         </Link>
 
         {/* Nav Links - Center */}

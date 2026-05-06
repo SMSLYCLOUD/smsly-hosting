@@ -11,11 +11,9 @@ export function Footer() {
                             <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
                                 <Cloud className="w-6 h-6" />
                             </div>
-                            <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight">CloudNeuron</span>
+                            <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight">Grid</span>
                         </div>
-                        <p className="text-slate-500 dark:text-slate-400 text-sm leading-relaxed mb-6">
-                            The intelligent cloud platform for modern engineering teams. Deploy, scale, and manage with ease.
-                        </p>
+                            Grid is a free, open-source PaaS powered by CloudNeuron. Deploy complete software ecosystems on infrastructure you control.
                         <div className="flex gap-4">
                             {/* Social Icons Placeholder */}
                             <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 hover:bg-emerald-100 hover:text-emerald-600 transition-colors cursor-pointer">
@@ -60,7 +58,7 @@ export function Footer() {
 
                 <div className="pt-8 border-t border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="text-slate-500 dark:text-slate-400 text-sm">
-                        © 2026 CloudNeuron Inc. All rights reserved.
+                        © 2026 Grid powered by CloudNeuron. All rights reserved.
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
