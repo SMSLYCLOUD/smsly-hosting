@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.4 (Production Hardened)
-# VERSION: 2026-05-06-2345
+# Grid by SMSLY - Universal Installer v3.1.5 (Production Hardened)
+# VERSION: 2026-05-06-2348
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -69,7 +69,7 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
         echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
         # Use -L for logging, -S for session name, -d -m to start detached then exec attach
         # Actually 'exec screen' is simpler as it replaces the current shell.
-        exec screen -L -S smsly-install bash "$SCRIPT_PATH" "$@"
+        exec screen -L -S grid bash "$SCRIPT_PATH" "$@"
     else
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
         sleep 1
