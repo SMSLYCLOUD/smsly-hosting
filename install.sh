@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1 (Production Hardened)
+# Grid by SMSLY - Universal Installer v3.1.3 (Production Hardened)
+# VERSION: 2026-05-06-2333
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
