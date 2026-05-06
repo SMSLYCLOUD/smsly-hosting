@@ -39,17 +39,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# ─── Lock File Check ─────────────────────────────────────────────────────────
-LOCK_FILE="/tmp/smsly-install.lock"
-if [ -f "$LOCK_FILE" ]; then
-    PID=$(cat "$LOCK_FILE")
-    if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
-        echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
-        echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
-        exit 1
-    fi
-fi
-echo $$ > "$LOCK_FILE"
 trap "rm -f $LOCK_FILE" EXIT
 
 # ─── Parse flags early ───────────────────────────────────────────────────────
@@ -224,8 +213,20 @@ if [ -z "${SMSLY_IN_SCREEN:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERAC
     export SMSLY_IN_SCREEN=1
     exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); export SMSLY_IN_SCREEN=1; $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
 fi
-
 # Ensure we start in a valid directory.
+
+# ─── Lock File Check ─────────────────────────────────────────────────────────
+LOCK_FILE="/tmp/smsly-install.lock"
+if [ -f "$LOCK_FILE" ]; then
+    PID=$(cat "$LOCK_FILE")
+    if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
+        echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
+        echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+        exit 1
+    fi
+fi
+echo $$ > "$LOCK_FILE"
+trap "rm -f $LOCK_FILE" EXIT
 # Provisioning can pass SMSLY_INSTALL_WORKDIR to use a prepared local source tree.
 if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
     cd "${SMSLY_INSTALL_WORKDIR}" 2>/dev/null || cd /root 2>/dev/null || cd /
