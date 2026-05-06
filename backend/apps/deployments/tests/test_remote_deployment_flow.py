@@ -68,6 +68,24 @@ class RemoteDeploymentFlowTests(TestCase):
     @patch("apps.deployments.tasks.time.sleep", return_value=None)
     @patch("apps.deployments.services.server_guard.ServerGuard.check_user_workload_allowed", return_value={"ok": True})
     @patch("apps.deployments.services.remote_orchestrator.RemoteOrchestrator")
+    def test_remote_sync_failure_includes_upstream_reason(self, orchestrator_cls, _guard, _sleep, _broadcast):
+        orchestrator = orchestrator_cls.return_value
+        orchestrator.sync_service.return_value = None
+        orchestrator.describe_last_error.return_value = (
+            "Remote API at http://153.75.247.117 redirected GET /api/v1/services/"
+        )
+
+        _handle_remote_deployment(self.deployment, self.server)
+
+        self.deployment.refresh_from_db()
+        self.assertEqual(self.deployment.status, Deployment.Status.FAILED)
+        self.assertIn("Remote Sync Failure", self.deployment.build_logs)
+        self.assertIn("redirected GET /api/v1/services/", self.deployment.build_logs)
+
+    @patch("apps.deployments.tasks.broadcast_status")
+    @patch("apps.deployments.tasks.time.sleep", return_value=None)
+    @patch("apps.deployments.services.server_guard.ServerGuard.check_user_workload_allowed", return_value={"ok": True})
+    @patch("apps.deployments.services.remote_orchestrator.RemoteOrchestrator")
     def test_remote_approval_resumes_existing_deployment(self, orchestrator_cls, _guard, _sleep, _broadcast):
         self.deployment.remote_deployment_id = "remote-deployment-id"
         self.deployment.status = Deployment.Status.BUILDING

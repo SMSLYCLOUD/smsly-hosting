@@ -6,6 +6,7 @@ import json
 import requests
 import re
 from typing import Optional
+from urllib.parse import urlencode, urlparse
 from .ssh_client import SSHClient
 from apps.deployments.models import (
     Service,
@@ -17,6 +18,22 @@ from apps.deployments.models import (
 
 logger = logging.getLogger(__name__)
 
+
+REMOTE_RESPONSE_SNIPPET_CHARS = 1200
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
+
+
+def _safe_error_snippet(value: object, limit: int = REMOTE_RESPONSE_SNIPPET_CHARS) -> str:
+    """Return a short, NUL-free, best-effort redacted error snippet."""
+    text = str(value or "").replace("\x00", "")
+    text = re.sub(
+        r"(?i)((?:authorization|api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;}{]+",
+        r"\1***",
+        text,
+    )
+    return text[:limit]
+
+
 class RemoteOrchestrator:
     """
     Handles synchronization and orchestration of services/deployments
@@ -26,6 +43,22 @@ class RemoteOrchestrator:
     def __init__(self, server: ManagedServer):
         self.server = server
         self.base_url = (server.api_url or f"http://{server.host}").rstrip('/')
+        self.last_error = ""
+
+    def _set_last_error(self, message: str, response: requests.Response | None = None):
+        detail = _safe_error_snippet(message)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            text = _safe_error_snippet(getattr(response, "text", ""))
+            if text:
+                detail = f"{detail} Response: {text}"
+            if status_code and f"HTTP {status_code}" not in detail:
+                detail = f"HTTP {status_code}: {detail}"
+        self.last_error = detail
+
+    def describe_last_error(self) -> str:
+        """Human-readable reason for the most recent remote request failure."""
+        return self.last_error
 
     def auto_authenticate(self) -> bool:
         """
@@ -137,10 +170,43 @@ class RemoteOrchestrator:
     def _path_with_query(path: str, params: dict | None = None) -> str:
         if not params:
             return path
-        from urllib.parse import urlencode
 
         separator = "&" if "?" in path else "?"
         return f"{path}{separator}{urlencode(params, doseq=True)}"
+
+    def _candidate_base_urls(self) -> list[str]:
+        """Return API base URLs worth trying without mutating the saved server."""
+        urls: list[str] = []
+
+        def append(value: str):
+            normalized = str(value or "").strip().rstrip("/")
+            if normalized and normalized not in urls:
+                urls.append(normalized)
+
+        append(self.base_url)
+
+        host_port = str(getattr(self.server, "host", "") or "").strip().rstrip("/")
+        if "://" in host_port:
+            parsed = urlparse(host_port)
+            host_port = parsed.netloc or parsed.path
+        host_port = host_port.split("/", 1)[0].strip()
+        if not host_port:
+            return urls
+
+        has_explicit_port = host_port.count(":") == 1
+        append(f"http://{host_port}")
+        append(f"https://{host_port}")
+        if not has_explicit_port:
+            append(f"http://{host_port}:8090")
+        return urls
+
+    @staticmethod
+    def _timeout(timeout: int | float | tuple | None):
+        if timeout is None:
+            return (5, 20)
+        if isinstance(timeout, tuple):
+            return timeout
+        return (5, timeout)
 
     def _request(
         self,
@@ -155,10 +221,12 @@ class RemoteOrchestrator:
         """
         Make a remote API request with token -> HMAC fallback.
         """
+        self.last_error = ""
         request_path = self._path_with_query(path, params)
-        url = f"{self.base_url}{request_path}"
         body = self._encode_json(payload)
-        retryable_statuses = {401, 403, 500, 502, 503}
+        method_upper = method.upper()
+        auth_retry_statuses = {401, 403}
+        network_retry_statuses = {429, 500, 502, 503, 504}
         last_response = None
         modes = self._auth_modes()
 
@@ -167,54 +235,181 @@ class RemoteOrchestrator:
             if self.auto_authenticate():
                 modes = self._auth_modes()
 
-        for index, mode in enumerate(modes):
-            headers = self._get_headers(
-                method,
-                path, # Use base path for signing, NOT request_path (no query string)
-                body=body,
-                auth_mode=None if mode == "none" else mode,
+        for base_url in self._candidate_base_urls():
+            url = f"{base_url}{request_path}"
+            redirected = False
+
+            for index, mode in enumerate(modes):
+                headers = self._get_headers(
+                    method_upper,
+                    path,  # Use base path for signing, NOT request_path.
+                    body=body,
+                    auth_mode=None if mode == "none" else mode,
+                )
+                attempts = 2 if method_upper in SAFE_METHODS else 1
+
+                for attempt in range(attempts):
+                    try:
+                        response = requests.request(
+                            method_upper,
+                            url,
+                            data=body if payload is not None else None,
+                            headers=headers,
+                            timeout=self._timeout(timeout),
+                            allow_redirects=False,
+                        )
+                    except requests.RequestException as exc:
+                        message = (
+                            f"Remote request failed for {method_upper} {request_path} "
+                            f"at {base_url} via {mode} auth: {exc}"
+                        )
+                        self._set_last_error(message)
+                        logger.warning(message)
+                        if attempt < attempts - 1:
+                            time.sleep(1 + attempt)
+                            continue
+                        break
+
+                    last_response = response
+                    status = response.status_code
+
+                    if 300 <= status < 400:
+                        location = response.headers.get("Location", "")
+                        self._set_last_error(
+                            (
+                                f"Remote API at {base_url} redirected {method_upper} "
+                                f"{request_path} to {location or 'another URL'} "
+                                f"(HTTP {status}). Configure the managed server API URL "
+                                "to a reachable API endpoint; IP-based HTTPS often fails "
+                                "when no certificate exists for the IP address."
+                            ),
+                            response=response,
+                        )
+                        logger.warning(self.last_error)
+                        redirected = True
+                        break
+
+                    if (
+                        method_upper in SAFE_METHODS
+                        and status in network_retry_statuses
+                        and attempt < attempts - 1
+                    ):
+                        self._set_last_error(
+                            f"Remote API returned retryable HTTP {status} for {method_upper} {request_path}.",
+                            response=response,
+                        )
+                        time.sleep(1 + attempt)
+                        continue
+
+                    has_more_modes = index < len(modes) - 1
+                    if has_more_modes and status in auth_retry_statuses:
+                        self._set_last_error(
+                            (
+                                f"Remote API returned HTTP {status} for {method_upper} "
+                                f"{request_path} via {mode} auth; trying next auth mode."
+                            ),
+                            response=response,
+                        )
+                        logger.warning(self.last_error)
+                        break
+
+                    if retry_auth and status in (401, 403) and not has_more_modes:
+                        # If we failed all modes with 401/403, try one last auto-auth retry.
+                        if self.auto_authenticate():
+                            return self._request(
+                                method_upper,
+                                path,
+                                payload=payload,
+                                params=params,
+                                timeout=timeout,
+                                retry_auth=False,
+                            )
+
+                    if status >= 400:
+                        self._set_last_error(
+                            f"Remote API returned HTTP {status} for {method_upper} {request_path}.",
+                            response=response,
+                        )
+
+                    return response
+
+                if redirected:
+                    break
+
+        if not self.last_error and last_response is not None:
+            self._set_last_error(
+                f"Remote API returned HTTP {last_response.status_code} for {method_upper} {request_path}.",
+                response=last_response,
             )
-            try:
-                response = requests.request(
-                    method,
-                    url,
-                    data=body if payload is not None else None,
-                    headers=headers,
-                    timeout=timeout,
-                )
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Remote request failed on %s %s via %s auth: %s",
-                    method,
-                    request_path,
-                    mode,
-                    exc,
-                )
-                continue
-
-            last_response = response
-            has_more_modes = index < len(modes) - 1
-            if has_more_modes and response.status_code in retryable_statuses:
-                logger.warning(
-                    "Remote request %s %s returned HTTP %s via %s auth; trying next auth mode.",
-                    method,
-                    request_path,
-                    response.status_code,
-                    mode,
-                )
-                continue
-
-            if retry_auth and response.status_code in (401, 403) and not has_more_modes:
-                # If we failed all modes with 401/403, try one last auto-auth retry
-                if self.auto_authenticate():
-                    return self._request(
-                        method, path, payload=payload, params=params, 
-                        timeout=timeout, retry_auth=False
-                    )
-
-            return response
+        elif not self.last_error:
+            self._set_last_error(
+                f"Remote request failed for {method_upper} {request_path}: no response."
+            )
 
         return last_response
+
+    def _response_error(self, fallback: str, response: requests.Response | None = None) -> str:
+        if self.last_error:
+            return self.last_error
+        if response is not None:
+            return (
+                f"{fallback}: HTTP {response.status_code}. "
+                f"{_safe_error_snippet(getattr(response, 'text', ''))}"
+            ).strip()
+        return fallback
+
+    def _parse_json_response(self, response: requests.Response, context: str):
+        try:
+            return response.json()
+        except ValueError:
+            self._set_last_error(
+                f"Remote API returned non-JSON response while {context}.",
+                response=response,
+            )
+            logger.error(self.last_error)
+            return None
+
+    def _search_remote_service(self, service: Service, path: str) -> Optional[str]:
+        resp = self._request("GET", path, params={"search": service.name}, timeout=15)
+        if resp is None:
+            logger.error(
+                "Failed to search service %s on remote %s: %s",
+                service.name,
+                self.server.host,
+                self.describe_last_error(),
+            )
+            return None
+
+        if resp.status_code != 200:
+            logger.error(
+                "Failed to search service %s on remote %s: %s",
+                service.name,
+                self.server.host,
+                self._response_error("service search failed", resp),
+            )
+            return None
+
+        results = self._parse_json_response(resp, "searching remote services")
+        if results is None:
+            return None
+        if isinstance(results, dict):
+            results = results.get("results", [])
+        if not isinstance(results, list):
+            self._set_last_error("Remote API returned an invalid services list.")
+            return None
+
+        for remote_svc in results:
+            if not isinstance(remote_svc, dict):
+                continue
+            if remote_svc.get("name") == service.name:
+                logger.info(
+                    "Found existing service %s on remote %s",
+                    service.name,
+                    self.server.host,
+                )
+                return remote_svc.get("id")
+
+        return ""
 
     def sync_service(self, service: Service) -> Optional[str]:
         """
@@ -222,21 +417,20 @@ class RemoteOrchestrator:
         Returns the remote service ID (UUID string) on success.
         """
         path = "/api/v1/services/"
-        
-        # 1. Search for service by name on remote
+
+        # 1. Search for service by name on remote. If the search fails, do not
+        # POST a create request; connectivity/auth failures should not become
+        # duplicate-service risk.
         try:
-            resp = self._request("GET", path, params={"search": service.name}, timeout=15)
-            if resp and resp.status_code == 200:
-                results = resp.json()
-                if isinstance(results, dict):
-                    results = results.get("results", [])
-                
-                for remote_svc in results:
-                    if remote_svc["name"] == service.name:
-                        logger.info("Found existing service %s on remote %s", service.name, self.server.host)
-                        return remote_svc["id"]
+            existing_id = self._search_remote_service(service, path)
+            if existing_id:
+                return existing_id
+            if existing_id is None:
+                return None
         except Exception as e:
-            logger.warning("Failed to search service on remote %s: %s", self.server.host, e)
+            self._set_last_error(f"Failed to search service on remote {self.server.host}: {e}")
+            logger.warning(self.last_error)
+            return None
 
         # 2. Not found -> Create it
         logger.info("Creating service %s on remote %s", service.name, self.server.host)
@@ -254,18 +448,25 @@ class RemoteOrchestrator:
         try:
             resp = self._request("POST", path, payload=payload, timeout=15)
             if resp and resp.status_code in (201, 200):
-                remote_id = resp.json()["id"]
+                data = self._parse_json_response(resp, "creating remote service")
+                if not isinstance(data, dict) or not data.get("id"):
+                    self._set_last_error(
+                        "Remote service create response did not include an id.",
+                        response=resp,
+                    )
+                    return None
+                remote_id = data["id"]
                 
                 # Sync environment variables
                 self.sync_env_vars(service, remote_id)
                 return remote_id
-            
-            logger.error(
-                "Failed to create service on remote: %s",
-                resp.text if resp is not None else "no response",
-            )
+
+            if resp is not None:
+                self._set_last_error("Failed to create service on remote.", response=resp)
+            logger.error(self.last_error)
         except Exception as e:
-            logger.error("Error creating service on remote: %s", e)
+            self._set_last_error(f"Error creating service on remote: {e}")
+            logger.error(self.last_error)
             
         return None
 
@@ -282,9 +483,21 @@ class RemoteOrchestrator:
                 "source": var.source,
             }
             try:
-                self._request("POST", path, payload=payload, timeout=10)
-            except Exception:
-                pass
+                resp = self._request("POST", path, payload=payload, timeout=10)
+                if resp is not None and resp.status_code >= 400:
+                    logger.warning(
+                        "Failed to sync env var %s to remote service %s: %s",
+                        var.key,
+                        remote_service_id,
+                        self._response_error("env var sync failed", resp),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to sync env var %s to remote service %s: %s",
+                    var.key,
+                    remote_service_id,
+                    exc,
+                )
 
     def trigger_deploy(self, deployment, remote_service_id, skip_review=False):
         """Trigger a deployment task on the remote server."""
@@ -302,13 +515,22 @@ class RemoteOrchestrator:
         try:
             resp = self._request("POST", path, payload=payload, timeout=15)
             if resp and resp.status_code in (201, 200, 202):
-                return resp.json().get("deployment_id") or resp.json().get("id")
-            logger.error(
-                "Failed to trigger remote deploy: %s",
-                resp.text if resp is not None else "no response",
-            )
+                data = self._parse_json_response(resp, "triggering remote deploy")
+                if isinstance(data, dict):
+                    remote_id = data.get("deployment_id") or data.get("id")
+                    if remote_id:
+                        return remote_id
+                self._set_last_error(
+                    "Remote deploy trigger response did not include a deployment id.",
+                    response=resp,
+                )
+                return None
+            if resp is not None:
+                self._set_last_error("Failed to trigger remote deploy.", response=resp)
+            logger.error(self.last_error)
         except Exception as e:
-            logger.error("Error triggering remote deploy: %s", e)
+            self._set_last_error(f"Error triggering remote deploy: {e}")
+            logger.error(self.last_error)
             
         return None
 
@@ -320,12 +542,12 @@ class RemoteOrchestrator:
             resp = self._request("POST", path, payload=payload or {}, timeout=15)
             if resp and resp.status_code in (200, 202):
                 return True
-            logger.error(
-                "Failed to approve remote deploy: %s",
-                resp.text if resp is not None else "no response",
-            )
+            if resp is not None:
+                self._set_last_error("Failed to approve remote deploy.", response=resp)
+            logger.error(self.last_error)
         except Exception as e:
-            logger.error("Error approving remote deploy: %s", e)
+            self._set_last_error(f"Error approving remote deploy: {e}")
+            logger.error(self.last_error)
 
         return False
 
@@ -336,9 +558,12 @@ class RemoteOrchestrator:
         try:
             resp = self._request("GET", path, timeout=10)
             if resp and resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
+                data = self._parse_json_response(resp, "polling remote deployment")
+                return data if isinstance(data, dict) else {}
+            if resp is not None:
+                self._set_last_error("Failed to poll remote deployment.", response=resp)
+        except Exception as exc:
+            self._set_last_error(f"Error polling remote deployment: {exc}")
             
         return {}
 

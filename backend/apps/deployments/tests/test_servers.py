@@ -8,11 +8,13 @@ import time
 from unittest.mock import patch, MagicMock
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
 from ..models_servers import ManagedServer
+from ..tasks import update_remote_server_task
 from ..views_servers import _build_remote_headers
 
 User = get_user_model()
@@ -475,6 +477,54 @@ class ManagedServerViewTests(TestCase):
         self.assertEqual(resp.data["domains"][0]["domain"], "app.example.com")
         self.assertEqual(resp.data["domains"][1]["domain"], "api.example.com")
 
+    @patch("apps.deployments.tasks.update_remote_server_task.delay")
+    def test_update_server_queues_task_when_ssh_credentials_exist(self, delay_mock):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="UpdateMe",
+            host="10.0.0.20",
+            ssh_user="root",
+            ssh_password="secret",
+        )
+
+        resp = self.client.post(f"/api/v1/servers/{server.id}/update-server/")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["success"])
+        delay_mock.assert_called_once_with(str(server.id))
+        server.refresh_from_db()
+        self.assertIn("Update queued by", server.provision_logs)
+
+    @patch("apps.deployments.tasks.update_remote_server_task.delay")
+    def test_update_server_rejects_missing_ssh_credentials(self, delay_mock):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="NoSSH",
+            host="10.0.0.21",
+        )
+
+        resp = self.client.post(f"/api/v1/servers/{server.id}/update-server/")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("SSH credentials", resp.data["error"])
+        delay_mock.assert_not_called()
+
+    @patch("apps.deployments.tasks.update_remote_server_task.delay")
+    def test_update_server_rejects_when_update_already_running(self, delay_mock):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Busy",
+            host="10.0.0.22",
+            ssh_password="secret",
+            provision_status=ManagedServer.ProvisionStatus.UPDATING,
+        )
+
+        resp = self.client.post(f"/api/v1/servers/{server.id}/update-server/")
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data["provision_status"], ManagedServer.ProvisionStatus.UPDATING)
+        delay_mock.assert_not_called()
+
     def test_update_server_name(self):
         """Test that a server name can be updated via PATCH."""
         server = ManagedServer.objects.create(
@@ -495,3 +545,60 @@ class ManagedServerViewTests(TestCase):
         self.assertNotIn("gateway_secret", resp.data)
         server.refresh_from_db()
         self.assertEqual(server.name, "NewName")
+
+
+class RemoteServerUpdateTaskTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="srvupdate", email="srvupdate@test.com", password="testpass123"
+        )
+        cache.clear()
+
+    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
+    @patch("apps.deployments.services.ssh_client.SSHClient")
+    def test_update_task_runs_preflight_installer_and_postflight(self, ssh_cls, _token_mock):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Worker",
+            host="10.0.0.30",
+            ssh_password="secret",
+        )
+        ssh = ssh_cls.return_value
+        ssh.find_hosting_path.return_value = "/opt/smsly-hosting"
+        ssh.exec_command.side_effect = [
+            ("preflight ok\n", "", 0),
+            ("installer ok\n", "", 0),
+            ("postflight ok\n", "", 0),
+        ]
+
+        ok = update_remote_server_task.run(str(server.id))
+
+        self.assertTrue(ok)
+        server.refresh_from_db()
+        self.assertEqual(server.provision_status, ManagedServer.ProvisionStatus.DONE)
+        self.assertIn("preflight ok", server.provision_logs)
+        self.assertIn("installer ok", server.provision_logs)
+        self.assertIn("postflight ok", server.provision_logs)
+        self.assertEqual(ssh.exec_command.call_count, 3)
+        ssh.close.assert_called_once()
+
+    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
+    @patch("apps.deployments.services.ssh_client.SSHClient")
+    def test_update_task_marks_failed_when_preflight_fails(self, ssh_cls, _token_mock):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Broken",
+            host="10.0.0.31",
+            ssh_password="secret",
+        )
+        ssh = ssh_cls.return_value
+        ssh.find_hosting_path.return_value = "/opt/smsly-hosting"
+        ssh.exec_command.return_value = ("", "docker daemon is not reachable\n", 16)
+
+        ok = update_remote_server_task.run(str(server.id))
+
+        self.assertFalse(ok)
+        server.refresh_from_db()
+        self.assertEqual(server.provision_status, ManagedServer.ProvisionStatus.FAILED)
+        self.assertIn("docker daemon is not reachable", server.provision_logs)
+        self.assertIn("preflight failed", server.provision_logs.lower())

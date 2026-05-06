@@ -4,6 +4,7 @@ import socket
 import logging
 import io
 import os
+import shlex
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,10 @@ class SSHClient:
             'username': self.user,
             'timeout': 10,
             'banner_timeout': 30,
+            'auth_timeout': 20,
+            'look_for_keys': False,
+            'allow_agent': False,
+            'compress': True,
         }
 
         if self.key_content:
@@ -103,13 +108,20 @@ class SSHClient:
         for i in range(retries):
             try:
                 self.client.connect(**connect_kwargs)
+                transport = self.client.get_transport()
+                if transport:
+                    transport.set_keepalive(30)
                 return
-            except (socket.error, paramiko.SSHException) as e:
+            except paramiko.AuthenticationException:
+                raise
+            except (socket.error, socket.timeout, TimeoutError, paramiko.SSHException) as e:
                 last_exc = e
                 if i < retries - 1:
                     time.sleep(2)
 
-        raise last_exc
+        raise SSHConnectionError(
+            f"SSH connection to {self.ip}:{self.port} failed after {retries} attempts: {last_exc}"
+        )
 
     def close(self):
         if self.sftp:
@@ -131,11 +143,46 @@ class SSHClient:
 
         logger.debug(f"SSH Exec ({self.ip}): {command}")
         stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+        stdin.close()
 
-        # Wait for command to complete
-        exit_status = stdout.channel.recv_exit_status()
-        out = stdout.read().decode('utf-8', errors='replace')
-        err = stderr.read().decode('utf-8', errors='replace')
+        # Drain stdout/stderr while the command runs. Waiting for exit before
+        # reading can deadlock on noisy commands once Paramiko's channel window
+        # fills up.
+        channel = stdout.channel
+        out_chunks = []
+        err_chunks = []
+        deadline = time.monotonic() + timeout if timeout else None
+        timed_out = False
+
+        while True:
+            while channel.recv_ready():
+                out_chunks.append(channel.recv(65536))
+            while channel.recv_stderr_ready():
+                err_chunks.append(channel.recv_stderr(65536))
+
+            if channel.exit_status_ready():
+                break
+
+            if deadline and time.monotonic() > deadline:
+                timed_out = True
+                channel.close()
+                break
+
+            time.sleep(0.05)
+
+        while channel.recv_ready():
+            out_chunks.append(channel.recv(65536))
+        while channel.recv_stderr_ready():
+            err_chunks.append(channel.recv_stderr(65536))
+
+        out = b"".join(out_chunks).decode('utf-8', errors='replace')
+        err = b"".join(err_chunks).decode('utf-8', errors='replace')
+
+        if timed_out:
+            exit_status = 124
+            err = (err + f"\nCommand timed out after {timeout} seconds.").strip()
+        else:
+            exit_status = channel.recv_exit_status()
 
         if exit_status != 0 and raise_on_error:
             raise SSHConnectionError(f"Command failed (exit {exit_status}): {err or out}")
@@ -186,14 +233,20 @@ class SSHClient:
         for path in candidates:
             try:
                 # Check if docker-compose.prod.yml or .env exists in this path
-                self.exec_command(f"ls {path}/.env")
+                self.exec_command(f"test -f {shlex.quote(path)}/.env", timeout=10)
                 return path
             except Exception:
                 continue
         
         # Fallback: try to find it via locate or find if available
         try:
-            path = self.exec_command("find /opt -name '.env' -maxdepth 3 | xargs dirname | head -n 1").strip()
+            out, _err, code = self.exec_command(
+                "found=$(find /opt -maxdepth 3 -name .env -print -quit 2>/dev/null); "
+                "[ -n \"$found\" ] && dirname \"$found\"",
+                timeout=15,
+                raise_on_error=False,
+            )
+            path = out.strip().splitlines()[0] if code == 0 and out.strip() else ""
             if path:
                 return path
         except Exception:
@@ -204,14 +257,16 @@ class SSHClient:
     def run_diagnose_nodes_fix(self, hosting_path):
         """Run the diagnose_nodes --fix command and return the output."""
         # Try both 'docker compose' and 'docker-compose'
-        cmd = f"cd {hosting_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
+        quoted_path = shlex.quote(hosting_path)
+        cmd = f"cd {quoted_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
         out, err, code = self.exec_command(cmd)
         return out + err
 
     def get_gateway_secret(self, hosting_path):
         """Extract the GATEWAY_SECRET from the remote .env file."""
         try:
-            cmd = f"grep GATEWAY_SECRET {hosting_path}/.env | cut -d= -f2"
+            env_path = shlex.quote(f"{hosting_path.rstrip('/')}/.env")
+            cmd = f"sed -n 's/^GATEWAY_SECRET=//p' {env_path} | head -n 1"
             out, err, code = self.exec_command(cmd)
             secret = out.strip().strip("'\"")
             if secret:

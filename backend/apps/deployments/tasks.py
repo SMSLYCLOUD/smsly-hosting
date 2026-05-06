@@ -909,7 +909,12 @@ def _handle_remote_deployment_legacy(deployment, server):
     # 1. Sync Service
     remote_svc_id = orchestrator.sync_service(service)
     if not remote_svc_id:
-        _handle_failure(None, deployment, "Failed to sync service to remote server", "Remote Sync Failure")
+        _handle_failure(
+            None,
+            deployment,
+            _remote_failure_message(orchestrator, "Failed to sync service to remote server"),
+            "Remote Sync Failure",
+        )
         return
 
     update_stage(deployment, 'Remote Sync', 'success')
@@ -918,7 +923,12 @@ def _handle_remote_deployment_legacy(deployment, server):
     # 2. Trigger Deploy
     remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id)
     if not remote_dep_id:
-        _handle_failure(None, deployment, "Failed to trigger deployment on remote server", "Remote Deploy Failure")
+        _handle_failure(
+            None,
+            deployment,
+            _remote_failure_message(orchestrator, "Failed to trigger deployment on remote server"),
+            "Remote Deploy Failure",
+        )
         return
 
     append_log(deployment, f"🚀 Remote deployment triggered: {remote_dep_id}\n")
@@ -950,6 +960,17 @@ def _handle_remote_deployment_legacy(deployment, server):
             return
 
     _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
+
+
+def _remote_failure_message(orchestrator, fallback: str) -> str:
+    """Append the last upstream error from RemoteOrchestrator when available."""
+    try:
+        detail = orchestrator.describe_last_error()
+    except Exception:
+        detail = ""
+    if detail:
+        return f"{fallback}: {detail}"
+    return fallback
 
 
 def _stop_local_service_container(service_name: str):
@@ -1003,7 +1024,12 @@ def _handle_remote_deployment(deployment, server, skip_review=False):
 
     remote_svc_id = orchestrator.sync_service(service)
     if not remote_svc_id:
-        _handle_failure(None, deployment, "Failed to sync service to remote server", "Remote Sync Failure")
+        _handle_failure(
+            None,
+            deployment,
+            _remote_failure_message(orchestrator, "Failed to sync service to remote server"),
+            "Remote Sync Failure",
+        )
         return
 
     update_stage(deployment, 'Remote Sync', 'success')
@@ -1011,7 +1037,12 @@ def _handle_remote_deployment(deployment, server, skip_review=False):
 
     remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id, skip_review=skip_review)
     if not remote_dep_id:
-        _handle_failure(None, deployment, "Failed to trigger deployment on remote server", "Remote Deploy Failure")
+        _handle_failure(
+            None,
+            deployment,
+            _remote_failure_message(orchestrator, "Failed to trigger deployment on remote server"),
+            "Remote Deploy Failure",
+        )
         return
 
     deployment.remote_deployment_id = remote_dep_id
@@ -1052,7 +1083,12 @@ def _resume_remote_deployment(deployment, server):
         "memory_mb": service.memory_mb,
     }
     if not orchestrator.approve_deployment(remote_dep_id, payload=payload):
-        _handle_failure(None, deployment, "Failed to approve remote deployment", "Remote Approval Failure")
+        _handle_failure(
+            None,
+            deployment,
+            _remote_failure_message(orchestrator, "Failed to approve remote deployment"),
+            "Remote Approval Failure",
+        )
         return
 
     update_stage(deployment, 'Remote Approval', 'success')
@@ -1095,11 +1131,35 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
 def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
     """Poll a delegated deployment until it reaches REVIEW or a terminal state."""
     max_retries = 90  # 15 minutes (10s intervals)
+    max_empty_polls = 12  # 2 minutes of unreachable/invalid poll responses.
+    empty_polls = 0
     for _ in range(max_retries):
         time.sleep(10)
         remote_status = orchestrator.poll_deployment(remote_dep_id)
         if not remote_status:
+            empty_polls += 1
+            if empty_polls in (3, 6, 12):
+                append_log(
+                    deployment,
+                    (
+                        "[Remote] Status unavailable "
+                        f"({empty_polls}/{max_empty_polls}): "
+                        f"{_remote_failure_message(orchestrator, 'poll failed')}\n"
+                    ),
+                )
+            if empty_polls >= max_empty_polls:
+                _handle_failure(
+                    None,
+                    deployment,
+                    _remote_failure_message(
+                        orchestrator,
+                        "Remote deployment status could not be fetched",
+                    ),
+                    "Remote Poll Failure",
+                )
+                return
             continue
+        empty_polls = 0
 
         status = remote_status.get("status")
         _copy_remote_deployment_fields(deployment, remote_status)
@@ -3057,13 +3117,109 @@ def auto_authenticate_nodes_task():
     return count
 
 
+REMOTE_UPDATE_LOG_LIMIT = 300_000
+
+
+def _redact_remote_update_log(text: str) -> str:
+    """Redact credentials before persisting remote update output."""
+    if not text:
+        return ""
+    safe = str(text).replace("\x00", "")
+    safe = re.sub(r"https://x-access-token:[^@\s]+@", "https://x-access-token:***@", safe)
+    safe = re.sub(
+        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL)[A-Z0-9_]*=)([^\s]+)",
+        r"\1***",
+        safe,
+    )
+    return safe
+
+
+def _append_remote_update_log(server, message: str):
+    """Append bounded, redacted text to a ManagedServer provision log."""
+    safe = _redact_remote_update_log(message)
+    if not safe:
+        return
+    existing = server.provision_logs or ""
+    combined = existing + safe
+    if len(combined) > REMOTE_UPDATE_LOG_LIMIT:
+        combined = (
+            "--- Older update log output truncated to keep this record bounded ---\n"
+            + combined[-REMOTE_UPDATE_LOG_LIMIT:]
+        )
+    server.provision_logs = combined
+    server.save(update_fields=["provision_logs", "updated_at"])
+
+
+def _remote_update_preflight_script(hosting_path: str) -> str:
+    quoted_path = shlex.quote(hosting_path)
+    return f"""
+set -u
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+cd {quoted_path} || {{ echo "SMSLY install path not found: {quoted_path}" >&2; exit 12; }}
+[ -f install.sh ] || {{ echo "install.sh is missing in {quoted_path}" >&2; exit 13; }}
+command -v bash >/dev/null || {{ echo "bash is not installed" >&2; exit 14; }}
+command -v docker >/dev/null || {{ echo "docker is not installed" >&2; exit 15; }}
+$SUDO docker info >/dev/null || {{ echo "docker daemon is not reachable" >&2; exit 16; }}
+if $SUDO docker compose version >/dev/null 2>&1; then
+  echo "compose=docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  echo "compose=docker-compose"
+else
+  echo "docker compose/docker-compose is not available" >&2
+  exit 17
+fi
+available_kb=$(df -Pk . | awk 'NR==2 {{print $4}}')
+if [ "${{available_kb:-0}}" -lt 1048576 ]; then
+  echo "WARNING: less than 1GiB free on install filesystem" >&2
+fi
+echo "path=$(pwd)"
+echo "current_commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "WARNING: remote worktree has local changes; installer must handle or preserve them."
+    git status --short | head -n 60
+  fi
+fi
+"""
+
+
+def _remote_update_postflight_script(hosting_path: str) -> str:
+    quoted_path = shlex.quote(hosting_path)
+    return f"""
+set -u
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+cd {quoted_path} || exit 22
+if $SUDO docker compose version >/dev/null 2>&1; then
+  COMPOSE="$SUDO docker compose"
+else
+  COMPOSE="$SUDO docker-compose"
+fi
+echo "> Compose status after update"
+$COMPOSE ps 2>&1 || true
+if $COMPOSE config --services 2>/dev/null | grep -qx backend; then
+  backend_status="$($COMPOSE ps backend 2>/dev/null | tail -n +2 || true)"
+  if [ -z "$backend_status" ] || ! printf '%s\n' "$backend_status" | grep -Eiq 'running|up|healthy'; then
+    echo "backend service is not running after update" >&2
+    exit 31
+  fi
+fi
+for url in http://127.0.0.1:8090/health http://127.0.0.1/health; do
+  if curl -fsS --max-time 10 "$url" >/dev/null 2>&1; then
+    echo "health=$url OK"
+    exit 0
+  fi
+done
+echo "WARNING: no local health endpoint responded after update" >&2
+exit 0
+"""
+
+
 @shared_task(name="apps.deployments.tasks.update_remote_server_task")
 def update_remote_server_task(server_id: str):
     """
-    SSH into a remote server and trigger a git pull + docker compose restart.
+    SSH into a connected server and run the resilient installer update flow.
     """
     from apps.deployments.models import ManagedServer
-    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 
     try:
         server = ManagedServer.objects.get(id=server_id)
@@ -3071,15 +3227,29 @@ def update_remote_server_task(server_id: str):
         logger.error("Update Task: Server %s not found", server_id)
         return False
 
+    lock_key = f"server-update:{server_id}"
+    if not cache.add(lock_key, "1", timeout=7200):
+        _append_remote_update_log(
+            server,
+            f"\n--- Update skipped at {timezone.now()} - another update is already running ---\n",
+        )
+        logger.warning("Update Task: duplicate update ignored for server %s", server_id)
+        return False
+
     logger.info("Update Task: Starting update for server %s (%s)", server.name, server.host)
-    
-    # Track progress in provision_logs
+
     server.provision_status = ManagedServer.ProvisionStatus.UPDATING
-    server.provision_logs = (server.provision_logs or "") + f"\n--- Update started at {timezone.now()} ---\n"
-    server.save(update_fields=["provision_status", "provision_logs"])
+    server.save(update_fields=["provision_status", "updated_at"])
+    _append_remote_update_log(
+        server,
+        f"\n--- Update started at {timezone.now()} for {server.name} ({server.host}) ---\n",
+    )
 
     try:
         from apps.deployments.services.ssh_client import SSHClient
+        if not (server.ssh_key or server.ssh_password):
+            raise RuntimeError("Server has no SSH credentials configured for updates.")
+
         ssh = SSHClient(
             ip=server.host,
             key_content=server.ssh_key,
@@ -3087,9 +3257,20 @@ def update_remote_server_task(server_id: str):
             user=server.ssh_user,
             port=server.ssh_port
         )
-        
-        # 1. Pull latest code
-        # Resolve GitHub token for the server owner to handle private repos
+        ssh.connect()
+        hosting_path = ssh.find_hosting_path()
+        _append_remote_update_log(server, f"> Connected over SSH. install_path={hosting_path}\n")
+
+        stdout, stderr, code = ssh.exec_command(
+            _remote_update_preflight_script(hosting_path),
+            timeout=120,
+            raise_on_error=False,
+        )
+        _append_remote_update_log(server, "\n--- Preflight ---\n" + stdout + stderr + "\n")
+        if code != 0:
+            raise RuntimeError(f"Remote update preflight failed with exit code {code}.")
+
+        # Resolve GitHub token for the server owner to handle private repos.
         github_token = get_github_oauth_token_for_user(server.owner)
         auth_url = None
         if github_token:
@@ -3097,11 +3278,12 @@ def update_remote_server_task(server_id: str):
             encoded = quote(github_token, safe="")
             auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
 
-        branch = os.environ.get('SMSLY_BRANCH', 'main')
+        branch = (os.environ.get('SMSLY_BRANCH') or 'main').strip() or 'main'
         logger.info("Update Task: Triggering installer update on %s (branch: %s)", server.host, branch)
         
         # Build environment for the update
-        master_ip = os.environ.get('PUBLIC_IP') or '127.0.0.1'
+        config = PlatformConfig.load()
+        master_ip = str(config.server_ip or os.environ.get('PUBLIC_IP') or '').strip() or '127.0.0.1'
         env_vars = {
             "NON_INTERACTIVE": "1",
             "MASTER_IP": master_ip,
@@ -3111,23 +3293,41 @@ def update_remote_server_task(server_id: str):
         if auth_url:
             env_vars["SMSLY_GIT_REMOTE"] = auth_url
 
-        env_str = " ".join([f"{k}='{v}'" for k, v in env_vars.items()])
-        cmd_update = f"cd /opt/smsly-hosting && sudo {env_str} bash install.sh --update"
-        
-        server.provision_logs += f"> Running installer update (branch: {branch})...\n"
-        server.save(update_fields=["provision_logs"])
-        
-        stdout, stderr, code = ssh.exec_command(cmd_update, raise_on_error=False)
-        server.provision_logs += stdout + stderr
-        server.save(update_fields=["provision_logs"])
+        env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
+        quoted_path = shlex.quote(hosting_path)
+        cmd_update = (
+            f"cd {quoted_path} && "
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
+            f"$SUDO env {env_str} bash install.sh --update"
+        )
+
+        _append_remote_update_log(server, f"> Running installer update (branch: {branch})...\n")
+
+        stdout, stderr, code = ssh.exec_command(
+            cmd_update,
+            timeout=5400,
+            raise_on_error=False,
+        )
+        _append_remote_update_log(server, "\n--- Installer output ---\n" + stdout + stderr + "\n")
         
         if code != 0:
-            logger.error("Update Task: Installer update failed on %s", server.host)
-            return False
+            raise RuntimeError(f"Installer update failed with exit code {code}.")
+
+        stdout, stderr, code = ssh.exec_command(
+            _remote_update_postflight_script(hosting_path),
+            timeout=180,
+            raise_on_error=False,
+        )
+        _append_remote_update_log(server, "\n--- Postflight ---\n" + stdout + stderr + "\n")
+        if code != 0:
+            raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
 
         server.provision_status = ManagedServer.ProvisionStatus.DONE
-        server.provision_logs += f"\n--- Update completed successfully at {timezone.now()} ---\n"
-        server.save(update_fields=["provision_status", "provision_logs"])
+        server.save(update_fields=["provision_status", "updated_at"])
+        _append_remote_update_log(
+            server,
+            f"\n--- Update completed successfully at {timezone.now()} ---\n",
+        )
         logger.info("Update Task: Finished successfully for %s", server.host)
         return True
 
@@ -3135,10 +3335,11 @@ def update_remote_server_task(server_id: str):
         error_msg = f"Update Task failed for {server.host}: {str(e)}"
         logger.error(error_msg)
         server.provision_status = ManagedServer.ProvisionStatus.FAILED
-        server.provision_logs += f"\nFATAL ERROR: {str(e)}\n"
-        server.save(update_fields=["provision_status", "provision_logs"])
+        server.save(update_fields=["provision_status", "updated_at"])
+        _append_remote_update_log(server, f"\nFATAL ERROR: {str(e)}\n")
         return False
 
     finally:
         if 'ssh' in locals():
             ssh.close()
+        cache.delete(lock_key)
