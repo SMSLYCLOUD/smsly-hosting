@@ -2276,7 +2276,7 @@ for svc in Service.objects.all():
     }"
                 fi
 
-                cat > /etc/caddy/Caddyfile <<CFCADDY
+                cat > /etc/caddy/Caddyfile.tmp <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 ${cf_domain} {
     reverse_proxy localhost:8090
