@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================================
-# CloudNeuron by SMSLY - Universal Installer v3.1 (Production Hardened)
+# Grid by SMSLY - Universal Installer v3.1 (Production Hardened)
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -59,8 +59,8 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
-# To reattach after disconnect: screen -r cloudneuron-install
-if [ -z "${SMSLY_IN_SCREEN:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]] && [ -t 0 ]; then
+# To reattach after disconnect: screen -r grid-install
+if [ -z "${SMSLY_IN_SCREEN:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]] && [[ "${1:-}" != "--update"* ]] && [[ "${1:-}" != "--refresh" ]] && [[ "${1:-}" != "--wipe" ]] && [ -t 0 ]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
         apt-get update -qq && apt-get install -y screen > /dev/null 2>&1
@@ -195,7 +195,7 @@ if [ -z "${SMSLY_IN_SCREEN:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERAC
     echo "═══════════════════════════════════════════════════════════"
     echo "  Running inside a screen session for safety."
     echo "  If SSH disconnects, reconnect and run:"
-    echo "    screen -r cloudneuron-install"
+    echo "    screen -r grid-install"
     echo "═══════════════════════════════════════════════════════════"
     echo -e "\033[0m"
 
@@ -209,7 +209,7 @@ if [ -z "${SMSLY_IN_SCREEN:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERAC
 
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
     export SMSLY_IN_SCREEN=1
-    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); export SMSLY_IN_SCREEN=1; $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
+    exec screen -S grid-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); export SMSLY_IN_SCREEN=1; $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
 fi
 # Ensure we start in a valid directory.
 
@@ -334,7 +334,7 @@ check_hardware() {
     local ram_mb=$((ram_kb / 1024))
     echo -e "${BLUE}  RAM: ${ram_mb}MB${NC}"
     if [ "$ram_mb" -lt 950 ]; then # Allow some margin for 1GB VPS
-        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). CloudNeuron requires at least 1GB.${NC}"
+        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 1GB.${NC}"
         exit 1
     fi
     
@@ -1078,7 +1078,7 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
+echo -e "${BLUE}   Grid - Production Installer v3.1${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
@@ -3468,7 +3468,7 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
     if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
         # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
         cat > /etc/caddy/Caddyfile <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
+# Grid Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
 
@@ -3516,7 +3516,7 @@ ENVEOF
     else
         # ─── Standard SSL (no wildcard) ──────────────────────────────────
         cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
+# Grid Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
 $DOMAIN {
@@ -3544,7 +3544,7 @@ CADDYEOF
     fi
 else
     cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
-# CloudNeuron Reverse Proxy — Auto-generated
+# Grid Reverse Proxy — Auto-generated
 :80 {
     reverse_proxy localhost:8090
 }

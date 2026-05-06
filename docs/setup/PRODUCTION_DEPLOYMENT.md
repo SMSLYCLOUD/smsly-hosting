@@ -1,4 +1,4 @@
-# CloudNeuron Production Deployment Guide
+# Grid Production Deployment Guide
 
 ## Prerequisites
 
@@ -215,7 +215,7 @@ docker compose -f docker-compose.prod.yml start backend celery
 
 ```bash
 # Add to cron (every 5 minutes)
-*/5 * * * * curl -f https://cloud.smsly.cloud/health || /usr/local/bin/alert.sh "CloudNeuron Down"
+*/5 * * * * curl -f https://cloud.smsly.cloud/health || /usr/local/bin/alert.sh "Grid Down"
 ```
 
 ### View Logs

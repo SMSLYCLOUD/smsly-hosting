@@ -1,14 +1,14 @@
 # Ecosystem Deployment Intelligence
 
-CloudNeuron possesses a God-level ecosystem deployment intelligence layer that allows it to safely orchestrate multiple interconnected services without requiring explicit knowledge of external service logic or VPS runtime environments.
+Grid possesses a God-level ecosystem deployment intelligence layer that allows it to safely orchestrate multiple interconnected services without requiring explicit knowledge of external service logic or VPS runtime environments.
 
 ## Core Capabilities
 
-1. **Manifest-Driven Configuration**: Defined in `cloudneuron.ecosystem.yml`, CloudNeuron understands services, dependencies, and environment contracts before executing anything.
+1. **Manifest-Driven Configuration**: Defined in `Grid.ecosystem.yml`, Grid understands services, dependencies, and environment contracts before executing anything.
 2. **Environment Synchronization and Persistence**: Using the `EcosystemEnvResolver`, secrets and public URLs are dynamically generated and synchronized uniformly across dependent nodes. Missing external values hard-block deployments.
 3. **Primary/Control Plane Protection**: By classifying nodes using `is_control_plane` and `allow_user_workloads`, normal ecosystem services are safely routed to user-provisioned VPSs or explicit managed nodes.
 4. **AI Senate Advisory Intelligence**: The coded AI Senate parses service intents to auto-complete missing environment shapes securely and explicitly through JSON-schema validated outputs.
-5. **Self-Healing and Repair**: A Django management CLI (`repair_ecosystem_deploy`) permits CloudNeuron to introspect its known service database and safely assign unallocated nodes or recreate environment credentials.
+5. **Self-Healing and Repair**: A Django management CLI (`repair_ecosystem_deploy`) permits Grid to introspect its known service database and safely assign unallocated nodes or recreate environment credentials.
 
 ## For More Information
 

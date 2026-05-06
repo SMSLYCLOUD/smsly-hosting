@@ -1,8 +1,8 @@
-# CloudNeuron Monetization Strategy — How to Make Money
+# Grid Monetization Strategy — How to Make Money
 
 ## Executive Summary
 
-CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR within 12 months**. The key is positioning as **"The Privacy-First PaaS"** for teams that want Vercel/Railway UX without giving up data sovereignty.
+Grid has **5 viable revenue streams** with realistic path to **$100K MRR within 12 months**. The key is positioning as **"The Privacy-First PaaS"** for teams that want Vercel/Railway UX without giving up data sovereignty.
 
 ---
 
@@ -10,7 +10,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 
 ### Model 1: Managed Cloud Hosting (SaaS) — **Primary Revenue**
 
-**What:** You host CloudNeuron on your infrastructure, customers deploy their apps to your platform.
+**What:** You host Grid on your infrastructure, customers deploy their apps to your platform.
 
 **Pricing Tiers:**
 
@@ -36,7 +36,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 
 ### Model 2: Self-Hosted Enterprise License — **High-Margin Revenue**
 
-**What:** Sell licenses for customers to run CloudNeuron on their own infrastructure.
+**What:** Sell licenses for customers to run Grid on their own infrastructure.
 
 **Pricing:**
 
@@ -86,7 +86,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 
 ### Model 4: White-Label Reseller Program — **Partner Revenue**
 
-**What:** Let agencies/consultants rebrand CloudNeuron and sell to their clients.
+**What:** Let agencies/consultants rebrand Grid and sell to their clients.
 
 **Partner Tiers:**
 
@@ -94,7 +94,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 |------|---------------|--------|
 | **Affiliate** | 20% recurring | Bloggers, influencers |
 | **Reseller** | 30% recurring | Agencies, consultants |
-| **OEM** | Custom pricing | ISVs embedding CloudNeuron |
+| **OEM** | Custom pricing | ISVs embedding Grid |
 
 **Revenue Projection:**
 - 10 resellers × $2K MRR each × 30% = $6K/month
@@ -148,7 +148,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 - Viral growth via GitHub stars, dev communities
 
 **Content Marketing:**
-- "Migrate from Heroku to CloudNeuron in 10 Minutes" (blog post)
+- "Migrate from Heroku to Grid in 10 Minutes" (blog post)
 - "How We Built a $0.05/Hour PaaS" (technical case study)
 - YouTube tutorials on deployment workflows
 - Comparison guides (vs. Vercel, Railway, Render)
@@ -180,7 +180,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 - Pre-configured templates (MERN, Django, Rails)
 
 **Certification Program:**
-- CloudNeuron Certified Engineer ($299 exam fee)
+- Grid Certified Engineer ($299 exam fee)
 - Training courses ($499 per course)
 - Corporate training packages ($5K/team)
 
@@ -191,11 +191,11 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 ### Messaging: "The Privacy-First PaaS"
 
 **Positioning Statement:**
-> CloudNeuron is the self-hosted alternative to Vercel and Railway for teams that need enterprise-grade features without vendor lock-in. Deploy to any cloud, keep your data, and save 70% on hosting costs.
+> Grid is the self-hosted alternative to Vercel and Railway for teams that need enterprise-grade features without vendor lock-in. Deploy to any cloud, keep your data, and save 70% on hosting costs.
 
 **Key Differentiators:**
 
-| Feature | CloudNeuron | Vercel | Railway | Heroku |
+| Feature | Grid | Vercel | Railway | Heroku |
 |---------|-------------|--------|---------|--------|
 | **Self-hosted** | ✅ | ❌ | ❌ | ⚠️ (Private Spaces) |
 | **AI Diagnostics** | ✅ | ❌ | ❌ | ❌ |
@@ -269,7 +269,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 ### Week 3: Outbound Sales
 1. **LinkedIn Prospecting:** Find DevOps managers at mid-size companies
 2. **Cold Email Sequence:** 3-touch campaign (value prop → case study → demo)
-3. **Demo Script:** 15-minute CloudNeuron walkthrough
+3. **Demo Script:** 15-minute Grid walkthrough
 4. **Pricing Calculator:** ROI comparison vs. Vercel/Heroku
 
 ---
@@ -343,7 +343,7 @@ CloudNeuron has **5 viable revenue streams** with realistic path to **$100K MRR 
 **Next Steps:**
 1. Add Stripe billing this week
 2. Launch free tier publicly
-3. Write "Heroku → CloudNeuron migration" guide
+3. Write "Heroku → Grid migration" guide
 4. Post on Hacker News
 5. Track signups and conversions
 

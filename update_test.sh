@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =============================================================================
-# CloudNeuron by SMSLY - Universal Installer v3.1 (Production Hardened)
+# Grid by SMSLY - Universal Installer v3.1 (Production Hardened)
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -65,7 +65,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # ─── Screen Session Guard (survives SSH disconnects) ─────────────────────────
 # Collect ALL interactive input FIRST (before screen), then re-launch inside
 # a screen session with the collected values as env vars.
-# To reattach after disconnect: screen -r cloudneuron-install
+# To reattach after disconnect: screen -r Grid-install
 if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "true" ] && [[ "${1:-}" != "--verify" ]] && [[ "${1:-}" != "--debug" ]] && [ -t 0 ]; then
     # Install screen if missing
     if ! command -v screen &> /dev/null; then
@@ -201,7 +201,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "tr
     echo "═══════════════════════════════════════════════════════════"
     echo "  Running inside a screen session for safety."
     echo "  If SSH disconnects, reconnect and run:"
-    echo "    screen -r cloudneuron-install"
+    echo "    screen -r Grid-install"
     echo "═══════════════════════════════════════════════════════════"
     echo -e "\033[0m"
 
@@ -214,7 +214,7 @@ if [ -z "${STY:-}" ] && [ -z "${SKIP_SCREEN:-}" ] && [ "$NON_INTERACTIVE" != "tr
     [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && _ENV_PASS="$_ENV_PASS CLOUDFLARE_API_TOKEN=$(printf '%q' "$CLOUDFLARE_API_TOKEN")"
 
     # Stay ATTACHED (no -dm), use absolute path, set correct working directory
-    exec screen -S cloudneuron-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
+    exec screen -S Grid-install bash -c "cd $(printf '%q' "$SCRIPT_DIR"); $_ENV_PASS bash $(printf '%q' "$SCRIPT_PATH") $*"
 fi
 
 # Ensure we start in a valid directory.
@@ -326,7 +326,7 @@ check_hardware() {
     local ram_mb=$((ram_kb / 1024))
     echo -e "${BLUE}  RAM: ${ram_mb}MB${NC}"
     if [ "$ram_mb" -lt 950 ]; then # Allow some margin for 1GB VPS
-        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). CloudNeuron requires at least 1GB.${NC}"
+        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 1GB.${NC}"
         exit 1
     fi
     
@@ -1070,7 +1070,7 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   CloudNeuron - Production Installer v3.1${NC}"
+echo -e "${BLUE}   Grid - Production Installer v3.1${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 

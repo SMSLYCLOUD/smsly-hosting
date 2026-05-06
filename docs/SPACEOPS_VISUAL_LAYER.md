@@ -1,6 +1,6 @@
 # SpaceOps Visual Layer
 
-The SpaceOps Visual Layer is a live, cinematic infrastructure visualization system that spans the CloudNeuron PaaS dashboard, deployment watch modes, and Code Map experiences. It turns application state (deploying, failing, recovering, idle) into an interactive and meaningful space environment.
+The SpaceOps Visual Layer is a live, cinematic infrastructure visualization system that spans the Grid PaaS dashboard, deployment watch modes, and Code Map experiences. It turns application state (deploying, failing, recovering, idle) into an interactive and meaningful space environment.
 
 ## Goal
 "Enterprise power, founder-level simplicity — with a live visual cloud universe."

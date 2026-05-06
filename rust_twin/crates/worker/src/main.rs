@@ -15,7 +15,7 @@ pub struct WorkerState {
     pub redis: redis::Client,
 }
 
-const QUEUE_NAME: &str = "cloudneuron:tasks:default";
+const QUEUE_NAME: &str = "grid:tasks:default";
 
 #[tokio::main]
 async fn main() -> Result<()> {

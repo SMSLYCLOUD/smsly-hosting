@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class WireGuardService:
-    """Manage WireGuard mesh network across CloudNeuron servers."""
+    """Manage WireGuard mesh network across Grid servers."""
 
     INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 

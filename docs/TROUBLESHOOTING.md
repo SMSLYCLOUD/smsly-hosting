@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-This guide covers common issues and resolutions when operating CloudNeuron.
+This guide covers common issues and resolutions when operating Grid.
 
 ## Deployment Failures
 

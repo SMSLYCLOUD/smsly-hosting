@@ -54,7 +54,7 @@ def run_parity_test(endpoint, method="GET", payload=None, token=None):
 
 def generate_markdown_report(results):
     with open("PARITY_REPORT.md", "w") as f:
-        f.write("# CloudNeuron Python vs. Rust Parity Report\n\n")
+        f.write("# Grid Python vs. Rust Parity Report\n\n")
         f.write("This report details the simultaneous endpoint testing against both the legacy Python/Django application and the new Rust/Axum twin.\n\n")
 
         f.write("| Method | Endpoint | Python Status | Rust Status | Python Latency (ms) | Rust Latency (ms) | Parity Status |\n")

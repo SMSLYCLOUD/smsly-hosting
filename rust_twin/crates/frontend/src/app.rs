@@ -36,7 +36,7 @@ pub fn App() -> impl IntoView {
             <main class="min-h-screen bg-gray-50 flex flex-col">
                 <nav class="bg-indigo-600 text-white p-4 shadow-md">
                     <div class="container mx-auto flex justify-between items-center">
-                        <h1 class="text-xl font-bold">"CloudNeuron"</h1>
+                        <h1 class="text-xl font-bold">"Grid"</h1>
                         <div class="space-x-4">
                             <A href="/" class="hover:underline">"Dashboard"</A>
                             <A href="/projects" class="hover:underline">"Projects"</A>
@@ -154,7 +154,7 @@ fn Login() -> impl IntoView {
 fn Dashboard() -> impl IntoView {
     view! {
         <div class="space-y-4">
-            <h2 class="text-3xl font-bold text-gray-800">"Welcome to CloudNeuron"</h2>
+            <h2 class="text-3xl font-bold text-gray-800">"Welcome to Grid"</h2>
             <p class="text-gray-600">"Your fully integrated Rust-based PaaS dashboard."</p>
         </div>
     }

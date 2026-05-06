@@ -1,7 +1,7 @@
 # PgCat Migration Audit
 
 ## Overview
-This document outlines the findings from the repository audit regarding the migration from PgBouncer to PgCat in CloudNeuron.
+This document outlines the findings from the repository audit regarding the migration from PgBouncer to PgCat in Grid.
 
 ## Entrypoints & Workloads
 

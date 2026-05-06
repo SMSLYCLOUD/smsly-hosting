@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/cloudneuron-logo.png" alt="CloudNeuron" width="400" />
+  <img src="docs/Grid-logo.png" alt="Grid" width="400" />
 </p>
 
-<h1 align="center">CloudNeuron</h1>
+<h1 align="center">Grid</h1>
 <p align="center"><strong>by SMSLY</strong></p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ---
 
-**CloudNeuron** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
+**Grid** is an open-source alternative to Vercel, Railway, and Heroku that runs on **your own infrastructure** — AWS, Azure, GCP, or bare metal. Enterprise-grade security, zero-downtime deployments, AI-powered observability, and automated disaster recovery, all out of the box.
 
 ---
 
@@ -39,7 +39,7 @@
 ## 🚀 Features
 
 ### ⚡ Serverless Functions ("Hot Functions")
-Deploy code, not containers. CloudNeuron wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
+Deploy code, not containers. Grid wraps your Python/Node.js handlers in high-performance micro-containers that scale to zero.
 
 ### 👁️ AI-Driven Observability & Live Topology
 - **3D City Topology**: Visualize your infrastructure as a living, breathing digital city with animated traffic and real-time connectivity states.
@@ -98,7 +98,7 @@ The installer prompts you to choose:
 | 9. Verification | Health checks, proxy validation, container status report |
 
 ### Install the Next-Gen Rust Twin (Beta)
-We are actively rewriting CloudNeuron into a high-performance, single-workspace Rust architecture. You can deploy it alongside or instead of the legacy Python version.
+We are actively rewriting Grid into a high-performance, single-workspace Rust architecture. You can deploy it alongside or instead of the legacy Python version.
 
 ```bash
 # Fresh install of the Rust architecture
@@ -271,6 +271,6 @@ MIT License. See [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  <strong>CloudNeuron</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
+  <strong>Grid</strong> by <a href="https://github.com/SMSLYCLOUD">SMSLY</a><br />
   <em>Deploy anything. Own everything.</em>
 </p>

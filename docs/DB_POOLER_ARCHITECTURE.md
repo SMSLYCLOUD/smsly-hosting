@@ -1,6 +1,6 @@
 # Database Pooler Architecture
 
-CloudNeuron uses PgCat for high-performance PostgreSQL connection pooling.
+Grid uses PgCat for high-performance PostgreSQL connection pooling.
 
 ## Logical Flow
 

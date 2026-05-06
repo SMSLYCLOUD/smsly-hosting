@@ -319,7 +319,7 @@ export default function Home() {
                     >
                         <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                         <span className="text-xs md:text-sm font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wide">
-                            Powered by CloudNeuron
+                            Open Source PaaS
                         </span>
                     </motion.div>
 
@@ -341,7 +341,7 @@ export default function Home() {
                         transition={{ delay: 0.2, duration: 0.5 }}
                         className="mt-6 text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto leading-relaxed font-light"
                     >
-                        Grid is a free, open-source PaaS powered by CloudNeuron. <br />
+                        Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control. <br />
                         <strong>Connect your VPS and deploy connected apps, services, databases, workers, and multi-server infrastructure without DevOps pain.</strong>
                     </motion.p>
 
@@ -802,7 +802,7 @@ export default function Home() {
                             </div>
                             <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight text-slate-900 dark:text-white">Hardened for Production</h2>
                             <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-                                Don&apos;t compromise on compliance. Grid wraps your Docker clusters in military-grade WireGuard VPNs, powered by CloudNeuron&apos;s orchestration engine.
+                                Don&apos;t compromise on compliance. Grid wraps your Docker clusters in military-grade WireGuard VPNs, powered by Grid&apos;s orchestration engine.
                             </p>
                             <ul className="space-y-4 mb-8">
                                 <li className="flex items-center gap-3 text-slate-700 dark:text-slate-300">

@@ -3104,7 +3104,6 @@ def update_remote_server_task(server_id: str):
         master_ip = os.environ.get('PUBLIC_IP') or '127.0.0.1'
         env_vars = {
             "NON_INTERACTIVE": "1",
-            "SKIP_SCREEN": "1",
             "MASTER_IP": master_ip,
             "SMSLY_BRANCH": branch,
         }

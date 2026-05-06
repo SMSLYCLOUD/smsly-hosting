@@ -167,12 +167,12 @@ pub async fn trigger_deploy(
         }
     });
 
-    // 5. Push task to Redis Queue `cloudneuron:tasks:default`
+    // 5. Push task to Redis Queue `grid:tasks:default`
     let mut redis_conn = state.redis.get_multiplexed_async_connection().await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Redis connection failed: {}", e))
     })?;
 
-    let queue_name = "cloudneuron:tasks:default";
+    let queue_name = "grid:tasks:default";
     redis_conn.lpush::<_, _, ()>(queue_name, task_payload.to_string()).await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to push task to queue: {}", e))
     })?;

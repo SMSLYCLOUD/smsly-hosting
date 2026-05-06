@@ -228,7 +228,7 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
 @shared_task(bind=True, max_retries=0, soft_time_limit=1860, time_limit=1920)
 def provision_server(self, server_id: str):
     """
-    Provision CloudNeuron on a remote server via SSH.
+    Provision Grid on a remote server via SSH.
 
     Steps:
     1. SSH into the target server
@@ -269,7 +269,7 @@ def provision_server(self, server_id: str):
         logger.error("Server %s not found", server_id)
         return
 
-    _append_log(server, "🚀 Starting CloudNeuron provisioning...")
+    _append_log(server, "🚀 Starting Grid provisioning...")
     _append_log(server, f"📡 Connecting to {server.ssh_user}@{server.host}:{server.ssh_port}")
 
     ssh = None
@@ -327,38 +327,55 @@ def provision_server(self, server_id: str):
         sftp.chmod("/tmp/smsly-install.sh", 0o755)
 
         run_prefix = ""
-        if use_local_bundle:
-            _append_log(server, "📦 Uploading local source bundle for provisioning fallback...")
-            local_bundle_path = _build_local_source_bundle()
-            sftp.put(local_bundle_path, "/tmp/smsly-hosting-src.tar.gz")
-            extract_cmd = (
-                "rm -rf /tmp/smsly-hosting-src && "
-                "mkdir -p /tmp/smsly-hosting-src && "
-                "tar -xzf /tmp/smsly-hosting-src.tar.gz "
-                "-C /tmp/smsly-hosting-src && "
-                "test -f /tmp/smsly-hosting-src/docker-compose.prod.yml"
-            )
-            stdin, stdout, stderr = ssh.exec_command(extract_cmd)
-            extract_exit = stdout.channel.recv_exit_status()
-            extract_err = stderr.read().decode("utf-8", errors="replace").strip()
-            if extract_exit != 0:
-                raise RuntimeError(
-                    "Failed to prepare local source bundle on target: "
-                    f"{extract_err or f'exit {extract_exit}'}"
-                )
-            run_prefix = "cd /tmp/smsly-hosting-src && "
-
         sftp.close()
         _append_log(server, "✅ Install script uploaded")
 
+        run_prefix = ""
+        if use_local_bundle:
+            _append_log(server, "📦 Uploading local source bundle for provisioning fallback...")
+            local_bundle_path = _build_local_source_bundle()
+            try:
+                bundle_size = os.path.getsize(local_bundle_path)
+                _append_log(server, f"ℹ️ Local bundle size: {bundle_size / 1024 / 1024:.2f} MB")
+                
+                # Re-open SFTP for the bundle put
+                sftp_bundle = ssh.open_sftp()
+                try:
+                    sftp_bundle.put(local_bundle_path, "/tmp/smsly-hosting-src.tar.gz")
+                finally:
+                    sftp_bundle.close()
+
+                _append_log(server, "📦 Extracting source bundle on target...")
+                extract_cmd = (
+                    "rm -rf /tmp/smsly-hosting-src && "
+                    "mkdir -p /tmp/smsly-hosting-src && "
+                    "tar -xzf /tmp/smsly-hosting-src.tar.gz "
+                    "-C /tmp/smsly-hosting-src && "
+                    "test -f /tmp/smsly-hosting-src/docker-compose.prod.yml"
+                )
+                stdin, stdout, stderr = ssh.exec_command(extract_cmd)
+                extract_exit = stdout.channel.recv_exit_status()
+                extract_err = stderr.read().decode("utf-8", errors="replace").strip()
+                if extract_exit != 0:
+                    raise RuntimeError(
+                        "Failed to prepare local source bundle on target: "
+                        f"{extract_err or f'exit {extract_exit}'}"
+                    )
+                run_prefix = "cd /tmp/smsly-hosting-src && "
+            finally:
+                if os.path.exists(local_bundle_path):
+                    try:
+                        os.remove(local_bundle_path)
+                    except OSError:
+                        pass
+
         # -- Step 3: Run install script --
-        _append_log(server, "⚙️ Running CloudNeuron installer (this may take 5-15 minutes)...")
+        _append_log(server, "⚙️ Running Grid installer (this may take 5-15 minutes)...")
 
         # Build non-interactive environment
         master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
         env_vars = (
             "NON_INTERACTIVE=1 "
-            "SKIP_SCREEN=1 "
             "SKIP_REBOOT=1 "
             "SMSLY_STRICT_VERIFY=1 "
             f"MASTER_IP={master_ip} "
@@ -623,7 +640,7 @@ def provision_server(self, server_id: str):
             "updated_at",
         ])
 
-        _append_log(server, "\n✅ CloudNeuron provisioning complete!")
+        _append_log(server, "✅ Grid provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
         # -- Step 7: Auto-exchange — get a proper smsly_ API token --

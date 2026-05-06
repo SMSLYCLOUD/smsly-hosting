@@ -88,6 +88,6 @@ def deploy_rust_twin():
 
 if __name__ == "__main__":
     print("==================================================")
-    print("  CloudNeuron Inception: Python deploys Rust")
+    print("  Grid Inception: Python deploys Rust")
     print("==================================================")
     deploy_rust_twin()

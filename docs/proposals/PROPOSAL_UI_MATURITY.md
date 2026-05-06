@@ -1,4 +1,4 @@
-# Enterprise Maturity Proposal for CloudNeuron UI
+# Enterprise Maturity Proposal for Grid UI
 
 ## 1. Design System & Consistency
 *   **Component Library**: Standardize on a component library like **shadcn/ui** (built on Radix UI) for accessible, customizable components. Ensure all inputs, buttons, and dialogs follow a strict design token system (spacing, typography, colors).

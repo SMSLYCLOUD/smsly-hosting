@@ -1,6 +1,6 @@
 # Ecosystem Environment Resolver
 
-CloudNeuron uses a strict environment resolver (`EcosystemEnvResolver`) to compile the final set of environment variables for every service in an ecosystem before deployment begins.
+Grid uses a strict environment resolver (`EcosystemEnvResolver`) to compile the final set of environment variables for every service in an ecosystem before deployment begins.
 
 ## Key Features
 

@@ -52,8 +52,8 @@ class FlutterwaveService:
         amount: Decimal,
         currency: str,
         redirect_url: str,
-        title: str = "CloudNeuron",
-        description: str = "CloudNeuron plan upgrade",
+        title: str = "Grid",
+        description: str = "Grid plan upgrade",
         meta: Optional[Dict[str, Any]] = None,
     ) -> str:
         payload: Dict[str, Any] = {

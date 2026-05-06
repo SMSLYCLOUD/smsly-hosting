@@ -1,4 +1,4 @@
-# CloudNeuron Operations Runbook
+# Grid Operations Runbook
 
 ## Quick Reference
 
@@ -209,7 +209,7 @@ open http://localhost:3001  # Grafana (admin/admin)
 Add to crontab (`crontab -e`):
 
 ```bash
-*/5 * * * * curl -f https://cloud.smsly.cloud/health || echo "CloudNeuron health check failed" | mail -s "Alert: CloudNeuron Down" admin@smsly.cloud
+*/5 * * * * curl -f https://cloud.smsly.cloud/health || echo "Grid health check failed" | mail -s "Alert: Grid Down" admin@smsly.cloud
 ```
 
 ---

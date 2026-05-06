@@ -3,7 +3,7 @@
 set -e
 
 echo "=========================================================="
-echo "    CloudNeuron (Rust Twin) Automated Deployment script     "
+echo "    Grid (Rust Twin) Automated Deployment script     "
 echo "=========================================================="
 
 # 1. Gather configuration

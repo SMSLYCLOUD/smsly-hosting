@@ -1,7 +1,7 @@
-# CloudNeuron Rust Rewrite Roadmap
+# Grid Rust Rewrite Roadmap
 
 ## Objective
-Rewrite the entire CloudNeuron platform (Python/Django Backend, Celery Workers, Next.js Frontend) into a single, high-performance, unified Rust workspace. This roadmap is designed for AI agents to incrementally and safely migrate the system.
+Rewrite the entire Grid platform (Python/Django Backend, Celery Workers, Next.js Frontend) into a single, high-performance, unified Rust workspace. This roadmap is designed for AI agents to incrementally and safely migrate the system.
 
 ## Architectural Mapping
 

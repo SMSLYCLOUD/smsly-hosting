@@ -1,4 +1,4 @@
-# CloudNeuron Rust Twin Architecture
+# grid Rust Twin Architecture
 
 This document exhaustively details the complete architectural mapping between the legacy Python/Django stack and the new Rust workspace ecosystem (`rust_twin`).
 
@@ -30,7 +30,7 @@ The legacy monolith has been decomposed into a highly modular Cargo Workspace, d
 ### B. Deployment Pipeline (The "Smart Deploy")
 1. A user authenticates via the Leptos frontend (`POST /api/v1/auth/login`). The backend issues an Argon2-secured JWT.
 2. The user clicks "Deploy" in the UI. The frontend sends a `POST /api/v1/projects/:id/deploy` request with the JWT Bearer token.
-3. The `api` crate's `AuthUser` extractor validates the JWT. The handler queries SeaORM to verify ownership, creates a `PENDING` Deployment record, and pushes a JSON `SmartDeploy` task to the Redis `cloudneuron:tasks:default` list.
+3. The `api` crate's `AuthUser` extractor validates the JWT. The handler queries SeaORM to verify ownership, creates a `PENDING` Deployment record, and pushes a JSON `SmartDeploy` task to the Redis `grid:tasks:default` list.
 4. The `worker` crate's polling loop (`BRPOP`) pops the task and spawns a green thread (`tokio::spawn`).
 5. The task updates the DB to `BUILDING`. It leverages the `infrastructure` crate to spawn the `nixpacks` CLI asynchronously, streaming the stdout/stderr build logs directly to `tracing`.
 6. Once the image is built, the worker uses `bollard` to connect to the Docker socket, ensures the `smsly-net` bridge exists, and provisions the container (`UNLESS_STOPPED`).
