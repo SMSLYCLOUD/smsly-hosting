@@ -1824,6 +1824,10 @@ if [ -n "$UPDATE_MODE" ]; then
     check_internet
     check_hardware
 
+    # ─── Git Safety ──────────────────────────────────────────────────────────
+    # Prevents "dubious ownership" errors on production VPS
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+
     ensure_infrastructure_permissions
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
