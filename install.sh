@@ -32,6 +32,13 @@
 
 set -euo pipefail
 
+# ─── Root Check ─────────────────────────────────────────────────────────────
+if [ "$EUID" -ne 0 ]; then
+    echo -e "\033[0;31mERROR: This script must be run as root.\033[0m"
+    echo -e "Please use: sudo bash $0 $*"
+    exit 1
+fi
+
 # ─── Lock File Check ─────────────────────────────────────────────────────────
 LOCK_FILE="/tmp/smsly-install.lock"
 if [ -f "$LOCK_FILE" ]; then
