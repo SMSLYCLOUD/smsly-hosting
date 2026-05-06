@@ -83,11 +83,16 @@ class ServerTransferServiceTest(TestCase):
 
         mock_ssh = MockSSH.return_value
         mock_ssh.check_docker.return_value = True
+        mock_ssh.find_hosting_path.return_value = '/opt/smsly-hosting'
         def _exec_side_effect_full(cmd, *args, **kwargs):
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
             if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
                 return "TRANSFER_TCP_OK"
+            if "grep POSTGRES_USER" in cmd:
+                return "smsly"
+            if "grep POSTGRES_DB" in cmd:
+                return "smsly"
             return "mock_output"
         mock_ssh.exec_command.side_effect = _exec_side_effect_full
 
@@ -107,7 +112,10 @@ class ServerTransferServiceTest(TestCase):
         self.transfer.refresh_from_db()
         self.assertEqual(self.transfer.status, 'COMPLETED')
 
-        mock_ssh.exec_command.assert_any_call("yes | /tmp/install.sh")
+        mock_ssh.exec_command.assert_any_call(
+            "yes | NON_INTERACTIVE=1 bash /tmp/install.sh",
+            timeout=3600,
+        )
         mock_backup_svc.backup_server.assert_called()
 
     @patch('apps.deployments.services.transfer_service.SSHClient')

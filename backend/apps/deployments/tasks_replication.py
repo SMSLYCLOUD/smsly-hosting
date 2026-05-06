@@ -7,8 +7,13 @@ Periodic replication health checks and auto-failover.
 import logging
 
 from celery import shared_task
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
+
+
+def _bounded_error(exc, limit=2000):
+    return str(exc).replace("\x00", "")[:limit]
 
 
 @shared_task(
@@ -76,6 +81,11 @@ def deploy_replication_task(self, mesh_id: str, db_password: str,
     from apps.deployments.services.replication_service import ReplicationService
     from django.utils import timezone
 
+    lock_key = f"replication-deploy:{mesh_id}"
+    if not cache.add(lock_key, "1", timeout=1260):
+        logger.warning("Replication deploy skipped for %s because another deploy is running", mesh_id)
+        return {"error": "Replication deployment already running"}
+
     try:
         mesh = MeshNetwork.objects.get(id=mesh_id)
         mesh.replication_status = "DEPLOYING"
@@ -133,8 +143,8 @@ def deploy_replication_task(self, mesh_id: str, db_password: str,
     except Exception as e:
         try:
             mesh.replication_status = "FAILED"
-            mesh.replication_last_error = str(e)
-            mesh.replication_last_result = {"error": str(e)}
+            mesh.replication_last_error = _bounded_error(e)
+            mesh.replication_last_result = {"error": _bounded_error(e)}
             mesh.replication_updated_at = timezone.now()
             mesh.save(update_fields=[
                 "replication_status",
@@ -146,7 +156,9 @@ def deploy_replication_task(self, mesh_id: str, db_password: str,
         except Exception:
             pass
         logger.error(f"Replication deployment failed: {e}")
-        return {"error": str(e)}
+        return {"error": _bounded_error(e)}
+    finally:
+        cache.delete(lock_key)
 
 
 @shared_task(name="apps.deployments.tasks_replication.manual_failover_task")

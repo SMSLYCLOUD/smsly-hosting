@@ -111,13 +111,12 @@ export default function RegisterPage() {
           <CardHeader className="text-center space-y-2">
             <div className="mx-auto mb-4 flex flex-col items-center gap-2">
               <Image
-                src="/images/logo.svg"
+                src="/images/logo.png"
                 alt="Grid"
-                width={40}
-                height={40}
-                className="h-10 w-10 brightness-0 invert"
+                width={190}
+                height={78}
+                className="h-20 w-auto max-w-full rounded-xl object-contain shadow-md"
               />
-              Grid
             </div>
             <CardTitle className="text-2xl font-bold tracking-tight">Create an account</CardTitle>
             <CardDescription>
