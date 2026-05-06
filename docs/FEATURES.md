@@ -1,7 +1,7 @@
-# CloudNeuron — Core Features
+# Grid — Core Features
 
 ## 1. Hot Functions (Serverless)
-CloudNeuron creates "Serverless" behavior on standard Docker/K8s containers.
+Grid creates "Serverless" behavior on standard Docker/K8s containers.
 - **Mechanism**: We mount your source code into a pre-warmed runtime container (e.g., `python:3.9-slim`).
 - **Dynamic Entrypoint**: A lightweight Python/Node script wraps your handler function (e.g., `handler(event, context)`) and exposes it via HTTP on port 8080.
 - **Benefit**: No need for AWS Lambda or proprietary vendor lock-in.

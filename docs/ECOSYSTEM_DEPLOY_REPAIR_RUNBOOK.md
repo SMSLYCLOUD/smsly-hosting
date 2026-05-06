@@ -1,6 +1,6 @@
 # Ecosystem Deploy Repair Runbook
 
-If an ecosystem deployment fails (e.g. due to node capacity constraints or transient env resolver issues), CloudNeuron provides a Django management command to repair the ecosystem from its known CloudNeuron-side state.
+If an ecosystem deployment fails (e.g. due to node capacity constraints or transient env resolver issues), Grid provides a Django management command to repair the ecosystem from its known Grid-side state.
 
 ## The Command
 

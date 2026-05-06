@@ -19,11 +19,15 @@ def run():
             page.screenshot(path="/home/jules/verification/landing_page_updated.png", full_page=True)
             print("Captured landing_page_updated.png")
 
-            # Check for CloudNeuron text
-            if page.get_by_text("CloudNeuron").count() > 0:
-                print("Found 'CloudNeuron' text.")
+            # Check for Grid text
+            if page.get_by_text("Grid").count() > 0:
+                print("✓ Found 'Grid' text.")
             else:
-                print("WARNING: 'CloudNeuron' text not found.")
+                print("❌ ERROR: 'Grid' text not found.")
+
+            # Check for legacy CloudNeuron text
+            if page.get_by_text("CloudNeuron").count() > 0:
+                print("❌ ERROR: Found legacy 'CloudNeuron' text!")
 
         except Exception as e:
             print(f"Error on Landing: {e}")

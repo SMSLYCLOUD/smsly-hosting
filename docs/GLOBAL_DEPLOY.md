@@ -1,6 +1,6 @@
 # Global Deployment Guide
 
-CloudNeuron is designed to run anywhere.
+Grid is designed to run anywhere.
 
 ## 1. Kubernetes (Any Cloud)
 Use our Helm Chart to deploy the control plane to EKS, GKE, AKS, or DigitalOcean K8s.

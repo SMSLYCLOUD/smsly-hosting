@@ -1,6 +1,6 @@
 # AI Senate Environment Resolution
 
-The CloudNeuron deployment orchestration leverages the existing AI Senate (via `apps.intelligence.providers.ask_with_fallback`) to propose intelligent ecosystem environment resolutions without exposing raw AI output.
+The Grid deployment orchestration leverages the existing AI Senate (via `apps.intelligence.providers.ask_with_fallback`) to propose intelligent ecosystem environment resolutions without exposing raw AI output.
 
 ## Architecture
 - **EcosystemDeploymentSenate**: A custom adapter (`services/ecosystem_ai.py`) that formats a manifest summary and requests a strict JSON schema from the Senate.

@@ -1,7 +1,7 @@
 # Critical Production DB Readiness Report
 
 ## Summary of Changes
-CloudNeuron has been fully migrated from PgBouncer to PgCat as the primary database connection pooler. The entire connection path across Django APIs, Celery workers, deployments, migrations, and health checks has been hardened for safe, critical production use.
+Grid has been fully migrated from PgBouncer to PgCat as the primary database connection pooler. The entire connection path across Django APIs, Celery workers, deployments, migrations, and health checks has been hardened for safe, critical production use.
 
 ## Architecture
 - **Web/API (Django):** Uses PgCat's Transaction Pool Mode (`smsly_hosting` pool) for optimal connection reuse across fast API requests. Server-side cursors are disabled.
@@ -24,4 +24,4 @@ Implemented a stringent connection budgeting calculation. The total PgCat pools 
 If an individual deployment job attempts to open hundreds of internal connections (bypassing Django ORM), it could still strain the session pool. However, this is mitigated by strict Celery `concurrency=1` in `celery-deploy`.
 
 ## Status
-**CloudNeuron is now critical-production safe from a DB connection perspective.**
+**Grid is now critical-production safe from a DB connection perspective.**

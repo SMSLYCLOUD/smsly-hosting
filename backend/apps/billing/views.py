@@ -220,8 +220,8 @@ class CheckoutView(GenericAPIView):
                     amount=amount,
                     currency=currency,
                     redirect_url=redirect_url,
-                    title="CloudNeuron Pro",
-                    description="Upgrade to CloudNeuron Pro",
+                    title="Grid Pro",
+                    description="Upgrade to Grid Pro",
                     meta={
                         "user_id": str(request.user.id),
                         "plan": plan,

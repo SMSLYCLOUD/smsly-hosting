@@ -1,6 +1,6 @@
 # Database Connection Budget
 
-When running CloudNeuron PaaS, configuring database connection pools is critical. Too many connections will overwhelm Postgres, causing `FATAL: sorry, too many clients already`.
+When running Grid PaaS, configuring database connection pools is critical. Too many connections will overwhelm Postgres, causing `FATAL: sorry, too many clients already`.
 
 ## Budget Calculation
 

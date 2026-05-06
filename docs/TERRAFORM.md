@@ -1,6 +1,6 @@
 # Infrastructure as Code (Terraform)
 
-CloudNeuron supports automated provisioning of cloud infrastructure using Terraform.
+Grid supports automated provisioning of cloud infrastructure using Terraform.
 
 ## Usage
 
@@ -8,7 +8,7 @@ Navigate to the `infrastructure/terraform` directory to find modules for major c
 
 ### AWS Setup
 ```hcl
-module "cloudneuron_aws" {
+module "Grid_aws" {
   source = "./modules/aws"
   region = "us-east-1"
 
@@ -25,4 +25,4 @@ terraform init
 terraform apply
 ```
 
-The modules configure VPC, Subnets, Security Groups, IAM Roles, and an EC2 instance pre-configured with the CloudNeuron platform via User Data script.
+The modules configure VPC, Subnets, Security Groups, IAM Roles, and an EC2 instance pre-configured with the Grid platform via User Data script.

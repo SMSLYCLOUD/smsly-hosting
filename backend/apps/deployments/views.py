@@ -332,7 +332,7 @@ def _normalize_request_domain(raw_domain: str):
 
 
 def _rewrite_public_domain(current_domain: str, old_base_domain: str, new_base_domain: str) -> str | None:
-    """Rewrite a service public domain from one platform base domain to another."""
+    """Rewrite a service public domain from one Grid platform base domain to another."""
     current = str(current_domain or "").strip().lower().rstrip(".")
     old_base = str(old_base_domain or "").strip().lower().rstrip(".")
     new_base = str(new_base_domain or "").strip().lower().rstrip(".")
@@ -1062,7 +1062,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='multi-deploy')
     def multi_deploy(self, request, pk=None):
         """
-        Deploy a service to the local server AND selected remote servers.
+        Deploy a service to the local server AND selected Grid servers.
         POST /api/v1/services/{id}/multi-deploy/
         Body: {
             "ref": "HEAD",
@@ -1763,7 +1763,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'verified': is_valid,
             'cname_target': cname_target,
             'message': (
-                'DNS verified! Domain points to CloudNeuron.'
+                'DNS verified! Domain points to Grid.'
                 if is_valid
                 else (
                     f'DNS not configured. Add a CNAME record pointing to {cname_target} '

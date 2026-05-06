@@ -13,7 +13,7 @@ export function Footer() {
                             </div>
                             <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight">Grid</span>
                         </div>
-                            Grid is a free, open-source PaaS powered by CloudNeuron. Deploy complete software ecosystems on infrastructure you control.
+                            Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control.
                         <div className="flex gap-4">
                             {/* Social Icons Placeholder */}
                             <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 hover:bg-emerald-100 hover:text-emerald-600 transition-colors cursor-pointer">
@@ -58,7 +58,7 @@ export function Footer() {
 
                 <div className="pt-8 border-t border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="text-slate-500 dark:text-slate-400 text-sm">
-                        © 2026 Grid powered by CloudNeuron. All rights reserved.
+                        © 2026 Grid. All rights reserved.
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />

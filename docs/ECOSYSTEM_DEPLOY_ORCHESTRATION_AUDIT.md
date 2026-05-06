@@ -1,7 +1,7 @@
 # Ecosystem Deploy Orchestration Audit
 
 ## The Core Problem
-CloudNeuron's platform currently builds services individually and has an `ecosystem_deploy_task`, but it struggles with environment variable persistence and cross-service dependencies before actual deployment begins.
+Grid's platform currently builds services individually and has an `ecosystem_deploy_task`, but it struggles with environment variable persistence and cross-service dependencies before actual deployment begins.
 
 ## Current Flow Issues
 1. **Env Generation & Persistence**: The env generation (`_resolve_env_placeholders` and `_normalize_env_vars` in `tasks_ecosystem.py`) only happens just as the `Deployment` record is created, but it does not run strict validation against required ecosystem-level contracts or block on weak placeholders before attempting the build.

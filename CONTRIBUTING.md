@@ -1,4 +1,4 @@
-# Contributing to CloudNeuron
+# Contributing to Grid
 
 We are building the **Universal PaaS** for the world. Whether you are in San Francisco, Lagos, Berlin, or Tokyo, we want your code.
 

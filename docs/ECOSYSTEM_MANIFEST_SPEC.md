@@ -1,6 +1,6 @@
 # Ecosystem Manifest Specification
 
-The `cloudneuron.ecosystem.yml` manifest allows CloudNeuron to deploy complex interconnected services reliably by defining all dependencies, addons, and environment variables upfront.
+The `Grid.ecosystem.yml` manifest allows Grid to deploy complex interconnected services reliably by defining all dependencies, addons, and environment variables upfront.
 
 ## Format Reference
 
@@ -77,7 +77,7 @@ services:
 
 ## Schema Details
 
-- `addons`: Managed services that CloudNeuron provisions.
+- `addons`: Managed services that Grid provisions.
 - `shared_env`: Environment variables that are synced identically across dependent services.
 - `services`: The components of the ecosystem.
   - `dependencies`: Defines the deployment order and linkage.

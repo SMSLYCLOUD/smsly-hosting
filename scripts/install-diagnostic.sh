@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# CloudNeuron Installer Health Diagnostic
-# Verifies the readiness of the host for SMSLY CloudNeuron installation/updates.
+# Grid Installer Health Diagnostic
+# Verifies the readiness of the host for SMSLY Grid installation/updates.
 # =============================================================================
 
 set -u
@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}SMSLY CloudNeuron Installation Diagnostic v1.0${NC}"
+echo -e "${BLUE}SMSLY Grid Installation Diagnostic v1.0${NC}"
 echo -e "------------------------------------------------"
 
 # 1. OS & Kernel

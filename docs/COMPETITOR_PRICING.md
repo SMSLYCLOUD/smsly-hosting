@@ -1,4 +1,4 @@
-# CloudNeuron Competitor Pricing Analysis
+# Grid Competitor Pricing Analysis
 
 Generated on 2026-02-14 03:25:26.166214
 
@@ -10,8 +10,8 @@ Generated on 2026-02-14 03:25:26.166214
 | Enterprise (Heavy)   | 50.0 vCPU / 128.0 GB | $256.00            | $861.20        | $1892.86      | $2987.16        | $5506.28  | $2583.76 |
 
 ## Assumptions
-* **CloudNeuron Self-Hosted**: $4.0/mo per 1vCPU/2GB unit (VPS cost).
-* **CloudNeuron Managed**: $29.0/mo base + $0.01/vCPU-hr + $0.005/GB-hr.
+* **Grid Self-Hosted**: $4.0/mo per 1vCPU/2GB unit (VPS cost).
+* **Grid Managed**: $29.0/mo base + $0.01/vCPU-hr + $0.005/GB-hr.
 * **AWS Fargate**: $0.04048/vCPU-hr + $0.004445/GB-hr (us-east-1).
 * **GCP Cloud Run**: $0.0588/vCPU-hr + $0.009/GB-hr.
 * **Railway**: $0.12/vCPU-hr + $0.012/GB-hr.

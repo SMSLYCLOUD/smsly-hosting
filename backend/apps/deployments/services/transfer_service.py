@@ -177,8 +177,8 @@ class ServerTransferService:
                 backend_container = self._find_remote_backend_container(required=False)
             if not backend_container:
                 raise RuntimeError(
-                    "CloudNeuron backend container not found on target server. "
-                    "Please install CloudNeuron on the target before transferring services."
+                    "Grid backend container not found on target server. "
+                    "Please install Grid on the target before transferring services."
                 )
             self._wait_for_remote_backend_ready(backend_container)
 
@@ -256,9 +256,9 @@ class ServerTransferService:
             self._restore_full_server(remote_backup_path)
 
     def _restore_single_service(self, remote_backup_path):
-        self._update(65, 'Uploading backup archive to remote CloudNeuron API container...')
+        self._update(65, 'Uploading backup archive to remote Grid API container...')
         
-        # 1. We must execute the restoration inside the remote server's CloudNeuron
+        # 1. We must execute the restoration inside the remote server's Grid
         # backend container so it registers the Service in the remote database!
         # First, copy the tarball into the backend container.
         backend_container = self._find_remote_backend_container(required=True)
@@ -519,7 +519,7 @@ if svc:
         self.ssh.exec_command(cmd, timeout=1200)
 
     def _find_remote_backend_container(self, required=False):
-        """Return the best matching CloudNeuron backend container name on the target."""
+        """Return the best matching Grid backend container name on the target."""
         configured = getattr(
             settings, "REMOTE_BACKEND_CONTAINER_NAME", "smsly-hosting-backend-1"
         )
@@ -544,13 +544,13 @@ if svc:
 
         if required:
             raise RuntimeError(
-                "Could not locate CloudNeuron backend container on target server. "
+                "Could not locate Grid backend container on target server. "
                 f"Searched for: {candidates or [configured]}"
             )
         return None
 
     def _ensure_target_platform_started(self):
-        """Start an installed CloudNeuron target when Docker is up but the stack is down."""
+        """Start an installed Grid target when Docker is up but the stack is down."""
         hosting_path = self.ssh.find_hosting_path()
         safe_path = shlex.quote(hosting_path)
         timeout = int(getattr(settings, "TRANSFER_TARGET_START_TIMEOUT", 1200))
@@ -561,7 +561,7 @@ if svc:
             "docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null",
             "(test -f docker-compose.prod.yml && docker compose -f docker-compose.prod.yml up -d --build || docker compose up -d --build)",
         ])
-        self._update(8, 'Starting CloudNeuron platform on target server...')
+        self._update(8, 'Starting Grid platform on target server...')
         self.ssh.exec_command(cmd, timeout=timeout)
 
     def _wait_for_remote_backend_ready(self, backend_container):
@@ -576,7 +576,7 @@ if svc:
         )
         output = self.ssh.exec_command(command, timeout=330)
         if "READY" not in output:
-            raise RuntimeError("Target CloudNeuron backend did not become ready before restore.")
+            raise RuntimeError("Target Grid backend did not become ready before restore.")
 
     @staticmethod
     def _build_restore_trigger_script(owner_email, backup_path='/tmp/transfer_backup.tar.gz'):
@@ -666,7 +666,7 @@ if __name__ == '__main__':
 """
 
     def _restore_full_server(self, remote_backup_path):
-        self._update(60, 'Installing CloudNeuron platform on target...')
+        self._update(60, 'Installing Grid platform on target...')
 
         self.ssh.exec_command("yes | /tmp/install.sh")
 

@@ -1,6 +1,6 @@
 # PgCat Production Runbook
 
-This document describes how to handle database and connection pool operations in a production CloudNeuron cluster.
+This document describes how to handle database and connection pool operations in a production Grid cluster.
 
 ## 1. Inspecting PgCat Pools
 

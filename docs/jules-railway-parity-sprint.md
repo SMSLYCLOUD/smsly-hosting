@@ -1,6 +1,6 @@
-# CloudNeuron → Railway Parity Sprint (Jules Prompt)
+# Grid → Railway Parity Sprint (Jules Prompt)
 
-> **Goal**: Bring CloudNeuron to full Railway-level feature parity across 15 features, organized into 5 sequential phases. Each phase MUST be completed and verified before proceeding to the next.
+> **Goal**: Bring Grid to full Railway-level feature parity across 15 features, organized into 5 sequential phases. Each phase MUST be completed and verified before proceeding to the next.
 
 ---
 
@@ -677,24 +677,24 @@ The teams app already exists at `backend/apps/teams/`. Enhance:
    ```
    cli/
    ├── setup.py
-   ├── cloudneuron/
+   ├── Grid/
    │   ├── __init__.py
    │   ├── cli.py        # Main CLI entry point
    │   ├── api.py        # API client
-   │   └── config.py     # Local config (~/.cloudneuron/config.json)
+   │   └── config.py     # Local config (~/.Grid/config.json)
    ```
 
 2. **Commands**:
    ```bash
-   cloudneuron login           # Authenticate with API token
-   cloudneuron services list   # List all services
-   cloudneuron deploy          # Deploy current directory
-   cloudneuron logs <service>  # Stream logs
-   cloudneuron env set KEY=VAL # Set environment variable
-   cloudneuron ssh <service>   # SSH into service container
+   Grid login           # Authenticate with API token
+   Grid services list   # List all services
+   Grid deploy          # Deploy current directory
+   Grid logs <service>  # Stream logs
+   Grid env set KEY=VAL # Set environment variable
+   Grid ssh <service>   # SSH into service container
    ```
 
-3. **Publish to PyPI** as `cloudneuron-cli`
+3. **Publish to PyPI** as `Grid-cli`
 
 ---
 

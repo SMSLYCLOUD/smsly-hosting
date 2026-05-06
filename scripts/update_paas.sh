@@ -11,7 +11,7 @@ handle_error() {
 trap 'handle_error $LINENO' ERR
 
 echo "========================================"
-echo " CloudNeuron PaaS - Core Update Script"
+echo " Grid PaaS - Core Update Script"
 echo "========================================"
 
 # Lock file check
