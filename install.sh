@@ -48,10 +48,13 @@ trap "rm -f $LOCK_FILE" EXIT
 # ─── Parse flags early ───────────────────────────────────────────────────────
 NON_INTERACTIVE=false
 MODE_AGENT_LITE=false
+RESUME_MODE=false
 for arg in "$@"; do
   case "$arg" in
     --non-interactive) NON_INTERACTIVE=true ;;
     --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
+    --resume) RESUME_MODE=true ;;
+    --wipe) rm -f "/opt/smsly-hosting/.smsly_install_state" ;;
   esac
 done
 
@@ -297,6 +300,69 @@ EOF
             docker compose -f "$compose_f" up -d docker-mirror >/dev/null 2>&1 || true
         fi
     fi
+}
+
+# ─── Pre-flight Validators ──────────────────────────────────────────────────
+check_internet() {
+    echo -e "${BLUE}  → Checking internet connectivity...${NC}"
+    if ! curl -Is --connect-timeout 5 https://google.com >/dev/null; then
+        echo -e "${RED}  ✗ No internet access. Check your firewall/network settings.${NC}"
+        exit 1
+    fi
+    if ! host github.com >/dev/null 2>&1; then
+         # Fallback to ping if host is missing
+         if ! ping -c 1 github.com >/dev/null 2>&1; then
+             echo -e "${RED}  ✗ DNS resolution failed for github.com.${NC}"
+             exit 1
+         fi
+    fi
+    echo -e "${GREEN}  ✓ Internet & DNS OK${NC}"
+}
+
+check_hardware() {
+    echo -e "${BLUE}  → Checking hardware requirements...${NC}"
+    local ram_kb
+    ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    local ram_mb=$((ram_kb / 1024))
+    echo -e "${BLUE}  RAM: ${ram_mb}MB${NC}"
+    if [ "$ram_mb" -lt 950 ]; then # Allow some margin for 1GB VPS
+        echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). CloudNeuron requires at least 1GB.${NC}"
+        exit 1
+    fi
+    
+    local cores
+    cores=$(nproc)
+    echo -e "${BLUE}  CPU Cores: ${cores}${NC}"
+    if [ "$cores" -lt 1 ]; then
+        echo -e "${RED}  ✗ CPU detection failed.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}  ✓ Hardware requirements met${NC}"
+}
+
+# ─── Installation State Machine ──────────────────────────────────────────────
+STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
+
+set_checkpoint() {
+    local name="$1"
+    mkdir -p "$(dirname "$STATE_FILE")"
+    # Ensure name is unique in the file to avoid duplicates on resume
+    if ! grep -q "^$name$" "$STATE_FILE" 2>/dev/null; then
+        echo "$name" >> "$STATE_FILE"
+    fi
+    echo -e "${GREEN}  ✓ Checkpoint reached: $name${NC}"
+}
+
+is_checkpoint_done() {
+    local name="$1"
+    if [ "$RESUME_MODE" != "true" ]; then
+        return 1
+    fi
+    if [ -f "$STATE_FILE" ] && grep -q "^$name$" "$STATE_FILE"; then
+        echo -e "${BLUE}  → Skipping already completed step: $name${NC}"
+        return 0
+    fi
+    return 1
 }
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -834,6 +900,15 @@ validate_env_file() {
                 echo "RABBITMQ_PASSWORD=$new_rabbitmq_pass" >> "$env_file"
                 # Update celery broker URL immediately to use this new password
                 env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${new_rabbitmq_pass}@rabbitmq:5672//"
+            elif [ "$var_name" = "GATEWAY_SECRET" ]; then
+                echo -e "${BLUE}  -> Generating missing GATEWAY_SECRET...${NC}"
+                env_set_value "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)"
+            elif [ "$var_name" = "FRP_AUTH_TOKEN" ]; then
+                echo -e "${BLUE}  -> Generating missing FRP_AUTH_TOKEN...${NC}"
+                env_set_value "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)"
+            elif [ "$var_name" = "TUNNEL_DOMAIN" ]; then
+                echo -e "${BLUE}  -> Setting missing TUNNEL_DOMAIN...${NC}"
+                env_set_value "$env_file" "TUNNEL_DOMAIN" "tunnel.localhost"
             else
                 missing_vars+=("$var_name")
             fi
@@ -1738,6 +1813,9 @@ if [ -n "$UPDATE_MODE" ]; then
         exit 1
     fi
 
+    check_internet
+    check_hardware
+
     ensure_infrastructure_permissions
 
     if [ ! -d "$INSTALL_DIR/.git" ]; then
@@ -1758,6 +1836,9 @@ if [ -n "$UPDATE_MODE" ]; then
         echo -e "${RED}x .env validation failed. Fix the values above and re-run update.${NC}"
         exit 1
     fi
+    set_checkpoint "update_preflight_done"
+
+if ! is_checkpoint_done "update_git_synced"; then
 
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
@@ -1802,6 +1883,8 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${RED}✗ Git update failed and no local fallback bundle available. Update may be incomplete.${NC}"
         fi
     fi
+    set_checkpoint "update_git_synced"
+fi
 
     # ─── Self-Update Check ──────────────────────────────────────────────────
     # If the installer itself was updated, we MUST re-execute it to pick up
@@ -1871,6 +1954,7 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # ─── Targeted Rebuild (CRITICAL BLINDSPOT FIX: --no-deps) ────────────────
     # Using --no-deps prevents cascade restart of unrelated services
+    if ! is_checkpoint_done "update_containers_rebuilt"; then
 
     # ─── Fix script permissions (Git on Windows strips execute bits) ──────────
     echo -e "${BLUE}  → Fixing script permissions...${NC}"
@@ -1908,6 +1992,8 @@ if [ -n "$UPDATE_MODE" ]; then
             }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
+
+            set_checkpoint "update_db_migrated"
 
             # Clean stale celerybeat-schedule (prevents Permission denied crash loop)
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
@@ -1975,8 +2061,11 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" restart celery-beat celery-deploy celery-fast 2>/dev/null || true
+            set_checkpoint "update_db_migrated"
             ;;
     esac
+    set_checkpoint "update_containers_rebuilt"
+fi
 
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────
     echo -e "${BLUE}  → Ensuring Local Docker cloud provider exists...${NC}"
@@ -2220,7 +2309,8 @@ ${cf_known_stanza}
 
 ${cf_svc_blocks}
 CFCADDY
-                caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+                caddy fmt --overwrite /etc/caddy/Caddyfile.tmp 2>/dev/null || true
+                mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
                 echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
             else
                 # IP mode or no domain — fall back to safe Caddyfile
@@ -2515,6 +2605,9 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+check_internet
+check_hardware
+
 # Check OS
 if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -2591,11 +2684,13 @@ else
 fi
 
 echo -e "${GREEN}  ✓ Pre-flight checks passed${NC}"
+set_checkpoint "requirements_checked"
 
 # -----------------------------------------------------------------------------
 # 2. Dependency Management & cleanup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
+if ! is_checkpoint_done "dependencies_installed"; then
+    echo -e "\n${YELLOW}[2/9] Installing dependencies...${NC}"
 
 # Stop conflicting services if present (anything that holds port 80/443)
 # NOTE: Don't stop Caddy here — we install/configure it in step 7.
@@ -2673,11 +2768,14 @@ if command -v docker &> /dev/null; then
 fi
 
 echo -e "${GREEN}  ✓ Dependencies installed${NC}"
+    set_checkpoint "dependencies_installed"
+fi
 
 # -----------------------------------------------------------------------------
 # 3. Configuration & Secrets (IDEMPOTENT)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[3/9] Configuration...${NC}"
+if ! is_checkpoint_done "config_generated"; then
+    echo -e "\n${YELLOW}[3/9] Configuration...${NC}"
 
 mkdir -p "$INSTALL_DIR"
 
@@ -2939,8 +3037,9 @@ print(f'FRP_AUTH_TOKEN={frp_token}')
         exit 1
     fi
 
-    # Create .env
-    cat <<EOF > "$INSTALL_DIR/.env"
+    # Create .env (Atomic)
+    local ENV_TMP="$INSTALL_DIR/.env.tmp"
+    cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
 DEBUG=False
@@ -2996,35 +3095,41 @@ EOF
     else
         EXPECTED_TUNNEL_DOMAIN="tunnel.localhost"
     fi
-    echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$INSTALL_DIR/.env"
+    echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$ENV_TMP"
 
     # ── Agent Lite Overrides ──────────────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        echo "MODE=agent" >> "$INSTALL_DIR/.env"
-        echo "MASTER_IP=$MASTER_IP" >> "$INSTALL_DIR/.env"
+        echo "MODE=agent" >> "$ENV_TMP"
+        echo "MASTER_IP=$MASTER_IP" >> "$ENV_TMP"
         # Force Agent to use Master VPS for DB/Redis/RabbitMQ
-        env_set_value "$INSTALL_DIR/.env" "DATABASE_URL" "postgresql://smsly_admin:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
-        env_set_value "$INSTALL_DIR/.env" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//"
-        env_set_value "$INSTALL_DIR/.env" "REDIS_URL" "redis://${MASTER_IP}:6379/1"
+        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://smsly_admin:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting|" "$ENV_TMP"
+        sed -i "s|^CELERY_BROKER_URL=.*|CELERY_BROKER_URL=amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//|" "$ENV_TMP"
+        sed -i "s|^REDIS_URL=.*|REDIS_URL=redis://${MASTER_IP}:6379/1|" "$ENV_TMP"
         # Disable local DB/Registry requirements in the app
-        echo "SMSLY_DISABLE_LOCAL_SERVICES=true" >> "$INSTALL_DIR/.env"
+        echo "SMSLY_DISABLE_LOCAL_SERVICES=true" >> "$ENV_TMP"
     else
-        echo "MODE=master" >> "$INSTALL_DIR/.env"
+        echo "MODE=master" >> "$ENV_TMP"
     fi
 
-    chmod 600 "$INSTALL_DIR/.env"
-    if ! validate_env_file "$INSTALL_DIR/.env"; then
+    # Atomic move and validation
+    if validate_env_file "$ENV_TMP"; then
+        mv "$ENV_TMP" "$INSTALL_DIR/.env"
+        chmod 600 "$INSTALL_DIR/.env"
+        echo -e "${GREEN}  ✓ Configuration saved to .env (chmod 600)${NC}"
+    else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
+        rm -f "$ENV_TMP"
         exit 1
     fi
-
-    echo -e "${GREEN}  ✓ Configuration saved to .env (chmod 600)${NC}"
+fi
+    set_checkpoint "config_generated"
 fi
 
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
+if ! is_checkpoint_done "stack_deployed"; then
+    echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
 docker network create smsly-net 2>/dev/null || true
@@ -3043,12 +3148,15 @@ docker network create smsly-proxy 2>/dev/null || true
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
 echo -e "${BLUE}  → Starting App Stack...${NC}"
-docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+    docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+    set_checkpoint "stack_deployed"
+fi
 
 # -----------------------------------------------------------------------------
 # 5. Database Setup
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
+if ! is_checkpoint_done "database_initialized"; then
+    echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
 
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
@@ -3131,11 +3239,14 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
 else
     echo -e "${BLUE}  → Rust Twin: Skipping static file collection (handled by Trunk WASM bundler)...${NC}"
 fi
+    set_checkpoint "database_initialized"
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
+if ! is_checkpoint_done "admin_created"; then
+    echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
 
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     echo -e "${BLUE}  → Rust Twin: Skipping Python admin user creation (Use 'docker compose exec cli createsuperuser')...${NC}"
@@ -3203,11 +3314,14 @@ print('CREATED' if created else 'EXISTS')
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
 fi
+    set_checkpoint "admin_created"
+fi
 
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
+if ! is_checkpoint_done "caddy_configured"; then
+    echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
 
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     echo -e "${BLUE}  → Formatting Rust Twin Caddyfile...${NC}"
@@ -3389,7 +3503,7 @@ ENVEOF
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
     else
         # ─── Standard SSL (no wildcard) ──────────────────────────────────
-        cat > /etc/caddy/Caddyfile <<CADDYEOF
+        cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
@@ -3413,10 +3527,11 @@ CADDYEOF
             rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
             systemctl daemon-reload
         fi
+        mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
     fi
 else
-    cat > /etc/caddy/Caddyfile <<CADDYEOF
+    cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 :80 {
     reverse_proxy localhost:8090
@@ -3427,6 +3542,7 @@ CADDYEOF
         rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
         systemctl daemon-reload
     fi
+    mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
     echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
 fi
 
@@ -3504,17 +3620,17 @@ systemctl enable caddy >/dev/null 2>&1
 sleep 2
 if systemctl is-active --quiet caddy; then
     echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-else
-    echo -e "${RED}  ✗ Caddy failed to start. Check: journalctl -u caddy --no-pager -n 20${NC}"
-    exit 1
+    fi
+    
+    safe_refresh_runtime_services
+    set_checkpoint "caddy_configured"
 fi
-
-safe_refresh_runtime_services
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
 # -----------------------------------------------------------------------------
-echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
+if ! is_checkpoint_done "memory_hardened"; then
+    echo -e "\n${YELLOW}[8/9] Hardening System Memory...${NC}"
 
 # ─── Swap: Ensure swap is at least 2x RAM ────────────────────────────────────
 CURRENT_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
@@ -3715,6 +3831,8 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 echo -e "${GREEN}  ✓ System security hardening complete${NC}"
+    set_checkpoint "memory_hardened"
+fi
 
 # -----------------------------------------------------------------------------
 # 9. Verification

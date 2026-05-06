@@ -379,6 +379,13 @@ def provision_server(self, server_id: str):
             )
             install_args = "--mode agent-lite"
 
+        # ─── Resume Check ──────────────────────────────────────────────────
+        stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")
+        remote_mode = stdout.read().decode().strip()
+        if "RESUME" in remote_mode:
+            _append_log(server, "ℹ️ Found partial installation state. Resuming from last checkpoint...")
+            install_args = f"{install_args} --resume"
+
         if github_token and not token_known_invalid:
             from urllib.parse import quote
             encoded = quote(github_token, safe="")
