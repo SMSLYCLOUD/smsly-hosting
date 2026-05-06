@@ -39,8 +39,6 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-trap "rm -f $LOCK_FILE" EXIT
-
 # ─── Parse flags early ───────────────────────────────────────────────────────
 NON_INTERACTIVE=false
 MODE_AGENT_LITE=false
@@ -217,6 +215,7 @@ fi
 
 # ─── Lock File Check ─────────────────────────────────────────────────────────
 LOCK_FILE="/tmp/smsly-install.lock"
+trap "rm -f $LOCK_FILE" EXIT
 if [ -f "$LOCK_FILE" ]; then
     PID=$(cat "$LOCK_FILE")
     if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
