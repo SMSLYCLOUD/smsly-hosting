@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.3 (Production Hardened)
-# VERSION: 2026-05-06-2333
+# Grid by SMSLY - Universal Installer v3.1.4 (Production Hardened)
+# VERSION: 2026-05-06-2345
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -53,6 +53,7 @@ for arg in "$@"; do
     --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
     --rust)            RUST_TWIN_MODE="true" ;;
     --resume)          RESUME_MODE=true ;;
+    --no-screen)       NO_SCREEN=true ;;
     --wipe)            rm -f "/opt/smsly-hosting/.smsly_install_state" ;;
   esac
 done
@@ -61,7 +62,20 @@ done
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
-# (Screen Guard removed to prevent nesting issues on fresh VPS)
+# ─── Screen Guard ────────────────────────────────────────────────────────────
+# Protect against SSH disconnects by running inside a screen session.
+if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [ -z "${TMUX:-}" ]; then
+    if command -v screen >/dev/null 2>&1; then
+        echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
+        # Use -L for logging, -S for session name, -d -m to start detached then exec attach
+        # Actually 'exec screen' is simpler as it replaces the current shell.
+        exec screen -L -S smsly-install bash "$SCRIPT_PATH" "$@"
+    else
+        echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
+        sleep 1
+    fi
+fi
+
 # Ensure we start in a valid directory.
 
 # ─── Lock File Check ─────────────────────────────────────────────────────────
