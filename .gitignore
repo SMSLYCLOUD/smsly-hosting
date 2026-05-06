@@ -111,6 +111,7 @@ logs/
 
 # One-off local repair/debug scripts
 /check_*.py
+/fix.sh
 /fix_*.py
 /fix_*.sh
 /list_*.py
