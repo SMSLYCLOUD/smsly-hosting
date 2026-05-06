@@ -2966,7 +2966,7 @@ print(f'FRP_AUTH_TOKEN={frp_token}')
     fi
 
     # Create .env (Atomic)
-    local ENV_TMP="$INSTALL_DIR/.env.tmp"
+    ENV_TMP="$INSTALL_DIR/.env.tmp"
     cat <<EOF > "$ENV_TMP"
 # SMSLY Hosting Configuration — Generated $(date -Iseconds)
 ENVIRONMENT=production
