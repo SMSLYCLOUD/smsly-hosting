@@ -397,9 +397,22 @@ DATABASES = {
     )
 }
 
-# Direct connection for migrations — bypasses PgCat transaction pooling.
-# Without this, Django migrations hang because PgCat's transaction mode
-# doesn't support the SET/SAVEPOINT statements that Django emits.
+# ---------------------------------------------------------------------------
+# Migration/DDL Safety:
+# PgCat in 'transaction' mode (default) does not support SET/SAVEPOINT.
+# We derive a 'session' pool alias (smsly_hosting_session) or use a 'direct'
+# connection to bypass the pooler during migrations.
+# ---------------------------------------------------------------------------
+_db_url = config('DATABASE_URL', default=_DATABASE_DEFAULT)
+if _db_url and 'pgcat' in _db_url and '_session' not in _db_url:
+    _session_url = _db_url.rstrip('/') + '_session'
+    DATABASES['session'] = dj_database_url.config(
+        default=_session_url,
+        conn_max_age=0,
+        conn_health_checks=True,
+    )
+
+# Direct connection for migrations — bypasses PgCat entirely if configured.
 _DIRECT_DB_URL = config('DIRECT_DATABASE_URL', default='')
 if _DIRECT_DB_URL:
     DATABASES['direct'] = dj_database_url.config(

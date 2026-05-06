@@ -14,13 +14,25 @@ is_web_container() {
 }
 
 run_migrations_with_retry() {
-    echo "Running migrations..."
+    migrate_db="${1:-default}"
+    echo "Running migrations on database: $migrate_db..."
 
     max_retries="${MIGRATE_MAX_RETRIES:-5}"
     retry=0
+    
+    # Selection of database alias for migrations
+    migrate_db="default"
+    if python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'session' pool. Using it for migrations..."
+        migrate_db="session"
+    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'direct' connection. Using it for migrations..."
+        migrate_db="direct"
+    fi
+
     while [ "$retry" -lt "$max_retries" ]; do
-        if python manage.py migrate --noinput; then
-            echo "Migrations complete."
+        if python manage.py migrate --database="$migrate_db" --noinput; then
+            echo "Migrations complete (on database: $migrate_db)."
             return 0
         fi
         retry=$((retry + 1))
@@ -34,6 +46,7 @@ run_migrations_with_retry() {
 }
 
 create_admin_if_configured() {
+    migrate_db="${1:-default}"
     admin_user="${DJANGO_SUPERUSER_USERNAME:-admin}"
     admin_email="${DJANGO_SUPERUSER_EMAIL:-admin@localhost}"
     admin_pass="${DJANGO_SUPERUSER_PASSWORD:-}"
@@ -53,6 +66,7 @@ create_admin_if_configured() {
 
     echo "No superuser found. Creating admin account..."
     DJANGO_SUPERUSER_PASSWORD="$admin_pass" python manage.py createsuperuser \
+        --database="$migrate_db" \
         --noinput \
         --username "$admin_user" \
         --email "$admin_email" >/dev/null 2>&1 || \
@@ -66,17 +80,28 @@ collect_static_nonfatal() {
 }
 
 setup_social_apps_nonfatal() {
+    migrate_db="${1:-default}"
     echo "Configuring OAuth social apps..."
-    python manage.py setup_social_apps >/dev/null 2>&1 || \
+    python manage.py setup_social_apps --database="$migrate_db" >/dev/null 2>&1 || \
         echo "WARNING: setup_social_apps failed (non-fatal)"
 }
 
-if is_web_container "$@"; then
-    run_migrations_with_retry
-    setup_social_apps_nonfatal
-    create_admin_if_configured
-    collect_static_nonfatal
-fi
+    # Selection of database alias for migrations
+    migrate_db="default"
+    if python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'session' pool. Using it for management tasks..."
+        migrate_db="session"
+    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'direct' connection. Using it for management tasks..."
+        migrate_db="direct"
+    fi
+
+    if is_web_container "$@"; then
+        run_migrations_with_retry "$migrate_db"
+        setup_social_apps_nonfatal "$migrate_db"
+        create_admin_if_configured "$migrate_db"
+        collect_static_nonfatal
+    fi
 
 echo "Starting: $*"
 exec "$@"
