@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.2.1 (Production Hardened)
-# VERSION: 2026-05-07-0204
+# Grid by SMSLY - Universal Installer v3.2.2 (Production Hardened)
+# VERSION: 2026-05-07-0206
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -214,21 +214,15 @@ check_hardware() {
 }
 
 ensure_system_swap() {
-    echo -e "${BLUE}  → Ensuring system swap is sufficient...${NC}"
+    echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 3x-4x RAM)...${NC}"
     local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
     
-    # For high RAM nodes (>8GB), we only need a safety buffer (4GB)
-    # For low RAM nodes, we target 2x-4x RAM.
-    local target_swap_mb=4096
-    if [ "$current_ram_mb" -lt 4096 ]; then
-        target_swap_mb=$((current_ram_mb * 4))
-    elif [ "$current_ram_mb" -lt 8192 ]; then
-        target_swap_mb=$((current_ram_mb * 2))
-    fi
+    # Strictly enforce 4x RAM target for maximum stability
+    local target_swap_mb=$((current_ram_mb * 4))
     
-    # Cap at 16GB max for any node
-    [ "$target_swap_mb" -gt 16384 ] && target_swap_mb=16384
+    # Cap at 64GB max for sanity, but floor at 4x RAM for the user's requirement
+    [ "$target_swap_mb" -gt 65536 ] && target_swap_mb=65536
 
     local current_swap_mb
     current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
@@ -242,7 +236,7 @@ ensure_system_swap() {
         local needed_mb=$target_swap_mb
         [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && needed_mb=$((target_swap_mb - current_swap_mb))
         
-        echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB)...${NC}"
+        echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB, Target: 4x)...${NC}"
         local swapfile="/swapfile-smsly"
 
         # If the file already exists but is too small, we need to recreate it
