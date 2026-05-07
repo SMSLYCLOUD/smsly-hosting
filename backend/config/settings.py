@@ -387,6 +387,8 @@ _DATABASE_DEFAULT = (
     if DEBUG
     else f'sqlite:///{_fallback_sqlite_path}'
 )
+DATABASE_CONNECT_TIMEOUT = config('DATABASE_CONNECT_TIMEOUT', default=5, cast=int)
+REDIS_SOCKET_TIMEOUT = config('REDIS_SOCKET_TIMEOUT', default=5, cast=int)
 DATABASES = {
     'default': dj_database_url.config(
         default=config('DATABASE_URL', default=_DATABASE_DEFAULT),
@@ -420,6 +422,13 @@ if _DIRECT_DB_URL:
         conn_max_age=0,
         conn_health_checks=True,
     )
+
+# Bound failed database connects so health/login requests do not pin workers.
+for _db_cfg in DATABASES.values():
+    if 'postgresql' not in str(_db_cfg.get('ENGINE', '')):
+        continue
+    _db_cfg.setdefault('OPTIONS', {})
+    _db_cfg['OPTIONS'].setdefault('connect_timeout', DATABASE_CONNECT_TIMEOUT)
 
 # Disable server-side cursors – incompatible with PgCat transaction pooling
 DISABLE_SERVER_SIDE_CURSORS = True
@@ -532,6 +541,10 @@ else:
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": REDIS_CACHE_URL,
+            "OPTIONS": {
+                "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,
+                "socket_timeout": REDIS_SOCKET_TIMEOUT,
+            },
         }
     }
 

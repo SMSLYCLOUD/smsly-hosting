@@ -48,11 +48,12 @@ def health_check(request):
         checks_passed = False
 
     # Count recent deployments (non-critical, won't fail health check)
-    try:
-        from apps.deployments.models import Deployment
-        deployment_count = Deployment.objects.count()
-    except Exception:
-        pass
+    if db_status == 'healthy':
+        try:
+            from apps.deployments.models import Deployment
+            deployment_count = Deployment.objects.count()
+        except Exception:
+            pass
 
     uptime_seconds = int(time.monotonic() - _PROCESS_START)
 
