@@ -2769,6 +2769,10 @@ AUTOSCALER_API_TOKEN=$AUTOSCALER_API_TOKEN
 
 # FRP Tunnel Relay Authentication Token
 FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
+
+# AppConfig.ready() must stay side-effect free during installs and management commands.
+# Edge/proxy sync is performed explicitly by the installer and watcher services.
+SMSLY_ENABLE_STARTUP_CADDY_SYNC=false
 EOF
 
     # Derive expected tunnel domain

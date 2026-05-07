@@ -166,7 +166,7 @@ export function Navbar() {
             <div
               className={
                 user
-                  ? "flex items-center gap-0 bg-[#12151c]/60 p-1 rounded-xl border border-white/5"
+                  ? "grid w-full max-w-[1180px] grid-cols-7 items-center gap-1 rounded-xl border border-white/5 bg-[#12151c]/60 p-1"
                   : "flex items-center gap-1 overflow-x-auto"
               }
             >
@@ -198,14 +198,14 @@ export function Navbar() {
                          prefetch={false}
                          title={link.label}
                          className={`
-                             relative min-w-0 px-1.5 py-1.5 rounded-lg text-[11px] font-[600] tracking-tight transition-all duration-200 flex items-center justify-center gap-1.5
+                             relative flex h-9 min-w-0 items-center justify-center gap-2 rounded-lg px-2 text-[12px] font-semibold tracking-normal transition-all duration-200
                              ${isActive
                                 ? 'text-white bg-[#1e232d] shadow-[0_0_0_1px_rgba(255,255,255,0.05)] border border-white/10'
                                 : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'}
                         `}
                     >
-                        <Icon size={14} className={isActive ? 'text-emerald-400' : 'text-zinc-600'} />
-                        <span className={`truncate ${['Ecosystem', 'Intelligence'].includes(link.label) ? 'hidden xl:inline' : ''}`}>{link.label}</span>
+                        <Icon size={15} className={`shrink-0 ${isActive ? 'text-emerald-400' : 'text-zinc-600'}`} />
+                        <span className="min-w-0 truncate">{link.label}</span>
                     </Link>
                 );
             })}

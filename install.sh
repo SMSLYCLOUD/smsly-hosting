@@ -148,13 +148,13 @@ detect_public_ip() {
 configure_docker_mirror() {
     # Ensure COMPOSE_FILE is defined for this scope
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
-    
+
     # Option B: Pull-Through Cache
     if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
         # This is a Follower node
         echo -e "${BLUE}  → Configuring Docker pull-through cache mirror (Master: $MASTER_IP)...${NC}"
         mkdir -p /etc/docker
-        
+
         # Build the daemon.json
         cat > /etc/docker/daemon.json <<EOF
 {
@@ -201,7 +201,7 @@ check_hardware() {
         echo -e "${RED}  ✗ Insufficient RAM ($ram_mb MB). Grid requires at least 1GB.${NC}"
         exit 1
     fi
-    
+
     local cores
     cores=$(nproc)
     echo -e "${BLUE}  CPU Cores: ${cores}${NC}"
@@ -212,20 +212,43 @@ check_hardware() {
     echo -e "${GREEN}  ✓ Hardware requirements met${NC}"
 }
 
+wait_for_apt_lock() {
+    local lock_file="/var/lib/dpkg/lock-frontend"
+    local max_wait=300
+    local elapsed=0
+
+    if [ ! -f "$lock_file" ]; then
+        return 0
+    fi
+
+    echo -e "${BLUE}  → Checking for background system updates (APT lock)...${NC}"
+    while fuser "$lock_file" >/dev/null 2>&1; do
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo -e "${YELLOW}  ⚠ APT lock held for >5 mins. Attempting to force release...${NC}"
+            rm -f "$lock_file"
+            break
+        fi
+        printf "."
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo -e "${GREEN}  ✓ APT system ready${NC}"
+}
+
 ensure_system_swap() {
     echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 3x-4x RAM)...${NC}"
     local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    
+
     # Strictly enforce 4x RAM target for maximum stability
     local target_swap_mb=$((current_ram_mb * 4))
-    
+
     # Cap at 64GB max for sanity, but floor at 4x RAM for the user's requirement
     [ "$target_swap_mb" -gt 65536 ] && target_swap_mb=65536
 
     local current_swap_mb
     current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
-    
+
     # Check for ACTIVE swap (sometimes free -m reports phantom swap from host)
     local active_swap_count
     active_swap_count=$(grep -c / /proc/swaps || echo 0)
@@ -234,7 +257,7 @@ ensure_system_swap() {
     if [ "$current_swap_mb" -lt "$target_swap_mb" ] || [ "$active_swap_count" -eq 0 ]; then
         local needed_mb=$target_swap_mb
         [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && needed_mb=$((target_swap_mb - current_swap_mb))
-        
+
         echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB, Target: 4x)...${NC}"
         local swapfile="/swapfile-smsly"
 
@@ -343,7 +366,7 @@ env_ensure_var() {
     local var_comment="${4:-}"
     local current_val
     current_val="$(env_get_value "$env_file" "$var_name")"
-    
+
     if [ -z "$current_val" ]; then
         echo -e "${BLUE}  -> Setting $var_name in .env${NC}"
         [ -n "$var_comment" ] && ! grep -q "# $var_comment" "$env_file" 2>/dev/null && echo "# $var_comment" >> "$env_file"
@@ -357,26 +380,30 @@ dump_diagnostic_logs() {
     echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
     echo -e "${RED}   DIAGNOSTIC LOG DUMP (FAILURE ANALYSIS)${NC}"
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
-    
+
     echo -e "${YELLOW}  → System Resource Snapshot:${NC}"
     free -m
     df -h /
-    
-    echo -e "\n${YELLOW}  → Container Status:${NC}"
-    docker compose -f "$COMPOSE_FILE" ps
-    
-    echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
-    
-    echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 nginx || true
 
-    echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
-    
-    echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
-    
+    echo -e "\n${YELLOW}  → Container Status:${NC}"
+    if command -v docker >/dev/null 2>&1; then
+        docker compose -f "$COMPOSE_FILE" ps || true
+
+        echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
+
+        echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 nginx || true
+
+        echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
+
+        echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
+    else
+        echo -e "${YELLOW}  (Docker not yet installed; skipping container logs)${NC}"
+    fi
+
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}\n"
 }
 
@@ -497,6 +524,7 @@ sync_platform_domain_state() {
     echo -e "${BLUE}  → Syncing PlatformConfig + public domains from installer state...${NC}"
     sync_json="$(
         docker compose -f "$COMPOSE_FILE" exec -T \
+            -e SMSLY_DISABLE_STARTUP_TASKS=true \
             -e SMSLY_SYNC_DOMAIN="$sync_domain" \
             -e SMSLY_SYNC_USE_SSL="$sync_use_ssl" \
             -e SMSLY_SYNC_WILDCARD="$sync_wildcard" \
@@ -612,6 +640,7 @@ queue_active_service_redeploys() {
     local service_ids="${2:-}"
 
     docker compose -f "$COMPOSE_FILE" exec -T \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_REDEPLOY_REASON="$reason" \
         -e SMSLY_SERVICE_IDS="$service_ids" \
         backend python manage.py shell <<'PY'
@@ -680,6 +709,7 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
     env_ensure_var "$env_file" "FRP_AUTH_TOKEN" "$(gen_hex_secret 32)" "FRP tunnel relay authentication token"
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
+    env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
@@ -749,7 +779,7 @@ ensure_env_runtime_defaults() {
             local db_user="${MASTER_DB_USER:-smsly_admin}"
             local db_pass="${MASTER_DB_PASSWORD:-$postgres_password}"
             local mq_pass="${MASTER_MQ_PASSWORD:-$rabbitmq_password}"
-            
+
             # Use Master IP directly for external connections
             expected_database_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
@@ -758,7 +788,7 @@ ensure_env_runtime_defaults() {
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
-            
+
             # Sync local vars for consistent validation below
             current_database_url="$expected_database_url"
             current_celery_broker_url="$expected_celery_broker_url"
@@ -793,7 +823,7 @@ ensure_env_runtime_defaults() {
 
         if [ -z "$current_database_url" ]; then
             env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
-            
+
             # Ensure direct connection bypass for migrations exists
             local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
             env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct connection bypass for migrations"
@@ -971,7 +1001,9 @@ release_install_lock() {
 get_migration_database_alias() {
     local migrate_db
     migrate_db="$(
-        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c \
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+            -e SMSLY_DISABLE_STARTUP_TASKS=true \
+            backend python manage.py shell -c \
             "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
             2>/dev/null | tail -n 1 | tr -d '\r'
     )"
@@ -982,17 +1014,51 @@ get_migration_database_alias() {
     esac
 }
 
+diagnose_migration_locks() {
+    local env_file="${INSTALL_DIR:-.}/.env"
+    [ -f "$env_file" ] && source "$env_file" 2>/dev/null || true
+
+    echo -e "${YELLOW}  -> PostgreSQL activity snapshot (lock diagnosis):${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T \
+        -e PGPASSWORD="${POSTGRES_PASSWORD:-}" \
+        db psql \
+            -U "${POSTGRES_USER:-smsly_admin}" \
+            -d "${POSTGRES_DB:-smsly_hosting}" \
+            -v ON_ERROR_STOP=1 \
+            -P pager=off \
+            -c "SELECT pid, usename, application_name, state, wait_event_type, wait_event, now() - COALESCE(xact_start, query_start) AS age, left(regexp_replace(query, '\s+', ' ', 'g'), 180) AS query FROM pg_stat_activity WHERE datname = current_database() ORDER BY COALESCE(xact_start, query_start) NULLS LAST LIMIT 20;" \
+        2>/dev/null || echo -e "${YELLOW}  -> Could not read pg_stat_activity.${NC}"
+}
+
 run_backend_migrations() {
     local user_args=()
     if [ "${1:-}" = "--root" ]; then
         user_args=(--user root)
     fi
 
-    local migrate_db
+    local migrate_db timeout_seconds rc
     migrate_db="$(get_migration_database_alias)"
+    timeout_seconds="${MIGRATION_TIMEOUT_SECONDS:-900}"
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
-    docker compose -f "$COMPOSE_FILE" exec -T "${user_args[@]}" backend \
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+        "${user_args[@]}" \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
+        -e SMSLY_MIGRATION_MODE=true \
+        backend timeout "$timeout_seconds" \
         python manage.py migrate --database="$migrate_db" --noinput
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 124 ]; then
+            echo -e "${RED}  x Migrations timed out after ${timeout_seconds}s.${NC}"
+        else
+            echo -e "${RED}  x Migrations exited with status ${rc}.${NC}"
+        fi
+        diagnose_migration_locks
+        return "$rc"
+    fi
+    return 0
 }
 
 export_caddy_cloudflare_env() {
@@ -1180,7 +1246,7 @@ cleanup_on_failure() {
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
         echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
-        
+
         # Capture diagnostics BEFORE rollback deletes the containers
         if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" 2>/dev/null || true
@@ -1614,11 +1680,11 @@ bust_core_build_cache() {
 
     # Build cache only (no global container/image prune).
     docker builder prune -af >/dev/null 2>&1 || true
-    
+
     # NEW: Prune old unused images older than 7 days to prevent disk space exhaustion.
     echo -e "${BLUE}  -> Pruning deeply stale images (>7 days old)...${NC}"
     docker image prune -a -f --filter "until=168h" >/dev/null 2>&1 || true
-    
+
     echo -e "${GREEN}  OK Cache bust complete (targeted images + build cache + deep prune)${NC}"
 }
 
@@ -2132,15 +2198,15 @@ if ! is_checkpoint_done "update_git_synced"; then
     fi
 
     echo -e "${BLUE}  → Force-pulling latest code from GitHub ($SMSLY_BRANCH)...${NC}"
-    
+
     # Track if git update succeeded
     GIT_UPDATE_OK=true
-    
+
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠️ Git fetch failed for $SMSLY_BRANCH.${NC}"
         GIT_UPDATE_OK=false
     fi
-    
+
     if [ "$GIT_UPDATE_OK" = "true" ]; then
         if ! git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
             echo -e "${YELLOW}  ⚠️ Git reset failed.${NC}"
@@ -2222,13 +2288,13 @@ fi
         echo -e "${YELLOW}  ⚠ Disk space low (${DISK_AVAIL_MB}MB). Running Docker prune...${NC}"
         docker container prune -f || true
         docker image prune -f || true # Only dangling images by default
-        
+
         if [ "$DISK_AVAIL_MB" -lt 2000 ]; then
             echo -e "${RED}  ⚠ Disk space CRITICAL. Running aggressive prune...${NC}"
             docker image prune -af || true
             bust_core_build_cache
         fi
-        
+
         DISK_AVAIL_MB=$(df -BM "$INSTALL_DIR" | tail -1 | awk '{print $4}' | tr -d 'M')
         echo -e "${BLUE}  → Disk space after cleanup: ${DISK_AVAIL_MB}MB${NC}"
         if [ "$DISK_AVAIL_MB" -lt 1000 ]; then
@@ -3101,7 +3167,7 @@ else
             CLONE_SUCCESS=true
         fi
     fi
-    
+
     if [ "$CLONE_SUCCESS" = "false" ]; then
         echo -e "${YELLOW}  ⚠️ Git clone/fetch failed.${NC}"
         if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
@@ -3174,6 +3240,7 @@ fi
 
 echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
+wait_for_apt_lock
 apt-get update -qq
 apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
 
@@ -3185,6 +3252,7 @@ if ! command -v docker &> /dev/null; then
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    wait_for_apt_lock
     apt-get update -qq
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
@@ -3194,6 +3262,7 @@ fi
 # Ensure docker compose is available
 if ! docker compose version >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
+    wait_for_apt_lock
     apt-get install -y docker-compose-plugin || true
 fi
 
@@ -3430,6 +3499,10 @@ DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_ho
 # The installer runs first-boot Django setup explicitly after the stack starts.
 # Keep the web container from doing the same work while Compose is waiting on health.
 SMSLY_RUN_ENTRYPOINT_TASKS=false
+
+# AppConfig.ready() must stay side-effect free during installs and management commands.
+# Edge/proxy sync is performed explicitly by the installer and watcher services.
+SMSLY_ENABLE_STARTUP_CADDY_SYNC=false
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
@@ -3770,6 +3843,7 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
         elif ! command -v caddy &> /dev/null; then
             # Fallback 2: Install stock Caddy from apt (no wildcard SSL, but basic HTTPS works)
             echo -e "${YELLOW}  ⚠ Download also failed — installing stock Caddy (no wildcard SSL)...${NC}"
+            wait_for_apt_lock
             apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
@@ -4027,7 +4101,7 @@ sleep 2
 if systemctl is-active --quiet caddy; then
     echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
     fi
-    
+
     safe_refresh_runtime_services
     set_checkpoint "caddy_configured"
 fi
@@ -4351,11 +4425,11 @@ if [ -d "$INSTALL_DIR/cli" ]; then
     # Use --break-system-packages for modern Python (Ubuntu 24.04+)
     pip3 install -q --break-system-packages "$INSTALL_DIR/cli" 2>/dev/null || \
         pip3 install -q "$INSTALL_DIR/cli" 2>/dev/null || true
-    
+
     # Ensure binary is in path (pip usually puts it in /usr/local/bin)
     if command -v smsly &> /dev/null; then
         echo -e "${GREEN}  ✓ CLI installed: run 'smsly login' or 'smsly --help'${NC}"
-        
+
         # Auto-configuration for local host
         if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
             URL_SCHEME="https" && [ "$USE_SSL" != "true" ] && URL_SCHEME="http"
@@ -4363,8 +4437,8 @@ if [ -d "$INSTALL_DIR/cli" ]; then
         else
             API_URL="http://127.0.0.1:8090"
         fi
-        
-        # Best effort: don't auto-login yet (token is in creds file), 
+
+        # Best effort: don't auto-login yet (token is in creds file),
         # but let the user know their URL is pre-linked.
         echo -e "${BLUE}  → Your local API URL: $API_URL${NC}"
     else

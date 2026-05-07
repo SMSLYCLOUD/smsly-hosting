@@ -130,13 +130,14 @@ try:
     import importlib
     _db_url = config('DATABASE_URL', default='')
     if _db_url and 'manage.py' not in sys.argv[0:1]:
-        # Defer actual import to avoid circular dependency during startup
-        pass  # Will be handled by the ready() hook below
+        # Defer actual import to avoid circular dependency during startup.
+        # Runtime domain patches are applied after explicit PlatformConfig saves.
+        pass
 except Exception:
     pass
 
 def _patch_allowed_hosts_from_db():
-    """Called from AppConfig.ready() to add PlatformConfig.domain."""
+    """Add PlatformConfig.domain to host/origin settings after Django is ready."""
     import sys
     # Avoid DB access during migrations or common management tasks to prevent RuntimeWarning
     if any(arg in sys.argv for arg in ('makemigrations', 'migrate', 'collectstatic', 'test', 'check')):
