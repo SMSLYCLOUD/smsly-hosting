@@ -143,7 +143,7 @@ export function Navbar() {
     <nav
         className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
     >
-      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[1440px] mx-auto">
+      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[1800px] mx-auto">
 
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
@@ -289,7 +289,7 @@ export function Navbar() {
       {/* Row 2+3: Infrastructure & Tools ΓÇö single container, divided */}
       {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
         <div className="hidden md:block border-t border-white/5 bg-[#0a0c10]/80 backdrop-blur-md">
-          <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[1440px] mx-auto">
+          <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[1800px] mx-auto">
             {/* Infrastructure row */}
             <div className="flex items-center justify-center gap-1 py-1">
               <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Infra</span>

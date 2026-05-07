@@ -1,122 +1,296 @@
-import React, { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+'use client';
 
-interface RiskReport {
-    risk_level: string;
-    risk_score: number;
-    summary: string;
-    reasons: string[];
-    recommendations: string[];
+import React, { useState, useEffect } from 'react';
+import { 
+  ShieldCheck, 
+  Database, 
+  GitBranch, 
+  Loader2, 
+  AlertTriangle, 
+  CheckCircle2, 
+  Trash2, 
+  RefreshCcw,
+  ExternalLink,
+  Info
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { toast } from '@/components/ui/use-toast';
+import { api } from '@/lib/api';
+
+interface SafeDeployPanelProps {
+  serviceId: string;
 }
 
-interface PreviewEnvironment {
-    id: string;
-    branch_name: string;
-    commit_sha: string;
-    status: string;
-    preview_url?: string;
-    migration_validation?: {
-        risk_level: string;
-        risk_score: number;
-        summary: string;
-        reasons: string[];
-        recommendations: string[];
-        requires_manual_approval: boolean;
-    };
-}
+export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId }) => {
+  const [previews, setPreviews] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [branchName, setBranchName] = useState('');
+  const [commitSha, setCommitSha] = useState('');
 
-export function SafeDeployPanel({ serviceId, preview }: { serviceId: string, preview: PreviewEnvironment }) {
-    const [isApproving, setIsApproving] = useState(false);
+  const fetchPreviews = async () => {
+    try {
+      const res = await api.get(`/services/${serviceId}/previews/`);
+      setPreviews(res.data);
+    } catch (err) {
+      console.error('Failed to fetch previews', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const handleApprove = async () => {
-        setIsApproving(true);
-        try {
-            await fetch(`/api/v1/services/${serviceId}/approvals/mock-deploy-id/approve/`, { method: 'POST' });
-            alert("Deployment Approved!");
-        } catch (e) {
-            alert("Approval failed.");
-        } finally {
-            setIsApproving(false);
-        }
-    };
+  useEffect(() => {
+    fetchPreviews();
+    const interval = setInterval(fetchPreviews, 10000); // Poll every 10s
+    return () => clearInterval(interval);
+  }, [serviceId]);
 
-    const riskColor = (level: string) => {
-        switch(level) {
-            case 'LOW': return 'bg-green-100 text-green-800 border-green-300';
-            case 'MEDIUM': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-            case 'HIGH': return 'bg-orange-100 text-orange-800 border-orange-300';
-            case 'CRITICAL': return 'bg-red-100 text-red-800 border-red-300';
-            default: return 'bg-gray-100 text-gray-800';
-        }
-    };
+  const handleCreatePreview = async () => {
+    if (!branchName || !commitSha) {
+      toast({
+        title: 'Validation Error',
+        description: 'Branch and Commit SHA are required',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    return (
-        <div className="space-y-4">
-            <Card>
-                <CardHeader>
-                    <CardTitle>Branch Preview: {preview.branch_name}</CardTitle>
-                    <CardDescription>Commit: {preview.commit_sha.substring(0,7)}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="flex items-center space-x-2 mb-4">
-                        <span className="font-semibold">Status:</span>
-                        <Badge variant="outline">{preview.status}</Badge>
-                        {preview.preview_url && (
-                            <a href={preview.preview_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline text-sm ml-4">
-                                View Preview ↗
-                            </a>
-                        )}
-                    </div>
+    setCreating(true);
+    try {
+      await api.post(`/services/${serviceId}/previews/`, {
+        branch_name: branchName,
+        commit_sha: commitSha
+      });
+      toast({
+        title: 'SafeDeploy Initiated',
+        description: 'Preview environment provisioning started.',
+      });
+      setBranchName('');
+      setCommitSha('');
+      fetchPreviews();
+    } catch (err: any) {
+      toast({
+        title: 'Deployment Failed',
+        description: err.response?.data?.error || 'Failed to create preview',
+        variant: 'destructive',
+      });
+    } finally {
+      setCreating(false);
+    }
+  };
 
-                    {preview.migration_validation && (
-                        <div className="mt-6 border rounded-md p-4 bg-slate-50">
-                            <h3 className="text-lg font-medium mb-2 flex items-center gap-2">
-                                <AlertTriangle className="h-5 w-5 text-slate-600" />
-                                Migration Risk Report
-                            </h3>
-                            <Badge className={riskColor(preview.migration_validation.risk_level)}>
-                                {preview.migration_validation.risk_level} RISK (Score: {preview.migration_validation.risk_score})
-                            </Badge>
+  const handleDeletePreview = async (previewId: string) => {
+    try {
+      await api.post(`/services/${serviceId}/previews/${previewId}/destroy_preview/`);
+      toast({
+        title: 'Teardown Initiated',
+        description: 'SafeDeploy environment is being removed.',
+      });
+      fetchPreviews();
+    } catch (err) {
+      toast({
+        title: 'Action Failed',
+        description: 'Failed to destroy preview environment.',
+        variant: 'destructive',
+      });
+    }
+  };
 
-                            <p className="mt-2 text-sm text-slate-700">{preview.migration_validation.summary}</p>
+  const getRiskColor = (level: string) => {
+    switch (level?.toUpperCase()) {
+      case 'LOW': return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+      case 'MEDIUM': return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
+      case 'HIGH': return 'bg-orange-500/10 text-orange-500 border-orange-500/20';
+      case 'CRITICAL': return 'bg-red-500/10 text-red-500 border-red-500/20';
+      default: return 'bg-muted text-muted-foreground border-border';
+    }
+  };
 
-                            {preview.migration_validation.reasons.length > 0 && (
-                                <div className="mt-4">
-                                    <h4 className="text-sm font-semibold mb-1">Detected Issues:</h4>
-                                    <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
-                                        {preview.migration_validation.reasons.map((r, i) => <li key={i}>{r}</li>)}
-                                    </ul>
-                                </div>
-                            )}
-
-                            {preview.migration_validation.recommendations.length > 0 && (
-                                <div className="mt-4">
-                                    <h4 className="text-sm font-semibold mb-1">Recommendations:</h4>
-                                    <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
-                                        {preview.migration_validation.recommendations.map((r, i) => <li key={i}>{r}</li>)}
-                                    </ul>
-                                </div>
-                            )}
-
-                            {preview.migration_validation.requires_manual_approval && (
-                                <div className="mt-6 flex space-x-3">
-                                    <Button onClick={handleApprove} disabled={isApproving} className="bg-green-600 hover:bg-green-700 text-white">
-                                        {isApproving ? <Loader2 className="h-4 w-4 animate-spin mr-2"/> : <CheckCircle2 className="h-4 w-4 mr-2"/>}
-                                        Approve Production Deploy
-                                    </Button>
-                                    <Button variant="destructive">
-                                        <XCircle className="h-4 w-4 mr-2"/>
-                                        Reject
-                                    </Button>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-bold flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-primary" />
+            SafeDeploy Environments
+          </h3>
+          <p className="text-sm text-muted-foreground mt-1">Clone production DB and validate migrations on ephemeral branches.</p>
         </div>
-    );
-}
+      </div>
+
+      {/* Creation Form */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold">Provisional Environment</CardTitle>
+          <CardDescription>Deploy an isolated copy of this service with a cloned production database.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="branch-name" className="text-xs">Target Branch</Label>
+              <div className="relative">
+                <GitBranch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input 
+                  id="branch-name"
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                  placeholder="e.g. feature/new-auth"
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="commit-sha" className="text-xs">Commit SHA</Label>
+              <Input 
+                id="commit-sha"
+                value={commitSha}
+                onChange={(e) => setCommitSha(e.target.value)}
+                placeholder="e.g. a1b2c3d"
+              />
+            </div>
+            <div className="flex items-end">
+              <Button 
+                onClick={handleCreatePreview}
+                disabled={creating}
+                className="w-full gap-2"
+              >
+                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
+                Create Preview
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Previews List */}
+      <div className="space-y-4">
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="w-8 h-8 text-primary animate-spin" />
+          </div>
+        ) : previews.length === 0 ? (
+          <div className="text-center py-12 bg-muted/30 border border-dashed border-border rounded-xl">
+            <Database className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-muted-foreground text-sm font-medium">No active previews found for this service.</p>
+          </div>
+        ) : (
+          previews.map((preview) => (
+            <Card key={preview.id} className="overflow-hidden border-border bg-card">
+              <div className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className="mt-1 p-2 bg-primary/10 rounded-lg">
+                    <GitBranch className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-foreground">{preview.branch_name}</span>
+                      <Badge variant="secondary" className="font-mono text-[10px]">
+                        {preview.commit_sha.substring(0, 7)}
+                      </Badge>
+                      <Badge className={`text-[10px] font-bold ${
+                        preview.status === 'READY' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                        preview.status.includes('FAILED') ? 'bg-red-500/10 text-red-500 border-red-500/20' :
+                        'bg-muted text-muted-foreground'
+                      }`}>
+                        {preview.status}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground font-medium">
+                      <span className="flex items-center gap-1">
+                        <Database className="w-3.5 h-3.5" />
+                        {preview.database_clone?.clone_database_name || 'Allocating...'}
+                      </span>
+                      {preview.preview_url && (
+                        <a 
+                          href={preview.preview_url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-primary hover:underline transition-colors"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Visit Preview
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" className="gap-2 font-bold h-9">
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                    Rebuild
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => handleDeletePreview(preview.id)}
+                    className="text-muted-foreground hover:text-red-500 h-9 w-9"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Status Details */}
+              <div className="px-5 py-4 bg-muted/20 border-t border-border grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Database Clone Info */}
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+                    <Database className="w-3 h-3" />
+                    Snapshot Status
+                  </h4>
+                  <div className="p-3 bg-muted/40 rounded-lg border border-border">
+                    {preview.database_clone ? (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-foreground">{preview.database_clone.status}</span>
+                        {preview.database_clone.status === 'READY' && (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground italic">Initializing clone...</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Migration Risk Info */}
+                <div className="space-y-2">
+                  <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
+                    <AlertTriangle className="w-3 h-3" />
+                    Migration Impact
+                  </h4>
+                  <div className={`p-3 rounded-lg border flex items-center justify-between ${
+                    preview.migration_validation ? getRiskColor(preview.migration_validation.risk_level) : 'bg-muted/40 border-border text-muted-foreground'
+                  }`}>
+                    {preview.migration_validation ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold">{preview.migration_validation.risk_level} RISK</span>
+                          <span className="text-[10px] font-bold opacity-70">Score: {preview.migration_validation.risk_score}</span>
+                        </div>
+                        <Info className="w-4 h-4 opacity-50 cursor-help" />
+                      </>
+                    ) : (
+                      <p className="text-sm italic font-medium">Pending Analysis</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Risk Summary if exists */}
+              {preview.migration_validation?.summary && (
+                <div className="px-5 py-3 bg-card border-t border-border text-[11px] text-muted-foreground font-medium">
+                  <p className="line-clamp-2 leading-relaxed">{preview.migration_validation.summary}</p>
+                </div>
+              )}
+            </Card>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};

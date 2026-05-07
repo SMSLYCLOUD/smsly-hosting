@@ -38,12 +38,17 @@ export default function DashboardPage() {
   const hasShownLoadError = useRef(false);
 
   useEffect(() => {
-    // Show warning if logged in as 'admin' and not dismissed
-    if (user?.username === 'admin' && typeof window !== 'undefined') {
-      const dismissed = localStorage.getItem('password_warning_dismissed');
-      if (!dismissed) setShowPasswordWarning(true);
+    if (!data || typeof window === 'undefined') return;
+    
+    const hasDefaultPasswordAlert = data.alerts.some((a: any) => a.id === 'default_password');
+    const dismissed = localStorage.getItem('password_warning_dismissed');
+    
+    if (hasDefaultPasswordAlert && !dismissed) {
+      setShowPasswordWarning(true);
+    } else {
+      setShowPasswordWarning(false);
     }
-  }, [user]);
+  }, [data]);
 
   useEffect(() => {
     const fetchData = async () => {

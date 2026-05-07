@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from .models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentApproval, DeploymentArtifact
 from .serializers_transfer import ServerTransferSerializer, ServerTransferCreateSerializer
 
 
@@ -260,3 +261,34 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
             }
             for d in obj.domain_instances.all()
         ]
+
+# --- SafeDeploy Serializers ---
+
+class DatabaseCloneSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DatabaseClone
+        fields = '__all__'
+
+class MigrationValidationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MigrationValidation
+        fields = '__all__'
+
+class DeploymentArtifactSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeploymentArtifact
+        fields = '__all__'
+
+class DeploymentApprovalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeploymentApproval
+        fields = '__all__'
+
+class PreviewEnvironmentSerializer(serializers.ModelSerializer):
+    database_clone = DatabaseCloneSerializer(read_only=True)
+    migration_validation = MigrationValidationSerializer(read_only=True)
+    artifacts = DeploymentArtifactSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = PreviewEnvironment
+        fields = '__all__'

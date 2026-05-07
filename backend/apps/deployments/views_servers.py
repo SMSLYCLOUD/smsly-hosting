@@ -484,7 +484,7 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
             "name", "host", "private_ip", "api_url", "api_token",
             "gateway_secret", "ssh_user", "ssh_password", "ssh_key",
             "ssh_port", "is_primary", "allow_user_workloads",
-            "provider_metadata",
+            "provider_metadata", "is_lite_agent",
         ]
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
@@ -530,7 +530,7 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         fields = [
             "name", "host", "ssh_port", "ssh_user",
             "ssh_password", "ssh_key", "ssh_auth_method",
-            "is_primary", "allow_user_workloads",
+            "is_primary", "allow_user_workloads", "is_lite_agent",
         ]
         extra_kwargs = {
             "ssh_password": {"write_only": True},

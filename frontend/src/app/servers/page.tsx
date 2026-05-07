@@ -103,6 +103,7 @@ export default function ServersPage() {
         name: '', host: '', private_ip: '', api_url: '', api_token: '',
         gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
         ssh_port: 22, is_primary: false, allow_user_workloads: true,
+        is_lite_agent: false,
     });
 
     // Provision form
@@ -110,7 +111,7 @@ export default function ServersPage() {
         name: '', host: '', ssh_port: 22, ssh_user: 'root',
         ssh_auth_method: 'password' as 'password' | 'key',
         ssh_password: '', ssh_key: '', is_primary: false,
-        allow_user_workloads: true,
+        allow_user_workloads: true, is_lite_agent: false,
     });
 
     const fetchServers = useCallback(async () => {
@@ -164,6 +165,7 @@ export default function ServersPage() {
                 name: '', host: '', private_ip: '', api_url: '', api_token: '',
                 gateway_secret: '', ssh_user: 'root', ssh_password: '', ssh_key: '',
                 ssh_port: 22, is_primary: false, allow_user_workloads: true,
+                is_lite_agent: false,
             });
             fetchServers();
         } catch (err: any) {
@@ -180,7 +182,7 @@ export default function ServersPage() {
             setProvisionForm({
                 name: '', host: '', ssh_port: 22, ssh_user: 'root',
                 ssh_auth_method: 'password', ssh_password: '', ssh_key: '',
-                is_primary: false, allow_user_workloads: true,
+                is_primary: false, allow_user_workloads: true, is_lite_agent: false,
             });
             fetchServers();
             // Auto-open provision logs
@@ -347,16 +349,27 @@ export default function ServersPage() {
                                             </div>
                                             <div>
                                                 <label className="text-xs font-medium text-muted-foreground">Workload Target</label>
-                                                <label className="mt-2 flex items-center gap-2 text-sm">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={provisionForm.allow_user_workloads}
-                                                        disabled={provisionForm.is_primary}
-                                                        onChange={e => setProvisionForm({ ...provisionForm, allow_user_workloads: e.target.checked })}
-                                                        className="rounded"
-                                                    />
-                                                    Allow user deployments
-                                                </label>
+                                                <div className="mt-2 space-y-2">
+                                                    <label className="flex items-center gap-2 text-sm">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provisionForm.allow_user_workloads}
+                                                            disabled={provisionForm.is_primary}
+                                                            onChange={e => setProvisionForm({ ...provisionForm, allow_user_workloads: e.target.checked })}
+                                                            className="rounded"
+                                                        />
+                                                        Allow user deployments
+                                                    </label>
+                                                    <label className="flex items-center gap-2 text-sm">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={provisionForm.is_lite_agent}
+                                                            onChange={e => setProvisionForm({ ...provisionForm, is_lite_agent: e.target.checked })}
+                                                            className="rounded"
+                                                        />
+                                                        Lite Agent (Edge Node)
+                                                    </label>
+                                                </div>
                                             </div>
                                             <div>
                                                 <label className="text-xs font-medium text-muted-foreground">SSH User</label>
@@ -590,6 +603,15 @@ export default function ServersPage() {
                                                         className="rounded"
                                                     />
                                                     Allow user deployments
+                                                </label>
+                                                <label className="flex items-center gap-2 text-sm">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={connectForm.is_lite_agent}
+                                                        onChange={e => setConnectForm({ ...connectForm, is_lite_agent: e.target.checked })}
+                                                        className="rounded"
+                                                    />
+                                                    Lite Agent (Edge Node)
                                                 </label>
                                             </div>
                                             <div className="flex gap-2">
