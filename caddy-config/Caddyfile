@@ -7,7 +7,7 @@
     }
 }
 
-cloud.smsly.cloud {
+{$DOMAIN} {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
@@ -18,23 +18,9 @@ cloud.smsly.cloud {
     }
 }
 
-*.cloud.smsly.cloud {
+*.{$DOMAIN} {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
-    @remote_hosts_0 host friend-maker-bc8a2b.cloud.smsly.cloud smsly-helper-dbc499.cloud.smsly.cloud smsly-marketer-77887a.cloud.smsly.cloud
-    handle @remote_hosts_0 {
-        reverse_proxy https://10.150.0.2 {
-            header_up Host {host}
-            transport http {
-                tls
-                tls_server_name {host}
-            }
-        }
-    }
-    @known_hosts host addon-minio-2bd08022.cloud.smsly.cloud addon-minio-a4f58193.cloud.smsly.cloud addon-rabbitmq-24f2b594.cloud.smsly.cloud friend-maker-bc8a2b.cloud.smsly.cloud friend-maker-demo-15bd84.cloud.smsly.cloud smsly-helper-dbc499.cloud.smsly.cloud smsly-marketer-77887a.cloud.smsly.cloud smsly-security-gateway-62100d.cloud.smsly.cloud
-    handle @known_hosts {
-        reverse_proxy localhost:8081
     }
     handle {
         respond "Service Not Found" 404
@@ -42,48 +28,12 @@ cloud.smsly.cloud {
 }
 
 :80 {
-    @has_host header_regexp host .+
-    redir @has_host https://{host}{uri} 308
+    @not_ip {
+        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
+        header_regexp host .+
+    }
+    redir @not_ip https://{host}{uri} 308
     handle {
         reverse_proxy localhost:8090
-    }
-}
-
-azabtc.online {
-    tls {
-        on_demand
-    }
-    reverse_proxy https://10.150.0.2 {
-        header_up Host friend-maker-bc8a2b.cloud.smsly.cloud
-        transport http {
-            tls
-            tls_server_name friend-maker-bc8a2b.cloud.smsly.cloud
-        }
-    }
-}
-
-ignite.smsly.cloud {
-    tls {
-        on_demand
-    }
-    reverse_proxy https://10.150.0.2 {
-        header_up Host smsly-marketer-77887a.cloud.smsly.cloud
-        transport http {
-            tls
-            tls_server_name smsly-marketer-77887a.cloud.smsly.cloud
-        }
-    }
-}
-
-intelliphoton.com {
-    tls {
-        on_demand
-    }
-    reverse_proxy https://10.150.0.2 {
-        header_up Host smsly-helper-dbc499.cloud.smsly.cloud
-        transport http {
-            tls
-            tls_server_name smsly-helper-dbc499.cloud.smsly.cloud
-        }
     }
 }

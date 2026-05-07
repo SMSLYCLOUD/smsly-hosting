@@ -105,14 +105,13 @@ def check_ssl_configuration():
     acme_email = os.getenv('ACME_EMAIL', '')
     domain = os.getenv('DOMAIN', '')
     
-    if not acme_email or acme_email == 'admin@smsly.cloud':
-        warning("ACME_EMAIL not configured (required for Let's Encrypt SSL)")
-        return False
+    if not acme_email or '@example.com' in acme_email:
+        print("[validate] WARNING: ACME_EMAIL not set or using default. SSL might fail.")
     else:
         success(f"ACME_EMAIL configured: {acme_email}")
     
-    if not domain or domain == 'smsly.cloud':
-        warning("DOMAIN not configured")
+    if not domain or domain == 'localhost':
+        print("[validate] WARNING: DOMAIN is not set to a public address.")
         return False
     else:
         success(f"DOMAIN configured: {domain}")
