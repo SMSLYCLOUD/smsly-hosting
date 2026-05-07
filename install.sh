@@ -6,7 +6,7 @@
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
-#   1. IP Mode (HTTP :8090) - Quick start, no domain needed.
+#   1. IP Mode (HTTP :80)   - Quick start, no domain needed.
 #   2. SSL Mode (HTTPS)     - Production ready, requires domain + DNS.
 #
 # Usage:
@@ -88,16 +88,27 @@ fi
 
 # ─── Lock File Check ─────────────────────────────────────────────────────────
 LOCK_FILE="/tmp/smsly-install.lock"
-trap "rm -f $LOCK_FILE" EXIT
-if [ -f "$LOCK_FILE" ]; then
-    PID=$(cat "$LOCK_FILE")
-    if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
-        echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
+if command -v flock >/dev/null 2>&1; then
+    exec 9<>"$LOCK_FILE"
+    if ! flock -n 9; then
+        PID="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+        echo -e "\033[0;31mERROR: Another installer instance${PID:+ (PID $PID)} is already running.\033[0m"
         echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
         exit 1
     fi
+    : > "$LOCK_FILE"
+    echo "$$" > "$LOCK_FILE"
+else
+    if [ -f "$LOCK_FILE" ]; then
+        PID=$(cat "$LOCK_FILE")
+        if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
+            echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
+            echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+            exit 1
+        fi
+    fi
+    echo $$ > "$LOCK_FILE"
 fi
-echo $$ > "$LOCK_FILE"
 trap "rm -f $LOCK_FILE" EXIT
 # Provisioning can pass SMSLY_INSTALL_WORKDIR to use a prepared local source tree.
 if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
@@ -912,6 +923,7 @@ COMPOSE_FILE="docker-compose.prod.yml"
 # Do not layer docker-compose.socket-proxy.yml on top of it or Docker Compose
 # will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
+CADDY_LAST_GOOD="/etc/caddy/Caddyfile.smsly-last-good"
 
 get_migration_database_alias() {
     local migrate_db
@@ -938,6 +950,96 @@ run_backend_migrations() {
     echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
     docker compose -f "$COMPOSE_FILE" exec -T "${user_args[@]}" backend \
         python manage.py migrate --database="$migrate_db" --noinput
+}
+
+export_caddy_cloudflare_env() {
+    local override_file="/etc/systemd/system/caddy.service.d/override.conf"
+    local cf_val=""
+
+    if [ -f "$override_file" ]; then
+        cf_val="$(grep 'CLOUDFLARE_API_TOKEN=' "$override_file" 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"//g' || true)"
+    fi
+    if [ -n "$cf_val" ]; then
+        export CLOUDFLARE_API_TOKEN="$cf_val"
+    fi
+}
+
+restore_last_good_caddy() {
+    if [ ! -f "$CADDY_LAST_GOOD" ]; then
+        return 1
+    fi
+    echo -e "${YELLOW}  -> Restoring last known-good Caddyfile${NC}"
+    cp "$CADDY_LAST_GOOD" /etc/caddy/Caddyfile
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+    else
+        systemctl restart caddy >/dev/null 2>&1 || true
+    fi
+}
+
+reload_caddy_preserving_previous() {
+    local previous_file="${1:-}"
+
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1
+    else
+        systemctl restart caddy >/dev/null 2>&1
+    fi
+
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$CADDY_LAST_GOOD" 2>/dev/null || true
+        return 0
+    fi
+
+    echo -e "${YELLOW}  WARN Caddy reload failed. Restoring previous config...${NC}"
+    if [ -n "$previous_file" ] && [ -f "$previous_file" ]; then
+        cp "$previous_file" /etc/caddy/Caddyfile
+    else
+        restore_last_good_caddy || true
+    fi
+
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+    else
+        systemctl restart caddy >/dev/null 2>&1 || true
+    fi
+
+    systemctl is-active --quiet caddy 2>/dev/null
+}
+
+install_caddyfile_atomically() {
+    local candidate="$1"
+    local label="${2:-Caddyfile}"
+    local previous="/etc/caddy/Caddyfile.prev.$$"
+
+    if [ ! -f "$candidate" ]; then
+        echo -e "${YELLOW}  WARN $label candidate missing: $candidate${NC}"
+        return 1
+    fi
+
+    mkdir -p /etc/caddy
+    [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$previous" 2>/dev/null || true
+    export_caddy_cloudflare_env
+
+    if command -v caddy >/dev/null 2>&1; then
+        caddy fmt --overwrite "$candidate" >/dev/null 2>&1 || true
+        if ! caddy validate --config "$candidate" >/dev/null 2>&1; then
+            echo -e "${YELLOW}  WARN $label candidate failed validation. Keeping current Caddyfile.${NC}"
+            rm -f "$previous"
+            return 1
+        fi
+    fi
+
+    install -m 0644 "$candidate" /etc/caddy/Caddyfile
+    if reload_caddy_preserving_previous "$previous"; then
+        [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$CADDY_LAST_GOOD" 2>/dev/null || true
+        rm -f "$previous"
+        return 0
+    fi
+
+    rm -f "$previous"
+    echo -e "${YELLOW}  WARN $label was not applied because Caddy could not reload safely.${NC}"
+    return 1
 }
 
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
@@ -1015,10 +1117,15 @@ cleanup_on_failure() {
 
         echo -e "${YELLOW}  → Rolling back...${NC}"
 
-        # Stop any containers that were started
-        if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        restore_last_good_caddy >/dev/null 2>&1 || true
+
+        # Do not tear down a live platform on install/update failure by default.
+        # Use SMSLY_ROLLBACK_DOWN=true only for intentionally destructive lab runs.
+        if [ "${SMSLY_ROLLBACK_DOWN:-false}" = "true" ] && [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
             cd "$INSTALL_DIR" 2>/dev/null || true
             docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+        else
+            echo -e "${YELLOW}  Runtime containers left running to avoid avoidable downtime.${NC}"
         fi
 
         # Restore backup .env if one was created
@@ -1199,6 +1306,7 @@ ensure_container_on_network() {
 # - Detects dns cloudflare + missing systemd override (validates passes, runtime crashes)
 generate_safe_caddyfile() {
     local reason="${1:-unknown}"
+    local candidate="/etc/caddy/Caddyfile.safe.$$"
     echo -e "${YELLOW}  ⚠ Generating safe fallback Caddyfile (reason: $reason)...${NC}"
 
     # 1. Discover domain: DB first, .env fallback
@@ -1238,7 +1346,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # 4. Build the Caddyfile
     if [ "$is_real_domain" = "true" ]; then
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 # Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
 # Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
@@ -1260,7 +1368,7 @@ ${domain} {
 ${svc_blocks}
 SAFECADDY
     else
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 :80 {
     reverse_proxy localhost:8090
@@ -1273,20 +1381,19 @@ SAFECADDY
 ${svc_blocks}
 SAFECADDY
     fi
-    caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
-    echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
+    if install_caddyfile_atomically "$candidate" "safe fallback Caddyfile"; then
+        rm -f "$candidate"
+        echo -e "${YELLOW}  Safe fallback Caddyfile applied.${NC}"
+        return 0
+    fi
+    rm -f "$candidate"
+    return 1
 }
 
 # Returns 0 if Caddy config needs fixing, 1 if it's fine.
 caddy_needs_fix() {
     # Export CF token from systemd override so caddy validate can resolve {env.CLOUDFLARE_API_TOKEN}
-    if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
-        local cf_val
-        cf_val="$(grep 'CLOUDFLARE_API_TOKEN=' /etc/systemd/system/caddy.service.d/override.conf 2>/dev/null | sed 's/.*CLOUDFLARE_API_TOKEN=//;s/"//g' || true)"
-        if [ -n "$cf_val" ]; then
-            export CLOUDFLARE_API_TOKEN="$cf_val"
-        fi
-    fi
+    export_caddy_cloudflare_env
 
     if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
@@ -1326,8 +1433,8 @@ restart_edge_stack() {
     local edge_services="socket-proxy traefik route-fallback nginx"
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
 
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
@@ -1336,16 +1443,15 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
+    docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
+        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
+
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-        if systemctl is-active --quiet caddy 2>/dev/null; then
-            systemctl reload caddy >/dev/null 2>&1 || true
-        else
-            systemctl restart caddy >/dev/null 2>&1 || true
-        fi
+        reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
         systemctl restart caddy-watcher >/dev/null 2>&1 || true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
@@ -1403,8 +1509,8 @@ refresh_runtime_services() {
     fi
 
     if [ "${#app_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${app_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${app_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d "${app_services[@]}" >/dev/null 2>&1 || true
     fi
 
     ensure_container_on_network "smsly-net" "smsly-hosting-pgcat-1"
@@ -1437,14 +1543,17 @@ refresh_runtime_services() {
     done
 
     if [ "${#failed_services[@]}" -eq 0 ] && [ "${#edge_services[@]}" -gt 0 ]; then
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
+            docker compose -f "$COMPOSE_FILE" up -d "${edge_services[@]}" >/dev/null 2>&1 || true
 
         ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
+            docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
 
         for svc in "${edge_services[@]}"; do
             container_name="smsly-hosting-${svc}-1"
@@ -1461,11 +1570,7 @@ refresh_runtime_services() {
         return 1
     fi
 
-    if systemctl is-active --quiet caddy 2>/dev/null; then
-        systemctl reload caddy >/dev/null 2>&1 || true
-    else
-        systemctl restart caddy >/dev/null 2>&1 || true
-    fi
+    reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
@@ -1677,11 +1782,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
-    if systemctl is-active --quiet caddy 2>/dev/null; then
-        systemctl reload caddy >/dev/null 2>&1 || true
-    else
-        systemctl restart caddy >/dev/null 2>&1 || true
-    fi
+    reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
     sleep 3
 
@@ -1991,7 +2092,7 @@ fi
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat nginx traefik socket-proxy route-fallback"
+            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
 
             # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
             # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
@@ -2018,7 +2119,7 @@ fi
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --force-recreate $CORE_SERVICES
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps $CORE_SERVICES
 
             # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
             #    (recreation drops Docker DNS links — causes 502 gateway errors)
@@ -2294,8 +2395,8 @@ ${cf_known_stanza}
 
 ${cf_svc_blocks}
 CFCADDY
-                caddy fmt --overwrite /etc/caddy/Caddyfile.tmp 2>/dev/null || true
-                mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
+                install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "wildcard Caddyfile" || true
+                rm -f /etc/caddy/Caddyfile.tmp
                 echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
             else
                 # IP mode or no domain — fall back to safe Caddyfile
@@ -2306,7 +2407,7 @@ CFCADDY
             generate_safe_caddyfile "update flow caddy regen"
 
             # Strip any leftover dns cloudflare blocks to prevent crash
-            if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
+            if false && grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
                 python3 -c "
 import re
@@ -2326,11 +2427,7 @@ print('Stripped tls blocks')
             generate_safe_caddyfile "post-update validation"
         fi
 
-        if systemctl is-active --quiet caddy 2>/dev/null; then
-            systemctl reload caddy 2>/dev/null || true
-        else
-            systemctl restart caddy 2>/dev/null || true
-        fi
+        reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
         systemctl restart caddy-watcher 2>/dev/null || true
 
         # Verify Caddy is running
@@ -2411,7 +2508,7 @@ if d and d != 'localhost':
     HTTPS_OK=false
     EP2_CODE="---"
     EP2_URL="(skipped)"
-    if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ]; then
+    if [ -n "$EP_DOMAIN" ] && [ "$EP_DOMAIN" != "localhost" ] && ! echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         EP2_URL="https://${EP_DOMAIN}/health"
         echo -e "${BLUE}        Endpoint: $EP2_URL${NC}"
         for attempt in 1 2 3; do
@@ -2434,6 +2531,10 @@ if d and d != 'localhost':
             echo -e "${YELLOW}        Fix: systemctl status caddy && journalctl -u caddy --no-pager -n 15${NC}"
             FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
+    elif [ -n "$EP_DOMAIN" ] && echo "$EP_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        EP2_URL="(skipped: IP mode)"
+        EP2_RESULT="${YELLOW}SKIP${NC}"
+        echo -e "${YELLOW}  [2/3] SKIPPED (HTTPS requires a domain name, not raw IP $EP_DOMAIN)${NC}"
     else
         EP2_RESULT="${YELLOW}SKIP${NC}"
         echo -e "${YELLOW}  ⊘ [2/3] SKIPPED (no domain configured)${NC}"
@@ -2903,7 +3004,7 @@ else
     PRESET_USE_SSL="${USE_SSL:-}"
 
     echo -e "\n${BLUE}Select Deployment Mode:${NC}"
-    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP:8090"
+    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
     echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
 
     # If any mode was pre-selected (even IP mode), skip prompting even in interactive shells.
@@ -3196,8 +3297,12 @@ fi
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
     set +e
-    docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+    docker compose -f "$COMPOSE_FILE" build
     DEPLOY_RC=$?
+    if [ "$DEPLOY_RC" -eq 0 ]; then
+        docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+        DEPLOY_RC=$?
+    fi
     set -e
     kill $HEARTBEAT_PID 2>/dev/null || true
     wait $HEARTBEAT_PID 2>/dev/null || true
@@ -3390,7 +3495,7 @@ if [ "$RUST_TWIN_MODE" = "true" ]; then
     cd rust_twin && export DOMAIN && export ACME_EMAIL && caddy fmt --overwrite Caddyfile 2>/dev/null || true
     cd ..
     # Swap the default Caddyfile path to point to the Rust Twin version
-    cp rust_twin/Caddyfile /etc/caddy/Caddyfile 2>/dev/null || true
+    install_caddyfile_atomically rust_twin/Caddyfile "Rust Twin Caddyfile" || true
 fi
 
 # ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
@@ -3517,7 +3622,7 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 
     if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
         # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
-        cat > /etc/caddy/Caddyfile <<CADDYEOF
+        cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
 # Grid Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
@@ -3561,6 +3666,8 @@ Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
 ENVEOF
         chmod 600 "$CADDY_OVERRIDE_FILE"
         systemctl daemon-reload
+        install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh wildcard Caddyfile" || generate_safe_caddyfile "fresh wildcard fallback"
+        rm -f /etc/caddy/Caddyfile.tmp
 
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
     else
@@ -3589,7 +3696,8 @@ CADDYEOF
             rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
             systemctl daemon-reload
         fi
-        mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
+        install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh HTTPS Caddyfile" || generate_safe_caddyfile "fresh HTTPS fallback"
+        rm -f /etc/caddy/Caddyfile.tmp
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
     fi
 else
@@ -3604,7 +3712,8 @@ CADDYEOF
         rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
         systemctl daemon-reload
     fi
-    mv /etc/caddy/Caddyfile.tmp /etc/caddy/Caddyfile
+    install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh IP-mode Caddyfile" || true
+    rm -f /etc/caddy/Caddyfile.tmp
     echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
 fi
 
@@ -3671,11 +3780,7 @@ for port in 80 443; do
     fi
 done
 
-if systemctl is-active --quiet caddy; then
-    systemctl reload caddy
-else
-    systemctl restart caddy
-fi
+reload_caddy_preserving_previous "" || true
 systemctl enable caddy >/dev/null 2>&1
 
 # Verify Caddy is running
