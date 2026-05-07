@@ -35,6 +35,16 @@ class AIProviderSettings(models.Model):
     deepseek_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     deepseek_model = models.CharField(max_length=100, default="deepseek-coder", blank=True)
 
+    # OpenAI-compatible Providers
+    openrouter_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    openrouter_model = models.CharField(max_length=100, default="openrouter/auto", blank=True)
+
+    groq_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    groq_model = models.CharField(max_length=100, default="llama-3.3-70b-versatile", blank=True)
+
+    alibaba_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    alibaba_model = models.CharField(max_length=100, default="qwen-max", blank=True)
+
     jules_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     jules_model = models.CharField(max_length=100, default="jules-latest", blank=True)
     jules_base_url = models.CharField(

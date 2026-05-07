@@ -588,6 +588,176 @@ class JulesProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class OpenRouterProvider(AIProvider):
+    """OpenRouter provider — gateway to 100+ models."""
+
+    BASE_URL = "https://openrouter.ai/api/v1"
+
+    def __init__(self):
+        self.api_key = _sanitize_api_key(os.environ.get("OPENROUTER_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("OPENROUTER_MODEL"), "openrouter/auto")
+
+    def name(self) -> str:
+        return f"OpenRouter ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[OpenRouter] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://smsly.hosting",
+                        "X-Title": "SMSLY Intelligence Senate",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("OpenRouter ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        """Fetch OpenRouter balance."""
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.get(
+                    "https://openrouter.ai/api/v1/auth/key",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json().get("data", {})
+                    limit = data.get("limit", 0)
+                    usage = data.get("usage", 0)
+                    remaining = limit - usage if limit else "Unlimited"
+                    return {
+                        "balance": f"${remaining}" if isinstance(remaining, (int, float)) else remaining,
+                        "currency": "USD",
+                        "raw": data,
+                    }
+                return {"balance": "Active", "currency": "USD", "raw": {}}
+        except Exception: # pylint: disable=broad-exception-caught
+            return {"balance": "Error checking", "currency": "", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# Groq Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class GroqProvider(AIProvider):
+    """Groq provider — ultra-low latency Llama/Mixtral."""
+
+    BASE_URL = "https://api.groq.com/openai/v1"
+
+    def __init__(self):
+        self.api_key = _sanitize_api_key(os.environ.get("GROQ_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("GROQ_MODEL"), "llama-3.3-70b-versatile")
+
+    def name(self) -> str:
+        return f"Groq ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[Groq] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=45) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Groq ask failed: %s", exc)
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Alibaba (DashScope) Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class AlibabaProvider(AIProvider):
+    """Alibaba DashScope (Qwen) provider."""
+
+    BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    def __init__(self):
+        self.api_key = _sanitize_api_key(os.environ.get("ALIBABA_API_KEY", ""))
+        self.model = _normalize_model(os.environ.get("ALIBABA_MODEL"), "qwen-max")
+
+    def name(self) -> str:
+        return f"Alibaba ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[Alibaba] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Alibaba ask failed: %s", exc)
+            raise
+
+
+# ---------------------------------------------------------------------------
 # DeepSeek Provider (OpenAI-compatible)
 # ---------------------------------------------------------------------------
 
@@ -815,6 +985,9 @@ PROVIDERS = {
     "grok": GrokProvider,
     "gemini": GeminiProvider,
     "claude": ClaudeProvider,
+    "openrouter": OpenRouterProvider,
+    "groq": GroqProvider,
+    "alibaba": AlibabaProvider,
     "deepseek": DeepSeekProvider,
     "jules": JulesProvider,
     "localllm": LocalLLMProvider,
@@ -827,6 +1000,9 @@ ENV_KEY_MAP = {
     "grok": "GROK_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "claude": "CLAUDE_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "alibaba": "ALIBABA_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "jules": "JULES_API_KEY",
     "localllm": "LOCALLM_API_KEY",
@@ -949,6 +1125,12 @@ def _sync_db_to_env():
         ("gemini_model", "GEMINI_MODEL", "gemini-2.0-flash"),
         ("claude_api_key", "CLAUDE_API_KEY", ""),
         ("claude_model", "CLAUDE_MODEL", "claude-sonnet-4-20250514"),
+        ("openrouter_api_key", "OPENROUTER_API_KEY", ""),
+        ("openrouter_model", "OPENROUTER_MODEL", "openrouter/auto"),
+        ("groq_api_key", "GROQ_API_KEY", ""),
+        ("groq_model", "GROQ_MODEL", "llama-3.3-70b-versatile"),
+        ("alibaba_api_key", "ALIBABA_API_KEY", ""),
+        ("alibaba_model", "ALIBABA_MODEL", "qwen-max"),
         ("deepseek_api_key", "DEEPSEEK_API_KEY", ""),
         ("deepseek_model", "DEEPSEEK_MODEL", "deepseek-coder"),
         ("jules_api_key", "JULES_API_KEY", ""),
