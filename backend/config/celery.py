@@ -1,6 +1,17 @@
 """Celery module."""
 import os
 import logging
+
+if os.name == "nt":
+    # Python 3.14's WMI-backed platform detection can hang on some Windows
+    # hosts during Celery import. Force platform.py to use its registry/ver
+    # fallback path in local development and test runs.
+    try:
+        import platform
+        platform._wmi = None  # pylint: disable=protected-access
+    except Exception:
+        pass
+
 from celery import Celery, signals
 from kombu import Exchange, Queue
 from celery.schedules import crontab
@@ -56,6 +67,7 @@ app.conf.task_queues = (
     Queue('deploy', Exchange('deploy'), routing_key='deploy'),
     Queue('fast', Exchange('fast'), routing_key='fast'),
 )
+app.conf.task_create_missing_queues = True
 
 app.conf.task_routes = {
     'apps.deployments.tasks.smart_deploy_task': {'queue': 'deploy'},

@@ -119,6 +119,7 @@ def test_connect_replica_success(mock_cache_add, mock_cache_set, mock_cache_get,
     # Mock cache for ratelimit bypass
     mock_cache_add.return_value = True
     mock_cache_get.return_value = None
+    mock_deploy.return_value = {"patroni": [], "haproxy": "OK"}
 
     url = reverse("replication-connect-replica")
     payload = {

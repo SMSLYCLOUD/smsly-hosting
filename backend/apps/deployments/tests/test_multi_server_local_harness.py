@@ -102,9 +102,17 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertEqual(blocked.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(blocked.data["error"]["code"], "PRIMARY_SERVER_DEPLOYMENT_BLOCKED")
 
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._sync_target_dashboard")
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._wait_for_remote_backend_ready")
     @patch("apps.deployments.services.transfer_service.BackupService.backup_service")
     @patch("apps.deployments.services.transfer_service.SSHClient")
-    def test_transfer_failure_preserves_source_deployment(self, ssh_cls, backup_mock):
+    def test_transfer_failure_preserves_source_deployment(
+        self,
+        ssh_cls,
+        backup_mock,
+        _ready_mock,
+        _sync_mock,
+    ):
         ssh = ssh_cls.return_value
         ssh.connect.return_value = None
         ssh.check_docker.return_value = True
@@ -171,6 +179,10 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["mesh_status"], "ACTIVE")
 
+    @patch(
+        "apps.deployments.services.replication_service.ReplicationService.wait_for_cluster_ready",
+        return_value={"status": "READY", "health": {"primary": {"name": "patroni1"}}},
+    )
     @patch("apps.deployments.services.replication_service.ReplicationService._deploy_haproxy_local")
     @patch("apps.deployments.services.replication_service.ReplicationService._deploy_patroni_remote")
     @patch("apps.deployments.services.replication_service.ReplicationService._deploy_patroni_local")
@@ -179,6 +191,7 @@ class MultiServerLocalHarnessTests(TestCase):
         deploy_local,
         deploy_remote,
         deploy_haproxy,
+        _ready_mock,
     ):
         mesh = self._mesh()
 
@@ -202,7 +215,7 @@ class MultiServerLocalHarnessTests(TestCase):
     def test_replication_sync_now_updates_db_state(self, requests_get):
         mesh = self._mesh()
 
-        def fake_get(url, timeout):
+        def fake_get(url, *args, **kwargs):
             response = Mock()
             response.status_code = 200
             if "10.100.0.1" in url:
