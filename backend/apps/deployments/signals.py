@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import Service, Deployment, EnvironmentVariable
+from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .models_audit import AuditLog
 from .utils import log_event
 import secrets
@@ -108,3 +108,14 @@ def audit_deployment_lifecycle(sender, instance, created, **kwargs):
         logging.getLogger(__name__).warning(
             "Failed to queue deploy notification for user %s: %s", owner.pk, exc
         )
+
+
+@receiver(post_save, sender=PlatformConfig)
+def update_allowed_hosts_on_config_change(sender, instance, **kwargs):
+    """Update settings in real-time when PlatformConfig changes."""
+    try:
+        from config.settings import _patch_allowed_hosts_from_db
+        _patch_allowed_hosts_from_db()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Failed to patch ALLOWED_HOSTS from signal: %s", e)
