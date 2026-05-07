@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.6 (Production Hardened)
-# VERSION: 2026-05-07-0118
+# Grid by SMSLY - Universal Installer v3.1.7 (Production Hardened)
+# VERSION: 2026-05-07-0133
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -214,13 +214,20 @@ check_hardware() {
 }
 
 ensure_system_swap() {
-    echo -e "${BLUE}  → Ensuring system swap is sufficient (Target: 4x RAM)...${NC}"
+    echo -e "${BLUE}  → Ensuring system swap is sufficient...${NC}"
     local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    local target_swap_mb=$((current_ram_mb * 4))
     
-    # Floor at 4GB for safety on small nodes, cap at 16GB for large ones
-    [ "$target_swap_mb" -lt 4096 ] && target_swap_mb=4096
+    # For high RAM nodes (>8GB), we only need a safety buffer (4GB)
+    # For low RAM nodes, we target 2x-4x RAM.
+    local target_swap_mb=4096
+    if [ "$current_ram_mb" -lt 4096 ]; then
+        target_swap_mb=$((current_ram_mb * 4))
+    elif [ "$current_ram_mb" -lt 8192 ]; then
+        target_swap_mb=$((current_ram_mb * 2))
+    fi
+    
+    # Cap at 16GB max for any node
     [ "$target_swap_mb" -gt 16384 ] && target_swap_mb=16384
 
     local current_swap_mb
@@ -230,13 +237,12 @@ ensure_system_swap() {
     local active_swap_count
     active_swap_count=$(grep -c / /proc/swaps || echo 0)
 
-    # If swap is suspiciously large (e.g. > 32GB on a small VPS) and active count is low, 
-    # it might be phantom swap. We want local active swap for the build.
-    if [ "$current_swap_mb" -lt "$target_swap_mb" ] || [ "$active_swap_count" -eq 0 ] || [ "$current_swap_mb" -gt 32000 ]; then
+    # If swap is insufficient or missing, provision it.
+    if [ "$current_swap_mb" -lt "$target_swap_mb" ] || [ "$active_swap_count" -eq 0 ]; then
         local needed_mb=$target_swap_mb
-        [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && [ "$current_swap_mb" -lt 32000 ] && needed_mb=$((target_swap_mb - current_swap_mb))
+        [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && needed_mb=$((target_swap_mb - current_swap_mb))
         
-        echo -e "${BLUE}  → Active swap count: ${active_swap_count}. Provisioning ${needed_mb}MB local swap...${NC}"
+        echo -e "${BLUE}  → Provisioning ${needed_mb}MB local swap (RAM: ${current_ram_mb}MB)...${NC}"
         local swapfile="/swapfile-smsly"
 
         # If the file already exists but is too small, we need to recreate it
@@ -3051,6 +3057,19 @@ FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 # PgCat administration password
 PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 EOF
+
+    # ─── Dynamic Build Resource Allocation ──────────────────────────────
+    # Detect physical RAM for optimized build limits
+    local current_ram_mb
+    current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+    local build_mem=2048
+    if [ "$current_ram_mb" -ge 8192 ]; then
+        build_mem=4096
+    elif [ "$current_ram_mb" -ge 16384 ]; then
+        build_mem=8192
+    fi
+    echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
+    echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
 
     # Derive expected tunnel domain
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
