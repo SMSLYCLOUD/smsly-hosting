@@ -2931,9 +2931,9 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         echo "  CONFIGURING LITE AGENT NODE"
         echo "═══════════════════════════════════════════════════════════${NC}"
         read -p "  Enter Master VPS IP Address: " MASTER_IP < /dev/tty
-        read -sp "  Enter Master Database Password: " MASTER_DB_PASSWORD < /dev/tty
+        read -p "  Enter Master Database Password: " MASTER_DB_PASSWORD < /dev/tty
         echo ""
-        read -sp "  Enter Master RabbitMQ Password: " MASTER_MQ_PASSWORD < /dev/tty
+        read -p "  Enter Master RabbitMQ Password: " MASTER_MQ_PASSWORD < /dev/tty
         echo ""
         COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
         export MASTER_IP MASTER_DB_PASSWORD MASTER_MQ_PASSWORD
@@ -3325,7 +3325,7 @@ else
             if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
                 WILDCARD_SUBDOMAINS="true"
                 while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
-                    read -sp "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
+                    read -p "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
                     echo
                 done
                 echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
