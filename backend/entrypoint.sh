@@ -24,23 +24,28 @@ should_run_entrypoint_tasks() {
     esac
 }
 
+select_management_database() {
+    if [ -n "${DIRECT_DATABASE_URL:-}" ]; then
+        echo "Detected DIRECT_DATABASE_URL. Using direct database alias for management tasks..." >&2
+        printf '%s\n' "direct"
+        return 0
+    fi
+
+    if python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'session' pool. Using it for management tasks..." >&2
+        printf '%s\n' "session"
+        return 0
+    fi
+
+    printf '%s\n' "default"
+}
+
 run_migrations_with_retry() {
     migrate_db="${1:-default}"
     echo "Running migrations on database: $migrate_db..."
 
     max_retries="${MIGRATE_MAX_RETRIES:-5}"
     retry=0
-    
-    # Selection of database alias for migrations
-    migrate_db="default"
-    if python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'direct' connection. Using it for migrations..."
-        migrate_db="direct"
-    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'session' pool. Using it for migrations..."
-        migrate_db="session"
-    fi
-
     while [ "$retry" -lt "$max_retries" ]; do
         if python manage.py migrate --database="$migrate_db" --noinput; then
             echo "Migrations complete (on database: $migrate_db)."
@@ -63,7 +68,7 @@ create_admin_if_configured() {
     admin_pass="${DJANGO_SUPERUSER_PASSWORD:-}"
 
     echo "Checking for existing superuser..."
-    has_superuser="$(python manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); print('yes' if User.objects.filter(is_superuser=True).exists() else 'no')" 2>/dev/null | tail -n 1 || true)"
+    has_superuser="$(python manage.py shell -c "from django.contrib.auth import get_user_model; User=get_user_model(); print('yes' if User.objects.using('${migrate_db}').filter(is_superuser=True).exists() else 'no')" 2>/dev/null | tail -n 1 || true)"
 
     if [ "$has_superuser" != "no" ]; then
         echo "Superuser already exists (or check failed). Skipping admin creation."
@@ -97,15 +102,7 @@ setup_social_apps_nonfatal() {
         echo "WARNING: setup_social_apps failed (non-fatal)"
 }
 
-    # Selection of database alias for migrations
-    migrate_db="default"
-    if python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'direct' connection. Using it for management tasks..."
-        migrate_db="direct"
-    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'session' pool. Using it for management tasks..."
-        migrate_db="session"
-    fi
+    migrate_db="$(select_management_database)"
 
     if is_web_container "$@" && should_run_entrypoint_tasks; then
         run_migrations_with_retry "$migrate_db"

@@ -3500,8 +3500,8 @@ print('CREATED' if created else 'EXISTS')
     fi
 fi
 if [ "$RUST_TWIN_MODE" != "true" ]; then
-    echo -e "${BLUE}  → Re-enabling backend entrypoint bootstrap for future restarts...${NC}"
-    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "true"
+    echo -e "${BLUE}  → Keeping backend entrypoint bootstrap disabled; installer controls migrations...${NC}"
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
 fi
     set_checkpoint "admin_created"
 fi
