@@ -467,12 +467,13 @@ class ManagedServerSerializer(serializers.ModelSerializer):
             "ssh_user", "provider_metadata", "is_primary",
             "allow_user_workloads", "status", "last_health_check",
             "server_version", "services_count", "created_at",
-            "provision_status", "provision_logs", "role", "wg_address", "has_ssh_credentials",
+            "provision_status", "provision_logs", "role", "wg_address",
+            "has_ssh_credentials", "is_lite_agent",
         ]
         read_only_fields = [
             "id", "status", "last_health_check", "server_version",
             "services_count", "created_at", "provision_status",
-            "role", "wg_address", "has_ssh_credentials",
+            "role", "wg_address", "has_ssh_credentials", "is_lite_agent",
         ]
 
 
