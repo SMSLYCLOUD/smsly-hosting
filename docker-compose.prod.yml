@@ -15,7 +15,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     networks:
     - smsly-net
   pgcat:
@@ -38,7 +38,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 15s
+      start_period: 60s
     networks:
     - smsly-net
   redis:
@@ -54,7 +54,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     networks:
     - smsly-net
     # No external ports — internal network only (security hardening)
@@ -156,7 +156,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     networks:
     - smsly-net
   celery-beat:
@@ -189,7 +189,7 @@ services:
       interval: 60s
       timeout: 20s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     networks:
     - smsly-net
   frontend:
@@ -249,7 +249,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     networks:
     - smsly-net
     - socket-proxy
@@ -290,7 +290,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     networks:
     - smsly-net
     - socket-proxy
@@ -430,7 +430,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
-      start_period: 30s
+      start_period: 60s
     networks:
     - smsly-net
 networks:

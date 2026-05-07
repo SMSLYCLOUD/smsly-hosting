@@ -23,6 +23,15 @@ CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 
 
+def _table_exists(table_name: str) -> bool:
+    """Helper to check if a database table exists without triggering an exception."""
+    from django.db import connection
+    try:
+        return table_name in connection.introspection.table_names()
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
 def _remote_server_mesh_ip(server) -> str:
     """Return the best WireGuard address for a remote service server."""
     if not server or getattr(server, "is_primary", False):
@@ -105,6 +114,10 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
     
     try:
         from apps.deployments.models import Service
+
+        # Schema Guard: Check if tables exist before querying
+        if not _table_exists(Service._meta.db_table):
+            return []
 
         for service in Service.objects.all().select_related("server").order_by("id"):
             raw_public = (
@@ -222,6 +235,10 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
         from apps.deployments.models import Service
         from apps.deployments.models_addons import Addon
 
+        # Schema Guard: Check if tables exist before querying
+        if not _table_exists(Service._meta.db_table):
+            return []
+
         suffix = f".{wildcard_domain}"
         for service in Service.objects.all().only("id", "public_domain", "custom_domains", "public_domain_hidden"):
             public_domain = ""
@@ -290,6 +307,10 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
 
     try:
         from apps.deployments.models import Service
+
+        # Schema Guard: Check if tables exist before querying
+        if not _table_exists(Service._meta.db_table):
+            return {}
 
         suffix = f".{wildcard_domain}"
         for service in Service.objects.select_related("server").all():
