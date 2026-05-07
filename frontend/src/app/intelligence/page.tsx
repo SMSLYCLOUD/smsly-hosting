@@ -229,19 +229,45 @@ export default function IntelligencePage() {
                        <Shield className="text-purple-500" size={18} /> Configure AI Providers
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                       {["openai", "grok", "gemini", "claude", "jules"].map(provider => (
-                         <div key={provider} className="space-y-2">
-                           <label className="text-sm font-medium uppercase text-muted-foreground">{provider} API Key</label>
+                       {[
+                         { id: "openai", label: "OpenAI" },
+                         { id: "gemini", label: "Gemini" },
+                         { id: "claude", label: "Claude" },
+                         { id: "openrouter", label: "OpenRouter" },
+                         { id: "groq", label: "Groq" },
+                         { id: "alibaba", label: "Alibaba" },
+                         { id: "grok", label: "xAI Grok" },
+                         { id: "deepseek", label: "DeepSeek" },
+                         { id: "jules", label: "Jules", hasUrl: true },
+                         { id: "localllm", label: "Local LLM", hasUrl: true },
+                         { id: "smslycloud", label: "SMSLY Cloud" }
+                       ].map(p => (
+                         <div key={p.id} className="space-y-3 p-4 rounded-xl bg-muted/30 border border-border/50">
+                           <div className="flex items-center justify-between">
+                             <label className="text-sm font-bold uppercase tracking-tight text-foreground">{p.label}</label>
+                             {providers?.providers?.find(pp => pp.id === p.id)?.configured && (
+                               <span className="text-[10px] bg-emerald-500/20 text-emerald-500 px-2 py-0.5 rounded-full font-bold">ACTIVE</span>
+                             )}
+                           </div>
                            <Input
                              type="password"
-                             placeholder={`Enter ${provider} key...`}
-                             onChange={e => setConfigData({...configData, [`${provider}_api_key`]: e.target.value})}
+                             placeholder={`Enter ${p.label} API Key...`}
+                             onChange={e => setConfigData({...configData, [`${p.id}_api_key`]: e.target.value})}
                            />
-                           <Input
-                             placeholder={`Model (default)`}
-                             className="text-xs"
-                             onChange={e => setConfigData({...configData, [`${provider}_model`]: e.target.value})}
-                           />
+                           <div className="grid grid-cols-2 gap-2">
+                             <Input
+                               placeholder={`Model ID`}
+                               className="text-xs h-8"
+                               onChange={e => setConfigData({...configData, [`${p.id}_model`]: e.target.value})}
+                             />
+                             {p.hasUrl && (
+                               <Input
+                                 placeholder={`Base URL`}
+                                 className="text-xs h-8"
+                                 onChange={e => setConfigData({...configData, [`${p.id}_base_url`]: e.target.value})}
+                               />
+                             )}
+                           </div>
                          </div>
                        ))}
                     </div>

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
@@ -947,57 +947,88 @@ export default function SettingsPage() {
                       grok: ['grok-3-mini', 'grok-3', 'grok-2', 'grok-beta'],
                       gemini: ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'],
                       claude: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+                      openrouter: ['openrouter/auto', 'openai/gpt-4o', 'anthropic/claude-3.5-sonnet'],
+                      groq: ['llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768'],
+                      alibaba: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+                      deepseek: ['deepseek-coder', 'deepseek-chat'],
                       jules: ['jules-latest', 'jules-pro'],
+                      localllm: ['local-model'],
+                      smslycloud: ['smsly-latest']
                     };
+                    const hasUrl = ['jules', 'localllm'].includes(p.id);
+                    
                     return (
                       <div
                         key={p.id}
-                        className={`p-4 rounded-lg border-2 transition-all ${
+                        className={`p-4 rounded-xl border-2 transition-all ${
                           p.configured
-                            ? 'border-emerald-500/50 bg-emerald-500/5'
-                            : 'border-border'
+                            ? 'border-emerald-500/50 bg-emerald-500/5 shadow-sm'
+                            : 'border-border bg-card'
                         }`}
                       >
                         <div className="flex items-center justify-between mb-3">
-                          <div className="font-semibold text-sm">{p.name}</div>
+                          <div className="font-bold text-sm uppercase tracking-tight">{p.name}</div>
                           {p.configured ? (
-                            <Badge variant="outline" className="text-[10px] bg-green-500/10 text-green-500 border-green-500/30">
-                              <Check className="h-3 w-3 mr-1" /> Active
+                            <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-500 border-emerald-500/30 font-bold uppercase">
+                              ACTIVE
                             </Badge>
                           ) : (
-                            <Badge variant="outline" className="text-[10px]">Not Set</Badge>
+                            <Badge variant="outline" className="text-[10px] font-bold uppercase opacity-50">Inactive</Badge>
                           )}
                         </div>
 
                         {/* API Key Input */}
-                        <div className="space-y-2 mb-2">
-                          <Label className="text-xs text-muted-foreground">API Key</Label>
+                        <div className="space-y-1.5 mb-3">
+                          <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">API Key</Label>
                           <Input
                             type="password"
-                            placeholder={p.configured ? 'Configured key (hidden)' : 'Enter API key'}
-                            className="h-8 text-xs"
+                            placeholder={p.configured ? 'Configured key (hidden)' : 'Enter API key...'}
+                            className="h-9 text-xs"
                             value={aiKeys[p.id] || ''}
                             onChange={(e) => setAiKeys(prev => ({ ...prev, [p.id]: e.target.value }))}
                           />
                         </div>
 
-                        {/* Model Selector */}
-                        <div className="space-y-2 mb-3">
-                          <Label className="text-xs text-muted-foreground">Model</Label>
-                          <select
-                            className="w-full h-8 px-2 text-xs border rounded-md bg-background"
-                            value={aiModels[p.id] || p.model || ''}
-                            onChange={(e) => setAiModels(prev => ({ ...prev, [p.id]: e.target.value }))}
-                          >
-                            {(modelOptions[p.id] || []).map((m: string) => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
+                        <div className="grid grid-cols-1 gap-3">
+                          {/* Model Selector */}
+                          <div className="space-y-1.5">
+                            <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Model</Label>
+                            <div className="flex gap-2">
+                              <select
+                                className="flex-1 h-9 px-2 text-xs border rounded-md bg-background"
+                                value={aiModels[p.id] || p.model || ''}
+                                onChange={(e) => setAiModels(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              >
+                                {(modelOptions[p.id] || [p.model]).map((m: string) => (
+                                  <option key={m} value={m}>{m}</option>
+                                ))}
+                              </select>
+                              <Input
+                                placeholder="Custom Model"
+                                className="w-1/2 h-9 text-xs"
+                                onChange={(e) => setAiModels(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              />
+                            </div>
+                          </div>
+
+                          {/* URL Input (if applicable) */}
+                          {hasUrl && (
+                            <div className="space-y-1.5">
+                              <Label className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Base URL</Label>
+                              <Input
+                                placeholder="https://api.example.com/v1"
+                                className="h-9 text-xs font-mono"
+                                value={aiUrls[p.id] || ''}
+                                onChange={(e) => setAiUrls(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              />
+                            </div>
+                          )}
                         </div>
 
                         {p.balance && (
-                          <div className="text-xs text-yellow-500 font-medium">
-                            Balance: {p.balance.balance}
+                          <div className="mt-3 pt-3 border-t border-border/50 flex justify-between items-center">
+                             <span className="text-[10px] font-bold uppercase text-muted-foreground">Credits</span>
+                             <span className="text-[11px] text-emerald-500 font-bold">{p.balance.balance}</span>
                           </div>
                         )}
                       </div>
@@ -1006,43 +1037,41 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Save + Actions */}
-                <div className="flex gap-3 flex-wrap">
+                <div className="flex gap-3 flex-wrap pt-4 border-t border-border/50">
                   <Button
                     variant="default"
                     onClick={async () => {
                       setSaving(true);
                       try {
                         const data: Record<string, string> = {};
-                        ['openai', 'grok', 'gemini', 'claude', 'jules'].forEach((id) => {
+                        const allIds = ['openai', 'grok', 'gemini', 'claude', 'openrouter', 'groq', 'alibaba', 'deepseek', 'jules', 'localllm', 'smslycloud'];
+                        allIds.forEach((id) => {
                           if (aiKeys[id]) data[`${id}_api_key`] = aiKeys[id];
                           if (aiModels[id]) data[`${id}_model`] = aiModels[id];
+                          if (aiUrls[id]) data[`${id}_base_url`] = aiUrls[id];
                         });
                         await aiApi.updateProviders(data);
-                        toast({ title: "AI Config Saved", description: "Provider settings updated." });
+                        toast({ title: "AI Config Saved", description: "The Intelligence Senate has been updated." });
                         fetchAIConfig();
                       } catch (err) {
-                        toast({ title: "Error", description: "Failed to save AI config.", variant: "destructive" });
+                        toast({ title: "Error", description: "Failed to update the Senate.", variant: "destructive" });
                       } finally {
                         setSaving(false);
                       }
                     }}
                     disabled={saving}
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
                   >
-                    {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : 'Save AI Config'}
+                    {saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : 'Apply Senate Changes'}
                   </Button>
-                  <Button variant="outline" onClick={handleTestAI} disabled={testingAI}>
+                  <Button variant="outline" onClick={handleTestAI} disabled={testingAI} className="font-bold">
                     {testingAI ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
-                    Test AI
+                    Test Committee
                   </Button>
-                  <Button variant="outline" onClick={fetchAIConfig} disabled={loadingAI}>
+                  <Button variant="ghost" onClick={fetchAIConfig} disabled={loadingAI} className="font-bold">
                     <Loader2 className={`mr-2 h-4 w-4 ${loadingAI ? 'animate-spin' : ''}`} />
-                    Refresh
+                    Sync
                   </Button>
-                  <Link href="/settings/ai">
-                    <Button variant="secondary">
-                      <Sparkles className="mr-2 h-4 w-4" /> Full AI Dashboard
-                    </Button>
-                  </Link>
                 </div>
 
                 <p className="text-xs text-muted-foreground">

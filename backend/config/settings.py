@@ -42,6 +42,7 @@ try:
     Fernet(FIELD_ENCRYPTION_KEY.encode() if isinstance(FIELD_ENCRYPTION_KEY, str) else FIELD_ENCRYPTION_KEY)
 except Exception as e:
     raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'") from e
+DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
 # Owner edition: all tier gates disabled — all features unlocked.
@@ -97,7 +98,7 @@ else:
         print("[settings] WARNING: GITHUB_WEBHOOK_SECRET missing; deriving fallback value from SECRET_KEY.")
         GITHUB_WEBHOOK_SECRET = f"{SECRET_KEY}-github-webhook"
 # SECURITY: No wildcard default - prevents host header injection
-DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
+# (DOMAIN moved to top of file)
 _DEFAULT_TUNNEL_BASE_DOMAIN = 'tunnel.localhost'
 if DOMAIN and DOMAIN != 'localhost':
     if re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN):
