@@ -3001,6 +3001,32 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         DOMAIN="${DOMAIN:-$PUBLIC_IP}"
         echo -e "${BLUE}  → Using IP Mode: $DOMAIN${NC}"
     fi
+
+    # ─── Wildcard Subdomain & Cloudflare Setup (Front-loaded) ────────────
+    WILDCARD_SUBDOMAINS="false"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
+        echo ""
+        echo -e "${BLUE}  Wildcard subdomains allow deployed services to get automatic SSL.${NC}"
+        echo -e "  e.g., myapp-abc123.${DOMAIN} will automatically have HTTPS."
+        echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
+
+        if [ -n "${CLOUDFLARE_API_TOKEN}" ]; then
+            WILDCARD_SUBDOMAINS="true"
+            echo -e "${BLUE}  → Preset Cloudflare token detected. Enabling wildcard subdomains.${NC}"
+        elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+            read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
+            WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
+            if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
+                WILDCARD_SUBDOMAINS="true"
+                while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
+                    read -p "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
+                    echo
+                done
+                echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
+            fi
+        fi
+    fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -3290,37 +3316,7 @@ else
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
     USE_SSL="${USE_SSL:-false}"
-
-
-    # ─── Wildcard Subdomain & Cloudflare Setup (SSL mode only) ────────────
-    WILDCARD_SUBDOMAINS="false"
-    CLOUDFLARE_API_TOKEN=""
-    if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
-        echo ""
-        echo -e "${BLUE}  Wildcard subdomains allow deployed services to get automatic SSL.${NC}"
-        echo -e "  e.g., myapp-abc123.${DOMAIN} will automatically have HTTPS."
-        echo -e "  This requires a Cloudflare API Token with DNS:Edit permission.\n"
-
-        PRESET_WILDCARD="${WILDCARD_SUBDOMAINS:-}"
-        PRESET_CF_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
-
-        if [ -n "$PRESET_WILDCARD" ] && [ -n "$PRESET_CF_TOKEN" ]; then
-            WILDCARD_SUBDOMAINS="$PRESET_WILDCARD"
-            CLOUDFLARE_API_TOKEN="$PRESET_CF_TOKEN"
-            echo -e "${BLUE}  → Preset detected: wildcard=$WILDCARD_SUBDOMAINS${NC}"
-        elif [ -e /dev/tty ]; then
-            read -p "  Enable wildcard subdomains? (y/n) [n]: " WILDCARD_CHOICE < /dev/tty
-            WILDCARD_CHOICE=${WILDCARD_CHOICE:-n}
-            if [[ $WILDCARD_CHOICE =~ ^[Yy]$ ]]; then
-                WILDCARD_SUBDOMAINS="true"
-                while [ -z "$CLOUDFLARE_API_TOKEN" ]; do
-                    read -p "  Enter Cloudflare API Token (DNS:Edit): " CLOUDFLARE_API_TOKEN < /dev/tty
-                    echo
-                done
-                echo -e "${GREEN}  ✓ Wildcard subdomains enabled.${NC}"
-            fi
-        fi
-    fi
+    # WILDCARD_SUBDOMAINS and CLOUDFLARE_API_TOKEN are already set in Step 0 or via ENV
 
     # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
