@@ -11,6 +11,8 @@ import json
 import time
 import zipfile
 import secrets
+import threading
+from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 
 import docker
@@ -81,6 +83,66 @@ def _regenerate_caddyfile():
             logger.warning("Caddyfile regeneration failed: %s", result.get('message'))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("Could not regenerate Caddyfile: %s", exc)
+
+
+@contextmanager
+def fleet_build_lock(deployment):
+    """
+    Prevent resource exhaustion by limiting concurrent builds across the entire fleet.
+    Uses Redis-backed cache to manage a global semaphore.
+    """
+    try:
+        config = PlatformConfig.load()
+    except Exception:
+        # Fallback if DB is unreachable
+        yield
+        return
+
+    max_builds = getattr(config, "max_concurrent_builds", 1) or 1
+    # For now, we enforce a strict single-build lock for maximum safety on small VPS nodes.
+    # A true semaphore can be implemented later if needed.
+    lock_key = "smsly_fleet_build_lock"
+    lock_owner_key = f"smsly_fleet_build_owner_{deployment.id}"
+    
+    acquired = False
+    max_wait = 1800  # 30 minutes
+    start_time = time.monotonic()
+    
+    while time.monotonic() - start_time < max_wait:
+        # Try to set the lock if it doesn't exist
+        if cache.add(lock_key, str(deployment.id), timeout=3600):
+            acquired = True
+            break
+        
+        # Check if the existing lock is stale (owner doesn't exist or is different but old)
+        # This is a safety measure against worker crashes
+        current_owner = cache.get(lock_key)
+        if not current_owner:
+            # Race condition: lock was deleted between add and get
+            continue
+            
+        if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
+            setattr(fleet_build_lock, "_attempt_count", attempt_count + 1)
+        else:
+            setattr(fleet_build_lock, "_attempt_count", 1)
+            append_log(deployment, "[fleet] Another build is in progress across the node fleet. Waiting for a free slot...\n")
+            broadcast_status(deployment)
+
+        time.sleep(15)
+    
+    if not acquired:
+        append_log(deployment, "❌ Timed out waiting for a free build slot in the node fleet.\n")
+        raise RuntimeError("Fleet build concurrency limit reached. Please try again later.")
+        
+    try:
+        append_log(deployment, "🚀 Build slot acquired. Starting build phase...\n")
+        yield
+    finally:
+        # Only release if we were the one who held it
+        if cache.get(lock_key) == str(deployment.id):
+            cache.delete(lock_key)
+            if hasattr(fleet_build_lock, "_attempt_count"):
+                delattr(fleet_build_lock, "_attempt_count")
 
 
 def _run_managed_image_post_deploy_hooks(deployment, service: Service, container_id: str) -> None:
@@ -808,7 +870,8 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
 
             # Skip review for: rollbacks, restarts, webhooks
             if deployment.is_rollback or skip_review:
-                image_name = manager.run()
+                with fleet_build_lock(deployment):
+                    image_name = manager.run()
             else:
                 # Fresh manual deploy → analysis only, pause for review
                 manager.run_analysis_only()
@@ -816,13 +879,15 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                 return  # Paused at REVIEW → user must approve
 
         elif service.deploy_type == 'FUNCTION':
-            image_name = _build_function(deployment, service)
+            with fleet_build_lock(deployment):
+                image_name = _build_function(deployment, service)
 
         elif service.deploy_type == 'DOCKER':
             image_name = service.docker_image
 
         elif service.deploy_type == 'UPLOAD':
-            image_name = _build_uploaded_source(deployment, service)
+            with fleet_build_lock(deployment):
+                image_name = _build_uploaded_source(deployment, service)
 
         else:
             raise ValueError(f"Unsupported deploy type: {service.deploy_type}")
@@ -873,8 +938,9 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
             return
 
         # Build phase
-        manager = PipelineManager(deployment)
-        image_name = manager.run_build_only()
+        with fleet_build_lock(deployment):
+            manager = PipelineManager(deployment)
+            image_name = manager.run_build_only()
 
         # Deploy phase
         _deploy_container(deployment, provider, image_name)

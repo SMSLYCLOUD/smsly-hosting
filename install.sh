@@ -736,8 +736,29 @@ ensure_env_runtime_defaults() {
         expected_database_url="postgresql://smsly_admin:${postgres_password}@pgcat:5432/smsly_hosting"
         current_database_url="$(env_get_value "$env_file" "DATABASE_URL")"
 
+        # [EDGE NODE] Override for Lite Agent mode
+        if [ "$MODE_AGENT_LITE" = "true" ] && [ -n "${MASTER_IP:-}" ]; then
+            echo -e "${BLUE}  -> Configuring for Edge Node (Lite Agent) mode...${NC}"
+            local db_user="${MASTER_DB_USER:-smsly_admin}"
+            local db_pass="${MASTER_DB_PASSWORD:-$postgres_password}"
+            local mq_pass="${MASTER_MQ_PASSWORD:-$rabbitmq_password}"
+            
+            # Use Master IP directly for external connections
+            expected_database_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
+            expected_direct_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
+            expected_celery_broker_url="amqp://smsly_user:${mq_pass}@${MASTER_IP}:5672//"
+
+            env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
+            env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
+            env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            
+            # Sync local vars for consistent validation below
+            current_database_url="$expected_database_url"
+            current_celery_broker_url="$expected_celery_broker_url"
+        fi
+
         # Migrate legacy @db:5432 URLs to @pgcat:5432
-        if [[ "$current_database_url" =~ @db:5432 ]]; then
+        if [[ "$current_database_url" =~ @db:5432 ]] && [ "$MODE_AGENT_LITE" != "true" ]; then
             echo -e "${BLUE}  -> Migrating DATABASE_URL from db to pgcat${NC}"
             local migrated_url="${current_database_url/@db:5432/@pgcat:5432}"
             env_set_value "$env_file" "DATABASE_URL" "$migrated_url"

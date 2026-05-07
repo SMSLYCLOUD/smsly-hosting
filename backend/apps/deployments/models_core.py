@@ -707,6 +707,9 @@ class PlatformConfig(models.Model):
     caddy_status = models.CharField(
         max_length=20, default='unknown',
         help_text="Last known Caddy status")
+    max_concurrent_builds = models.PositiveIntegerField(
+        default=1,
+        help_text="Maximum concurrent builds across the entire node fleet (to prevent OOM)")
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
