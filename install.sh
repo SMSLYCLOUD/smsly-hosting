@@ -397,6 +397,13 @@ apply_env_platform_overrides() {
 
     if [ "${DOMAIN+x}" = "x" ]; then
         desired_domain="${DOMAIN}"
+        # Protection: Do NOT allow an IP to overwrite a real domain unless forced or it's a fresh install.
+        if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ -n "$current_domain" ] && ! echo "$current_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo -e "${YELLOW}  ⚠ WARNING: Attempted to overwrite domain ($current_domain) with IP ($desired_domain). Ignored to prevent lockout.${NC}"
+                desired_domain="$current_domain"
+            fi
+        fi
     else
         desired_domain="${current_domain}"
     fi
@@ -1385,17 +1392,27 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     fi
 
     # 4. Build the Caddyfile
-    if [ "$is_real_domain" = "true" ]; then
-        cat > "$candidate" <<SAFECADDY
+    cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
-# Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
-# Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 ${domain} {
     reverse_proxy localhost:8090
     encode gzip
     log {
         output file /var/log/caddy/access.log
     }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
 }
 
 :80 {
@@ -1407,20 +1424,6 @@ ${domain} {
 
 ${svc_blocks}
 SAFECADDY
-    else
-        cat > "$candidate" <<SAFECADDY
-# Auto-generated safe fallback (reason: $reason)
-:80 {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-${svc_blocks}
-SAFECADDY
-    fi
     if install_caddyfile_atomically "$candidate" "safe fallback Caddyfile"; then
         rm -f "$candidate"
         echo -e "${YELLOW}  Safe fallback Caddyfile applied.${NC}"
