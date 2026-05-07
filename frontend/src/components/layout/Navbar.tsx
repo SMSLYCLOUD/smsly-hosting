@@ -143,18 +143,24 @@ export function Navbar() {
     <nav
         className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
     >
-      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[1800px] mx-auto">
+      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
 
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
             <div className="rounded-md bg-white p-1 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
                 <Image src="/images/mini_logo.png" alt="Grid" width={28} height={32} className="h-8 w-auto object-contain" priority />
             </div>
-            {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block">Grid</span>}
+            <div className="flex flex-col">
+              {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block leading-none">Grid</span>}
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-[8px] font-bold text-emerald-500 tracking-[0.15em] uppercase">Secured By</span>
+                <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">SMSLYCLOUD</span>
+              </div>
+            </div>
         </Link>
 
         {/* Nav Links - Center */}
-        <nav className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
+        <nav className="hidden min-w-0 items-center justify-start ml-8 md:flex md:flex-1">
             <div
               className={
                 user
@@ -289,7 +295,7 @@ export function Navbar() {
       {/* Row 2+3: Infrastructure & Tools ΓÇö single container, divided */}
       {user && (secondaryAuthLinks.length > 0 || tertiaryAuthLinks.length > 0) && (
         <div className="hidden md:block border-t border-white/5 bg-[#0a0c10]/80 backdrop-blur-md">
-          <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[1800px] mx-auto">
+          <div className="w-full px-4 sm:px-6 lg:px-8 py-1 max-w-[2200px] mx-auto">
             {/* Infrastructure row */}
             <div className="flex items-center justify-center gap-1 py-1">
               <span className="text-[9px] uppercase tracking-[0.2em] text-zinc-600 font-bold mr-4 shrink-0">Infra</span>

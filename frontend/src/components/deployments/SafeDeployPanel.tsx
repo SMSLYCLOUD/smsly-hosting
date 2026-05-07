@@ -23,9 +23,10 @@ import { api } from '@/lib/api';
 
 interface SafeDeployPanelProps {
   serviceId: string;
+  preview?: any;
 }
 
-export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId }) => {
+export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, preview }) => {
   const [previews, setPreviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);

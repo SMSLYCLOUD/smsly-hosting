@@ -1018,6 +1018,7 @@ restore_last_good_caddy() {
     else
         systemctl restart caddy >/dev/null 2>&1 || true
     fi
+    sync_active_caddyfile_to_shared /etc/caddy/Caddyfile 2>/dev/null || true
 }
 
 reload_caddy_preserving_previous() {
@@ -1031,6 +1032,7 @@ reload_caddy_preserving_previous() {
 
     if systemctl is-active --quiet caddy 2>/dev/null; then
         [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$CADDY_LAST_GOOD" 2>/dev/null || true
+        sync_active_caddyfile_to_shared /etc/caddy/Caddyfile 2>/dev/null || true
         return 0
     fi
 
@@ -1047,7 +1049,12 @@ reload_caddy_preserving_previous() {
         systemctl restart caddy >/dev/null 2>&1 || true
     fi
 
-    systemctl is-active --quiet caddy 2>/dev/null
+    if systemctl is-active --quiet caddy 2>/dev/null; then
+        [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$CADDY_LAST_GOOD" 2>/dev/null || true
+        sync_active_caddyfile_to_shared /etc/caddy/Caddyfile 2>/dev/null || true
+        return 0
+    fi
+    return 1
 }
 
 sync_active_caddyfile_to_shared() {
@@ -1519,6 +1526,29 @@ ensure_caddy_https_listener() {
     return 1
 }
 
+restart_caddy_watcher_safely() {
+    local domain="${1:-}"
+    local reason="${2:-caddy-watcher restart}"
+    local shared_dir="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config"
+
+    if [ -z "$domain" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        domain="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "DOMAIN" 2>/dev/null || true)"
+    fi
+
+    # The watcher consumes the shared Caddyfile only when .reload exists. Before
+    # installer-driven restarts, mirror the active known-good config and clear
+    # stale reload flags so a restart cannot replay an older :80-only file.
+    sync_active_caddyfile_to_shared /etc/caddy/Caddyfile
+    rm -f "$shared_dir/.reload" 2>/dev/null || true
+
+    systemctl cat caddy-watcher >/dev/null 2>&1 || return 0
+    systemctl restart caddy-watcher >/dev/null 2>&1 || systemctl start caddy-watcher >/dev/null 2>&1 || true
+    sleep 2
+
+    ensure_caddy_https_listener "$domain" "$reason" || true
+    sync_active_caddyfile_to_shared /etc/caddy/Caddyfile
+}
+
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
@@ -1566,7 +1596,7 @@ restart_edge_stack() {
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
         reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
-        systemctl restart caddy-watcher >/dev/null 2>&1 || true
+        restart_caddy_watcher_safely "${DOMAIN:-}" "restart_edge_stack Caddy watcher verification"
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
@@ -1685,7 +1715,7 @@ refresh_runtime_services() {
     fi
 
     reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    restart_caddy_watcher_safely "${DOMAIN:-}" "runtime refresh Caddy watcher verification"
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -1897,7 +1927,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
     reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    restart_caddy_watcher_safely "$DOMAIN" "verify mode Caddy watcher verification"
     ensure_caddy_https_listener "$DOMAIN" "verify mode Caddy verification" || true
     sleep 3
 
@@ -2551,7 +2581,7 @@ print('Stripped tls blocks')
         fi
 
         reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
-        systemctl restart caddy-watcher 2>/dev/null || true
+        restart_caddy_watcher_safely "${cf_domain:-}" "post-update Caddy watcher verification"
 
         # Verify Caddy is running
         sleep 2
@@ -3869,7 +3899,7 @@ WantedBy=multi-user.target
 WATCHEREOF
     systemctl daemon-reload
     systemctl enable caddy-watcher >/dev/null 2>&1
-    systemctl restart caddy-watcher
+    restart_caddy_watcher_safely "${DOMAIN:-}" "fresh install Caddy watcher verification"
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 

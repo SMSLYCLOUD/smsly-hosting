@@ -21,6 +21,7 @@ export const metadata: Metadata = {
 import { FloatingAI } from "@/components/ai/FloatingAI";
 import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
+import { Footer } from "@/components/layout/Footer";
 
 export default function RootLayout({
   children,
@@ -42,7 +43,12 @@ export default function RootLayout({
                   <SpaceOpsProvider>
                   <SpaceOpsBackground />
                   <Navbar />
-                  {children}
+                  <main className="min-h-[calc(100vh-3.5rem)] flex flex-col">
+                    <div className="flex-1">
+                      {children}
+                    </div>
+                    <Footer />
+                  </main>
                   <FloatingAI />
                   <PoweredByBadge />
                   <Toaster />
