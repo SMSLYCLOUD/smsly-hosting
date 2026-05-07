@@ -1549,6 +1549,55 @@ restart_caddy_watcher_safely() {
     sync_active_caddyfile_to_shared /etc/caddy/Caddyfile
 }
 
+install_caddy_health_guard() {
+    local domain="${1:-}"
+    local guard_script="${INSTALL_DIR:-/opt/smsly-hosting}/scripts/caddy-health-guard.sh"
+    local dropin_dir="/etc/systemd/system/caddy.service.d"
+
+    [ -f "$guard_script" ] || return 0
+
+    chmod +x "$guard_script" 2>/dev/null || true
+    mkdir -p "$dropin_dir"
+    cat > "$dropin_dir/10-smsly-reliability.conf" <<'CADDYRELIABILITY'
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=always
+RestartSec=3
+CADDYRELIABILITY
+
+    cat > /etc/systemd/system/smsly-caddy-health-guard.service <<GUARDSERVICE
+[Unit]
+Description=SMSLY Caddy Health Guard
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$guard_script ${INSTALL_DIR:-/opt/smsly-hosting}
+GUARDSERVICE
+
+    cat > /etc/systemd/system/smsly-caddy-health-guard.timer <<'GUARDTIMER'
+[Unit]
+Description=Run SMSLY Caddy Health Guard
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=smsly-caddy-health-guard.service
+
+[Install]
+WantedBy=timers.target
+GUARDTIMER
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl enable --now smsly-caddy-health-guard.timer >/dev/null 2>&1 || true
+    systemctl start smsly-caddy-health-guard.service >/dev/null 2>&1 || true
+    ensure_caddy_https_listener "$domain" "Caddy health guard installation" || true
+}
+
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
@@ -1714,6 +1763,7 @@ refresh_runtime_services() {
         return 1
     fi
 
+    install_caddy_health_guard "${DOMAIN:-}"
     reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
     restart_caddy_watcher_safely "${DOMAIN:-}" "runtime refresh Caddy watcher verification"
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
@@ -1927,6 +1977,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
 
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
     reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
+    install_caddy_health_guard "$DOMAIN"
     restart_caddy_watcher_safely "$DOMAIN" "verify mode Caddy watcher verification"
     ensure_caddy_https_listener "$DOMAIN" "verify mode Caddy verification" || true
     sleep 3
@@ -2515,6 +2566,12 @@ for svc in Service.objects.all():
 
                 cat > /etc/caddy/Caddyfile.tmp <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 ${cf_domain} {
     reverse_proxy localhost:8090
     encode gzip
@@ -2536,6 +2593,13 @@ ${cf_known_stanza}
         rewrite * /notice
         reverse_proxy localhost:8090
     }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
 }
 
 :80 {
@@ -2602,6 +2666,7 @@ if d and d != 'localhost':
             POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
         fi
         ensure_caddy_https_listener "$POST_CADDY_DOMAIN" "post-update Caddy verification" || true
+        install_caddy_health_guard "$POST_CADDY_DOMAIN"
     fi
 
     safe_refresh_runtime_services
@@ -3751,6 +3816,8 @@ User=caddy
 Group=caddy
 ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=always
+RestartSec=3
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
@@ -3792,6 +3859,12 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
 
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 $DOMAIN {
     reverse_proxy localhost:8090
     encode gzip
@@ -3812,6 +3885,13 @@ $DOMAIN {
         rewrite * /notice
         reverse_proxy localhost:8090
     }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
 }
 
 :80 {
@@ -3839,12 +3919,25 @@ ENVEOF
 # Grid Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 $DOMAIN {
     reverse_proxy localhost:8090
     encode gzip
     log {
         output file /var/log/caddy/access.log
     }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
 }
 
 :80 {
@@ -3900,6 +3993,7 @@ WATCHEREOF
     systemctl daemon-reload
     systemctl enable caddy-watcher >/dev/null 2>&1
     restart_caddy_watcher_safely "${DOMAIN:-}" "fresh install Caddy watcher verification"
+    install_caddy_health_guard "${DOMAIN:-}"
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 

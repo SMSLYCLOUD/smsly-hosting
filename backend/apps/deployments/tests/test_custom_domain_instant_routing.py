@@ -71,6 +71,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         self.assertIn('cloud.smsly.cloud {\n    reverse_proxy localhost:8090', caddyfile)
         self.assertIn('*.cloud.smsly.cloud {', caddyfile)
+        self.assertIn(':443 {\n    tls {\n        on_demand', caddyfile)
         self.assertEqual(
             caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
             1,
@@ -88,6 +89,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('reverse_proxy localhost:8090', caddyfile)
+        self.assertIn(':443 {\n    tls {\n        on_demand', caddyfile)
 
     def test_ip_mode_keeps_http_catch_all_proxy(self):
         config = SimpleNamespace(

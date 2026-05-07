@@ -148,55 +148,65 @@ def _patch_allowed_hosts_from_db():
     try:
         from apps.deployments.models import PlatformConfig
         pc = PlatformConfig.load()
-        if pc.domain and pc.domain not in ALLOWED_HOSTS:
-            ALLOWED_HOSTS.append(pc.domain)
-        # Also add wildcard subdomain pattern
-        if pc.domain and pc.wildcard_subdomains:
-            wildcard = f'.{pc.domain}'
-            if wildcard not in ALLOWED_HOSTS:
-                ALLOWED_HOSTS.append(wildcard)
+        
+        # ── Site/Protocol Fallback ──────────────────────────────────────
+        # If the DB config is empty, ensure we still sync the Site framework
+        # and protocol from the .env DOMAIN to prevent OAuth mismatches.
+        _effective_domain = pc.domain or DOMAIN
+        _effective_use_ssl = pc.use_ssl if pc.domain else (not DEBUG)
+
+        # Patch ALLOWED_HOSTS
+        if _effective_domain and _effective_domain not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_effective_domain)
+        
         # Patch CSRF_TRUSTED_ORIGINS
-        if pc.domain and pc.use_ssl:
-            https_origin = f'https://{pc.domain}'
-            if https_origin not in CSRF_TRUSTED_ORIGINS:
-                CSRF_TRUSTED_ORIGINS.append(https_origin)
-        elif pc.domain:
-            http_origin = f'http://{pc.domain}'
-            if http_origin not in CSRF_TRUSTED_ORIGINS:
-                CSRF_TRUSTED_ORIGINS.append(http_origin)
-        # Patch CORS
-        if pc.domain:
-            scheme = 'https' if pc.use_ssl else 'http'
-            cors_origin = f'{scheme}://{pc.domain}'
-            if cors_origin not in CORS_ALLOWED_ORIGINS:
-                CORS_ALLOWED_ORIGINS.append(cors_origin)
+        if _effective_domain:
+            # IP-Aware Protocol Detection
+            _is_effective_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', _effective_domain))
+            if _is_effective_ip:
+                scheme = 'http'
+            else:
+                scheme = 'https' if (_effective_use_ssl and not DEBUG) else 'http'
+            
+            origin = f'{scheme}://{_effective_domain}'
+            if origin not in CSRF_TRUSTED_ORIGINS:
+                CSRF_TRUSTED_ORIGINS.append(origin)
+            
+            # Patch CORS
+            if origin not in CORS_ALLOWED_ORIGINS:
+                CORS_ALLOWED_ORIGINS.append(origin)
+
         # Patch SITE_URL so OAuth redirects use the correct domain
         # IMPORTANT: Must patch django.conf.settings directly (the LazySettings
         # proxy), not the raw module — Django caches values at init time.
-        if pc.domain:
+        # ── Site/Protocol Fallback ──────────────────────────────────────
+        if _effective_domain:
             from django.conf import settings as django_settings
-            scheme = 'https' if pc.use_ssl else 'http'
-            new_site_url = f'{scheme}://{pc.domain}'
-            django_settings.SITE_URL = new_site_url
-            # Also update ACCOUNT_DEFAULT_HTTP_PROTOCOL for allauth
-            django_settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
-        # ── Critical: Update Django Sites framework ──────────────────────
-        # allauth uses Site.objects.get_current().domain to build the OAuth
-        # redirect_uri. If the Site record still has the old IP/localhost,
-        # the redirect_uri will be wrong and GitHub will reject it.
-        if pc.domain:
             from django.contrib.sites.models import Site
+            
+            # IP-Aware Protocol Detection
+            _is_effective_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', _effective_domain))
+            if _is_effective_ip:
+                scheme = 'http'
+            else:
+                scheme = 'https' if (_effective_use_ssl and not DEBUG) else 'http'
+            
+            # Patch Settings
+            django_settings.SITE_URL = f'{scheme}://{_effective_domain}'
+            django_settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
+            
+            # Sync Django Site table
             try:
                 site = Site.objects.get(id=SITE_ID)
-                if site.domain != pc.domain:
-                    site.domain = pc.domain
-                    site.name = f'CloudNeuron ({pc.domain})'
+                if site.domain != _effective_domain:
+                    site.domain = _effective_domain
+                    site.name = f'CloudNeuron ({_effective_domain})'
                     site.save()
             except Site.DoesNotExist:
                 Site.objects.create(
                     id=SITE_ID,
-                    domain=pc.domain,
-                    name=f'CloudNeuron ({pc.domain})'
+                    domain=_effective_domain,
+                    name=f'CloudNeuron ({_effective_domain})'
                 )
     except Exception:
         pass  # DB not ready yet (first boot / migrations)
