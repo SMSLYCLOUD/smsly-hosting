@@ -142,3 +142,5 @@ logs/
 /backend/test_*.py
 /backend/trigger_*.py
 /backend/wait*.sh
+
+caddy-config/.cloudflare_token
