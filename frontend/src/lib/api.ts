@@ -694,6 +694,7 @@ export interface AIProviderInfo {
   name: string;
   configured: boolean;
   model: string;
+  base_url?: string;
   balance?: AIProviderBalance;
 }
 

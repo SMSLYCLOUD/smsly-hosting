@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { Cloud, Globe, GitBranch } from 'lucide-react';
+import Image from 'next/image';
+import { Globe, GitBranch } from 'lucide-react';
 
 export function Footer() {
     return (
@@ -8,10 +9,16 @@ export function Footer() {
                 <div className="grid md:grid-cols-4 gap-8 md:gap-12 mb-8 md:mb-12">
                     <div className="col-span-1 md:col-span-1">
                         <div className="flex items-center gap-3 mb-6">
-                            <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
-                                <Cloud className="w-6 h-6" />
+                            <div className="rounded-md bg-white p-1 shadow-lg shadow-emerald-500/10">
+                                <Image src="/images/mini_logo.png" alt="Grid" width={24} height={28} className="h-7 w-auto object-contain" />
                             </div>
-                            <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight">Grid</span>
+                            <div className="flex flex-col">
+                                <span className="font-bold text-xl text-slate-900 dark:text-white tracking-tight leading-none">Grid</span>
+                                <div className="flex items-center gap-1 mt-1">
+                                    <span className="text-[7px] font-bold text-emerald-500 tracking-[0.1em] uppercase">Secured By</span>
+                                    <span className="text-[8px] font-extrabold text-slate-500 dark:text-slate-400 tracking-[0.05em] uppercase">SMSLYCLOUD</span>
+                                </div>
+                            </div>
                         </div>
                             Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control.
                         <div className="flex gap-4">
@@ -57,8 +64,13 @@ export function Footer() {
                 </div>
 
                 <div className="pt-8 border-t border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="text-slate-500 dark:text-slate-400 text-sm">
+                    <div className="text-slate-500 dark:text-slate-400 text-sm flex items-center gap-2">
                         © 2026 Grid. All rights reserved.
+                        <span className="text-slate-300 dark:text-slate-700 mx-2">|</span>
+                        <span className="flex items-center gap-1.5 group">
+                          Built with <span className="text-rose-500 animate-pulse">❤️</span> by 
+                          <Link href="https://smsly.cloud" target="_blank" className="font-bold text-slate-700 dark:text-slate-300 hover:text-emerald-500 transition-colors">SMSLYCLOUD</Link>
+                        </span>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-400">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />

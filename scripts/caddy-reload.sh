@@ -101,6 +101,44 @@ load_cloudflare_env
 # Ensure watch directory exists
 mkdir -p "$WATCH_DIR"
 
+https_listener_active() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    else
+        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+    fi
+}
+
+candidate_requires_https() {
+    local candidate="$1"
+    awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*\{/ { next }
+        /^:[0-9]+[[:space:]]*\{/ { next }
+        /^http:\/\// { next }
+        /^([*][.])?[A-Za-z0-9_.-]+[[:space:]]*\{/ {
+            host = $1
+            sub(/[{].*/, "", host)
+            if (host != "localhost" && host !~ /^([0-9]{1,3}[.]){3}[0-9]{1,3}$/) {
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$candidate"
+}
+
+restore_previous_caddyfile() {
+    local previous="$1"
+
+    if [ -f "$previous" ]; then
+        cp "$previous" "$CADDY_CONF"
+    elif [ -f "$LAST_GOOD_CONF" ]; then
+        cp "$LAST_GOOD_CONF" "$CADDY_CONF"
+    fi
+    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1 || true
+}
+
 apply_validated_caddyfile() {
     local candidate="$1"
     local previous="${CADDY_CONF}.prev.$$"
@@ -109,19 +147,21 @@ apply_validated_caddyfile() {
     cp "$candidate" "$CADDY_CONF"
 
     if systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1; then
+        sleep 2
+        if candidate_requires_https "$candidate" && ! https_listener_active; then
+            echo "$LOG_PREFIX ERROR: Caddy accepted the candidate but TCP 443 is not listening; restoring previous config"
+            restore_previous_caddyfile "$previous"
+            rm -f "$previous"
+            return 1
+        fi
         cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
         rm -f "$previous"
         return 0
     fi
 
     echo "$LOG_PREFIX ERROR: Caddy reload failed after applying candidate; restoring previous config"
-    if [ -f "$previous" ]; then
-        cp "$previous" "$CADDY_CONF"
-    elif [ -f "$LAST_GOOD_CONF" ]; then
-        cp "$LAST_GOOD_CONF" "$CADDY_CONF"
-    fi
+    restore_previous_caddyfile "$previous"
     rm -f "$previous"
-    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1 || true
     return 1
 }
 

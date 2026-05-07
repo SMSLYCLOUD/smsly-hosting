@@ -4,7 +4,6 @@ import Link from 'next/link';
 import Image from 'next/image';
 
 import { Button } from '@/components/ui/button';
-import { Footer } from '@/components/layout/Footer';
 import { CloudHeroAnimation } from '@/components/animations/CloudHeroAnimation';
 import {
     ArrowRight,
@@ -35,7 +34,11 @@ import {
     ArrowUpRight,
     Search,
     BrainCircuit,
-    Bot
+    Bot,
+    MessageSquare,
+    Fingerprint,
+    TrendingUp,
+    Brain
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -49,121 +52,57 @@ const globalStats = [
     { label: 'Active Deployments', value: '50K+', icon: Rocket, color: 'text-violet-500' }
 ];
 
-// ============================================
-// DATA: CORE FEATURES
-// ============================================
-const coreFeatures = [
-    {
-        title: 'GitOps Workflow',
-        subtitle: 'GitHub-native',
-        description: 'Connect your repository, auto-provision builds, and gate releases with reviewable AI-driven deployment analysis.',
-        icon: GitBranch,
-        color: 'from-indigo-500 to-sky-600',
-    },
-    {
-        title: 'Secure Mesh & VPN',
-        subtitle: 'WireGuard-ready',
-        description: 'Zero-config WireGuard mesh networks connect your clusters globally, securing node-to-node traffic entirely under the hood.',
-        icon: Shield,
-        color: 'from-emerald-500 to-teal-600',
-    },
-    {
-        title: 'Vector-Ready Data',
-        subtitle: 'Postgres + pgvector',
-        description: 'Managed Postgres with Patroni replication and pgvector out-of-the-box for high-availability RAG and AI stacks.',
-        icon: Database,
-        color: 'from-blue-500 to-cyan-600',
-    }
-];
+
 
 // ============================================
 // DATA: FEATURES GRID
 // ============================================
 const features = [
     {
-        icon: Activity,
-        title: "Predictive Autoscaling",
-        description: "HPA-style container replicas that spin up seamlessly as traffic spikes, tracked live in the dashboard.",
+        icon: GitBranch,
+        title: "Deployment Previews",
+        description: "Spin up isolated, ephemeral environments for every pull request with auto-injected secrets and storage.",
         color: "text-blue-500",
         bg: "bg-blue-500/10"
     },
     {
-        icon: Lock,
-        title: "Backups & Transfers",
-        description: "Encrypted archives, retention pruning, and zero-downtime server-to-server transfers via SSH.",
+        icon: Database,
+        title: "Database Cloning",
+        description: "Zero-copy PostgreSQL template cloning provides instant staging data for previews without the wait.",
         color: "text-purple-500",
         bg: "bg-purple-500/10"
     },
     {
         icon: Workflow,
-        title: "Templates & Blueprints",
-        description: "One-click deploys for AI routers, Ollama, and data stacks with secret-aware environment rendering.",
+        title: "Blueprints & AI Clusters",
+        description: "One-click deployment for GPU-accelerated LLMs like Ollama, DeepSeek, and custom private data stacks.",
         color: "text-orange-500",
         bg: "bg-orange-500/10"
     },
     {
-        icon: BarChart3,
-        title: "Observability",
-        description: "Traefik metrics, health checks, and per-service logs feed deployment insights and autoscale decisions.",
+        icon: Globe,
+        title: "Global Edge Routing",
+        description: "Automated Let's Encrypt SSL and Caddy proxying routes traffic instantly to your global container mesh.",
+        color: "text-teal-500",
+        bg: "bg-teal-500/10"
+    },
+    {
+        icon: Activity,
+        title: "Observability & Mesh",
+        description: "Traefik metrics and WireGuard VPN stats feed real-time health insights and autoscale decisions.",
         color: "text-cyan-500",
         bg: "bg-cyan-500/10"
     },
     {
-        icon: CheckCircle2,
-        title: "Template Preflight",
-        description: "Docker image manifest checks and env validation stop bad one-click deploys before they hit production.",
-        color: "text-indigo-500",
-        bg: "bg-indigo-500/10"
-    },
-    {
         icon: Bot,
         title: "Auto-Remediation",
-        description: "AI-driven log analysis immediately diagnoses crash loops, suggesting fixes or auto-reverting commits.",
+        description: "Intelligent log analysis diagnoses crash loops and suggests fixes or auto-reverts bad commits.",
         color: "text-emerald-500",
         bg: "bg-emerald-500/10"
     }
 ];
 
-// ============================================
-// DATA: EXPANDED FEATURES
-// ============================================
-const expandedFeatures = [
-    {
-        title: "AI & LLM Blueprints",
-        description: "One-click templates for Ollama, DeepSeek, vLLM, and Open-WebUI running entirely on your private GPUs.",
-        icon: BrainCircuit,
-        color: "text-pink-500",
-        bg: "bg-pink-500/10"
-    },
-    {
-        title: "100+ Add-on Catalog",
-        description: "Provision Redis, MongoDB, ElasticSearch, RabbitMQ, and more with auto-injected secrets to your apps.",
-        icon: Blocks,
-        color: "text-orange-500",
-        bg: "bg-orange-500/10"
-    },
-    {
-        title: "Enterprise SSO & RBAC",
-        description: "Secure your team with SAML/SSO integration, strict Audit Logs, and fine-grained access controls.",
-        icon: Key,
-        color: "text-yellow-500",
-        bg: "bg-yellow-500/10"
-    },
-    {
-        title: "Global Edge Domains",
-        description: "Automatic Let's Encrypt wildcard SSL and Caddy routing proxies traffic instantly to newly spawned containers.",
-        icon: Globe,
-        color: "text-teal-500",
-        bg: "bg-teal-500/10"
-    },
-    {
-        title: "LiteLLM AI Router",
-        description: "Connect local Ollama nodes with OpenAI fallback seamlessly, managed by an AI-aware gateway.",
-        icon: Sparkles,
-        color: "text-indigo-500",
-        bg: "bg-indigo-500/10"
-    }
-];
+
 
 // ============================================
 // DATA: BATTLE CARDS (COMPARISON)
@@ -254,44 +193,83 @@ const complianceStandards = [
 ];
 
 // ============================================
-// DATA: PLATFORM APPS
+// DATA: SMSLYCLOUD ECOSYSTEM SERVICES
 // ============================================
-const platformApps = [
+const ecosystemServices = [
     {
-        title: 'Container Orchestration',
-        description: 'Deploy Docker containers with automatic health checks, zero-downtime updates, and self-healing clusters.',
-        icon: Boxes,
-        color: 'bg-rose-500',
+        category: 'The Trust Layer',
+        icon: Shield,
+        color: 'text-emerald-500',
+        bg: 'bg-emerald-500/10',
+        services: [
+            { name: 'Security Gateway', desc: 'Zero-trust routing & policy enforcement' },
+            { name: 'Browser Shield', desc: 'Real-time Deepfake Live Detection (WASM)' },
+            { name: 'Identity Service', desc: 'High-assurance identity management' }
+        ]
     },
     {
-        title: 'Serverless Functions',
-        description: 'Run code snippets on-demand without provisioning servers. Scalable, event-driven execution.',
-        icon: Workflow,
-        color: 'bg-violet-500',
+        category: 'Communication Channels',
+        icon: MessageSquare,
+        color: 'text-blue-500',
+        bg: 'bg-blue-500/10',
+        services: [
+            { name: 'SMS & WhatsApp', desc: 'Global messaging infrastructure' },
+            { name: 'Voice & SFU Video', desc: 'Low-latency interactive media' },
+            { name: 'Managed Email', desc: 'High-deliverability SMTP & APIs' }
+        ]
     },
     {
-        title: 'Static & Jamstack',
-        description: 'Ultra-fast CDN-backed hosting for Next.js, React, and Vue with global edge replication.',
-        icon: Globe,
-        color: 'bg-blue-500',
+        category: 'Intelligence',
+        icon: Brain,
+        color: 'text-purple-500',
+        bg: 'bg-purple-500/10',
+        services: [
+            { name: 'Smart Automation', desc: 'Advanced workflow orchestration' },
+            { name: 'Conversional AI', desc: 'Neural-link chatbots & NLP' },
+            { name: 'Data Intelligence', desc: 'Deep analytics & predictive modeling' }
+        ]
     },
     {
-        title: 'Background Workers',
-        description: 'Manage Celery, Sidekiq, or Go workers with automatic queue monitoring and scaling.',
+        category: 'Infrastructure',
         icon: Cpu,
-        color: 'bg-emerald-500',
+        color: 'text-indigo-500',
+        bg: 'bg-indigo-500/10',
+        services: [
+            { name: 'Grid Hosting', desc: 'Multi-node PaaS orchestration' },
+            { name: 'Platform API', desc: 'Unified product interaction layer' },
+            { name: 'Secure Tunneling', desc: 'End-to-end private infra tunnels' }
+        ]
+    }
+];
+
+const smslycloudPillars = [
+    {
+        title: 'Communication APIs',
+        description: 'SMS, voice, WhatsApp, email, OTP, and customer messaging infrastructure.',
+        icon: MessageSquare,
+        color: 'text-blue-500',
+        bg: 'bg-blue-500/10'
     },
     {
-        title: 'API Gateways',
-        description: 'Traefik-powered routing with automatic SSL, rate limiting, and request tracing.',
-        icon: Network,
-        color: 'bg-amber-500',
+        title: 'Identity & Trust',
+        description: 'SilentOTP, verification, abuse prevention, media integrity, and trust-layer systems.',
+        icon: Fingerprint,
+        color: 'text-emerald-500',
+        bg: 'bg-emerald-500/10'
     },
     {
-        title: 'Private AI Clusters',
-        description: 'Dedicated GPU-ready nodes for hosting local LLMs and vector embedding pipelines.',
-        icon: BrainCircuit,
-        color: 'bg-cyan-500',
+        title: 'Deployment Infrastructure',
+        description: 'Grid powered by CloudNeuron: a free open-source PaaS for apps, services, and full ecosystems.',
+        icon: Cloud,
+        color: 'text-indigo-500',
+        bg: 'bg-indigo-500/10'
+    },
+    {
+        title: 'Growth Automation',
+        description: 'Ignite: AI-assisted marketing planning, publishing, listening, leads, and analytics.',
+        icon: TrendingUp,
+        color: 'text-amber-500',
+        bg: 'bg-amber-500/10'
     }
 ];
 
@@ -311,17 +289,30 @@ export default function Home() {
                 </div>
 
                 <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center z-10">
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.5 }}
-                        className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-full mb-8 shadow-sm backdrop-blur-sm"
-                    >
-                        <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                        <span className="text-xs md:text-sm font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wide">
-                            Open Source PaaS
-                        </span>
-                    </motion.div>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.5 }}
+                            className="inline-flex items-center gap-2 px-4 py-1.5 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-full shadow-sm backdrop-blur-sm"
+                        >
+                            <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                            <span className="text-xs md:text-sm font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wide">
+                                Open Source PaaS
+                            </span>
+                        </motion.div>
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.5, delay: 0.1 }}
+                            className="inline-flex items-center gap-2 px-4 py-1.5 bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-full shadow-sm backdrop-blur-sm"
+                        >
+                            <Rocket className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            <span className="text-xs md:text-sm font-semibold text-blue-800 dark:text-blue-300 uppercase tracking-wide">
+                                Secured by SMSLYCLOUD
+                            </span>
+                        </motion.div>
+                    </div>
 
                     <motion.h1
                         initial={{ opacity: 0, y: 20 }}
@@ -411,47 +402,159 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* CORE PILLARS */}
-            <section className="py-16 md:py-32 bg-slate-950 text-white overflow-hidden relative">
-                <div className="absolute inset-0 opacity-10">
-                    <div className="absolute inset-0 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:48px_48px]" />
-                </div>
 
-                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="text-center mb-16 md:mb-20">
-                        <span className="text-emerald-400 font-bold tracking-wider uppercase text-xs md:text-sm mb-4 block">Why Grid?</span>
-                        <h2 className="text-3xl md:text-5xl font-extrabold mb-4 md:mb-6 tracking-tight">Ecosystem Deployment Simplified</h2>
-                        <p className="text-base md:text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
-                            Grid is a control plane for modern software ecosystems — <span className="text-white font-semibold">free, open-source, and self-hosted</span> on your own infrastructure.
-                        </p>
-                    </div>
 
-                    <div className="grid lg:grid-cols-3 gap-8 md:gap-10">
-                        {coreFeatures.map((feature, i) => (
+            {/* BUILT BY SMSLYCLOUD */}
+            <section className="py-20 md:py-32 bg-white dark:bg-slate-950 overflow-hidden border-t border-slate-200 dark:border-slate-800">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
+                        <div className="lg:w-1/2">
                             <motion.div
-                                key={i}
-                                initial={{ opacity: 0, y: 30 }}
+                                initial={{ opacity: 0, y: 20 }}
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
-                                transition={{ delay: i * 0.2 }}
-                                className="relative p-8 md:p-10 rounded-2xl md:rounded-[2.5rem] bg-slate-900/50 border border-slate-800 hover:border-emerald-500/30 transition-all group overflow-hidden"
                             >
-                                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-
-                                <div className={`w-14 h-14 md:w-16 md:h-16 rounded-xl md:rounded-2xl bg-gradient-to-br ${feature.color} flex items-center justify-center mb-6 md:mb-8 shadow-lg relative z-10 group-hover:scale-105 transition-transform duration-300`}>
-                                    <feature.icon className="w-6 h-6 md:w-8 md:h-8 text-white" />
+                                <div className="inline-flex items-center gap-2 px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs md:text-sm font-medium rounded-full mb-6">
+                                    <Rocket className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                                    Secured by SMSLYCLOUD
                                 </div>
-
-                                <h3 className="text-xl md:text-2xl font-bold text-white mb-2 md:mb-3 relative z-10">{feature.title}</h3>
-                                <p className="text-emerald-400 font-mono text-[10px] md:text-xs mb-4 md:mb-5 uppercase tracking-widest relative z-10">{feature.subtitle}</p>
-                                <p className="text-sm md:text-base text-slate-400 leading-relaxed relative z-10">
-                                    {feature.description}
+                                <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 tracking-tight leading-tight">
+                                    Grid is secured by the SMSLYCLOUD infrastructure trust layer.
+                                </h2>
+                                <p className="text-base md:text-lg text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
+                                    Grid comes from SMSLYCLOUD, an infrastructure trust ecosystem building the tools modern internet businesses need to communicate, verify, deploy, and grow.
                                 </p>
+                                <p className="text-sm md:text-base text-slate-500 dark:text-slate-500 mb-8 leading-relaxed italic">
+                                    &quot;Grid is one product in a wider SMSLYCLOUD mission: make serious internet infrastructure easier, safer, and more accessible.&quot;
+                                </p>
+                                <Link 
+                                    href="https://smsly.cloud" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 font-bold rounded-xl border border-emerald-100 dark:border-emerald-800/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all mb-10"
+                                >
+                                    Explore SMSLYCLOUD <ArrowUpRight className="w-4 h-4" />
+                                </Link>
                             </motion.div>
-                        ))}
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                                {smslycloudPillars.map((pillar, i) => (
+                                    <motion.div
+                                        key={i}
+                                        initial={{ opacity: 0, x: -20 }}
+                                        whileInView={{ opacity: 1, x: 0 }}
+                                        viewport={{ once: true }}
+                                        transition={{ delay: i * 0.1 }}
+                                        className="flex items-start gap-3 group"
+                                    >
+                                        <div className={`p-2 rounded-lg ${pillar.bg} ${pillar.color} group-hover:scale-110 transition-transform`}>
+                                            <pillar.icon className="w-5 h-5" />
+                                        </div>
+                                        <div>
+                                            <h4 className="font-bold text-sm md:text-base text-slate-900 dark:text-white mb-1">{pillar.title}</h4>
+                                            <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">{pillar.description}</p>
+                                        </div>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="lg:w-1/2 relative">
+                            {/* Visual element representing the ecosystem - using existing styles */}
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                whileInView={{ opacity: 1, scale: 1 }}
+                                viewport={{ once: true }}
+                                className="relative p-1 bg-gradient-to-br from-emerald-500/20 via-teal-500/20 to-blue-500/20 rounded-[2.5rem] overflow-hidden"
+                            >
+                                <div className="bg-white dark:bg-slate-900 rounded-[2.3rem] p-8 md:p-12 relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 p-8 opacity-10">
+                                        <Globe className="w-64 h-64 text-slate-400" />
+                                    </div>
+                                    
+                                    <div className="relative z-10">
+                                        <div className="text-emerald-500 font-bold tracking-widest uppercase text-xs mb-4">Infrastructure Ecosystem</div>
+                                        <h3 className="text-2xl md:text-3xl font-extrabold text-slate-900 dark:text-white mb-6 leading-tight">Built for founders, scaled for the internet.</h3>
+                                        
+                                        <div className="space-y-6">
+                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 transform hover:translate-x-2 transition-transform">
+                                                <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                                                    <MessageSquare className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Communication APIs</div>
+                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Messaging & OTP</div>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 translate-x-4 md:translate-x-8 transform hover:translate-x-10 transition-transform">
+                                                <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
+                                                    <Fingerprint className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Identity & Trust</div>
+                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Security & Verification</div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800 transform hover:translate-x-2 transition-transform">
+                                                <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
+                                                    <Cloud className="w-5 h-5" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-sm text-slate-900 dark:text-white">Deployment</div>
+                                                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Grid by CloudNeuron</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        </div>
                     </div>
                 </div>
             </section>
+ 
+             {/* THE TRUST LAYER ECOSYSTEM GRID */}
+             <section className="py-20 md:py-32 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                     <div className="text-center mb-16 md:mb-20">
+                         <h2 className="text-3xl md:text-5xl font-extrabold text-slate-900 dark:text-white mb-6 tracking-tight">
+                             The Trust Layer for the Internet
+                         </h2>
+                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
+                             SMSLYCLOUD provides the essential infrastructure for modern internet businesses — 
+                             from zero-trust security to real-time deepfake detection and global communications.
+                         </p>
+                     </div>
+ 
+                     <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
+                         {ecosystemServices.map((cat, i) => (
+                             <motion.div
+                                 key={i}
+                                 initial={{ opacity: 0, y: 20 }}
+                                 whileInView={{ opacity: 1, y: 0 }}
+                                 viewport={{ once: true }}
+                                 transition={{ delay: i * 0.1 }}
+                                 className="flex flex-col bg-white dark:bg-slate-800 p-8 rounded-[2rem] border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-xl hover:shadow-emerald-500/5 transition-all group"
+                             >
+                                 <div className={`w-12 h-12 rounded-xl ${cat.bg} ${cat.color} flex items-center justify-center mb-6 group-hover:scale-110 transition-transform`}>
+                                     <cat.icon className="w-6 h-6" />
+                                 </div>
+                                 <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6">{cat.category}</h3>
+                                 <ul className="space-y-6 flex-1">
+                                     {cat.services.map((svc, j) => (
+                                         <li key={j} className="relative pl-4 border-l-2 border-slate-100 dark:border-slate-700 hover:border-emerald-500 transition-colors">
+                                             <h4 className="font-bold text-sm text-slate-900 dark:text-white mb-1">{svc.name}</h4>
+                                             <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">{svc.desc}</p>
+                                         </li>
+                                     ))}
+                                 </ul>
+                             </motion.div>
+                         ))}
+                     </div>
+                 </div>
+             </section>
 
             {/* BATTLE CARDS COMPARISON */}
             <section className="py-16 md:py-24 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
@@ -542,7 +645,7 @@ export default function Home() {
                     </motion.div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
-                        {features.concat(expandedFeatures).map((feature, i) => (
+                        {features.map((feature, i) => (
                             <motion.div
                                 key={feature.title}
                                 initial={{ opacity: 0, y: 20 }}
@@ -562,58 +665,7 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* DEEP DIVE: THE INTELLIGENT CLOUD */}
-            <section className="py-16 md:py-32 bg-slate-950 text-white overflow-hidden relative">
-                <div className="absolute inset-0 bg-gradient-to-b from-slate-900 to-slate-950" />
-                <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-20">
-                        <div className="lg:w-1/2 order-2 lg:order-1">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-4">
-                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
-                                        <Database className="w-8 h-8 text-blue-400 mb-4" />
-                                        <h4 className="font-bold mb-2">Automated PGVector</h4>
-                                        <p className="text-sm text-slate-400">Embeddings databases ready out-of-the-box for RAG templates like Khoj.</p>
-                                    </div>
-                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
-                                        <BrainCircuit className="w-8 h-8 text-pink-400 mb-4" />
-                                        <h4 className="font-bold mb-2">LiteLLM AI Router</h4>
-                                        <p className="text-sm text-slate-400">Connect local Ollama nodes with OpenAI fallback seamlessly.</p>
-                                    </div>
-                                </div>
-                                <div className="space-y-4 pt-8">
-                                    <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
-                                        <Bot className="w-8 h-8 text-emerald-400 mb-4" />
-                                        <h4 className="font-bold mb-2">Ollama GPU Native</h4>
-                                        <p className="text-sm text-slate-400">Schedule Llama3, DeepSeek-R1, and Mistral on your bare-metal machines.</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="lg:w-1/2 order-1 lg:order-2">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-900/30 text-emerald-400 text-xs md:text-sm font-medium rounded-full mb-6">
-                                <Sparkles className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                                The Intelligent Cloud
-                            </div>
-                            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-6 tracking-tight">AI Infrastructure,<br/>Self-Hosted.</h2>
-                            <p className="text-base md:text-lg text-slate-400 mb-8 leading-relaxed">
-                                Grid is the deployment layer for the modern web. From simple APIs to complex AI clusters, Grid handles orchestration on your private VPS. CloudNeuron is the underlying engine that manages CUDA drivers, Docker networking, and control-plane intelligence so you don&apos;t have to.
-                            </p>
-                            <ul className="space-y-4 mb-8">
-                                <li className="flex items-center gap-3 text-slate-300">
-                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Pre-configured templates for 20+ Open-Source LLMs
-                                </li>
-                                <li className="flex items-center gap-3 text-slate-300">
-                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Automatic cross-service secret injection
-                                </li>
-                                <li className="flex items-center gap-3 text-slate-300">
-                                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> AI diagnostics for broken code deployments
-                                </li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </section>
+
 
             {/* DEVELOPER EXPERIENCE & CLI */}
             <section className="py-16 md:py-32 bg-white dark:bg-slate-950 overflow-hidden">
@@ -706,40 +758,7 @@ export default function Home() {
                 </div>
             </section>
 
-            {/* PLATFORM APPS */}
-            <section className="py-16 md:py-32 bg-slate-100 dark:bg-slate-900/80 border-y border-slate-200 dark:border-slate-800">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="text-center mb-12 md:mb-20">
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs md:text-sm font-medium rounded-full mb-4">
-                            <Boxes className="w-3 h-3 md:w-3.5 md:h-3.5" />
-                            Platform primitives
-                        </div>
-                        <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4 md:mb-6 text-slate-900 dark:text-white tracking-tight">Deploy Any Architecture</h2>
-                        <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            From simple static sites to complex AI workloads, we provide the foundational primitives you need.
-                        </p>
-                    </div>
 
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {platformApps.map((app, i) => (
-                            <motion.div
-                                key={i}
-                                initial={{ opacity: 0, scale: 0.95 }}
-                                whileInView={{ opacity: 1, scale: 1 }}
-                                viewport={{ once: true }}
-                                transition={{ delay: i * 0.1 }}
-                                className="bg-white dark:bg-slate-950 p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col items-start hover:shadow-lg transition-shadow"
-                            >
-                                <div className={`p-3 rounded-xl text-white mb-6 ${app.color}`}>
-                                    <app.icon className="w-6 h-6" />
-                                </div>
-                                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-3">{app.title}</h3>
-                                <p className="text-slate-600 dark:text-slate-400 leading-relaxed">{app.description}</p>
-                            </motion.div>
-                        ))}
-                    </div>
-                </div>
-            </section>
 
             {/* TESTIMONIALS */}
             <section className="py-16 md:py-32 bg-slate-50 dark:bg-slate-900">
@@ -850,8 +869,6 @@ export default function Home() {
 
                 </div>
             </section>
-
-            <Footer />
         </main>
     );
 }

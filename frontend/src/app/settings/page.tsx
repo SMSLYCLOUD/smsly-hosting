@@ -133,6 +133,7 @@ export default function SettingsPage() {
   const [systemConfig, setSystemConfig] = useState<any>(null);
   const [aiKeys, setAiKeys] = useState<Record<string, string>>({});
   const [aiModels, setAiModels] = useState<Record<string, string>>({});
+  const [aiUrls, setAiUrls] = useState<Record<string, string>>({});
 
   // Domain & SSL Config State
   const [domainConfig, setDomainConfig] = useState<any>(null);
@@ -389,6 +390,32 @@ export default function SettingsPage() {
     fetchTeams();
     fetchNotifPrefs();
   }, [fetchProviders, fetchAIConfig, fetchSystemConfig, fetchProfile, fetchDomainConfig, fetchApiKeys, fetchTeams, fetchNotifPrefs]);
+
+  useEffect(() => {
+    if (aiData?.providers) {
+      const urls: Record<string, string> = {};
+      const models: Record<string, string> = {};
+      aiData.providers.forEach((p: any) => {
+        if (p.base_url) urls[p.id] = p.base_url;
+        if (p.model) models[p.id] = p.model;
+      });
+      setAiUrls(prev => {
+        const next = { ...urls };
+        // Preserve user edits for keys that already exist in state
+        Object.keys(prev).forEach(key => {
+          if (prev[key]) next[key] = prev[key];
+        });
+        return next;
+      });
+      setAiModels(prev => {
+        const next = { ...models };
+        Object.keys(prev).forEach(key => {
+          if (prev[key]) next[key] = prev[key];
+        });
+        return next;
+      });
+    }
+  }, [aiData]);
 
   const handleCreateApiKey = async () => {
       try {
