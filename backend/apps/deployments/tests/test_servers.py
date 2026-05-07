@@ -4,6 +4,7 @@
 import hashlib
 import hmac
 import json
+import os
 import time
 from unittest.mock import patch, MagicMock
 
@@ -14,7 +15,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from ..models_servers import ManagedServer
-from ..tasks import update_remote_server_task
+from ..tasks import enqueue_smart_deploy_task, update_remote_server_task
 from ..views_servers import _build_remote_headers
 
 User = get_user_model()
@@ -602,3 +603,88 @@ class RemoteServerUpdateTaskTests(TestCase):
         self.assertEqual(server.provision_status, ManagedServer.ProvisionStatus.FAILED)
         self.assertIn("docker daemon is not reachable", server.provision_logs)
         self.assertIn("preflight failed", server.provision_logs.lower())
+
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://smsly_admin:master-db@db:5432/smsly_hosting",
+            "RABBITMQ_PASSWORD": "master-mq",
+            "REDIS_PASSWORD": "master-redis",
+            "GATEWAY_SECRET": "master-gateway",
+        },
+        clear=False,
+    )
+    @patch("apps.deployments.services.provisioner._provision_node_db_credentials")
+    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
+    @patch("apps.deployments.services.ssh_client.SSHClient")
+    def test_lite_update_preserves_agent_mode_and_node_queue(
+        self,
+        ssh_cls,
+        _token_mock,
+        provision_db_mock,
+    ):
+        provision_db_mock.return_value = ("node_agent_abcd", "node-db-pass")
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Lite Worker",
+            host="10.0.0.32",
+            ssh_password="secret",
+            is_lite_agent=True,
+        )
+        ssh = ssh_cls.return_value
+        ssh.find_hosting_path.return_value = "/opt/smsly-hosting"
+        ssh.exec_command.side_effect = [
+            ("preflight ok\n", "", 0),
+            ("installer ok\n", "", 0),
+            ("postflight ok\n", "", 0),
+        ]
+
+        ok = update_remote_server_task.run(str(server.id))
+
+        self.assertTrue(ok)
+        update_command = ssh.exec_command.call_args_list[1].args[0]
+        self.assertIn("--mode=agent-lite", update_command)
+        self.assertIn("SMSLY_NODE_QUEUE=", update_command)
+        self.assertIn("MASTER_GATEWAY_SECRET=master-gateway", update_command)
+        self.assertIn("SKIP_REBOOT=1", update_command)
+
+        server.refresh_from_db()
+        self.assertEqual(server.provision_status, ManagedServer.ProvisionStatus.DONE)
+        self.assertEqual(server.gateway_secret, "master-gateway")
+        self.assertEqual(
+            server.provider_metadata["node_queue"],
+            f"smsly-node-{server.id}",
+        )
+
+
+class LiteAgentQueueTests(TestCase):
+    @patch.dict(
+        os.environ,
+        {"MODE": "agent", "SMSLY_NODE_QUEUE": "smsly-node-test"},
+        clear=False,
+    )
+    @patch("apps.deployments.tasks.smart_deploy_task.apply_async")
+    def test_agent_enqueue_uses_dedicated_node_queue(self, apply_async_mock):
+        enqueue_smart_deploy_task("dep-id", "provider-id", skip_review=True)
+
+        apply_async_mock.assert_called_once()
+        self.assertEqual(apply_async_mock.call_args.kwargs["queue"], "smsly-node-test")
+        self.assertEqual(
+            apply_async_mock.call_args.kwargs["kwargs"],
+            {
+                "deployment_id": "dep-id",
+                "provider_id": "provider-id",
+                "skip_review": True,
+            },
+        )
+
+    @patch.dict(os.environ, {"MODE": "master"}, clear=False)
+    @patch("apps.deployments.tasks.smart_deploy_task.delay")
+    def test_full_install_enqueue_uses_standard_deploy_route(self, delay_mock):
+        enqueue_smart_deploy_task("dep-id", "provider-id", skip_review=False)
+
+        delay_mock.assert_called_once_with(
+            deployment_id="dep-id",
+            provider_id="provider-id",
+            skip_review=False,
+        )

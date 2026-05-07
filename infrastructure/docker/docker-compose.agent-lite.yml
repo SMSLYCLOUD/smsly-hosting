@@ -40,6 +40,9 @@ services:
     env_file: ../../.env
     environment:
       - MODE=agent
+      - SMSLY_NODE_HOST=${SMSLY_NODE_HOST:-}
+      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-agent}
+      - SMSLY_NODE_QUEUE=${SMSLY_NODE_QUEUE:-deploy}
       - DOCKER_HOST=tcp://socket-proxy:2375
       # These are populated by the installer into .env
       - DATABASE_URL=${DATABASE_URL}
@@ -69,10 +72,13 @@ services:
   celery-worker:
     image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
     restart: unless-stopped
-    command: celery -A config worker --loglevel=info -Q deploy,fast,celery --concurrency=4
+    command: sh -c 'celery -A config worker --loglevel=info -Q "$${SMSLY_NODE_QUEUE:-deploy},fast,celery" --hostname="$${SMSLY_NODE_ID:-agent}@%h" --concurrency=4'
     env_file: ../../.env
     environment:
       - MODE=agent
+      - SMSLY_NODE_HOST=${SMSLY_NODE_HOST:-}
+      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-agent}
+      - SMSLY_NODE_QUEUE=${SMSLY_NODE_QUEUE:-deploy}
       - DOCKER_HOST=tcp://socket-proxy:2375
       - DOCKER_NETWORK=smsly-net
       - DATABASE_URL=${DATABASE_URL}

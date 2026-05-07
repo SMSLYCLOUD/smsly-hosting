@@ -37,7 +37,14 @@ from .serializers import (
 )
 from .models_audit import AuditLog
 from .models_backup import ServiceBackup, ServerBackup, BackupSchedule
-from .tasks import smart_deploy_task, resume_deploy_task, create_service_backup_task, create_server_backup_task, restore_service_backup_task
+from .tasks import (
+    smart_deploy_task,
+    resume_deploy_task,
+    create_service_backup_task,
+    create_server_backup_task,
+    restore_service_backup_task,
+    enqueue_smart_deploy_task,
+)
 from .domain_utils import normalize_domain
 from .services.server_guard import ServerGuard
 from apps.cloud.models import CloudProvider
@@ -797,7 +804,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         )
 
         try:
-            smart_deploy_task.delay(
+            enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id), 
                 provider_id=str(provider.id),
                 skip_review=skip_review
@@ -4029,7 +4036,7 @@ class RemoteTriggerView(GenericAPIView):
             )
 
             # Enqueue task
-            smart_deploy_task.delay(
+            enqueue_smart_deploy_task(
                 deployment_id=str(deployment.id),
                 provider_id=str(provider.id),
                 skip_review=skip_review

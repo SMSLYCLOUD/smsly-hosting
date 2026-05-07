@@ -65,6 +65,47 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _current_agent_node_queue() -> str:
+    """Return this lite agent's dedicated deploy queue, if running as an agent."""
+    if str(os.environ.get("MODE", "")).strip().lower() != "agent":
+        return ""
+    queue = str(os.environ.get("SMSLY_NODE_QUEUE", "")).strip()
+    if not queue or queue == "deploy":
+        logger.warning(
+            "Agent mode is running without a dedicated SMSLY_NODE_QUEUE; "
+            "falling back to the shared deploy queue."
+        )
+        return ""
+    return queue
+
+
+def enqueue_smart_deploy_task(
+    deployment_id: str,
+    provider_id: str,
+    skip_review: bool = False,
+):
+    """
+    Enqueue a deployment, using a dedicated node queue on lite agents.
+
+    Full installs have their own broker, so the normal deploy queue is local
+    to that server. Lite agents share the master broker and must route local
+    API-triggered deploys to their per-node queue.
+    """
+    kwargs = {
+        "deployment_id": str(deployment_id),
+        "provider_id": str(provider_id),
+        "skip_review": skip_review,
+    }
+    queue = _current_agent_node_queue()
+    if queue:
+        return smart_deploy_task.apply_async(
+            kwargs=kwargs,
+            queue=queue,
+            routing_key=queue,
+        )
+    return smart_deploy_task.delay(**kwargs)
+
+
 def _regenerate_caddyfile():
     """Regenerate and apply the Caddyfile with current service domains.
 
@@ -3400,19 +3441,35 @@ def update_remote_server_task(server_id: str):
         master_ip = str(config.server_ip or os.environ.get('PUBLIC_IP') or '').strip() or '127.0.0.1'
         env_vars = {
             "NON_INTERACTIVE": "1",
+            "SKIP_REBOOT": "1",
+            "SMSLY_STRICT_VERIFY": "1",
             "MASTER_IP": master_ip,
             "SMSLY_BRANCH": branch,
         }
+        update_args = ["--update"]
+
+        if getattr(server, "is_lite_agent", False):
+            from apps.deployments.services.provisioner import build_agent_lite_install_env
+
+            lite_env, lite_messages = build_agent_lite_install_env(
+                server,
+                master_ip=master_ip,
+            )
+            for message in lite_messages:
+                _append_remote_update_log(server, f"> {message}\n")
+            env_vars.update(lite_env)
+            update_args.append("--mode=agent-lite")
         
         if auth_url:
             env_vars["SMSLY_GIT_REMOTE"] = auth_url
 
         env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
+        update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
         quoted_path = shlex.quote(hosting_path)
         cmd_update = (
             f"cd {quoted_path} && "
             "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
-            f"$SUDO env {env_str} bash install.sh --update"
+            f"$SUDO env {env_str} bash install.sh {update_args_str}"
         )
 
         _append_remote_update_log(server, f"> Running installer update (branch: {branch})...\n")
@@ -3436,12 +3493,40 @@ def update_remote_server_task(server_id: str):
         if code != 0:
             raise RuntimeError(f"Remote update postflight failed with exit code {code}.")
 
+        update_fields = ["provision_status", "updated_at"]
+        if getattr(server, "is_lite_agent", False):
+            metadata = dict(server.provider_metadata or {})
+            metadata["connection_mode"] = "agent-lite"
+            metadata["node_id"] = str(server.id)
+            metadata["node_host"] = str(server.host or "")
+            metadata["node_queue"] = str(env_vars.get("SMSLY_NODE_QUEUE") or "")
+            server.provider_metadata = metadata
+            update_fields.append("provider_metadata")
+            gateway_secret = str(env_vars.get("MASTER_GATEWAY_SECRET") or "").strip()
+            if gateway_secret:
+                server.gateway_secret = gateway_secret
+                update_fields.append("gateway_secret")
         server.provision_status = ManagedServer.ProvisionStatus.DONE
-        server.save(update_fields=["provision_status", "updated_at"])
+        server.save(update_fields=update_fields)
         _append_remote_update_log(
             server,
             f"\n--- Update completed successfully at {timezone.now()} ---\n",
         )
+        if _env_bool("SMSLY_REMOTE_UPDATE_REBOOT_ON_SUCCESS", default=False):
+            reboot_cmd = (
+                "if [ \"$(id -u)\" -eq 0 ]; then "
+                "(nohup sh -c 'sleep 8; /sbin/reboot || reboot' >/dev/null 2>&1 &); "
+                "else "
+                "(nohup sh -c 'sleep 8; sudo -n /sbin/reboot || sudo -n reboot' >/dev/null 2>&1 &); "
+                "fi"
+            )
+            ssh.exec_command(reboot_cmd, timeout=10, raise_on_error=False)
+            server.status = ManagedServer.Status.UNKNOWN
+            server.save(update_fields=["status", "updated_at"])
+            _append_remote_update_log(
+                server,
+                "> Remote reboot scheduled after successful update.\n",
+            )
         logger.info("Update Task: Finished successfully for %s", server.host)
         return True
 

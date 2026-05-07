@@ -55,6 +55,142 @@ PROVISION_TIMEOUT_SECONDS = _env_int(
 )
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _shell_env_assignments(values: dict[str, object]) -> str:
+    """Render shell-safe KEY=value assignments for remote installer commands."""
+    parts = []
+    for key, value in values.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={shlex.quote(str(value))}")
+    return " ".join(parts)
+
+
+def _url_password(raw_url: str | None) -> str:
+    if not raw_url:
+        return ""
+    try:
+        return urlparse(raw_url).password or ""
+    except Exception:
+        return ""
+
+
+def _url_username(raw_url: str | None) -> str:
+    if not raw_url:
+        return ""
+    try:
+        return urlparse(raw_url).username or ""
+    except Exception:
+        return ""
+
+
+def _node_queue_name(server: ManagedServer) -> str:
+    """Return the stable Celery queue consumed only by this lite node."""
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(server.id)).strip("-")
+    return f"smsly-node-{slug or 'agent'}"
+
+
+def _master_gateway_secret() -> str:
+    return str(
+        os.environ.get("GATEWAY_SECRET")
+        or getattr(settings, "GATEWAY_SECRET", "")
+        or ""
+    ).strip()
+
+
+def build_agent_lite_install_env(
+    server: ManagedServer,
+    master_ip: str | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """
+    Build the environment needed to install or update a lite agent.
+
+    Lite agents share the master's database, broker, Redis, and HMAC secret.
+    They also need a deterministic node queue so deployments sent to the agent
+    cannot be consumed by the control-plane worker.
+    """
+    messages: list[str] = []
+
+    messages.append("Generating dedicated lite-node database credentials on the master.")
+    node_user, node_pass = _provision_node_db_credentials(server)
+    if node_user and node_pass:
+        messages.append(f"Dedicated lite-node DB user ready: {node_user}.")
+        master_db_user = node_user
+        master_db_pass = node_pass
+    else:
+        messages.append(
+            "Dedicated DB user creation failed; falling back to master DB credentials."
+        )
+        database_url = os.environ.get("DATABASE_URL", "")
+        master_db_user = (
+            os.environ.get("POSTGRES_USER")
+            or _url_username(database_url)
+            or "postgres"
+        )
+        master_db_pass = (
+            os.environ.get("POSTGRES_PASSWORD")
+            or _url_password(database_url)
+            or ""
+        )
+
+    master_mq_pass = (
+        os.environ.get("RABBITMQ_PASSWORD")
+        or _url_password(os.environ.get("CELERY_BROKER_URL", ""))
+        or ""
+    )
+    master_redis_pass = (
+        os.environ.get("REDIS_PASSWORD")
+        or _url_password(os.environ.get("REDIS_URL", ""))
+        or ""
+    )
+    resolved_master_ip = (
+        str(master_ip or "").strip()
+        or os.environ.get("PUBLIC_IP", "").strip()
+        or "127.0.0.1"
+    )
+
+    node_id = str(server.id)
+    node_queue = _node_queue_name(server)
+    return (
+        {
+            "MASTER_IP": resolved_master_ip,
+            "MASTER_DB_USER": master_db_user,
+            "MASTER_DB_PASSWORD": master_db_pass,
+            "MASTER_MQ_PASSWORD": master_mq_pass,
+            "MASTER_REDIS_PASSWORD": master_redis_pass,
+            "MASTER_GATEWAY_SECRET": _master_gateway_secret(),
+            "SMSLY_NODE_HOST": str(server.host or "").strip(),
+            "SMSLY_NODE_ID": node_id,
+            "SMSLY_NODE_QUEUE": node_queue,
+        },
+        messages,
+    )
+
+
+def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
+    """Schedule a best-effort reboot after successful provisioning/update."""
+    command = (
+        "if [ \"$(id -u)\" -eq 0 ]; then "
+        "(nohup sh -c 'sleep 8; /sbin/reboot || reboot' >/dev/null 2>&1 &); "
+        "else "
+        "(nohup sh -c 'sleep 8; sudo -n /sbin/reboot || sudo -n reboot' >/dev/null 2>&1 &); "
+        "fi"
+    )
+    try:
+        ssh.exec_command(command)
+        logger.info("Scheduled remote reboot for %s after %s", server.host, reason)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to schedule remote reboot for %s: %s", server.host, exc)
+        return False
+
+
 def _source_root_dir() -> str:
     """Return container path to smsly-hosting source root."""
     return utils_get_source_root()
@@ -428,71 +564,50 @@ def provision_server(self, server_id: str):
         # -- Step 3: Run install script --
         _append_log(server, "⚙️ Running Grid installer (this may take 5-15 minutes)...")
 
-        # Build non-interactive environment
+        # Build non-interactive environment.
         master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
-        env_vars = (
-            "NON_INTERACTIVE=1 "
-            "SKIP_REBOOT=1 "
-            "SMSLY_STRICT_VERIFY=1 "
-            f"MASTER_IP={master_ip} "
-            f"SMSLY_BRANCH={os.environ.get('SMSLY_BRANCH', 'main')} "
-            f"USE_SSL=false SMSLY_NODE_HOST={server.host}"
-        )
+        install_env = {
+            "NON_INTERACTIVE": "1",
+            "SKIP_REBOOT": "1",
+            "SMSLY_STRICT_VERIFY": "1",
+            "MASTER_IP": master_ip,
+            "SMSLY_BRANCH": os.environ.get("SMSLY_BRANCH", "main"),
+            "USE_SSL": "false",
+            "SMSLY_NODE_HOST": server.host,
+        }
 
-        install_args = ""
+        install_args: list[str] = []
         if getattr(server, "is_lite_agent", False):
-            # Lite Agent Node: dedicated credentials for database/queue
-            _append_log(server, "🔐 Generating dedicated node credentials on Master DB...")
-            node_user, node_pass = _provision_node_db_credentials(server)
-            
-            if node_user and node_pass:
-                _append_log(server, f"✅ Dedicated DB user created: {node_user}")
-                master_db_user = node_user
-                master_db_pass = node_pass
-            else:
-                _append_log(server, "⚠️ Failed to create dedicated DB user; falling back to primary Master credentials.")
-                master_db_user = os.environ.get("POSTGRES_USER", "postgres")
-                master_db_pass = os.environ.get("POSTGRES_PASSWORD", "")
-            
-            master_mq_pass = os.environ.get("RABBITMQ_PASSWORD", "")
-            master_redis_pass = os.environ.get("REDIS_PASSWORD", "")
-            if not master_redis_pass:
-                redis_url = os.environ.get("REDIS_URL", "")
-                try:
-                    master_redis_pass = urlparse(redis_url).password or ""
-                except Exception:
-                    master_redis_pass = ""
-            
-            env_vars = (
-                f"{env_vars} "
-                f"MASTER_DB_USER={master_db_user} "
-                f"MASTER_DB_PASSWORD={master_db_pass} "
-                f"MASTER_MQ_PASSWORD={master_mq_pass} "
-                f"MASTER_REDIS_PASSWORD={master_redis_pass}"
+            lite_env, lite_messages = build_agent_lite_install_env(
+                server,
+                master_ip=master_ip,
             )
-            install_args = "--mode=agent-lite"
-
+            for message in lite_messages:
+                _append_log(server, message)
+            install_env.update(lite_env)
+            install_args.append("--mode=agent-lite")
         # ─── Resume Check ──────────────────────────────────────────────────
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")
         remote_mode = stdout.read().decode().strip()
         if "RESUME" in remote_mode:
             _append_log(server, "ℹ️ Found partial installation state. Resuming from last checkpoint...")
-            install_args = f"{install_args} --resume"
+            install_args.append("--resume")
 
         if github_token and not token_known_invalid:
             from urllib.parse import quote
             encoded = quote(github_token, safe="")
             auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
-            env_vars = f"{env_vars} SMSLY_GIT_REMOTE='{auth_url}'"
+            install_env["SMSLY_GIT_REMOTE"] = auth_url
 
         if use_local_bundle:
-            env_vars = (
-                "SMSLY_FORCE_SOURCE_SYNC=1 "
-                "SMSLY_INSTALL_WORKDIR=/tmp/smsly-hosting-src "
-                f"{env_vars}"
-            )
+            install_env["SMSLY_FORCE_SOURCE_SYNC"] = "1"
+            install_env["SMSLY_INSTALL_WORKDIR"] = "/tmp/smsly-hosting-src"
 
-        cmd = f"{run_prefix}{env_vars} bash /tmp/smsly-install.sh {install_args} 2>&1"
+        install_args_str = " ".join(shlex.quote(arg) for arg in install_args)
+        cmd = (
+            f"{run_prefix}{_shell_env_assignments(install_env)} "
+            f"bash /tmp/smsly-install.sh {install_args_str} 2>&1"
+        )
 
         # Execute with a channel for streaming output
         transport = ssh.get_transport()
@@ -716,12 +831,32 @@ def provision_server(self, server_id: str):
         # -- Step 6: Update server record --
         server.api_url = api_url
         server.api_token = api_token or ""
+        provider_metadata = dict(server.provider_metadata or {})
+        provider_metadata["connection_mode"] = (
+            "agent-lite" if getattr(server, "is_lite_agent", False) else "full-install"
+        )
+        update_fields = [
+            "api_url", "api_token", "provision_status", "status",
+            "provider_metadata", "updated_at",
+        ]
+        if getattr(server, "is_lite_agent", False):
+            gateway_secret = str(install_env.get("MASTER_GATEWAY_SECRET") or "").strip()
+            node_queue = str(install_env.get("SMSLY_NODE_QUEUE") or _node_queue_name(server))
+            provider_metadata["node_id"] = str(server.id)
+            provider_metadata["node_queue"] = node_queue
+            provider_metadata["node_host"] = str(server.host or "")
+            if gateway_secret:
+                server.gateway_secret = gateway_secret
+                update_fields.append("gateway_secret")
+                _append_log(
+                    server,
+                    "Lite Agent HMAC secret synchronized with the master.",
+                )
+            _append_log(server, f"Lite Agent node queue: {node_queue}")
+        server.provider_metadata = provider_metadata
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.status = ManagedServer.Status.ONLINE
-        server.save(update_fields=[
-            "api_url", "api_token", "provision_status", "status",
-            "updated_at",
-        ])
+        server.save(update_fields=update_fields)
 
         _append_log(server, "✅ Grid provisioning complete!")
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
@@ -756,6 +891,16 @@ def provision_server(self, server_id: str):
                                 break
             except Exception as exc:
                 _append_log(server, f"⚠️ Auto token exchange failed (non-critical): {exc}")
+
+        if _env_bool("SMSLY_PROVISION_REBOOT_ON_SUCCESS", default=True):
+            _append_log(server, "Scheduling remote reboot after successful provisioning.")
+            if _schedule_remote_reboot(ssh, server, "provisioning"):
+                server.status = ManagedServer.Status.UNKNOWN
+                server.save(update_fields=["status", "updated_at"])
+                _append_log(
+                    server,
+                    "Remote reboot scheduled. Health check will mark the node online after it returns.",
+                )
 
     except SoftTimeLimitExceeded as exc:
         logger.exception("Provisioning soft-timeout for server %s", server_id)

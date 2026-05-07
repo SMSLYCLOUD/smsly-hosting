@@ -473,6 +473,16 @@ env_path.write_text("\n".join(updated) + "\n")
 PY
 }
 
+sanitize_node_identifier() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    if [ -z "$value" ]; then
+        value="$(hostname 2>/dev/null | tr -c 'A-Za-z0-9_.-' '-' | sed -E 's/^-+//; s/-+$//; s/-+/-/g' | cut -c1-96)"
+    fi
+    [ -n "$value" ] || value="agent"
+    printf '%s' "$value"
+}
+
 env_append_csv_values() {
     local env_file="$1"
     local var_name="$2"
@@ -584,6 +594,12 @@ apply_agent_lite_env_overrides() {
     MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
     MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:?MASTER_DB_PASSWORD is required for agent-lite mode}"
     MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:?MASTER_MQ_PASSWORD is required for agent-lite mode}"
+    SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
+    [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo agent)"
+    SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
+    local node_slug
+    node_slug="$(sanitize_node_identifier "$SMSLY_NODE_ID")"
+    SMSLY_NODE_QUEUE="${SMSLY_NODE_QUEUE:-smsly-node-${node_slug}}"
 
     local redis_url="redis://${MASTER_IP}:6379/1"
     if [ -n "${MASTER_REDIS_PASSWORD:-}" ]; then
@@ -592,10 +608,16 @@ apply_agent_lite_env_overrides() {
 
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
+    env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
+    env_set_value "$env_file" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
+    env_set_value "$env_file" "SMSLY_NODE_QUEUE" "$SMSLY_NODE_QUEUE"
     env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
     env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
     env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//"
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
+    if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
+        env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
+    fi
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "true"
     env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
