@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.2.3 (Production Hardened)
-# VERSION: 2026-05-07-0213
+# Grid by SMSLY - Universal Installer v3.2.4 (Production Hardened)
+# VERSION: 2026-05-07-0219
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -3077,9 +3077,8 @@ EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
     # Detect physical RAM for optimized build limits
-    local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    local build_mem=2048
+    build_mem=2048
     if [ "$current_ram_mb" -ge 8192 ]; then
         build_mem=4096
     elif [ "$current_ram_mb" -ge 16384 ]; then
