@@ -2079,48 +2079,58 @@ if d and d != 'localhost':
             # Discover wildcard-covered hosts and non-wildcard service blocks.
             # - Wildcard-covered hosts route through Traefik via matcher.
             # - Unknown wildcard hosts route to /notice on frontend.
-            # - External custom domains keep explicit TLS blocks with Host rewrite.
+            # - External custom domains keep explicit direct on-demand TLS blocks with Host rewrite.
             cf_wildcard_known_hosts=""
             cf_wildcard_known_hosts="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
+from apps.domains.models import Domain, DomainStatus
+from django.db.models import Q
 suffix = '.${cf_domain}'.lower().strip()
 hosts = set()
 for svc in Service.objects.all():
     d = (svc.public_domain or '').strip().lower()
     if d and suffix and d.endswith(suffix):
         hosts.add(d)
-    for cd in (svc.custom_domains or []):
-        cd = (cd or '').strip().lower()
-        if cd and suffix and cd.endswith(suffix):
-            hosts.add(cd)
+for domain in Domain.objects.filter(
+    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
+).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
+    cd = (domain.domain_name or '').strip().lower()
+    if cd and suffix and cd.endswith(suffix):
+        hosts.add(cd)
 print(' '.join(sorted(hosts)))
 " 2>/dev/null | tr -d '\r' | tr -d '\n' || true)"
 
             cf_svc_blocks=""
             cf_svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
 from apps.deployments.models import Service
+from apps.domains.models import Domain, DomainStatus
+from django.db.models import Q
 suffix = '.${cf_domain}'.lower().strip()
 seen = set()
 for svc in Service.objects.all():
     public_domain = (svc.public_domain or '').strip().lower()
     if public_domain and (not suffix or not public_domain.endswith(suffix)) and public_domain not in seen:
         seen.add(public_domain)
-        print(f'{public_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+        print(f'{public_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
 
-    for item in (svc.custom_domains or []):
-        custom_domain = (item or '').strip().lower()
-        if not custom_domain:
-            continue
-        if suffix and custom_domain.endswith(suffix):
-            continue
-        if custom_domain in seen:
-            continue
-        seen.add(custom_domain)
+for domain in Domain.objects.select_related('service').filter(
+    status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
+).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)):
+    custom_domain = (domain.domain_name or '').strip().lower()
+    svc = domain.service
+    public_domain = (svc.public_domain or '').strip().lower() if svc else ''
+    if not custom_domain:
+        continue
+    if suffix and custom_domain.endswith(suffix):
+        continue
+    if custom_domain in seen:
+        continue
+    seen.add(custom_domain)
 
-        if public_domain and public_domain != custom_domain:
-            print(f'{custom_domain} {{\n    reverse_proxy localhost:8081 {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
-        else:
-            print(f'{custom_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n    tls {{\n        dns cloudflare {{env.CLOUDFLARE_API_TOKEN}}\n    }}\n}}\n')
+    if public_domain and public_domain != custom_domain:
+        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy localhost:8081 {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
+    else:
+        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
@@ -2142,12 +2152,15 @@ for svc in Service.objects.all():
 
                 cat > /etc/caddy/Caddyfile <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 ${cf_domain} {
     reverse_proxy localhost:8090
     encode gzip
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
     log {
         output file /var/log/caddy/access.log
     }
@@ -2158,17 +2171,25 @@ ${cf_domain} {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
 ${cf_known_stanza}
+    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
+    handle @platform_assets {
+        reverse_proxy localhost:8090
+    }
     handle {
         rewrite * /notice
         reverse_proxy localhost:8090
     }
 }
 
-:80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
+:443 {
+    tls {
+        on_demand
     }
+    reverse_proxy localhost:8090
+}
+
+:80 {
+    reverse_proxy localhost:8090
 }
 
 ${cf_svc_blocks}
@@ -3207,10 +3228,13 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
 
-$DOMAIN {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
     }
+}
+
+$DOMAIN {
     reverse_proxy localhost:8090
     encode gzip
     log {
@@ -3222,17 +3246,25 @@ $DOMAIN {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
+    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
+    handle @platform_assets {
+        reverse_proxy localhost:8090
+    }
     handle {
         rewrite * /notice
         reverse_proxy localhost:8090
     }
 }
 
-:80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
+:443 {
+    tls {
+        on_demand
     }
+    reverse_proxy localhost:8090
+}
+
+:80 {
+    reverse_proxy localhost:8090
 }
 CADDYEOF
 

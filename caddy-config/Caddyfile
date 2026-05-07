@@ -8,9 +8,6 @@
 }
 
 {$DOMAIN} {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
     reverse_proxy localhost:8090
     encode gzip
     log {
@@ -18,13 +15,11 @@
     }
 }
 
-*.{$DOMAIN} {
+:443 {
     tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+        on_demand
     }
-    handle {
-        respond "Service Not Found" 404
-    }
+    reverse_proxy localhost:8090
 }
 
 :80 {

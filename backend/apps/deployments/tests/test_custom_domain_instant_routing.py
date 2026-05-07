@@ -42,7 +42,12 @@ class CaddyCustomDomainRoutingTests(TestCase):
             custom_domains=['intelliphoton.com'],
         )
         from apps.domains.models import Domain, DomainStatus
-        Domain.objects.create(domain_name='intelliphoton.com', service=svc, status=DomainStatus.DNS_VERIFIED)
+        Domain.objects.create(
+            domain_name='intelliphoton.com',
+            service=svc,
+            status=DomainStatus.DNS_VERIFIED,
+            verified=True,
+        )
         config = SimpleNamespace(
             domain='cloud.smsly.cloud',
             use_ssl=True,
@@ -53,6 +58,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('intelliphoton.com {', caddyfile)
+        self.assertIn('tls {\n        on_demand\n    }', caddyfile)
+        self.assertNotIn('dns cloudflare', caddyfile)
         self.assertIn('reverse_proxy localhost:8081 {', caddyfile)
         self.assertIn(
             'header_up Host buyforfront-0398be.cloud.smsly.cloud',
@@ -207,6 +214,34 @@ class InstantCustomDomainApiTests(APITestCase):
         self.assertIn('instant.example.com', self.service.custom_domains)
         self.assertEqual(self.service.deployments.count(), 1)
 
+    @patch('apps.deployments.services.dns.ensure_dns_records')
+    @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
+    @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
+    def test_add_domain_does_not_use_platform_cloudflare_for_custom_dns(
+        self,
+        verify_mock,
+        _sync_mock,
+        ensure_dns_mock,
+    ):
+        from apps.deployments.models import PlatformConfig
+
+        cfg = PlatformConfig.load()
+        cfg.cloudflare_api_token = 'platform-token'
+        cfg.server_ip = '203.0.113.10'
+        cfg.save(update_fields=['cloudflare_api_token', 'server_ip'])
+
+        response = self.client.post(
+            f'/api/v1/services/{self.service.id}/add-domain/',
+            {'domain': 'customer-owned.example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(response.data.get('dns_synced'))
+        self.assertIn('SSL will be issued directly', response.data.get('message', ''))
+        ensure_dns_mock.assert_not_called()
+        verify_mock.assert_called_once()
+
     @patch('apps.deployments.views.smart_deploy_task.delay')
     @patch('apps.deployments.views.ServiceViewSet._sync_caddy', return_value={'ok': True, 'message': 'ok'})
     @patch('apps.domains.tasks.verify_dns_and_provision_ssl_task.delay')
@@ -310,3 +345,39 @@ class InstantCustomDomainApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn('limit reached', response.data.get('error', ''))
+
+    def test_caddy_ask_rejects_pending_custom_domain(self):
+        from apps.domains.models import Domain, DomainStatus
+
+        self.service.custom_domains = ['pending.example.com']
+        self.service.save(update_fields=['custom_domains'])
+        Domain.objects.create(
+            domain_name='pending.example.com',
+            service=self.service,
+            status=DomainStatus.PENDING,
+            verified=False,
+        )
+
+        response = self.client.get(
+            '/api/v1/services/check-domain/',
+            {'domain': 'pending.example.com'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_caddy_ask_accepts_dns_verified_custom_domain(self):
+        from apps.domains.models import Domain, DomainStatus
+
+        Domain.objects.create(
+            domain_name='verified.example.com',
+            service=self.service,
+            status=DomainStatus.DNS_VERIFIED,
+            verified=True,
+        )
+
+        response = self.client.get(
+            '/api/v1/services/check-domain/',
+            {'domain': 'verified.example.com'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

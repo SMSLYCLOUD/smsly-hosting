@@ -352,53 +352,6 @@ def _rewrite_public_domain(current_domain: str, old_base_domain: str, new_base_d
     return f"{prefix}.{new_base}"
 
 
-def _resolve_domain_ips(hostname: str) -> set:
-    """Resolve host to a set of IPs (A/AAAA). Returns empty set on errors."""
-    import socket
-    ips = set()
-    try:
-        for row in socket.getaddrinfo(hostname, 443):
-            if row and len(row) >= 5 and row[4]:
-                ips.add(row[4][0])
-    except socket.gaierror:
-        return set()
-    return ips
-
-
-def _cname_chain_contains(domain: str, target: str, max_hops: int = 10) -> bool:
-    """
-    Best-effort CNAME chain check.
-    Returns False if dnspython is unavailable or lookup fails.
-    """
-    try:
-        import dns.resolver  # type: ignore
-    except Exception:  # pylint: disable=broad-exception-caught
-        return False
-
-    current = domain.rstrip(".").lower()
-    wanted = target.rstrip(".").lower()
-    seen = set()
-    for _ in range(max_hops):
-        if current in seen:
-            return False
-        seen.add(current)
-        try:
-            answers = dns.resolver.resolve(current, "CNAME")
-        except Exception:  # pylint: disable=broad-exception-caught
-            return False
-
-        try:
-            next_target = str(answers[0].target).rstrip(".").lower()
-        except Exception:  # pylint: disable=broad-exception-caught
-            return False
-
-        if next_target == wanted:
-            return True
-        current = next_target
-
-    return False
-
-
 def _service_for_domain(domain: str):
     """Find service routed by this public/custom domain."""
     direct = Service.objects.filter(public_domain=domain, public_domain_hidden=False).first()
@@ -1730,22 +1683,43 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'message': 'Service has no public domain assigned yet.',
             })
 
-        domain_ips = _resolve_domain_ips(domain)
-        expected_ips = _resolve_domain_ips(cname_target)
-        is_valid = bool(domain_ips and expected_ips and (domain_ips & expected_ips))
+        from apps.domains.models import Domain, DomainStatus
+        from apps.domains.verification import verify_custom_domain_dns
 
-        # Apex domains can point directly to server IP instead of CNAME.
-        server_ip = ""
-        try:
-            server_ip = str(PlatformConfig.load().server_ip or "").strip()
-        except Exception:  # pylint: disable=broad-exception-caught
-            server_ip = ""
-        if not is_valid and server_ip and server_ip in domain_ips:
-            is_valid = True
+        domain_obj = Domain.objects.filter(service=service, domain_name=domain).first()
+        transient_domain = domain_obj or Domain(domain_name=domain, service=service)
+        old_status = domain_obj.status if domain_obj else DomainStatus.PENDING
+        result = verify_custom_domain_dns(transient_domain, PlatformConfig.load())
+        is_valid = result.verified
 
-        # Extra robustness: follow CNAME chain when dnspython is available.
-        if not is_valid and _cname_chain_contains(domain, cname_target):
-            is_valid = True
+        if domain_obj:
+            domain_obj.dns_expected = result.expected
+            domain_obj.dns_actual = result.actual
+            domain_obj.verified = is_valid
+            domain_obj.last_error = None if is_valid else result.error
+            if is_valid:
+                domain_obj.status = (
+                    old_status
+                    if old_status in [DomainStatus.ACTIVE, DomainStatus.SSL_PROVISIONING]
+                    else DomainStatus.DNS_VERIFIED
+                )
+            else:
+                domain_obj.status = DomainStatus.DNS_PENDING
+                domain_obj.ssl_active = False
+            domain_obj.save(update_fields=[
+                'status',
+                'dns_expected',
+                'dns_actual',
+                'verified',
+                'last_error',
+                'ssl_active',
+            ])
+            if is_valid and old_status not in [
+                DomainStatus.DNS_VERIFIED,
+                DomainStatus.SSL_PROVISIONING,
+                DomainStatus.ACTIVE,
+            ]:
+                self._sync_caddy()
 
         # ── Persist the verification result on the Service model ──
         # This is the critical step that was missing. Without this, the
@@ -1762,12 +1736,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'domain': domain,
             'verified': is_valid,
             'cname_target': cname_target,
+            'dns_expected': result.expected,
+            'dns_actual': result.actual,
             'message': (
                 'DNS verified! Domain points to Grid.'
                 if is_valid
                 else (
-                    f'DNS not configured. Add a CNAME record pointing to {cname_target} '
-                    f'or an A record to {server_ip or "your server IP"}.'
+                    f'DNS not configured. Add {result.expected}. '
+                    'Use DNS-only records so direct SSL can be issued.'
                 )
             ),
         })
@@ -1779,8 +1755,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         GET /api/v1/services/check-domain/?domain=myapp.com
         Returns 200 OK if the domain is authorized, 404 otherwise.
         """
-        domain = request.query_params.get('domain', '').strip().lower()
-        if not domain:
+        raw_domain = request.query_params.get('domain', '').strip().lower()
+        if not raw_domain:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        try:
+            domain = normalize_domain(raw_domain)
+        except ValueError:
             return Response(status=status.HTTP_404_NOT_FOUND)
 
         # 1. Check against PlatformConfig primary domain
@@ -1795,29 +1775,25 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if Service.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
-        # 3. Check Custom Domains (JSONField)
-        # Optimized lookup for custom_domains JSON field
+        # 3. Check verified custom domains. Pending JSONField entries are
+        # intentionally not authorized, otherwise Caddy may attempt ACME before
+        # the customer has pointed DNS at this server.
         from apps.domains.models import Domain, DomainStatus
-        if Domain.objects.filter(domain_name=domain, status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]).exists():
+        routable_custom_domain = (
+            Domain.objects
+            .filter(
+                domain_name=domain,
+                status__in=[
+                    DomainStatus.ACTIVE,
+                    DomainStatus.DNS_VERIFIED,
+                    DomainStatus.SSL_PROVISIONING,
+                ],
+            )
+            .filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE))
+            .exists()
+        )
+        if routable_custom_domain:
             return Response(status=status.HTTP_200_OK)
-        # We try multiple ways to match for maximum compatibility across DB backends.
-        try:
-            # Postgres-optimized list containment check
-            if Service.objects.filter(custom_domains__contains=[domain]).exists():
-                return Response(status=status.HTTP_200_OK)
-        except Exception as exc:
-            logger.debug("check_domain: optimized contains check failed, falling back: %s", exc)
-
-        # Fallback: iterate over services with custom domains (safe for small-to-medium clusters)
-        # Using .only() to minimize DB load
-        for service in Service.objects.exclude(custom_domains=[]).only('custom_domains'):
-            values = [
-                str(v or "").strip().lower()
-                for v in (service.custom_domains or [])
-                if str(v or "").strip()
-            ]
-            if domain in values:
-                return Response(status=status.HTTP_200_OK)
 
         # 4. Check against Addons
         from .models_addons import Addon
@@ -1968,6 +1944,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 verify_dns_and_provision_ssl_task.delay(domain_obj.id)
 
 
+        cfg = PlatformConfig.load()
+        cname_target = service.public_domain or cfg.domain or ''
+        server_ip = str(cfg.server_ip or '')
+
         # Auto-sync Caddyfile so SSL + routing are provisioned immediately.
         # No service redeploy is required.
         caddy_result = self._sync_caddy()
@@ -1984,6 +1964,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 {
                     'domain': domain,
                     'domains': domains,
+                    'cname_target': cname_target,
+                    'server_ip': server_ip,
                     'message': (
                         f'{domain} was saved, but automatic routing sync failed. '
                         'Routing may not activate until Caddy reload succeeds.'
@@ -1995,29 +1977,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_202_ACCEPTED,
             )
 
-        # Auto-create DNS record if Cloudflare token + server IP available
-        dns_synced = False
-        try:
-            cfg = PlatformConfig.load()
-            if cfg.cloudflare_api_token and cfg.server_ip:
-                from apps.deployments.services.dns import ensure_dns_records
-                dns_result = ensure_dns_records([domain], cfg.server_ip, cfg.cloudflare_api_token)
-                dns_synced = dns_result.get("ok", False)
-                if not dns_synced:
-                    logger.warning("DNS sync for %s failed: %s", domain, dns_result.get("errors"))
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("DNS sync skipped for %s: %s", domain, exc)
-
         return Response({
             'domain': domain,
             'domains': domains,
+            'cname_target': cname_target,
+            'server_ip': server_ip,
             'caddy_synced': caddy_ok,
             'routing_sync_deployment_id': None,
             'requires_redeploy': False,
-            'dns_synced': dns_synced,
+            'dns_synced': False,
             'message': (
-                f'{domain} added. DNS {"synced to Cloudflare" if dns_synced else "needs to point to your server"}. '
-                'No redeploy required.'
+                f'{domain} added. Point DNS to the shown CNAME or server IP; '
+                'SSL will be issued directly after verification. No redeploy required.'
             ),
         }, status=status.HTTP_201_CREATED)
 
