@@ -9,6 +9,7 @@ set -euo pipefail
 
 WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
 CADDY_CONF="/etc/caddy/Caddyfile"
+LAST_GOOD_CONF="/etc/caddy/Caddyfile.smsly-last-good"
 RELOAD_FLAG="$WATCH_DIR/.reload"
 TOKEN_FILE="$WATCH_DIR/.cloudflare_token"
 TOKEN_CLEAR_FILE="$WATCH_DIR/.cloudflare_token_clear"
@@ -100,6 +101,30 @@ load_cloudflare_env
 # Ensure watch directory exists
 mkdir -p "$WATCH_DIR"
 
+apply_validated_caddyfile() {
+    local candidate="$1"
+    local previous="${CADDY_CONF}.prev.$$"
+
+    [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous" 2>/dev/null || true
+    cp "$candidate" "$CADDY_CONF"
+
+    if systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1; then
+        cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
+        rm -f "$previous"
+        return 0
+    fi
+
+    echo "$LOG_PREFIX ERROR: Caddy reload failed after applying candidate; restoring previous config"
+    if [ -f "$previous" ]; then
+        cp "$previous" "$CADDY_CONF"
+    elif [ -f "$LAST_GOOD_CONF" ]; then
+        cp "$LAST_GOOD_CONF" "$CADDY_CONF"
+    fi
+    rm -f "$previous"
+    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1 || true
+    return 1
+}
+
 while true; do
     # Check for reload flag
     if [ -f "$RELOAD_FLAG" ]; then
@@ -120,8 +145,9 @@ while true; do
                 while [ $attempts -lt 4 ]; do
                     if caddy validate --config "$WATCH_CADDY" 2>&1; then
                         echo "$LOG_PREFIX Validation passed — applying"
-                        cp "$WATCH_CADDY" "$CADDY_CONF"
-                        systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1
+                        if ! apply_validated_caddyfile "$WATCH_CADDY"; then
+                            break
+                        fi
                         echo "$LOG_PREFIX Caddy reloaded successfully"
                         # Post-reload smoke (non-blocking)
                         host_line=$(grep -m1 -E '^[^#].*{?$' "$WATCH_CADDY" | head -n1 | awk '{print $1}')
