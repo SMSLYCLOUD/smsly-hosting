@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.7 (Production Hardened)
-# VERSION: 2026-05-07-0133
+# Grid by SMSLY - Universal Installer v3.1.8 (Production Hardened)
+# VERSION: 2026-05-07-0136
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -996,6 +996,15 @@ cleanup_on_failure() {
 
         echo -e "${YELLOW}  Full log: $LOG_FILE${NC}"
         echo -e "${RED}  Please review the log and re-run the installer.${NC}"
+
+        # Keep screen session open for inspection if it failed
+        if [ -n "${STY:-}" ]; then
+            echo -e "\n${YELLOW}  [GUARD] Installation failed inside a screen session.${NC}"
+            echo -e "${YELLOW}  Session 'grid' will remain open for debugging.${NC}"
+            echo -e "${YELLOW}  Type 'exit' to close this window.${NC}"
+            # Re-exec bash to prevent screen from closing
+            exec bash
+        fi
     fi
 }
 trap cleanup_on_failure EXIT
