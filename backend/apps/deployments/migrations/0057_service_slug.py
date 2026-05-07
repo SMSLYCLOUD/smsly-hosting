@@ -5,6 +5,18 @@ import re
 from django.db import migrations, models
 
 
+POSTGRES_LOCK_TIMEOUT = '15s'
+POSTGRES_STATEMENT_TIMEOUT = '120s'
+
+
+def _set_postgres_timeouts(schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+
+    schema_editor.execute(f"SET lock_timeout TO '{POSTGRES_LOCK_TIMEOUT}'")
+    schema_editor.execute(f"SET statement_timeout TO '{POSTGRES_STATEMENT_TIMEOUT}'")
+
+
 def _column_names(schema_editor, table_name):
     with schema_editor.connection.cursor() as cursor:
         description = schema_editor.connection.introspection.get_table_description(
@@ -19,6 +31,7 @@ def _column_names(schema_editor, table_name):
 
 
 def ensure_service_slug_column(apps, schema_editor):
+    _set_postgres_timeouts(schema_editor)
     Service = apps.get_model('deployments', 'Service')
     table_name = Service._meta.db_table
     if 'slug' in _column_names(schema_editor, table_name):
@@ -60,7 +73,8 @@ def populate_service_slugs(apps, schema_editor):
     to_update = []
     batch_size = 500
 
-    for service in Service.objects.all().only('id', 'name', 'slug').order_by('id'):
+    queryset = Service.objects.all().only('id', 'name', 'slug').order_by('id')
+    for service in queryset.iterator(chunk_size=batch_size):
         slug = _dedupe_slug(_service_slug_base(service), used_slugs)
         if service.slug == slug:
             continue
@@ -80,6 +94,7 @@ def cleanup_service_slug_artifacts(apps, schema_editor):
     if schema_editor.connection.vendor != 'postgresql':
         return
 
+    _set_postgres_timeouts(schema_editor)
     Service = apps.get_model('deployments', 'Service')
     table_name = schema_editor.quote_name(Service._meta.db_table)
     constraint_name = schema_editor.quote_name('deployments_service_slug_key')
@@ -88,11 +103,63 @@ def cleanup_service_slug_artifacts(apps, schema_editor):
     schema_editor.execute(
         f'ALTER TABLE {table_name} DROP CONSTRAINT IF EXISTS {constraint_name}'
     )
-    schema_editor.execute(f'DROP INDEX IF EXISTS {constraint_name}')
-    schema_editor.execute(f'DROP INDEX IF EXISTS {like_index_name}')
+    schema_editor.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {constraint_name}')
+    schema_editor.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {like_index_name}')
+
+
+def _constraint_exists(schema_editor, constraint_name):
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = %s
+            """,
+            [constraint_name],
+        )
+        return cursor.fetchone() is not None
+
+
+def enforce_service_slug_constraints(apps, schema_editor):
+    Service = apps.get_model('deployments', 'Service')
+
+    if schema_editor.connection.vendor != 'postgresql':
+        old_field = models.SlugField(blank=True, max_length=255, null=True)
+        old_field.set_attributes_from_name('slug')
+        new_field = models.SlugField(blank=True, max_length=255, unique=True)
+        new_field.set_attributes_from_name('slug')
+        schema_editor.alter_field(Service, old_field, new_field)
+        return
+
+    _set_postgres_timeouts(schema_editor)
+    table_name = schema_editor.quote_name(Service._meta.db_table)
+    column_name = schema_editor.quote_name('slug')
+    constraint_name = 'deployments_service_slug_key'
+    quoted_constraint = schema_editor.quote_name(constraint_name)
+    like_index_name = schema_editor.quote_name('deployments_service_slug_like')
+
+    schema_editor.execute(
+        f'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET NOT NULL'
+    )
+
+    if not _constraint_exists(schema_editor, constraint_name):
+        schema_editor.execute(
+            f'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS {quoted_constraint} '
+            f'ON {table_name} ({column_name})'
+        )
+        schema_editor.execute(
+            f'ALTER TABLE {table_name} ADD CONSTRAINT {quoted_constraint} '
+            f'UNIQUE USING INDEX {quoted_constraint}'
+        )
+
+    schema_editor.execute(
+        f'CREATE INDEX CONCURRENTLY IF NOT EXISTS {like_index_name} '
+        f'ON {table_name} ({column_name} varchar_pattern_ops)'
+    )
 
 
 class Migration(migrations.Migration):
+    atomic = False
 
     dependencies = [
         ('deployments', '0056_workload_guard_mesh_replication_state'),
@@ -122,9 +189,19 @@ class Migration(migrations.Migration):
             cleanup_service_slug_artifacts,
             reverse_code=migrations.RunPython.noop,
         ),
-        migrations.AlterField(
-            model_name='service',
-            name='slug',
-            field=models.SlugField(blank=True, max_length=255, unique=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(
+                    enforce_service_slug_constraints,
+                    reverse_code=migrations.RunPython.noop,
+                ),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name='service',
+                    name='slug',
+                    field=models.SlugField(blank=True, max_length=255, unique=True),
+                ),
+            ],
         ),
     ]
