@@ -160,7 +160,20 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     )
 
             from apps.domains.models import Domain, DomainStatus
-            for domain_obj in Domain.objects.filter(service=service, status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]):
+            from django.db.models import Q
+            routed_domains = (
+                Domain.objects
+                .filter(
+                    service=service,
+                    status__in=[
+                        DomainStatus.ACTIVE,
+                        DomainStatus.DNS_VERIFIED,
+                        DomainStatus.SSL_PROVISIONING,
+                    ],
+                )
+                .filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE))
+            )
+            for domain_obj in routed_domains:
                 value = domain_obj.domain_name.strip()
                 if not value:
                     continue
@@ -176,7 +189,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 seen.add(value)
                 target_host = public_domain or value
                 
-                # For custom domains, use On-Demand TLS
+                # Custom domains use direct on-demand TLS. Do not attach the
+                # platform Cloudflare DNS challenge; customers may use any DNS
+                # provider as long as public DNS points here.
                 lines = [f"{value} {{"]
                 lines.append("    tls {")
                 lines.append("        on_demand")
@@ -189,6 +204,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     _append_reverse_proxy(lines, "localhost:8081", target_host)
                 else:
                     _append_reverse_proxy(lines, "localhost:8081")
+                lines.append("    encode gzip")
                 lines.append("}")
                 blocks.append("\n".join(lines))
 
