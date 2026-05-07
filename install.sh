@@ -46,6 +46,11 @@ MODE_AGENT_LITE=false
 RESUME_MODE=false
 RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+NO_SCREEN="${NO_SCREEN:-false}"
+
+case "${SKIP_SCREEN:-}" in
+  1|true|TRUE|yes|YES|on|ON) NO_SCREEN=true ;;
+esac
 
 for arg in "$@"; do
   case "$arg" in
@@ -53,8 +58,11 @@ for arg in "$@"; do
     --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
     --rust)            RUST_TWIN_MODE="true" ;;
     --resume)          RESUME_MODE=true ;;
-    --no-screen)       NO_SCREEN=true ;;
-    --wipe)            rm -f "/opt/smsly-hosting/.smsly_install_state" ;;
+    --no-screen|--skip-screen)
+                       NO_SCREEN=true ;;
+    --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" ;;
+    --recover|--refresh|--debug|--verify|--clear|--help|-h)
+                       NO_SCREEN=true ;;
   esac
 done
 
@@ -69,7 +77,7 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
         echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
         # Use -L for logging, -S for session name, -d -m to start detached then exec attach
         # Actually 'exec screen' is simpler as it replaces the current shell.
-        exec screen -L -S grid bash "$SCRIPT_PATH" "$@"
+        exec screen -L -S grid bash "$SCRIPT_PATH" --no-screen "$@"
     else
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
         sleep 1
