@@ -1493,7 +1493,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Local Health ----"
-    curl -iSsf http://127.0.0.1/health 2>/dev/null | head -20 || echo "http://127.0.0.1/health failed"
+    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
     echo ""
 
     echo "---- Backend DNS Checks ----"
@@ -1623,7 +1623,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal)
-    EP1_URL="http://127.0.0.1/health"
+    EP1_URL="http://127.0.0.1:8090/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
     case "$EP1_CODE" in
         2*|3*)
@@ -2242,8 +2242,8 @@ print('Stripped tls blocks')
     PASS_COUNT=0
     FAIL_COUNT=0
 
-    # ── Check 1: Backend API health (through Nginx on port 80) ──
-    EP1_URL="http://127.0.0.1/health"
+    # ── Check 1: Backend API health (through local Nginx on port 8090) ──
+    EP1_URL="http://127.0.0.1:8090/health"
     echo -e "${BLUE}  [1/3] Backend API health...${NC}"
     echo -e "${BLUE}        Endpoint: $EP1_URL${NC}"
     BACKEND_OK=false
@@ -3585,7 +3585,7 @@ HEALTH_OK=false
 # ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
+    if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi

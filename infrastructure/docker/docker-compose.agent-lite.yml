@@ -30,6 +30,9 @@ services:
   # ============================================================
   backend:
     image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
     restart: unless-stopped
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 600
     env_file: .env

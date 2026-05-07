@@ -52,10 +52,15 @@ case "${SKIP_SCREEN:-}" in
   1|true|TRUE|yes|YES|on|ON) NO_SCREEN=true ;;
 esac
 
+_EXPECT_MODE_VALUE=false
 for arg in "$@"; do
   case "$arg" in
     --non-interactive) NON_INTERACTIVE=true ;;
     --mode=agent-lite|--agent-lite) MODE_AGENT_LITE=true ;;
+    --mode)           _EXPECT_MODE_VALUE=true ;;
+    agent-lite)
+                       if [ "$_EXPECT_MODE_VALUE" = "true" ]; then MODE_AGENT_LITE=true; fi
+                       _EXPECT_MODE_VALUE=false ;;
     --rust)            RUST_TWIN_MODE="true" ;;
     --resume)          RESUME_MODE=true ;;
     --no-screen|--skip-screen)
@@ -65,6 +70,7 @@ for arg in "$@"; do
                        NO_SCREEN=true ;;
   esac
 done
+unset _EXPECT_MODE_VALUE
 
 # ─── Resolve script path BEFORE any cd (screen guard needs absolute path) ────
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -104,6 +110,8 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
 # Validate and safely detect a usable IPv4 address for installer defaults.
 is_valid_ipv4() {
     local ip="$1"
@@ -224,18 +232,35 @@ wait_for_apt_lock() {
     local active_locks=()
     local pids
     local pid
+    local proc_pids
 
     while true; do
         active_locks=()
         pids=""
 
-        for lock_file in "${lock_files[@]}"; do
-            [ -e "$lock_file" ] || continue
-            if fuser "$lock_file" >/dev/null 2>&1; then
-                active_locks+=("$lock_file")
-                pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
-            fi
-        done
+        if command -v fuser >/dev/null 2>&1; then
+            for lock_file in "${lock_files[@]}"; do
+                [ -e "$lock_file" ] || continue
+                if fuser "$lock_file" >/dev/null 2>&1; then
+                    active_locks+=("$lock_file")
+                    pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
+                fi
+            done
+        fi
+
+        proc_pids="$(ps -eo pid=,comm=,args= 2>/dev/null | awk -v self="$$" '
+            {
+                pid=$1
+                comm=tolower($2)
+                line=tolower($0)
+                if (pid == self || comm == "awk" || comm == "grep") next
+                if (comm ~ /^(apt|apt-get|dpkg|unattended-upgr|unattended-upgrade|packagekitd)$/ || line ~ /apt.systemd.daily/) print pid
+            }
+        ' || true)"
+        if [ -n "$proc_pids" ]; then
+            active_locks+=("apt/dpkg process")
+            pids="$pids $proc_pids"
+        fi
 
         if [ "${#active_locks[@]}" -eq 0 ]; then
             if [ "$elapsed" -gt 0 ]; then
@@ -513,7 +538,7 @@ dump_diagnostic_logs() {
     df -h /
 
     echo -e "\n${YELLOW}  → Container Status:${NC}"
-    if command -v docker >/dev/null 2>&1; then
+    if command -v docker >/dev/null 2>&1 && [ -f "$env_file" ] && grep -q '^POSTGRES_PASSWORD=' "$env_file" 2>/dev/null; then
         docker compose -f "$COMPOSE_FILE" ps || true
 
         echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
@@ -528,7 +553,7 @@ dump_diagnostic_logs() {
         echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
         docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
     else
-        echo -e "${YELLOW}  (Docker not yet installed; skipping container logs)${NC}"
+        echo -e "${YELLOW}  (Docker or .env not ready; skipping container logs)${NC}"
     fi
 
     echo -e "${RED}════════════════════════════════════════════════════════════${NC}\n"
@@ -1500,6 +1525,7 @@ wipe_existing_install() {
     rm -f "$LOG_FILE"
 
     trap - EXIT
+    release_install_lock
     echo -e "${GREEN}OK Wipe complete. The server is ready for a fresh install.${NC}"
     echo -e "${YELLOW}  Run: curl -fsSL https://raw.githubusercontent.com/SMSLYCLOUD/smsly-hosting/main/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh${NC}"
     exit 0
@@ -2056,7 +2082,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Local Health ----"
-    curl -iSsf http://127.0.0.1/health 2>/dev/null | head -20 || echo "http://127.0.0.1/health failed"
+    curl -iSsf http://127.0.0.1:8090/health 2>/dev/null | head -20 || echo "http://127.0.0.1:8090/health failed"
     echo ""
 
     echo "---- Backend DNS Checks ----"
@@ -2184,7 +2210,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal)
-    EP1_URL="http://127.0.0.1/health"
+    EP1_URL="http://127.0.0.1:8090/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
     case "$EP1_CODE" in
         2*|3*)
@@ -2888,8 +2914,8 @@ if d and d != 'localhost':
     PASS_COUNT=0
     FAIL_COUNT=0
 
-    # ── Check 1: Backend API health (through Nginx on port 80) ──
-    EP1_URL="http://127.0.0.1/health"
+    # ── Check 1: Backend API health (through local Nginx on port 8090) ──
+    EP1_URL="http://127.0.0.1:8090/health"
     echo -e "${BLUE}  [1/3] Backend API health...${NC}"
     echo -e "${BLUE}        Endpoint: $EP1_URL${NC}"
     BACKEND_OK=false
@@ -3096,6 +3122,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     echo -e "${GREEN}  ✓ OOM protection set (core, database, celery, proxy)${NC}"
 
     trap - EXIT
+    release_install_lock
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
@@ -3373,6 +3400,7 @@ echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
 wait_for_apt_lock
 apt-get update -qq
+wait_for_apt_lock
 apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
 
 # Install Docker if missing
@@ -3385,6 +3413,7 @@ if ! command -v docker &> /dev/null; then
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     wait_for_apt_lock
     apt-get update -qq
+    wait_for_apt_lock
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
     echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
@@ -3508,6 +3537,8 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     source "$INSTALL_DIR/.env" 2>/dev/null || true
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
     PUBLIC_IP="$(detect_public_ip)"
 
 
@@ -3516,7 +3547,9 @@ else
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
     USE_SSL="${USE_SSL:-false}"
-    # WILDCARD_SUBDOMAINS and CLOUDFLARE_API_TOKEN are already set in Step 0 or via ENV
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+    ACME_EMAIL="${ACME_EMAIL:-}"
 
     # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
@@ -3660,10 +3693,13 @@ EOF
 
     # ── Agent Lite Overrides ──────────────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
+        MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
+        MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:?MASTER_DB_PASSWORD is required for agent-lite mode}"
+        MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:?MASTER_MQ_PASSWORD is required for agent-lite mode}"
         echo "MODE=agent" >> "$ENV_TMP"
         echo "MASTER_IP=$MASTER_IP" >> "$ENV_TMP"
         # Force Agent to use Master VPS for DB/Redis/RabbitMQ
-        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://smsly_admin:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting|" "$ENV_TMP"
+        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting|" "$ENV_TMP"
         sed -i "s|^CELERY_BROKER_URL=.*|CELERY_BROKER_URL=amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//|" "$ENV_TMP"
         sed -i "s|^REDIS_URL=.*|REDIS_URL=redis://${MASTER_IP}:6379/1|" "$ENV_TMP"
         # Disable local DB/Registry requirements in the app
@@ -3978,7 +4014,9 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
             apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+            wait_for_apt_lock
             apt-get update >/dev/null 2>&1
+            wait_for_apt_lock
             apt-get install -y caddy >/dev/null 2>&1
         fi
     fi
@@ -4451,7 +4489,7 @@ HEALTH_OK=false
 # ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -sfL http://127.0.0.1/health >/dev/null 2>&1; then
+    if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -4587,6 +4625,7 @@ fi
 
 # ─── Remove rollback trap (installation succeeded) ─────────────────────────
 trap - EXIT
+release_install_lock
 
 # -----------------------------------------------------------------------------
 # Summary
