@@ -56,14 +56,18 @@ if not DEBUG and not IS_TESTING:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     _use_ssl = _env_bool('USE_SSL', default='False')
-    SECURE_SSL_REDIRECT = _use_ssl
+    # SEC-001: Automatic IP-Bypass for SSL Redirection
+    # If the domain is an IP address, disable the redirect to prevent ERR_SSL_PROTOCOL_ERROR.
+    _is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN))
+    SECURE_SSL_REDIRECT = _use_ssl if not _is_ip else False
+
     SECURE_REDIRECT_EXEMPT = [
         r'^api/v1/services/check-domain/',
         r'^health/',
     ]
-    SESSION_COOKIE_SECURE = _use_ssl
-    CSRF_COOKIE_SECURE = _use_ssl
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = _use_ssl if not _is_ip else False
+    CSRF_COOKIE_SECURE = _use_ssl if not _is_ip else False
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if not _is_ip else None
 else:
     # Explicitly disable for tests and debug mode
     SECURE_HSTS_SECONDS = 0
