@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.2.0 (Production Hardened)
-# VERSION: 2026-05-07-0155
+# Grid by SMSLY - Universal Installer v3.2.1 (Production Hardened)
+# VERSION: 2026-05-07-0204
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -772,6 +772,10 @@ ensure_env_runtime_defaults() {
 
         if [ -z "$current_database_url" ]; then
             env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
+            
+            # Ensure direct connection bypass for migrations exists
+            local expected_direct_url="postgresql://smsly_admin:${postgres_password}@db:5432/smsly_hosting"
+            env_ensure_var "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url" "Direct connection bypass for migrations"
         elif [[ "$current_database_url" =~ ^postgresql://smsly_admin:.*@pgcat:5432/smsly_hosting$ ]] && [ "$current_database_url" != "$expected_database_url" ]; then
             echo -e "${BLUE}  -> Fixing DATABASE_URL to match POSTGRES_PASSWORD${NC}"
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
