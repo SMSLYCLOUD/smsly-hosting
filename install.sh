@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.8 (Production Hardened)
-# VERSION: 2026-05-07-0136
+# Grid by SMSLY - Universal Installer v3.1.9 (Production Hardened)
+# VERSION: 2026-05-07-0144
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -973,6 +973,13 @@ cleanup_on_failure() {
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
         echo -e "${RED}════════════════════════════════════════════════════════════${NC}"
+        
+        # Capture diagnostics BEFORE rollback deletes the containers
+        if [ -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+            cd "$INSTALL_DIR" 2>/dev/null || true
+            dump_diagnostic_logs "$INSTALL_DIR/.env" || true
+        fi
+
         echo -e "${YELLOW}  → Rolling back...${NC}"
 
         # Stop any containers that were started
