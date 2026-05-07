@@ -65,7 +65,7 @@ for arg in "$@"; do
     --resume)          RESUME_MODE=true ;;
     --no-screen|--skip-screen)
                        NO_SCREEN=true ;;
-    --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" ;;
+    --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
     --recover|--refresh|--debug|--verify|--clear|--help|-h)
                        NO_SCREEN=true ;;
   esac
@@ -84,9 +84,10 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
         SCREEN_SESSION="${SMSLY_SCREEN_SESSION:-smsly-install-$$}"
         if screen -help 2>&1 | grep -q -- '-Logfile'; then
             exec screen -L -Logfile /var/log/smsly-screen.log -S "$SCREEN_SESSION" \
-                bash "$SCRIPT_PATH" --no-screen "$@"
+                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         else
-            exec screen -L -S "$SCREEN_SESSION" bash "$SCRIPT_PATH" --no-screen "$@"
+            exec screen -L -S "$SCREEN_SESSION" \
+                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         fi
     else
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
@@ -369,10 +370,39 @@ ensure_system_swap() {
 
 # ─── Installation State Machine ──────────────────────────────────────────────
 STATE_FILE="/opt/smsly-hosting/.smsly_install_state"
+STATE_MODE_FILE="${STATE_FILE}.mode"
+
+install_flavor() {
+    if [ "${RUST_TWIN_MODE:-false}" = "true" ]; then
+        echo "rust"
+    elif [ "${MODE_AGENT_LITE:-false}" = "true" ]; then
+        echo "agent-lite"
+    else
+        echo "master"
+    fi
+}
+
+sync_install_state_flavor() {
+    local current_flavor
+    local previous_flavor
+    current_flavor="$(install_flavor)"
+    mkdir -p "$(dirname "$STATE_FILE")"
+
+    if [ "$RESUME_MODE" = "true" ] && [ -f "$STATE_FILE" ]; then
+        previous_flavor="$(cat "$STATE_MODE_FILE" 2>/dev/null || echo "legacy")"
+        if [ "$previous_flavor" != "$current_flavor" ]; then
+            echo -e "${YELLOW}  -> Existing install checkpoints are for '$previous_flavor'; resetting state for '$current_flavor'.${NC}"
+            rm -f "$STATE_FILE"
+        fi
+    fi
+
+    printf '%s\n' "$current_flavor" > "$STATE_MODE_FILE"
+}
 
 set_checkpoint() {
     local name="$1"
     mkdir -p "$(dirname "$STATE_FILE")"
+    printf '%s\n' "$(install_flavor)" > "$STATE_MODE_FILE"
     # Ensure name is unique in the file to avoid duplicates on resume
     if ! grep -q "^$name$" "$STATE_FILE" 2>/dev/null; then
         echo "$name" >> "$STATE_FILE"
@@ -545,6 +575,32 @@ env_ensure_var() {
     fi
 }
 
+apply_agent_lite_env_overrides() {
+    local env_file="$1"
+
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+
+    MASTER_IP="${MASTER_IP:?MASTER_IP is required for agent-lite mode}"
+    MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
+    MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:?MASTER_DB_PASSWORD is required for agent-lite mode}"
+    MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:?MASTER_MQ_PASSWORD is required for agent-lite mode}"
+
+    local redis_url="redis://${MASTER_IP}:6379/1"
+    if [ -n "${MASTER_REDIS_PASSWORD:-}" ]; then
+        redis_url="redis://:${MASTER_REDIS_PASSWORD}@${MASTER_IP}:6379/1"
+    fi
+
+    env_set_value "$env_file" "MODE" "agent"
+    env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
+    env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
+    env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
+    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//"
+    env_set_value "$env_file" "REDIS_URL" "$redis_url"
+    env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "true"
+    env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+    env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
+}
+
 dump_diagnostic_logs() {
     local env_file="${1:-$INSTALL_DIR/.env}"
     echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
@@ -559,17 +615,8 @@ dump_diagnostic_logs() {
     if command -v docker >/dev/null 2>&1 && [ -f "$env_file" ] && grep -q '^POSTGRES_PASSWORD=' "$env_file" 2>/dev/null; then
         docker compose -f "$COMPOSE_FILE" ps || true
 
-        echo -e "\n${YELLOW}  → Backend Logs (Last 50 lines):${NC}"
-        docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
-
-        echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
-        docker compose -f "$COMPOSE_FILE" logs --tail=50 nginx || true
-
-        echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
-        docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
-
-        echo -e "\n${YELLOW}  → Database Logs (Last 50 lines):${NC}"
-        docker compose -f "$COMPOSE_FILE" logs --tail=50 db || true
+        echo -e "\n${YELLOW}  -> Compose Logs (Last 50 lines):${NC}"
+        docker compose -f "$COMPOSE_FILE" logs --tail=50 || true
     else
         echo -e "${YELLOW}  (Docker or .env not ready; skipping container logs)${NC}"
     fi
@@ -1372,6 +1419,7 @@ for arg in "$@"; do
         --debug)           DEBUG_MODE="true" ;;
         --verify)          VERIFY_MODE="true" ;;
         --rust)            RUST_TWIN_MODE="true" ;;
+        --mode=agent-lite|--agent-lite) MODE_AGENT_LITE="true" ;;
         --clear)           CLEAR_MODE="true" ;;
         --help|-h)
             echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear]"
@@ -1385,12 +1433,19 @@ for arg in "$@"; do
     esac
 done
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
+fi
+
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     COMPOSE_FILE="rust_twin/docker-compose.yml"
 fi
 
 
 MODE_LABEL="fresh-install"
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    MODE_LABEL="agent-lite-install"
+fi
 if [ -n "$UPDATE_MODE" ]; then
     MODE_LABEL="update-$UPDATE_MODE"
 elif [ "$REFRESH_MODE" = "true" ]; then
@@ -1411,6 +1466,7 @@ echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  SMSLY Hosting Install Log — $(date -Iseconds)"
 echo "  Mode: $MODE_LABEL"
+sync_install_state_flavor
 echo "═══════════════════════════════════════════════════════════"
 
 # ─── Rollback Trap ──────────────────────────────────────────────────────────
@@ -3511,7 +3567,12 @@ fi
 # ─── BLINDSPOT FIX: Validate required deployment files ──────────────────────
 echo -e "${BLUE}  → Validating deployment files...${NC}"
 MISSING_FILES=()
-for required_file in "$COMPOSE_FILE" "nginx.conf" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh"; do
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
+else
+    REQUIRED_FILES=("$COMPOSE_FILE" "nginx.conf" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh")
+fi
+for required_file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$required_file" ]; then
         MISSING_FILES+=("$required_file")
     fi
@@ -3541,6 +3602,7 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
     # Backfill newer required keys and validate before deployment.
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}x Existing .env is invalid. Fix it or restore .env.backup and rerun.${NC}"
         exit 1
@@ -3683,16 +3745,20 @@ SMSLY_ENABLE_STARTUP_CADDY_SYNC=false
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
-    # Detect physical RAM for optimized build limits
-    current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    build_mem=2048
-    if [ "$current_ram_mb" -ge 8192 ]; then
-        build_mem=4096
-    elif [ "$current_ram_mb" -ge 16384 ]; then
-        build_mem=8192
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        # Detect physical RAM for optimized build limits
+        current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+        build_mem=2048
+        if [ "$current_ram_mb" -ge 8192 ]; then
+            build_mem=4096
+        elif [ "$current_ram_mb" -ge 16384 ]; then
+            build_mem=8192
+        fi
+        echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
+        echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
+    else
+        echo -e "${BLUE}  → Lite Agent mode: frontend build is not part of this node.${NC}"
     fi
-    echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
-    echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
 
     # Derive expected tunnel domain
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -3706,17 +3772,7 @@ EOF
 
     # ── Agent Lite Overrides ──────────────────────────────────────
     if [ "$MODE_AGENT_LITE" = "true" ]; then
-        MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
-        MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:?MASTER_DB_PASSWORD is required for agent-lite mode}"
-        MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:?MASTER_MQ_PASSWORD is required for agent-lite mode}"
-        echo "MODE=agent" >> "$ENV_TMP"
-        echo "MASTER_IP=$MASTER_IP" >> "$ENV_TMP"
-        # Force Agent to use Master VPS for DB/Redis/RabbitMQ
-        sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting|" "$ENV_TMP"
-        sed -i "s|^CELERY_BROKER_URL=.*|CELERY_BROKER_URL=amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//|" "$ENV_TMP"
-        sed -i "s|^REDIS_URL=.*|REDIS_URL=redis://${MASTER_IP}:6379/1|" "$ENV_TMP"
-        # Disable local DB/Registry requirements in the app
-        echo "SMSLY_DISABLE_LOCAL_SERVICES=true" >> "$ENV_TMP"
+        apply_agent_lite_env_overrides "$ENV_TMP"
     else
         echo "MODE=master" >> "$ENV_TMP"
     fi
@@ -3757,6 +3813,10 @@ docker network create smsly-proxy 2>/dev/null || true
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: disabling master-only Caddy services before Traefik bind.${NC}"
+    systemctl disable --now caddy caddy-watcher smsly-update-watcher >/dev/null 2>&1 || true
+fi
 if [ "$RUST_TWIN_MODE" != "true" ]; then
     echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
     env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
@@ -3777,7 +3837,7 @@ fi
     if [ "$DEPLOY_RC" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
         docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
-        docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx db pgcat redis rabbitmq 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
         exit "$DEPLOY_RC"
     fi
     set_checkpoint "stack_deployed"
@@ -3789,6 +3849,10 @@ fi
 if ! is_checkpoint_done "database_initialized"; then
     echo -e "\n${YELLOW}[5/9] Initializing Database...${NC}"
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: skipping local database initialization; using Master services.${NC}"
+    set_checkpoint "database_initialized"
+else
 echo -e "${BLUE}  → Waiting for Database...${NC}"
 DB_READY=false
 for i in $(seq 1 24); do
@@ -3872,6 +3936,7 @@ else
 fi
     set_checkpoint "database_initialized"
 fi
+fi
 
 # -----------------------------------------------------------------------------
 # 6. Admin User (IDEMPOTENT — skips if admin already exists)
@@ -3879,6 +3944,10 @@ fi
 if ! is_checkpoint_done "admin_created"; then
     echo -e "\n${YELLOW}[6/9] Creating Admin User...${NC}"
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "${BLUE}  → Lite Agent mode: skipping master admin and Local Docker provider setup.${NC}"
+    set_checkpoint "admin_created"
+else
 if [ "$RUST_TWIN_MODE" = "true" ]; then
     echo -e "${BLUE}  → Rust Twin: Skipping Python admin user creation (Use 'docker compose exec cli createsuperuser')...${NC}"
     ADMIN_EXISTS=1
@@ -3951,11 +4020,18 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
 fi
     set_checkpoint "admin_created"
 fi
+fi
 
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
 if ! is_checkpoint_done "caddy_configured"; then
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "\n${YELLOW}[7/9] Configuring Lite Agent Edge...${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d socket-proxy backend celery-worker traefik >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓ Lite Agent edge services are managed by Traefik; skipping Caddy.${NC}"
+    set_checkpoint "caddy_configured"
+else
     echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
 
 if [ "$RUST_TWIN_MODE" = "true" ]; then
@@ -4284,6 +4360,7 @@ if systemctl is-active --quiet caddy; then
     safe_refresh_runtime_services
     set_checkpoint "caddy_configured"
 fi
+fi
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
@@ -4433,13 +4510,18 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1; do
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
+else
+    CRITICAL_CONTAINERS=(smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
+fi
+for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgcat)${NC}"
+echo -e "${GREEN}  ✓ OOM protection set (${CRITICAL_CONTAINERS[*]})${NC}"
 
 # ─── Firewall Hardening (UFW) ────────────────────────────────────────────────
 if command -v ufw >/dev/null 2>&1; then
@@ -4473,6 +4555,53 @@ VERIFY_PASS_COUNT=0
 VERIFY_TOTAL=5
 sleep 5
 
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+VERIFY_TOTAL=4
+
+echo -e "${BLUE}  → [1/4] Verifying Lite Agent compose profile...${NC}"
+AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/null || true)"
+if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
+   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|nginx|db|pgcat|redis|rabbitmq)$"; then
+    echo -e "${GREEN}  ✓ Lite Agent profile selected; no frontend/control-plane services included${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Lite Agent compose profile is wrong. Services: ${AGENT_SERVICES//$'\n'/, }${NC}"
+fi
+
+echo -e "${BLUE}  → [2/4] Checking Lite Agent containers...${NC}"
+RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
+TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
+if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}  ✓ All $TOTAL_COUNT Lite Agent containers running${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT Lite Agent containers running${NC}"
+fi
+
+echo -e "${BLUE}  → [3/4] Checking Lite Agent backend...${NC}"
+BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
+if echo "$BACKEND_STATUS" | grep -qi "unhealthy"; then
+    echo -e "${RED}  ✗ Lite Agent backend is unhealthy${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
+elif echo "$BACKEND_STATUS" | grep -qiE "healthy|running|Up"; then
+    echo -e "${GREEN}  ✓ Lite Agent backend is running${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${RED}  ✗ Lite Agent backend is not healthy/running${NC}"
+    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
+fi
+
+echo -e "${BLUE}  → [4/4] Checking swap...${NC}"
+SWAP_TOTAL=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$SWAP_TOTAL" -ge 1500 ]; then
+    echo -e "${GREEN}  ✓ Swap sufficient (${SWAP_TOTAL}MB)${NC}"
+    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
+else
+    echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
+fi
+else
 # ─── Check 1: Verify nginx loaded custom config (not default) ──────────────
 echo -e "${BLUE}  → [1/5] Verifying nginx configuration...${NC}"
 NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
@@ -4549,6 +4678,7 @@ if systemctl is-active --quiet caddy 2>/dev/null; then
 else
     echo -e "${RED}  ✗ Caddy is not running${NC}"
 fi
+fi
 
 # Show container status
 echo -e "\n${BLUE}Container Status:${NC}"
@@ -4597,6 +4727,9 @@ echo -e "${GREEN}  ✓ smsly-autoscaler service installed and started${NC}"
 # -----------------------------------------------------------------------------
 # 10. CLI Integration
 # -----------------------------------------------------------------------------
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+echo -e "\n${YELLOW}[10/10] Skipping SMSLY CLI on Lite Agent...${NC}"
+else
 echo -e "\n${YELLOW}[10/10] Integrating SMSLY CLI...${NC}"
 
 if [ -d "$INSTALL_DIR/cli" ]; then
@@ -4628,7 +4761,9 @@ else
 fi
 
 # ─── Final Verification Sync ──────────────────────────────────────────────────
-if command -v smsly &> /dev/null; then
+fi
+
+if [ "$MODE_AGENT_LITE" != "true" ] && command -v smsly &> /dev/null; then
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
     VERIFY_TOTAL=$((VERIFY_TOTAL + 1))
 fi
@@ -4644,18 +4779,26 @@ echo -e "\n${GREEN}════════════════════�
 echo -e "${GREEN}   ✓ INSTALLATION SUCCESSFUL!${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
-if [ "$USE_SSL" = "true" ]; then
-    echo -e "   URL:         https://$DOMAIN"
+if [ "$MODE_AGENT_LITE" = "true" ]; then
+    echo -e "   Mode:        Lite Agent"
+    echo -e "   Agent Edge:  http://$PUBLIC_IP"
+    echo -e "   Master:      $MASTER_IP"
 else
-    echo -e "   URL:         http://$PUBLIC_IP"
+    if [ "$USE_SSL" = "true" ]; then
+        echo -e "   URL:         https://$DOMAIN"
+    else
+        echo -e "   URL:         http://$PUBLIC_IP"
+    fi
+    echo -e "   Admin:       /admin"
+    echo -e "   Credentials: $CREDENTIALS_FILE"
 fi
-echo -e "   Admin:       /admin"
-echo -e "   Credentials: $CREDENTIALS_FILE"
 echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
-echo -e "   CLI:         'smsly services list'${NC}"
+if [ "$MODE_AGENT_LITE" != "true" ]; then
+    echo -e "   CLI:         'smsly services list'${NC}"
+fi
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "${YELLOW}  View credentials:   cat $CREDENTIALS_FILE${NC}"
 echo -e "${YELLOW}  View logs:          cat $LOG_FILE${NC}"
