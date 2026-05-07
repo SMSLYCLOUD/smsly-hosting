@@ -88,6 +88,7 @@ ENVEOF
             else
                 export CLOUDFLARE_API_TOKEN="$NEW_TOKEN"
             fi
+            rm -f "$CANDIDATE_CADDY"
         else
             clear_cloudflare_override
         fi
@@ -126,6 +127,47 @@ candidate_requires_https() {
         }
         END { exit found ? 0 : 1 }
     ' "$candidate"
+}
+
+candidate_has_explicit_443() {
+    grep -Eq '^[[:space:]]*:443[[:space:]]*\{' "$1"
+}
+
+normalize_caddy_candidate() {
+    local source="$1"
+    local target="$2"
+
+    cp "$source" "$target"
+    if ! candidate_requires_https "$source" || candidate_has_explicit_443 "$source"; then
+        return 0
+    fi
+
+    echo "$LOG_PREFIX Adding explicit TCP 443 listener to HTTPS Caddyfile candidate"
+    if grep -q 'on_demand_tls' "$source"; then
+        cp "$source" "$target"
+    else
+        {
+            cat <<'CADDY_GLOBAL'
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
+CADDY_GLOBAL
+            cat "$source"
+        } > "$target"
+    fi
+
+    cat >> "$target" <<'CADDY_HTTPS_FALLBACK'
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
+}
+CADDY_HTTPS_FALLBACK
 }
 
 restore_previous_caddyfile() {
@@ -179,19 +221,21 @@ while true; do
 
         WATCH_CADDY="$WATCH_DIR/Caddyfile"
             if [ -f "$WATCH_CADDY" ]; then
+                CANDIDATE_CADDY="$(mktemp /tmp/smsly-caddy-candidate.XXXXXX)"
+                normalize_caddy_candidate "$WATCH_CADDY" "$CANDIDATE_CADDY"
                 # Validate before applying with simple retry/backoff to avoid transient DNS/ACME race
                 attempts=0
                 delay=2
                 while [ $attempts -lt 4 ]; do
-                    if caddy validate --config "$WATCH_CADDY" 2>&1; then
+                    if caddy validate --config "$CANDIDATE_CADDY" 2>&1; then
                         echo "$LOG_PREFIX Validation passed — applying"
-                        if ! apply_validated_caddyfile "$WATCH_CADDY"; then
+                        if ! apply_validated_caddyfile "$CANDIDATE_CADDY"; then
                             break
                         fi
                         echo "$LOG_PREFIX Caddy reloaded successfully"
                         # Post-reload smoke (non-blocking)
-                        host_line=$(grep -m1 -E '^[^#].*{?$' "$WATCH_CADDY" | head -n1 | awk '{print $1}')
-                        wildcard_line=$(grep -m1 -E '^\\*\\.' "$WATCH_CADDY" | head -n1 | awk '{print $1}')
+                        host_line=$(grep -m1 -E '^[^#].*{?$' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
+                        wildcard_line=$(grep -m1 -E '^\\*\\.' "$CANDIDATE_CADDY" | head -n1 | awk '{print $1}')
                         if command -v bash >/dev/null 2>&1 && [ -x "/opt/smsly-hosting/scripts/smoke_routes.sh" ]; then
                             /opt/smsly-hosting/scripts/smoke_routes.sh "$host_line" "$wildcard_line" >/var/log/caddy/smoke.log 2>&1 || true
                         fi

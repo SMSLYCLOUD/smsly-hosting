@@ -430,6 +430,18 @@ def generate_caddyfile(config) -> str:
             )
             sections.append("\n".join(wildcard_lines))
 
+        # Keep a real TCP/443 listener present even if Caddy's implicit HTTPS
+        # server is delayed or skipped during reload. Host-specific site blocks
+        # above still win for the platform domain and wildcard/service routes.
+        sections.append(
+            """:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
+}"""
+        )
+
     # Always include :80 catch-all so the IP always works.
     # In SSL+domain mode this should only handle unmatched hosts and route to
     # a controlled notice page. In IP/HTTP mode it remains the primary route.
