@@ -455,12 +455,20 @@ def provision_server(self, server_id: str):
                 master_db_pass = os.environ.get("POSTGRES_PASSWORD", "")
             
             master_mq_pass = os.environ.get("RABBITMQ_PASSWORD", "")
+            master_redis_pass = os.environ.get("REDIS_PASSWORD", "")
+            if not master_redis_pass:
+                redis_url = os.environ.get("REDIS_URL", "")
+                try:
+                    master_redis_pass = urlparse(redis_url).password or ""
+                except Exception:
+                    master_redis_pass = ""
             
             env_vars = (
                 f"{env_vars} "
                 f"MASTER_DB_USER={master_db_user} "
                 f"MASTER_DB_PASSWORD={master_db_pass} "
-                f"MASTER_MQ_PASSWORD={master_mq_pass}"
+                f"MASTER_MQ_PASSWORD={master_mq_pass} "
+                f"MASTER_REDIS_PASSWORD={master_redis_pass}"
             )
             install_args = "--mode=agent-lite"
 
@@ -689,14 +697,21 @@ def provision_server(self, server_id: str):
                     + "; ".join(token_errors),
                 )
 
-        if not api_token:
+        if not api_token and getattr(server, "is_lite_agent", False):
+            _append_log(
+                server,
+                "Lite Agent install does not create a local admin token; "
+                "Master will manage the node through the shared agent channel.",
+            )
+        elif not api_token:
             raise RuntimeError(
                 "Provisioning completed but no API token was discovered. "
                 "Verify gateway health and credentials, then retry provisioning."
             )
 
         _append_log(server, f"🌐 API URL: {api_url}")
-        _append_log(server, f"[cred] Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
+        if api_token:
+            _append_log(server, f"[cred] Token: {'*' * 8}...{api_token[-4:] if len(api_token) > 4 else '****'}")
 
         # -- Step 6: Update server record --
         server.api_url = api_url

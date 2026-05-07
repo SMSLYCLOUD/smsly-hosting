@@ -1,3 +1,5 @@
+name: smsly-hosting
+
 services:
   # ============================================================
   # Docker Socket Proxy (Secure Docker access for the agent)
@@ -35,7 +37,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 600
-    env_file: .env
+    env_file: ../../.env
     environment:
       - MODE=agent
       - DOCKER_HOST=tcp://socket-proxy:2375
@@ -46,8 +48,14 @@ services:
       - CONTAINER_REGISTRY_URL=${MASTER_IP}:5000
     depends_on:
       - socket-proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.agent-api.rule=PathPrefix(`/api`) || PathPrefix(`/health`)
+      - traefik.http.routers.agent-api.entrypoints=web
+      - traefik.http.routers.agent-api.priority=1000
+      - traefik.http.services.agent-api.loadbalancer.server.port=8000
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/live || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -62,7 +70,7 @@ services:
     image: ${SMSLY_IMAGE_BACKEND:-smsly-hosting-backend}
     restart: unless-stopped
     command: celery -A config worker --loglevel=info -Q deploy,fast,celery --concurrency=4
-    env_file: .env
+    env_file: ../../.env
     environment:
       - MODE=agent
       - DOCKER_HOST=tcp://socket-proxy:2375
