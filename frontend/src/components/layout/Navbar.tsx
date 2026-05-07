@@ -143,12 +143,12 @@ export function Navbar() {
     <nav
         className={`sticky top-0 z-50 w-full transition-all duration-300 border-b border-white/5 bg-[#0a0c10] shadow-2xl`}
     >
-      <div className="w-full grid h-14 grid-cols-[auto_1fr_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
+      <div className="w-full grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
 
         {/* Logo - Left */}
         <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
-            <div className="rounded-md bg-white p-1 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
-                <Image src="/images/mini_logo.png" alt="Grid" width={28} height={32} className="h-8 w-auto object-contain" priority />
+            <div className="rounded-md bg-white p-0.5 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
+                <Image src="/images/mini_logo.png" alt="Grid" width={24} height={28} className="h-7 w-auto object-contain" priority />
             </div>
             <div className="flex flex-col">
               {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block leading-none">Grid</span>}
@@ -160,11 +160,11 @@ export function Navbar() {
         </Link>
 
         {/* Nav Links - Center */}
-        <nav className="hidden min-w-0 items-center justify-start ml-8 md:flex md:flex-1">
+        <nav className="hidden min-w-0 items-center justify-start ml-1 md:flex md:flex-1">
             <div
               className={
                 user
-                  ? "flex items-center gap-1 bg-[#12151c]/60 p-1 rounded-xl border border-white/5"
+                  ? "flex items-center gap-0 bg-[#12151c]/60 p-1 rounded-xl border border-white/5"
                   : "flex items-center gap-1 overflow-x-auto"
               }
             >
@@ -196,14 +196,14 @@ export function Navbar() {
                          prefetch={false}
                          title={link.label}
                          className={`
-                             relative min-w-0 px-4 py-2 rounded-lg text-[12.5px] font-[600] tracking-tight transition-all duration-200 flex items-center justify-center gap-2
+                             relative min-w-0 px-1.5 py-1.5 rounded-lg text-[11px] font-[600] tracking-tight transition-all duration-200 flex items-center justify-center gap-1.5
                              ${isActive
                                 ? 'text-white bg-[#1e232d] shadow-[0_0_0_1px_rgba(255,255,255,0.05)] border border-white/10'
                                 : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'}
                         `}
                     >
                         <Icon size={14} className={isActive ? 'text-emerald-400' : 'text-zinc-600'} />
-                        <span className="truncate">{link.label}</span>
+                        <span className={`truncate ${['Ecosystem', 'Intelligence'].includes(link.label) ? 'hidden xl:inline' : ''}`}>{link.label}</span>
                     </Link>
                 );
             })}
@@ -211,10 +211,10 @@ export function Navbar() {
         </nav>
 
         {/* Right Side Buttons (Desktop) */}
-        <div className="hidden items-center justify-end space-x-4 md:flex">
+        <div className="hidden items-center justify-end space-x-2 md:flex">
           {user && (
            <Link href="/new" prefetch={false}>
-               <Button size="sm" className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-5 rounded-lg shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95">
+               <Button size="sm" className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-3 rounded-lg shadow-lg shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95">
                    Deploy
                </Button>
            </Link>

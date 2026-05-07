@@ -191,100 +191,48 @@ def perform_update(update_record) -> bool:
         update_record.save()
         update_record.append_log(f"Snapshot created: commit={snapshot.get('commit', 'unknown')}")
 
-        # Step 2: Git pull
-        update_record.status = 'PULLING'
-        update_record.current_step = 'Pulling latest code'
-        update_record.progress_percent = 20
+        # Step 5: Execute full platform update via install.sh inside a monitorable screen session
+        # This allows the user to monitor progress via 'screen -r UI-update' while the UI tracks status.
+        update_record.status = 'UPDATING'
+        update_record.current_step = 'Executing update via screen (UI-update)'
+        update_record.progress_percent = 50
         update_record.save()
-
-        # Fix dubious ownership error in containers
-        _run(['git', 'config', '--global', '--add', 'safe.directory', INSTALL_DIR])
-
-        ok, output = _run(['git', 'pull', '--ff-only', 'origin', 'main'])
-        if not ok:
-            raise PlatformUpdateError(f"Git pull failed: {output}")
-        update_record.append_log(f"Git pull complete: {output[:200]}")
-
-        # Get new commit
-        ok, new_commit = _run(['git', 'rev-parse', 'HEAD'])
-        if ok:
-            update_record.to_commit = new_commit.strip()
-            update_record.save()
-
-        # Step 3: Build new images
-        update_record.current_step = 'Building new Docker images'
-        update_record.progress_percent = 40
-        update_record.save()
-        update_record.append_log('Building Docker images...')
-
-        ok, output = _run(
-            ['docker', 'compose', '-f', COMPOSE_FILE, 'build', '--no-cache'],
-            timeout=600,
-        )
-        if not ok:
-            raise PlatformUpdateError(f"Docker build failed: {output[-500:]}")
-        update_record.append_log('Docker build complete')
-
-        # Step 4: Run migrations
-        update_record.status = 'MIGRATING'
-        update_record.current_step = 'Running database migrations'
-        update_record.progress_percent = 60
-        update_record.save()
-
-        ok, output = _run([
-            'docker', 'compose', '-f', COMPOSE_FILE,
-            'run', '--rm', 'backend',
-            'python', 'manage.py', 'migrate', '--noinput',
-        ])
-        if not ok:
-            raise PlatformUpdateError(f"Migration failed: {output[-500:]}")
-        update_record.append_log('Migrations complete')
-
-        # Step 5: Restart services sequentially with health gates.
-        # Restart in dependency order so each service is healthy before its
-        # dependents start with new code. This prevents the window of downtime
-        # that occurs when all services are replaced simultaneously.
-        update_record.status = 'RESTARTING'
-        update_record.progress_percent = 75
-        update_record.save()
-
-        restart_order = [
-            'db', 'redis', 'pgcat', 'socket-proxy', 'registry',
-            'backend', 'celery', 'celery-beat',
-            'frontend', 'nginx',
+        
+        update_cmd = [
+            'screen', '-dmS', 'UI-update',
+            'bash', os.path.join(INSTALL_DIR, 'install.sh'), '--update', '--no-screen'
         ]
-        for svc in restart_order:
-            update_record.current_step = f'Restarting {svc}'
-            update_record.save()
+        
+        update_record.append_log(f"Triggering background update in screen session 'UI-update'...")
+        ok, output = _run(update_cmd)
+        
+        if not ok:
+            raise PlatformUpdateError(f"Failed to start screen session: {output}")
+            
+        update_record.append_log("Update session started. Monitor via: screen -r UI-update")
+        
+        # We now wait for the screen session to finish or timeout
+        # Since 'install.sh --update' can take minutes, we poll for the session's existence.
+        max_wait = 1800 # 30 minutes
+        waited = 0
+        while waited < max_wait:
+            time.sleep(10)
+            waited += 10
+            
+            # Check if screen session is still alive
+            check_ok, _ = _run(['screen', '-ls', 'UI-update'])
+            if not check_ok:
+                # Session ended (could be success or failure)
+                break
+            
+            # Update progress based on elapsed time (fake but indicative)
+            if update_record.progress_percent < 90:
+                update_record.progress_percent += 1
+                update_record.save()
 
-            ok, output = _run([
-                'docker', 'compose', '-f', COMPOSE_FILE,
-                'up', '-d', '--no-deps', svc,
-            ])
-            if not ok:
-                raise PlatformUpdateError(f"Failed to restart {svc}: {output[-300:]}")
-
-            # Wait for health before moving to next service
-            if svc in ('db', 'redis', 'pgcat', 'backend', 'frontend', 'nginx'):
-                svc_healthy = False
-                for attempt in range(HEALTH_CHECK_RETRIES):
-                    ok, ps_output = _run([
-                        'docker', 'compose', '-f', COMPOSE_FILE,
-                        'ps', svc, '--format', '{{.Health}}',
-                    ])
-                    if ok and 'healthy' in ps_output.lower():
-                        svc_healthy = True
-                        break
-                    time.sleep(HEALTH_CHECK_INTERVAL)
-                if not svc_healthy:
-                    update_record.append_log(
-                        f"WARNING: {svc} not healthy after "
-                        f"{HEALTH_CHECK_RETRIES * HEALTH_CHECK_INTERVAL}s"
-                    )
-                    raise PlatformUpdateError(f"Service {svc} failed to reach healthy state. Aborting update.")
-            update_record.append_log(f'{svc} restarted')
-
-        update_record.append_log('All services restarted sequentially')
+        update_record.append_log('Update session finished or detached.')
+        update_record.progress_percent = 90
+        update_record.save()
 
         # Step 6: Health check
         update_record.status = 'HEALTH_CHECK'

@@ -1,8 +1,27 @@
+'use client';
 import Link from 'next/link';
 import Image from 'next/image';
+import { usePathname } from 'next/navigation';
 import { Globe, GitBranch } from 'lucide-react';
 
 export function Footer() {
+    const pathname = usePathname();
+    
+    // List of authenticated/app routes where the footer should be hidden
+    const appRoutes = [
+        '/client', '/dashboard', '/projects', '/services', '/deployments',
+        '/ecosystem', '/intelligence', '/servers', '/autoscaler', '/topology',
+        '/replication', '/tunnels', '/network', '/activity', '/functions',
+        '/templates', '/transfers', '/settings', '/backups', '/admin-dashboard',
+        '/new'
+    ];
+
+    const isAppRoute = appRoutes.some(route => pathname?.startsWith(route));
+
+    if (isAppRoute) {
+        return null;
+    }
+
     return (
         <footer className="py-12 md:py-16 px-6 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
             <div className="max-w-7xl mx-auto">
