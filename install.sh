@@ -3073,6 +3073,10 @@ PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
 
 # Direct database connection for migrations (bypasses PgCat pooler)
 DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
+
+# The installer runs first-boot Django setup explicitly after the stack starts.
+# Keep the web container from doing the same work while Compose is waiting on health.
+SMSLY_RUN_ENTRYPOINT_TASKS=false
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
@@ -3147,11 +3151,25 @@ docker network create smsly-proxy 2>/dev/null || true
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Disabling backend entrypoint bootstrap for installer-controlled migrations...${NC}"
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
+fi
     echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
+    set +e
     docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+    DEPLOY_RC=$?
+    set -e
     kill $HEARTBEAT_PID 2>/dev/null || true
+    wait $HEARTBEAT_PID 2>/dev/null || true
+    if [ "$DEPLOY_RC" -ne 0 ]; then
+        echo -e "${RED}  ✗ Docker Compose failed during stack deployment (exit $DEPLOY_RC).${NC}"
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx db pgcat redis rabbitmq 2>/dev/null || true
+        exit "$DEPLOY_RC"
+    fi
     set_checkpoint "stack_deployed"
 fi
 
@@ -3316,6 +3334,10 @@ print('CREATED' if created else 'EXISTS')
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null | tail -1 >/dev/null
         echo -e "${GREEN}  ✓ Local Docker cloud provider ready${NC}"
     fi
+fi
+if [ "$RUST_TWIN_MODE" != "true" ]; then
+    echo -e "${BLUE}  → Re-enabling backend entrypoint bootstrap for future restarts...${NC}"
+    env_set_value "$INSTALL_DIR/.env" "SMSLY_RUN_ENTRYPOINT_TASKS" "true"
 fi
     set_checkpoint "admin_created"
 fi

@@ -13,6 +13,17 @@ is_web_container() {
     [ "${1:-}" = "gunicorn" ]
 }
 
+should_run_entrypoint_tasks() {
+    case "${SMSLY_RUN_ENTRYPOINT_TASKS:-true}" in
+        0|false|False|FALSE|no|No|NO)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
 run_migrations_with_retry() {
     migrate_db="${1:-default}"
     echo "Running migrations on database: $migrate_db..."
@@ -96,11 +107,13 @@ setup_social_apps_nonfatal() {
         migrate_db="session"
     fi
 
-    if is_web_container "$@"; then
+    if is_web_container "$@" && should_run_entrypoint_tasks; then
         run_migrations_with_retry "$migrate_db"
         setup_social_apps_nonfatal "$migrate_db"
         create_admin_if_configured "$migrate_db"
         collect_static_nonfatal
+    elif is_web_container "$@"; then
+        echo "SMSLY_RUN_ENTRYPOINT_TASKS=false; skipping entrypoint migrations/static/admin bootstrap."
     fi
 
 echo "Starting: $*"
