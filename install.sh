@@ -2940,18 +2940,14 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
     fi
 
     # ─── Deployment Mode Selection (Moved up) ──────────────────────────────
-    # Force IPv4 to ensure valid URL syntax
-    PUBLIC_IP="$(detect_public_ip)"
-
-    # Allow non-interactive SSL installs by pre-seeding env vars
+    # Initialize defaults
+    MODE_CHOICE=1
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
     PRESET_DOMAIN="${DOMAIN:-}"
     PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
     PRESET_USE_SSL="${USE_SSL:-}"
 
-    echo -e "\n${BLUE}Select Deployment Mode:${NC}"
-    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
-    echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
-
+    # Deployment Mode Selection - Only prompt if not preset and in interactive shell
     if [ -n "${PRESET_USE_SSL}" ]; then
         if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
             echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
@@ -2959,25 +2955,22 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         elif [ "${PRESET_USE_SSL}" = "false" ]; then
             echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
             MODE_CHOICE=1
-        else
-            read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
-            MODE_CHOICE=${MODE_CHOICE:-1}
         fi
-    else
+    elif [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+        echo -e "\n${BLUE}Select Deployment Mode:${NC}"
+        echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
+        echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
         read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
         MODE_CHOICE=${MODE_CHOICE:-1}
     fi
 
-    DOMAIN=""
-    ACME_EMAIL=""
-    USE_SSL="false"
-
-    if [ "$MODE_CHOICE" -eq "2" ]; then
+    # Set configuration based on choice or presets
+    if [ "$MODE_CHOICE" -eq "2" ] || [ "${PRESET_USE_SSL}" = "true" ]; then
         USE_SSL="true"
-        if [ ! -e /dev/tty ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            DOMAIN="${PRESET_DOMAIN}"
-            ACME_EMAIL="${PRESET_ACME_EMAIL}"
-        else
+        DOMAIN="${PRESET_DOMAIN:-}"
+        ACME_EMAIL="${PRESET_ACME_EMAIL:-}"
+
+        if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
             while [ -z "$DOMAIN" ]; do
                 read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
             done
@@ -2986,22 +2979,27 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
             done
         fi
 
-        echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
-        if command -v host &> /dev/null; then
-            DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
-            if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
-                echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
-                echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
-            else
-                echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
+        if [ -n "$DOMAIN" ]; then
+            echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
+            if command -v host &> /dev/null; then
+                DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
+                if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
+                    echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
+                    echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
+                    if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+                        read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
+                        echo
+                        if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+                    fi
+                else
+                    echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
+                fi
             fi
         fi
     else
-        DOMAIN="$PUBLIC_IP"
-        echo -e "${BLUE}  → Using IP Mode: $PUBLIC_IP${NC}"
+        USE_SSL="false"
+        DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+        echo -e "${BLUE}  → Using IP Mode: $DOMAIN${NC}"
     fi
 fi
 
