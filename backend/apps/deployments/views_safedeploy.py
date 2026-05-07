@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from apps.deployments.models_core import Service
 from apps.deployments.models_safedeploy import PreviewEnvironment
-from apps.deployments.serializers import PreviewEnvironmentSerializer # To be created
+from apps.deployments.serializers import PreviewEnvironmentSerializer, DeploymentApprovalSerializer
 from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
 
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
@@ -66,10 +66,11 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         return Response({"status": "destroying"}, status=status.HTTP_202_ACCEPTED)
 
 
-class DeploymentApprovalViewSet(viewsets.ViewSet):
+class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     """
     API for approving/rejecting production deployments.
     """
+    serializer_class = DeploymentApprovalSerializer
     from apps.deployments.permissions import CanApproveDeployment
     permission_classes = [CanApproveDeployment]
 

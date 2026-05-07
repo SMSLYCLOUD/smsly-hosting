@@ -23,6 +23,7 @@ import { BuildTab } from '@/components/settings/BuildTab';
 import { FilesTab } from '@/components/settings/FilesTab';
 import { AiRouterTab } from '@/components/settings/AiRouterTab';
 import BackupsTab from '@/components/settings/BackupsTab';
+import { SafeDeployPanel } from '@/components/deployments/SafeDeployPanel';
 import { toast } from '@/components/ui/use-toast';
 import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 
@@ -711,6 +712,8 @@ export default function ServiceDetailPage() {
 
 
             {activeTab === 'backups' && <BackupsTab serviceId={service.id} />}
+
+            {activeTab === 'safedeploy' && <SafeDeployPanel serviceId={service.id} />}
 
             {activeTab === 'advanced' && <AdvancedTab service={service} />}
 

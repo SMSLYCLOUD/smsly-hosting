@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status, serializers
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 import logging
+import os
 from django.utils import timezone
 from django.contrib.auth.models import User
 from apps.deployments.models import Service, Deployment
@@ -115,6 +116,26 @@ class DashboardOverviewView(GenericAPIView):
             'id', 'service__name', 'status', 'commit_message', 'created_at'
         )
 
+        # Security Alerts (Zero-Trust checks)
+        alerts = []
+        if user.is_superuser and user.username == 'admin':
+            # Check for common default passwords
+            common_defaults = ['admin', 'admin123', 'smsly-admin', 'password']
+            env_default = os.getenv('DJANGO_SUPERUSER_PASSWORD')
+            if env_default:
+                common_defaults.append(env_default)
+            
+            is_default = any(user.check_password(p) for p in common_defaults)
+            if is_default:
+                alerts.append({
+                    "id": "default_password",
+                    "type": "warning",
+                    "title": "Default password detected",
+                    "message": "You are using a default or insecure admin password. Please change it immediately.",
+                    "action_url": "/settings",
+                    "action_text": "Change Password"
+                })
+
         return Response({
             "services": service_stats,
             "deployments_this_month": deployments_this_month,
@@ -127,7 +148,7 @@ class DashboardOverviewView(GenericAPIView):
                 "bandwidth_gb": usage_summary['bandwidth_gb']
             },
             "recent_activity": recent_activity,
-            "alerts": []
+            "alerts": alerts
         })
 
 

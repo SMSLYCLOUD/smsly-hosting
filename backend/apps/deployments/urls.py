@@ -7,6 +7,7 @@ from .views import (
     RouteRecheckView, ServiceBackupViewSet, ServerBackupViewSet, BackupScheduleViewSet
     , PlatformResourcesView, RemoteTriggerView
 )
+from .views_safedeploy import PreviewEnvironmentViewSet, DeploymentApprovalViewSet
 from .views_transfer import ServerTransferViewSet
 from .views_addons import AddonViewSet
 from .views_metrics import MetricsViewSet
@@ -72,6 +73,8 @@ services_router.register(
 services_router.register(r'cron', CronJobViewSet, basename='service-cron')
 services_router.register(r'volumes', VolumeViewSet, basename='service-volumes')
 services_router.register(r'backups', ServiceBackupViewSet, basename='service-backup')
+services_router.register(r'previews', PreviewEnvironmentViewSet, basename='service-previews')
+services_router.register(r'approvals', DeploymentApprovalViewSet, basename='service-approvals')
 
 # ── CRITICAL: Explicit Addon Actions (must be before router.urls to avoid 404 shadowing)
 urlpatterns = [

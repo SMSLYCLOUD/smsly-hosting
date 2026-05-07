@@ -9,7 +9,7 @@ const getApiUrl = () => {
   return process.env.NEXT_PUBLIC_API_URL || '/api/v1';
 };
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: getApiUrl(),
   withCredentials: true,
 });
