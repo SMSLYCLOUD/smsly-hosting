@@ -40,15 +40,28 @@ max=4
 for url in "${urls[@]}"; do
   attempt=0
   delay=2
+  success=false
   while [ $attempt -lt $max ]; do
     code=$(curl -sk --connect-timeout 5 --max-time 10 -o /dev/null -w "%{http_code}" "$url" || true)
     if [ "$code" -ge 200 ] && [ "$code" -lt 500 ]; then
       echo "[smoke] OK $url ($code)"
+      success=true
       break
     fi
     attempt=$((attempt+1))
-    echo "[smoke] $url failed (code=${code:-0}), retrying in ${delay}s"
-    sleep $delay
-    delay=$((delay*2))
+    if [ $attempt -lt $max ]; then
+      echo "[smoke] $url failed (code=${code:-0}), retrying in ${delay}s"
+      sleep $delay
+      delay=$((delay*2))
+    fi
   done
+
+  if [ "$success" = false ]; then
+    if [[ "$url" == https://* ]]; then
+      echo "[smoke] WARNING: $url failed to respond. This is common during fresh SSL provisioning. Proceeding with caution..."
+    else
+      echo "[smoke] FATAL: Mandatory route $url failed smoke test."
+      exit 1
+    fi
+  fi
 done
