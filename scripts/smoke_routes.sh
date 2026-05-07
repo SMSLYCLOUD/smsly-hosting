@@ -12,17 +12,26 @@ if [ -z "$HOST" ]; then
   exit 0
 fi
 
+is_ip() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
 urls=()
 urls+=("http://${HOST}")
-urls+=("https://${HOST}")
-if [ -n "$WILDCARD" ]; then
-  if [[ "$WILDCARD" == \*.* ]]; then
-    WILDCARD_TEST_HOST="smoke-$(date +%s).${WILDCARD#*.}"
-  else
-    WILDCARD_TEST_HOST="$WILDCARD"
+
+if ! is_ip "$HOST"; then
+  urls+=("https://${HOST}")
+  if [ -n "$WILDCARD" ]; then
+    if [[ "$WILDCARD" == \*.* ]]; then
+      WILDCARD_TEST_HOST="smoke-$(date +%s).${WILDCARD#*.}"
+    else
+      WILDCARD_TEST_HOST="$WILDCARD"
+    fi
+    echo "[smoke] Wildcard probe host: ${WILDCARD_TEST_HOST}"
+    urls+=("https://${WILDCARD_TEST_HOST}")
   fi
-  echo "[smoke] Wildcard probe host: ${WILDCARD_TEST_HOST}"
-  urls+=("https://${WILDCARD_TEST_HOST}")
+else
+  echo "[smoke] IP mode detected; skipping HTTPS/wildcard probes."
 fi
 
 attempt=0

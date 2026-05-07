@@ -31,6 +31,7 @@ interface ManagedServer {
     created_at: string;
     provision_status: 'NONE' | 'PENDING' | 'PROVISIONING' | 'DONE' | 'FAILED';
     role?: 'LEADER' | 'FOLLOWER' | 'CANDIDATE';
+    is_lite_agent?: boolean;
 }
 
 function getToken() {
@@ -788,6 +789,11 @@ export default function ServersPage() {
                                                         {server.has_ssh_credentials && (
                                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 font-medium">
                                                                 SSH ready
+                                                            </span>
+                                                        )}
+                                                        {server.is_lite_agent && (
+                                                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 font-bold uppercase">
+                                                                Lite Agent
                                                             </span>
                                                         )}
                                                     </div>
