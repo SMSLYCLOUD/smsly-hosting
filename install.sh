@@ -1436,10 +1436,7 @@ ${domain} {
 }
 
 :80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
+    reverse_proxy localhost:8090
 }
 
 ${svc_blocks}
@@ -2501,6 +2498,10 @@ ${cf_domain} {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
 ${cf_known_stanza}
+    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
+    handle @platform_assets {
+        reverse_proxy localhost:8090
+    }
     handle {
         rewrite * /notice
         reverse_proxy localhost:8090
@@ -2508,10 +2509,7 @@ ${cf_known_stanza}
 }
 
 :80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
+    reverse_proxy localhost:8090
 }
 
 ${cf_svc_blocks}
@@ -3776,6 +3774,10 @@ $DOMAIN {
     tls {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
+    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
+    handle @platform_assets {
+        reverse_proxy localhost:8090
+    }
     handle {
         rewrite * /notice
         reverse_proxy localhost:8090
@@ -3783,10 +3785,7 @@ $DOMAIN {
 }
 
 :80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
+    reverse_proxy localhost:8090
 }
 CADDYEOF
 
@@ -3819,10 +3818,7 @@ $DOMAIN {
 }
 
 :80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
+    reverse_proxy localhost:8090
 }
 CADDYEOF
         if [ -f "$CADDY_OVERRIDE_FILE" ]; then
