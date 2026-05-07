@@ -57,13 +57,23 @@ def _service_slug_base(service):
 def populate_service_slugs(apps, schema_editor):
     Service = apps.get_model('deployments', 'Service')
     used_slugs = set()
+    to_update = []
+    batch_size = 500
 
     for service in Service.objects.all().only('id', 'name', 'slug').order_by('id'):
         slug = _dedupe_slug(_service_slug_base(service), used_slugs)
         if service.slug == slug:
             continue
 
-        Service.objects.filter(pk=service.pk).update(slug=slug)
+        service.slug = slug
+        to_update.append(service)
+
+        if len(to_update) >= batch_size:
+            Service.objects.bulk_update(to_update, ['slug'])
+            to_update = []
+
+    if to_update:
+        Service.objects.bulk_update(to_update, ['slug'])
 
 
 def cleanup_service_slug_artifacts(apps, schema_editor):
