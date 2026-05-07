@@ -722,8 +722,29 @@ class PlatformConfig(models.Model):
 
     @classmethod
     def load(cls):
-        """Get or create the singleton config."""
+        """
+        Get or create the singleton config.
+        Includes a schema guard to prevent 'relation does not exist' errors
+        during initial startup/migration phases.
+        """
         import os
+        from django.db import connection
+
+        # Schema Guard: Check if the table exists before querying
+        table_name = cls._meta.db_table
+        if table_name not in connection.introspection.table_names():
+            # Return a default instance from ENV without saving to DB
+            env_domain = os.environ.get('DOMAIN', '').strip()
+            env_ssl = os.environ.get('USE_SSL', '').strip().lower()
+            return cls(
+                pk=1,
+                domain=env_domain,
+                use_ssl=env_ssl in ('true', '1', 'yes'),
+                cloudflare_api_token=os.environ.get('CLOUDFLARE_API_TOKEN', '').strip(),
+                wildcard_subdomains=os.environ.get('WILDCARD_SUBDOMAINS', 'true').lower() in ('true', '1', 'yes'),
+                server_ip=os.environ.get('PUBLIC_IP', '').strip(),
+            )
+
         obj, created = cls.objects.get_or_create(pk=1)
 
         env_domain = os.environ.get('DOMAIN', '').strip()

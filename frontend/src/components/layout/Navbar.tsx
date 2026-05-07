@@ -146,21 +146,23 @@ export function Navbar() {
       <div className="w-full grid h-14 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-4 sm:px-6 lg:px-8 max-w-[2200px] mx-auto">
 
         {/* Logo - Left */}
-        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-3">
+        <Link href={user ? '/client' : '/'} prefetch={false} className="flex items-center group flex-shrink-0 gap-2.5">
             <div className="rounded-md bg-white p-0.5 shadow-lg shadow-emerald-500/10 group-hover:scale-105 transition-transform">
                 <Image src="/images/mini_logo.png" alt="Grid" width={24} height={28} className="h-7 w-auto object-contain" priority />
             </div>
             <div className="flex flex-col">
-              {!user && <span className="font-bold text-lg tracking-tight text-white hidden sm:block leading-none">Grid</span>}
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[8px] font-bold text-emerald-500 tracking-[0.15em] uppercase">Secured By</span>
-                <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">SMSLYCLOUD</span>
-              </div>
+              <span className="font-bold text-lg tracking-tight text-white leading-none">Grid</span>
+              {!user && (
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-[8px] font-bold text-emerald-500 tracking-[0.15em] uppercase">Secured By</span>
+                  <span className="text-[9px] font-extrabold text-white/70 tracking-[0.05em] uppercase">SMSLYCLOUD</span>
+                </div>
+              )}
             </div>
         </Link>
 
         {/* Nav Links - Center */}
-        <nav className="hidden min-w-0 items-center justify-start ml-1 md:flex md:flex-1">
+        <nav className="hidden min-w-0 items-center justify-center md:flex md:flex-1">
             <div
               className={
                 user
