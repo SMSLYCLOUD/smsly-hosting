@@ -436,7 +436,7 @@ def provision_server(self, server_id: str):
             "SMSLY_STRICT_VERIFY=1 "
             f"MASTER_IP={master_ip} "
             f"SMSLY_BRANCH={os.environ.get('SMSLY_BRANCH', 'main')} "
-            f"USE_SSL=false DOMAIN={server.host}"
+            f"USE_SSL=false SMSLY_NODE_HOST={server.host}"
         )
 
         install_args = ""
