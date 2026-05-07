@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.9 (Production Hardened)
-# VERSION: 2026-05-07-0144
+# Grid by SMSLY - Universal Installer v3.2.0 (Production Hardened)
+# VERSION: 2026-05-07-0155
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -3072,6 +3072,9 @@ FRP_AUTH_TOKEN=$FRP_AUTH_TOKEN
 
 # PgCat administration password
 PGCAT_ADMIN_PASSWORD=$PGCAT_ADMIN_PASSWORD
+
+# Direct database connection for migrations (bypasses PgCat pooler)
+DIRECT_DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@db:5432/smsly_hosting
 EOF
 
     # ─── Dynamic Build Resource Allocation ──────────────────────────────
