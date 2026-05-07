@@ -400,6 +400,92 @@ env_path.write_text("\n".join(updated) + "\n")
 PY
 }
 
+env_append_csv_values() {
+    local env_file="$1"
+    local var_name="$2"
+    shift 2
+
+    python3 - "$env_file" "$var_name" "$@" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+requested = [value.strip() for value in sys.argv[3:] if value.strip()]
+prefix = f"{key}="
+
+lines = env_path.read_text().splitlines() if env_path.exists() else []
+updated = []
+found = False
+changed = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            values = [value.strip() for value in line[len(prefix):].split(",") if value.strip()]
+            seen = {value.lower() for value in values}
+            for value in requested:
+                if value.lower() not in seen:
+                    values.append(value)
+                    seen.add(value.lower())
+                    changed = True
+            updated.append(f"{key}={','.join(values)}")
+            found = True
+        else:
+            changed = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={','.join(requested)}")
+    changed = True
+
+if changed:
+    env_path.write_text("\n".join(updated) + "\n")
+
+print("changed" if changed else "unchanged")
+PY
+}
+
+sync_env_domain_allowlists() {
+    local env_file="$1"
+    local domain="${2:-}"
+    local public_ip="${3:-}"
+    local changed=false
+    local result=""
+    local allowed_hosts=("localhost" "127.0.0.1" "backend" "smsly-hosting-backend-1")
+    local csrf_origins=("http://localhost:8090")
+    local cors_origins=("http://localhost:8090")
+
+    [ -f "$env_file" ] || return 0
+
+    [ -n "$domain" ] || domain="$(env_get_value "$env_file" "DOMAIN")"
+    [ -n "$public_ip" ] || public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+
+    if [ -n "$domain" ]; then
+        allowed_hosts+=("$domain")
+        csrf_origins+=("https://${domain}" "http://${domain}")
+        cors_origins+=("https://${domain}" "http://${domain}")
+    fi
+
+    if [ -n "$public_ip" ]; then
+        allowed_hosts+=("$public_ip")
+        csrf_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+        cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
+    fi
+
+    result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+    result="$(env_append_csv_values "$env_file" "CORS_ALLOWED_ORIGINS" "${cors_origins[@]}")"
+    [ "$result" = "changed" ] && changed=true
+
+    if [ "$changed" = true ]; then
+        echo -e "${GREEN}  ✓ Synced domain allowlists in .env${NC}"
+    fi
+}
+
 env_ensure_var() {
     local env_file="$1"
     local var_name="$2"
@@ -536,6 +622,8 @@ apply_env_platform_overrides() {
     WILDCARD_SUBDOMAINS="$desired_wildcard"
     CLOUDFLARE_API_TOKEN="$desired_cf_token"
     PUBLIC_IP="$desired_public_ip"
+
+    sync_env_domain_allowlists "$env_file" "$DOMAIN" "$PUBLIC_IP"
 
     if [ "$changed" = true ]; then
         echo -e "${GREEN}  ✓ Applied platform/domain overrides to .env${NC}"
@@ -759,6 +847,8 @@ ensure_env_runtime_defaults() {
     current_domain="$(env_get_value "$env_file" "DOMAIN")"
     current_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
     current_tunnel_domain="$(env_get_value "$env_file" "TUNNEL_DOMAIN")"
+
+    sync_env_domain_allowlists "$env_file" "$current_domain" "$current_public_ip"
 
     if [ -n "$current_domain" ] && [ "$current_domain" != "localhost" ] && ! echo "$current_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
         expected_tunnel_domain="tunnel.${current_domain}"
