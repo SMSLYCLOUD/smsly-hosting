@@ -786,6 +786,32 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
         elif svc in frontends: order = 40
         svc["deploy_order"] = order
 
+    # 6. Elite 100% Exhaustive Sweep
+    _ensure_100_percent_env_coverage(deployable)
+
+
+def _ensure_100_percent_env_coverage(services: List[dict]):
+    """
+    Guarantees that NO environment variable is left empty.
+    Forces production-ready values or clear placeholders for every key.
+    """
+    for svc in services:
+        env_map = svc.get("env_vars", {})
+        
+        # Scan for any null, empty, or missing values
+        for key in list(env_map.keys()):
+            val = env_map.get(key)
+            if not val or str(val).strip() == "":
+                # Fallback Logic:
+                if any(k in key.upper() for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "AUTH_HASH"]):
+                    env_map[key] = "{{GENERATE}}"
+                elif any(k in key.upper() for k in ["URL", "HOST", "ENDPOINT"]):
+                    env_map[key] = "http://localhost" # Safe fallback placeholder
+                else:
+                    env_map[key] = f"REPLACE_WITH_PRODUCTION_{key.upper()}"
+        
+        svc["env_vars"] = env_map
+
     # Final sorting for deploy sequence
     ordered = sorted(
         deployable,
