@@ -47,6 +47,7 @@ admin_username = "{admin_user}"
 admin_password = "{admin_pass}"
 server_lifetime = 86400000
 idle_timeout = 60000
+connect_timeout = 5000
 dns_cache_enabled = true
 dns_cache_ttl = 30000
 

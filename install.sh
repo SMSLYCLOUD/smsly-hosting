@@ -913,6 +913,33 @@ COMPOSE_FILE="docker-compose.prod.yml"
 # will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
 
+get_migration_database_alias() {
+    local migrate_db
+    migrate_db="$(
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c \
+            "from django.conf import settings; print('direct' if 'direct' in settings.DATABASES else ('session' if 'session' in settings.DATABASES else 'default'))" \
+            2>/dev/null | tail -n 1 | tr -d '\r'
+    )"
+
+    case "$migrate_db" in
+        direct|session|default) printf '%s\n' "$migrate_db" ;;
+        *) printf '%s\n' "default" ;;
+    esac
+}
+
+run_backend_migrations() {
+    local user_args=()
+    if [ "${1:-}" = "--root" ]; then
+        user_args=(--user root)
+    fi
+
+    local migrate_db
+    migrate_db="$(get_migration_database_alias)"
+    echo -e "${BLUE}  -> Migration database: ${migrate_db}${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T "${user_args[@]}" backend \
+        python manage.py migrate --database="$migrate_db" --noinput
+}
+
 # ─── Parse Arguments ─────────────────────────────────────────────────────────
 UPDATE_MODE=""
 WIPE_MODE="false"
@@ -1943,10 +1970,10 @@ fi
             # Note: Do NOT run makemigrations here — migrations are committed in the repo.
             # Running makemigrations auto-generates files inside the container that conflict
             # with committed migrations on subsequent deploys.
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
+            run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
+                run_backend_migrations --root
             }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
@@ -2007,10 +2034,10 @@ fi
             docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             sleep 10
             # Note: Do NOT run makemigrations — migrations are committed in the repo.
-            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput || {
+            run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
                 sleep 15
-                docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py migrate --noinput
+                run_backend_migrations --root
             }
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput
@@ -3039,10 +3066,12 @@ POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 POSTGRES_USER=smsly_admin
 POSTGRES_DB=smsly_hosting
 DATABASE_URL=postgresql://smsly_admin:$POSTGRES_PASSWORD@pgcat:5432/smsly_hosting
+DATABASE_CONNECT_TIMEOUT=5
 
 REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
+REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//
 
 DOMAIN=$DOMAIN
@@ -3239,7 +3268,7 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
     # Running makemigrations generates files inside the container that conflict on redeploy.
     MIGRATE_OK=false
     for attempt in 1 2 3; do
-        if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py migrate --noinput 2>&1; then
+        if run_backend_migrations 2>&1; then
             MIGRATE_OK=true
             break
         fi

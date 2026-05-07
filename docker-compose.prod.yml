@@ -11,7 +11,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - pg_isready -U smsly_admin -d smsly_hosting
+      - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
       interval: 10s
       timeout: 10s
       retries: 10
@@ -34,7 +34,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER:-smsly_admin}
+      - PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -h 127.0.0.1 -p 5432 -U "$${POSTGRES_USER:-smsly_admin}" -d "$${POSTGRES_DB:-smsly_hosting}"
       interval: 10s
       timeout: 10s
       retries: 10
@@ -112,7 +112,7 @@ services:
     - /opt/smsly-cache:/opt/smsly-cache
     - backups_data:/app/backups
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
       interval: 30s
       timeout: 10s
       retries: 10
