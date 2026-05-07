@@ -358,11 +358,10 @@ def generate_caddyfile(config) -> str:
         except ValueError:
             logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
 
-    if config.use_ssl and domain:
-        # In wildcard mode, also use DNS challenge for the platform domain.
-        # This avoids HTTP-01 edge cases when the domain is proxied by Cloudflare.
-        platform_block = [f"{domain} {{"]
-        if config.wildcard_subdomains and cloudflare_token:
+    if config.use_ssl:
+        # Use Caddy environment variable syntax to remain agnostic
+        platform_block = ["{$DOMAIN} {"]
+        if config.wildcard_subdomains:
             platform_block.extend(
                 [
                     "    tls {",
@@ -385,11 +384,11 @@ def generate_caddyfile(config) -> str:
         # Wildcard subdomains for deployed services.
         # Use {env.CLOUDFLARE_API_TOKEN} (Caddy env syntax) instead of the
         # raw token to match install.sh and avoid embedding secrets in files.
-        if config.wildcard_subdomains and cloudflare_token:
+        if config.wildcard_subdomains:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
             wildcard_lines = [
-                f"*.{domain} {{",
+                "*.{$DOMAIN} {",
                 "    tls {",
                 "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
                 "    }",
@@ -447,7 +446,7 @@ def generate_caddyfile(config) -> str:
         sections.append(
             """:80 {
     @not_ip {
-        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
+        not header_regexp host r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$'
         header_regexp host .+
     }
     redir @not_ip https://{host}{uri} 308
