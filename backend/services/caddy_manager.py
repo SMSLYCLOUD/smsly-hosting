@@ -358,17 +358,12 @@ def generate_caddyfile(config) -> str:
         except ValueError:
             logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
 
-    if config.use_ssl:
-        # Use Caddy environment variable syntax to remain agnostic
-        platform_block = ["{$DOMAIN} {"]
-        if config.wildcard_subdomains:
-            platform_block.extend(
-                [
-                    "    tls {",
-                    "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
-                    "    }",
-                ]
-            )
+    if config.use_ssl and domain:
+        # Keep the apex platform domain independent from wildcard DNS
+        # validation. Wildcard routes need Cloudflare DNS-01, but the apex can
+        # use Caddy's default HTTP-01 flow and should stay healthy even if the
+        # wildcard token is temporarily invalid.
+        platform_block = [f"{domain} {{"]
         platform_block.extend(
             [
                 "    reverse_proxy localhost:8090",
@@ -388,7 +383,7 @@ def generate_caddyfile(config) -> str:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
             wildcard_lines = [
-                "*.{$DOMAIN} {",
+                f"*.{domain} {{",
                 "    tls {",
                 "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
                 "    }",
@@ -446,7 +441,7 @@ def generate_caddyfile(config) -> str:
         sections.append(
             """:80 {
     @not_ip {
-        not header_regexp host r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$'
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
         header_regexp host .+
     }
     redir @not_ip https://{host}{uri} 308

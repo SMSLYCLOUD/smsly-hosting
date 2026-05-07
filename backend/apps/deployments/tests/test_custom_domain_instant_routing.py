@@ -59,7 +59,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile,
         )
 
-    def test_platform_domain_uses_dns_challenge_when_wildcard_enabled(self):
+    def test_platform_domain_stays_independent_from_wildcard_dns_challenge(self):
         config = SimpleNamespace(
             domain='cloud.smsly.cloud',
             use_ssl=True,
@@ -69,13 +69,12 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('cloud.smsly.cloud {\n    tls {', caddyfile)
+        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy localhost:8090', caddyfile)
         self.assertIn('*.cloud.smsly.cloud {', caddyfile)
-        self.assertGreaterEqual(
+        self.assertEqual(
             caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
-            2,
+            1,
         )
-        self.assertIn('reverse_proxy localhost:8090', caddyfile)
         self.assertIn('reverse_proxy localhost:8090', caddyfile)
 
     def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):

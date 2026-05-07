@@ -2253,8 +2253,11 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    if docker exec -i smsly-hosting-backend-1 celery -A config inspect active_queues 2>/dev/null | grep -q "deploy"; then
+    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' smsly-hosting-celery-deploy-1 2>/dev/null || echo "")"
+    if docker exec -i smsly-hosting-celery-deploy-1 celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
+    elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ]; then
+        echo -e "${GREEN}  ✓ Deployment worker container is healthy (queue inspect timed out)${NC}"
     else
         echo -e "${YELLOW}  ⚠ WARNING: Deployment worker not detected on 'deploy' queue. Check logs.${NC}"
     fi
@@ -2413,9 +2416,6 @@ for svc in Service.objects.all():
 ${cf_domain} {
     reverse_proxy localhost:8090
     encode gzip
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
     log {
         output file /var/log/caddy/access.log
     }
@@ -3674,9 +3674,6 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
 
 $DOMAIN {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
     reverse_proxy localhost:8090
     encode gzip
     log {
