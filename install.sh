@@ -2938,6 +2938,71 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
         COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
         export MASTER_IP MASTER_DB_PASSWORD MASTER_MQ_PASSWORD
     fi
+
+    # ─── Deployment Mode Selection (Moved up) ──────────────────────────────
+    # Force IPv4 to ensure valid URL syntax
+    PUBLIC_IP="$(detect_public_ip)"
+
+    # Allow non-interactive SSL installs by pre-seeding env vars
+    PRESET_DOMAIN="${DOMAIN:-}"
+    PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
+    PRESET_USE_SSL="${USE_SSL:-}"
+
+    echo -e "\n${BLUE}Select Deployment Mode:${NC}"
+    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
+    echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
+
+    if [ -n "${PRESET_USE_SSL}" ]; then
+        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
+            MODE_CHOICE=2
+        elif [ "${PRESET_USE_SSL}" = "false" ]; then
+            echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
+            MODE_CHOICE=1
+        else
+            read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
+            MODE_CHOICE=${MODE_CHOICE:-1}
+        fi
+    else
+        read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
+        MODE_CHOICE=${MODE_CHOICE:-1}
+    fi
+
+    DOMAIN=""
+    ACME_EMAIL=""
+    USE_SSL="false"
+
+    if [ "$MODE_CHOICE" -eq "2" ]; then
+        USE_SSL="true"
+        if [ ! -e /dev/tty ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
+            DOMAIN="${PRESET_DOMAIN}"
+            ACME_EMAIL="${PRESET_ACME_EMAIL}"
+        else
+            while [ -z "$DOMAIN" ]; do
+                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
+            done
+            while [ -z "$ACME_EMAIL" ]; do
+                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL < /dev/tty
+            done
+        fi
+
+        echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
+        if command -v host &> /dev/null; then
+            DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
+            if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
+                echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
+                echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
+                read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
+            else
+                echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
+            fi
+        fi
+    else
+        DOMAIN="$PUBLIC_IP"
+        echo -e "${BLUE}  → Using IP Mode: $PUBLIC_IP${NC}"
+    fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -3223,85 +3288,11 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 
 
 else
-    # ─── Fresh install: generate secrets ────────────────────────────────────
-    # Force IPv4 to ensure valid URL syntax (avoiding [IPv6] bracket issues)
-    PUBLIC_IP="$(detect_public_ip)"
+    # ─── Configuration Summary ──────────────────────────────────────────────
+    PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    USE_SSL="${USE_SSL:-false}"
 
-    # Allow non-interactive SSL installs by pre-seeding env vars:
-    #   USE_SSL=true DOMAIN=cloud.smsly.cloud ACME_EMAIL=admin@example.com SKIP_SCREEN=1 bash install.sh
-    PRESET_DOMAIN="${DOMAIN:-}"
-    PRESET_ACME_EMAIL="${ACME_EMAIL:-}"
-    PRESET_USE_SSL="${USE_SSL:-}"
-
-    echo -e "\n${BLUE}Select Deployment Mode:${NC}"
-    echo -e "  1) ${GREEN}IP Mode${NC} (Easy) - http://$PUBLIC_IP"
-    echo -e "  2) ${GREEN}SSL Mode${NC} (Prod) - https://your-domain.com (Requires DNS A Record pointing to $PUBLIC_IP)"
-
-    # If any mode was pre-selected (even IP mode), skip prompting even in interactive shells.
-    if [ -n "${PRESET_USE_SSL}" ]; then
-        if [ "${PRESET_USE_SSL}" = "true" ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            echo -e "${BLUE}  → Preset detected. Using SSL Mode for ${PRESET_DOMAIN}.${NC}"
-            MODE_CHOICE=2
-        elif [ "${PRESET_USE_SSL}" = "false" ]; then
-            echo -e "${BLUE}  → Preset detected. Using IP Mode.${NC}"
-            MODE_CHOICE=1
-        else
-            # Pre-seeded but incomplete? Ask anyway.
-            if [ -e /dev/tty ]; then
-                read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
-                MODE_CHOICE=${MODE_CHOICE:-1}
-            else
-                MODE_CHOICE=1
-            fi
-        fi
-    elif [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
-        read -p "Enter choice [1]: " MODE_CHOICE < /dev/tty
-        MODE_CHOICE=${MODE_CHOICE:-1}
-    else
-        echo -e "${YELLOW}  ⚠ Automated mode detected. Defaulting to IP Mode.${NC}"
-        MODE_CHOICE=1
-    fi
-
-    DOMAIN=""
-    ACME_EMAIL=""
-    USE_SSL="false"
-
-    if [ "$MODE_CHOICE" -eq "2" ]; then
-        USE_SSL="true"
-        if [ ! -e /dev/tty ] && [ -n "${PRESET_DOMAIN}" ] && [ -n "${PRESET_ACME_EMAIL}" ]; then
-            DOMAIN="${PRESET_DOMAIN}"
-            ACME_EMAIL="${PRESET_ACME_EMAIL}"
-        else
-            while [ -z "$DOMAIN" ]; do
-                read -p "Enter your Domain (e.g., app.example.com): " DOMAIN < /dev/tty
-            done
-
-            while [ -z "$ACME_EMAIL" ]; do
-                read -p "Enter Email for SSL (e.g., admin@example.com): " ACME_EMAIL < /dev/tty
-            done
-        fi
-
-        echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
-        if command -v host &> /dev/null; then
-            DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
-            if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
-                echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
-                echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
-                if [ -e /dev/tty ] && [ "$NON_INTERACTIVE" != "true" ]; then
-                    read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
-                    echo
-                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then exit 1; fi
-                else
-                    echo -e "${YELLOW}  ⚠ Automated mode: Ignoring DNS mismatch and continuing...${NC}"
-                fi
-            else
-                echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
-            fi
-        fi
-    else
-        DOMAIN="$PUBLIC_IP"
-        echo -e "${BLUE}  → Using IP Mode: $PUBLIC_IP${NC}"
-    fi
 
     # ─── Wildcard Subdomain & Cloudflare Setup (SSL mode only) ────────────
     WILDCARD_SUBDOMAINS="false"
