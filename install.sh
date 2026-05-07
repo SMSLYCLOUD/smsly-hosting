@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================================================
-# Grid by SMSLY - Universal Installer v3.1.5 (Production Hardened)
-# VERSION: 2026-05-06-2348
+# Grid by SMSLY - Universal Installer v3.1.6 (Production Hardened)
+# VERSION: 2026-05-07-0118
 # =============================================================================
 # Supports: Ubuntu 20.04/22.04/24.04 LTS
 # Modes:
@@ -218,12 +218,25 @@ ensure_system_swap() {
     local current_ram_mb
     current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
     local target_swap_mb=$((current_ram_mb * 4))
+    
+    # Floor at 4GB for safety on small nodes, cap at 16GB for large ones
+    [ "$target_swap_mb" -lt 4096 ] && target_swap_mb=4096
+    [ "$target_swap_mb" -gt 16384 ] && target_swap_mb=16384
+
     local current_swap_mb
     current_swap_mb=$(free -m | awk '/^Swap:/{print $2}')
+    
+    # Check for ACTIVE swap (sometimes free -m reports phantom swap from host)
+    local active_swap_count
+    active_swap_count=$(grep -c / /proc/swaps || echo 0)
 
-    if [ "$current_swap_mb" -lt "$target_swap_mb" ]; then
-        local needed_mb=$((target_swap_mb - current_swap_mb))
-        echo -e "${BLUE}  → Current swap: ${current_swap_mb}MB. Adding ${needed_mb}MB to reach 4x RAM (${target_swap_mb}MB)...${NC}"
+    # If swap is suspiciously large (e.g. > 32GB on a small VPS) and active count is low, 
+    # it might be phantom swap. We want local active swap for the build.
+    if [ "$current_swap_mb" -lt "$target_swap_mb" ] || [ "$active_swap_count" -eq 0 ] || [ "$current_swap_mb" -gt 32000 ]; then
+        local needed_mb=$target_swap_mb
+        [ "$current_swap_mb" -gt 0 ] && [ "$active_swap_count" -gt 0 ] && [ "$current_swap_mb" -lt 32000 ] && needed_mb=$((target_swap_mb - current_swap_mb))
+        
+        echo -e "${BLUE}  → Active swap count: ${active_swap_count}. Provisioning ${needed_mb}MB local swap...${NC}"
         local swapfile="/swapfile-smsly"
 
         # If the file already exists but is too small, we need to recreate it
@@ -3099,8 +3112,11 @@ docker network create smsly-proxy 2>/dev/null || true
 # Traefik is NOT used — Caddy natively handles Let's Encrypt SSL.
 # Ensure bind-mounted config paths exist before `docker compose up`.
 ensure_infrastructure_permissions
-echo -e "${BLUE}  → Starting App Stack...${NC}"
+    echo -e "${BLUE}  → Starting App Stack (Build + Deploy)...${NC}"
+    ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
+    HEARTBEAT_PID=$!
     docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate --remove-orphans
+    kill $HEARTBEAT_PID 2>/dev/null || true
     set_checkpoint "stack_deployed"
 fi
 
