@@ -232,7 +232,6 @@ wait_for_apt_lock() {
     local active_locks=()
     local pids
     local pid
-    local proc_pids
 
     while true; do
         active_locks=()
@@ -246,20 +245,6 @@ wait_for_apt_lock() {
                     pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
                 fi
             done
-        fi
-
-        proc_pids="$(ps -eo pid=,comm=,args= 2>/dev/null | awk -v self="$$" '
-            {
-                pid=$1
-                comm=tolower($2)
-                line=tolower($0)
-                if (pid == self || comm == "awk" || comm == "grep") next
-                if (comm ~ /^(apt|apt-get|dpkg|unattended-upgr|unattended-upgrade|packagekitd)$/ || line ~ /apt.systemd.daily/) print pid
-            }
-        ' || true)"
-        if [ -n "$proc_pids" ]; then
-            active_locks+=("apt/dpkg process")
-            pids="$pids $proc_pids"
         fi
 
         if [ "${#active_locks[@]}" -eq 0 ]; then
@@ -299,6 +284,39 @@ wait_for_apt_lock() {
         sleep 5
         elapsed=$((elapsed + 5))
     done
+}
+
+apt_run() {
+    local max_attempts="${SMSLY_APT_ATTEMPTS:-6}"
+    local attempt=1
+    local output=""
+    local rc=0
+
+    while [ "$attempt" -le "$max_attempts" ]; do
+        wait_for_apt_lock || return 1
+        set +e
+        output="$("$@" 2>&1)"
+        rc=$?
+        set -e
+
+        if [ "$rc" -eq 0 ]; then
+            [ -n "$output" ] && printf '%s\n' "$output"
+            return 0
+        fi
+
+        if printf '%s\n' "$output" | grep -qiE 'Could not get lock|Unable to acquire.*lock|dpkg frontend lock|/var/lib/dpkg/lock|/var/cache/apt/archives/lock'; then
+            echo -e "${YELLOW}  APT lock appeared during command; retrying ($attempt/$max_attempts)...${NC}"
+            sleep $((attempt * 5))
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        printf '%s\n' "$output"
+        return "$rc"
+    done
+
+    printf '%s\n' "$output"
+    return "$rc"
 }
 
 ensure_system_swap() {
@@ -3398,10 +3416,8 @@ fi
 
 echo -e "${GREEN}  ✓ Previous artifacts cleaned${NC}"
 
-wait_for_apt_lock
-apt-get update -qq
-wait_for_apt_lock
-apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
+apt_run apt-get update -qq
+apt_run apt-get install -y curl wget git python3 python3-pip python3-venv openssl ca-certificates gnupg lsb-release dnsutils
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
@@ -3411,10 +3427,8 @@ if ! command -v docker &> /dev/null; then
     echo \
       "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
       $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    wait_for_apt_lock
-    apt-get update -qq
-    wait_for_apt_lock
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    apt_run apt-get update -qq
+    apt_run apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
     echo -e "${GREEN}  ✓ Docker already installed ($(docker --version | head -c 40))${NC}"
 fi
@@ -3422,8 +3436,7 @@ fi
 # Ensure docker compose is available
 if ! docker compose version >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Docker Compose plugin...${NC}"
-    wait_for_apt_lock
-    apt-get install -y docker-compose-plugin || true
+    apt_run apt-get install -y docker-compose-plugin || true
 fi
 
 # Apply mirror config if applicable (Only if docker is now present)
@@ -4010,14 +4023,11 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
         elif ! command -v caddy &> /dev/null; then
             # Fallback 2: Install stock Caddy from apt (no wildcard SSL, but basic HTTPS works)
             echo -e "${YELLOW}  ⚠ Download also failed — installing stock Caddy (no wildcard SSL)...${NC}"
-            wait_for_apt_lock
-            apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
+            apt_run apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
             curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-            wait_for_apt_lock
-            apt-get update >/dev/null 2>&1
-            wait_for_apt_lock
-            apt-get install -y caddy >/dev/null 2>&1
+            apt_run apt-get update >/dev/null 2>&1
+            apt_run apt-get install -y caddy >/dev/null 2>&1
         fi
     fi
     cd "$INSTALL_DIR"
