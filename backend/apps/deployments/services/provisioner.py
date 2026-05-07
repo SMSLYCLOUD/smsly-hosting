@@ -462,7 +462,7 @@ def provision_server(self, server_id: str):
                 f"MASTER_DB_PASSWORD={master_db_pass} "
                 f"MASTER_MQ_PASSWORD={master_mq_pass}"
             )
-            install_args = "--mode agent-lite"
+            install_args = "--mode=agent-lite"
 
         # ─── Resume Check ──────────────────────────────────────────────────
         stdin, stdout, stderr = ssh.exec_command("test -f /opt/smsly-hosting/.smsly_install_state && echo 'RESUME' || echo 'FRESH'")

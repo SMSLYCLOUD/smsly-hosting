@@ -10,6 +10,7 @@ set -euo pipefail
 WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
 UPDATE_FLAG="$WATCH_DIR/.update"
 INSTALL_DIR="/opt/smsly-hosting"
+INSTALL_LOCK_FILE="/tmp/smsly-install.lock"
 LOG_PREFIX="[update-watcher]"
 
 echo "$LOG_PREFIX Starting — watching $WATCH_DIR for updates"
@@ -17,9 +18,30 @@ echo "$LOG_PREFIX Starting — watching $WATCH_DIR for updates"
 # Ensure watch directory exists
 mkdir -p "$WATCH_DIR"
 
+install_lock_active() {
+    [ -f "$INSTALL_LOCK_FILE" ] || return 1
+
+    if command -v flock >/dev/null 2>&1; then
+        if (flock -n 9) 9<"$INSTALL_LOCK_FILE"; then
+            return 1
+        fi
+        return 0
+    fi
+
+    local pid
+    pid="$(cat "$INSTALL_LOCK_FILE" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
 while true; do
     # Check for update flag
     if [ -f "$UPDATE_FLAG" ]; then
+        if install_lock_active; then
+            echo "$LOG_PREFIX Installer lock is active; deferring platform update"
+            sleep 10
+            continue
+        fi
+
         MODE=$(cat "$UPDATE_FLAG" | tr -d ' \n\r' || echo "update")
         [ -z "$MODE" ] && MODE="update"
         
