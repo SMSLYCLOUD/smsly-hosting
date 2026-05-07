@@ -1050,6 +1050,25 @@ reload_caddy_preserving_previous() {
     systemctl is-active --quiet caddy 2>/dev/null
 }
 
+sync_active_caddyfile_to_shared() {
+    local source="${1:-/etc/caddy/Caddyfile}"
+    local shared_dir="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config"
+    local shared_file="$shared_dir/Caddyfile"
+
+    [ -f "$source" ] || return 0
+
+    mkdir -p "$shared_dir" 2>/dev/null || true
+    install -m 0664 "$source" "$shared_file" 2>/dev/null || cp "$source" "$shared_file" 2>/dev/null || true
+    if id smsly >/dev/null 2>&1; then
+        chown smsly:smsly "$shared_file" 2>/dev/null || true
+    else
+        chown 1000:1000 "$shared_file" 2>/dev/null || true
+    fi
+
+    # Prevent the watcher from immediately replaying a stale pending reload.
+    rm -f "$shared_dir/.reload" 2>/dev/null || true
+}
+
 install_caddyfile_atomically() {
     local candidate="$1"
     local label="${2:-Caddyfile}"
@@ -1076,6 +1095,7 @@ install_caddyfile_atomically() {
     install -m 0644 "$candidate" /etc/caddy/Caddyfile
     if reload_caddy_preserving_previous "$previous"; then
         [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile "$CADDY_LAST_GOOD" 2>/dev/null || true
+        sync_active_caddyfile_to_shared /etc/caddy/Caddyfile
         rm -f "$previous"
         return 0
     fi
@@ -1466,6 +1486,7 @@ https_listener_active() {
 ensure_caddy_https_listener() {
     local domain="${1:-}"
     local reason="${2:-https listener check}"
+    local watcher_was_active="false"
 
     is_real_domain_name "$domain" || return 0
 
@@ -1474,16 +1495,30 @@ ensure_caddy_https_listener() {
     fi
 
     echo -e "${YELLOW}  ⚠ Caddy is not listening on TCP 443 for ${domain}; applying HTTPS fallback config...${NC}"
+    if systemctl is-active --quiet caddy-watcher 2>/dev/null; then
+        watcher_was_active="true"
+        systemctl stop caddy-watcher >/dev/null 2>&1 || true
+    fi
     generate_safe_caddyfile "$reason: missing tcp/443 listener" || true
-    reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
-    sleep 2
+    sync_active_caddyfile_to_shared /etc/caddy/Caddyfile
+    systemctl reset-failed caddy >/dev/null 2>&1 || true
+    systemctl restart caddy >/dev/null 2>&1 || true
+    sleep 3
 
     if https_listener_active; then
         echo -e "${GREEN}  ✓ Caddy HTTPS listener is active on TCP 443${NC}"
+        [ "$watcher_was_active" = "true" ] && systemctl start caddy-watcher >/dev/null 2>&1 || true
         return 0
     fi
 
     echo -e "${YELLOW}  ⚠ TCP 443 is still not listening. Check: ss -tlnp | grep ':443' && journalctl -u caddy --no-pager -n 30${NC}"
+    echo -e "${YELLOW}  ↳ Current Caddy listeners:${NC}"
+    ss -H -tlnp 2>/dev/null | grep -E ':(80|443)\b' || true
+    echo -e "${YELLOW}  ↳ Active /etc/caddy/Caddyfile:${NC}"
+    sed -n '1,140p' /etc/caddy/Caddyfile 2>/dev/null || true
+    echo -e "${YELLOW}  ↳ Recent Caddy journal:${NC}"
+    journalctl -u caddy --no-pager -n 40 2>/dev/null || true
+    [ "$watcher_was_active" = "true" ] && systemctl start caddy-watcher >/dev/null 2>&1 || true
     return 1
 }
 
