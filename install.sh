@@ -1448,6 +1448,45 @@ caddy_needs_fix() {
     return 1  # Config is fine
 }
 
+is_real_domain_name() {
+    local host="${1:-}"
+    [ -n "$host" ] \
+        && [ "$host" != "localhost" ] \
+        && ! echo "$host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+}
+
+https_listener_active() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -H -tln 2>/dev/null | awk '{print $4}' | grep -Eq ':443$'
+    else
+        lsof -iTCP:443 -sTCP:LISTEN >/dev/null 2>&1
+    fi
+}
+
+ensure_caddy_https_listener() {
+    local domain="${1:-}"
+    local reason="${2:-https listener check}"
+
+    is_real_domain_name "$domain" || return 0
+
+    if https_listener_active; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ Caddy is not listening on TCP 443 for ${domain}; applying HTTPS fallback config...${NC}"
+    generate_safe_caddyfile "$reason: missing tcp/443 listener" || true
+    reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
+    sleep 2
+
+    if https_listener_active; then
+        echo -e "${GREEN}  ✓ Caddy HTTPS listener is active on TCP 443${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ TCP 443 is still not listening. Check: ss -tlnp | grep ':443' && journalctl -u caddy --no-pager -n 30${NC}"
+    return 1
+}
+
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
@@ -1827,6 +1866,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
     reload_caddy_preserving_previous "" >/dev/null 2>&1 || true
     systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    ensure_caddy_https_listener "$DOMAIN" "verify mode Caddy verification" || true
     sleep 3
 
     echo -e "\n${BLUE}  → Running endpoint verification...${NC}"
@@ -2441,9 +2481,13 @@ ${cf_known_stanza}
 
 ${cf_svc_blocks}
 CFCADDY
-                install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "wildcard Caddyfile" || true
+                if install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "wildcard Caddyfile"; then
+                    echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
+                else
+                    echo -e "${YELLOW}  ⚠ Wildcard Caddyfile could not be applied. Falling back to standard HTTPS for ${cf_domain}.${NC}"
+                    generate_safe_caddyfile "wildcard Caddyfile apply failed"
+                fi
                 rm -f /etc/caddy/Caddyfile.tmp
-                echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
             else
                 # IP mode or no domain — fall back to safe Caddyfile
                 generate_safe_caddyfile "update flow (IP mode)"
@@ -2483,6 +2527,18 @@ print('Stripped tls blocks')
         else
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
         fi
+
+        POST_CADDY_DOMAIN="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+c = PlatformConfig.load()
+d = (c.domain or '').strip()
+if d and d != 'localhost':
+    print(d)
+" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ -z "$POST_CADDY_DOMAIN" ]; then
+            POST_CADDY_DOMAIN="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+        fi
+        ensure_caddy_https_listener "$POST_CADDY_DOMAIN" "post-update Caddy verification" || true
     fi
 
     safe_refresh_runtime_services
