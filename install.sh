@@ -75,9 +75,13 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [ -z "${TMUX:-}" ]; then
     if command -v screen >/dev/null 2>&1; then
         echo -e "\033[0;34m  → Protecting session with 'screen' (safety against disconnects)...\033[0m"
-        # Use -L for logging, -S for session name, -d -m to start detached then exec attach
-        # Actually 'exec screen' is simpler as it replaces the current shell.
-        exec screen -L -S grid bash "$SCRIPT_PATH" --no-screen "$@"
+        SCREEN_SESSION="${SMSLY_SCREEN_SESSION:-smsly-install-$$}"
+        if screen -help 2>&1 | grep -q -- '-Logfile'; then
+            exec screen -L -Logfile /var/log/smsly-screen.log -S "$SCREEN_SESSION" \
+                bash "$SCRIPT_PATH" --no-screen "$@"
+        else
+            exec screen -L -S "$SCREEN_SESSION" bash "$SCRIPT_PATH" --no-screen "$@"
+        fi
     else
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
         sleep 1
@@ -86,30 +90,6 @@ fi
 
 # Ensure we start in a valid directory.
 
-# ─── Lock File Check ─────────────────────────────────────────────────────────
-LOCK_FILE="/tmp/smsly-install.lock"
-if command -v flock >/dev/null 2>&1; then
-    exec 9<>"$LOCK_FILE"
-    if ! flock -n 9; then
-        PID="$(cat "$LOCK_FILE" 2>/dev/null || true)"
-        echo -e "\033[0;31mERROR: Another installer instance${PID:+ (PID $PID)} is already running.\033[0m"
-        echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
-        exit 1
-    fi
-    : > "$LOCK_FILE"
-    echo "$$" > "$LOCK_FILE"
-else
-    if [ -f "$LOCK_FILE" ]; then
-        PID=$(cat "$LOCK_FILE")
-        if [ "$PID" != "$$" ] && kill -0 "$PID" 2>/dev/null; then
-            echo -e "\033[0;31mERROR: Another installer instance (PID $PID) is already running.\033[0m"
-            echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
-            exit 1
-        fi
-    fi
-    echo $$ > "$LOCK_FILE"
-fi
-trap "rm -f $LOCK_FILE" EXIT
 # Provisioning can pass SMSLY_INSTALL_WORKDIR to use a prepared local source tree.
 if [ -n "${SMSLY_INSTALL_WORKDIR:-}" ] && [ -d "${SMSLY_INSTALL_WORKDIR}" ]; then
     cd "${SMSLY_INSTALL_WORKDIR}" 2>/dev/null || cd /root 2>/dev/null || cd /
@@ -919,11 +899,46 @@ LOG_FILE="/var/log/smsly-install.log"
 INSTALL_DIR="/opt/smsly-hosting"
 CREDENTIALS_FILE="$INSTALL_DIR/.credentials"
 COMPOSE_FILE="docker-compose.prod.yml"
+LOCK_FILE="/tmp/smsly-install.lock"
 # The production compose file already includes socket-proxy and traefik.
 # Do not layer docker-compose.socket-proxy.yml on top of it or Docker Compose
 # will reject the config due to duplicate services.
 ROLLBACK_NEEDED=false
 CADDY_LAST_GOOD="/etc/caddy/Caddyfile.smsly-last-good"
+
+acquire_install_lock() {
+    if command -v flock >/dev/null 2>&1; then
+        exec 9<>"$LOCK_FILE"
+        if ! flock -n 9; then
+            local pid
+            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            echo -e "${RED}ERROR: Another installer instance${pid:+ (PID $pid)} is already running.${NC}"
+            echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+            exit 1
+        fi
+        : > "$LOCK_FILE"
+        echo "$$" > "$LOCK_FILE"
+    else
+        if [ -f "$LOCK_FILE" ]; then
+            local pid
+            pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+            if [ "$pid" != "$$" ] && kill -0 "$pid" 2>/dev/null; then
+                echo -e "${RED}ERROR: Another installer instance (PID $pid) is already running.${NC}"
+                echo -e "If you are sure no other instance is running, remove $LOCK_FILE and try again."
+                exit 1
+            fi
+        fi
+        echo "$$" > "$LOCK_FILE"
+    fi
+}
+
+release_install_lock() {
+    if command -v flock >/dev/null 2>&1; then
+        flock -u 9 2>/dev/null || true
+        exec 9>&- 2>/dev/null || true
+    fi
+    rm -f "$LOCK_FILE" 2>/dev/null || true
+}
 
 get_migration_database_alias() {
     local migrate_db
@@ -1095,6 +1110,8 @@ fi
 
 # Log all output to file AND terminal
 exec > >(tee -a "$LOG_FILE") 2>&1
+acquire_install_lock
+trap 'release_install_lock' EXIT
 echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "  SMSLY Hosting Install Log — $(date -Iseconds)"
@@ -1147,12 +1164,14 @@ cleanup_on_failure() {
         # Keep screen session open for inspection if it failed
         if [ -n "${STY:-}" ]; then
             echo -e "\n${YELLOW}  [GUARD] Installation failed inside a screen session.${NC}"
-            echo -e "${YELLOW}  Session 'grid' will remain open for debugging.${NC}"
+            echo -e "${YELLOW}  Screen session will remain open for debugging.${NC}"
             echo -e "${YELLOW}  Type 'exit' to close this window.${NC}"
+            release_install_lock
             # Re-exec bash to prevent screen from closing
             exec bash
         fi
     fi
+    release_install_lock
 }
 trap cleanup_on_failure EXIT
 
@@ -1978,7 +1997,10 @@ fi
     if [[ "${SMSLY_REEXEC:-}" != "1" ]]; then
         echo -e "${GREEN}  → Installer updated. Re-executing for safe synchronization...${NC}"
         export SMSLY_REEXEC=1
-        exec bash "$SCRIPT_PATH" "$@"
+        export NO_SCREEN=true
+        export SKIP_SCREEN=1
+        release_install_lock
+        exec bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
     echo -e "${BLUE}  → Applying platform/domain overrides...${NC}"
