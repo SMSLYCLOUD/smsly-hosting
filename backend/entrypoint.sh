@@ -22,12 +22,12 @@ run_migrations_with_retry() {
     
     # Selection of database alias for migrations
     migrate_db="default"
-    if python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'session' pool. Using it for migrations..."
-        migrate_db="session"
-    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
+    if python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
         echo "Detected 'direct' connection. Using it for migrations..."
         migrate_db="direct"
+    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'session' pool. Using it for migrations..."
+        migrate_db="session"
     fi
 
     while [ "$retry" -lt "$max_retries" ]; do
@@ -88,12 +88,12 @@ setup_social_apps_nonfatal() {
 
     # Selection of database alias for migrations
     migrate_db="default"
-    if python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
-        echo "Detected 'session' pool. Using it for management tasks..."
-        migrate_db="session"
-    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
+    if python manage.py shell -c "from django.conf import settings; exit(0 if 'direct' in settings.DATABASES else 1)" 2>/dev/null; then
         echo "Detected 'direct' connection. Using it for management tasks..."
         migrate_db="direct"
+    elif python manage.py shell -c "from django.conf import settings; exit(0 if 'session' in settings.DATABASES else 1)" 2>/dev/null; then
+        echo "Detected 'session' pool. Using it for management tasks..."
+        migrate_db="session"
     fi
 
     if is_web_container "$@"; then
