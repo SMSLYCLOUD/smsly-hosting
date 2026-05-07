@@ -442,10 +442,15 @@ def generate_caddyfile(config) -> str:
     # Never generate domain-specific HTTP blocks — they break IP access
     # because Caddy won't match requests by IP to a domain-named block.
     if config.use_ssl and domain:
+        # Only redirect if the host is NOT an IP address.
+        # This prevents breaking "IP mode" access when SSL is enabled for domains.
         sections.append(
             """:80 {
-    @has_host header_regexp host .+
-    redir @has_host https://{host}{uri} 308
+    @not_ip {
+        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
+        header_regexp host .+
+    }
+    redir @not_ip https://{host}{uri} 308
     handle {
         reverse_proxy localhost:8090
     }
