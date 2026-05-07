@@ -213,26 +213,67 @@ check_hardware() {
 }
 
 wait_for_apt_lock() {
-    local lock_file="/var/lib/dpkg/lock-frontend"
-    local max_wait=300
+    local lock_files=(
+        "/var/lib/dpkg/lock-frontend"
+        "/var/lib/dpkg/lock"
+        "/var/cache/apt/archives/lock"
+    )
+    local max_wait="${SMSLY_APT_LOCK_TIMEOUT:-600}"
     local elapsed=0
+    local lock_file
+    local active_locks=()
+    local pids
+    local pid
 
-    if [ ! -f "$lock_file" ]; then
-        return 0
-    fi
+    while true; do
+        active_locks=()
+        pids=""
 
-    echo -e "${BLUE}  → Checking for background system updates (APT lock)...${NC}"
-    while fuser "$lock_file" >/dev/null 2>&1; do
-        if [ "$elapsed" -ge "$max_wait" ]; then
-            echo -e "${YELLOW}  ⚠ APT lock held for >5 mins. Attempting to force release...${NC}"
-            rm -f "$lock_file"
-            break
+        for lock_file in "${lock_files[@]}"; do
+            [ -e "$lock_file" ] || continue
+            if fuser "$lock_file" >/dev/null 2>&1; then
+                active_locks+=("$lock_file")
+                pids="$pids $(fuser "$lock_file" 2>/dev/null || true)"
+            fi
+        done
+
+        if [ "${#active_locks[@]}" -eq 0 ]; then
+            if [ "$elapsed" -gt 0 ]; then
+                echo
+                echo -e "${GREEN}  ✓ APT system ready${NC}"
+            fi
+            return 0
         fi
-        printf "."
+
+        if [ "$elapsed" -eq 0 ]; then
+            echo -e "${BLUE}  → Checking for background system updates (APT lock)...${NC}"
+        fi
+
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo
+            echo -e "${RED}  x APT lock is still held after ${max_wait}s.${NC}"
+            echo -e "${YELLOW}  Holding process(es):${NC}"
+            for pid in $(printf "%s\n" $pids | sort -u); do
+                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+            done
+            echo -e "${YELLOW}  Wait for those processes to finish, then rerun the installer.${NC}"
+            echo -e "${YELLOW}  If no apt/dpkg processes are running, repair with: sudo dpkg --configure -a${NC}"
+            return 1
+        fi
+
+        if [ $((elapsed % 30)) -eq 0 ]; then
+            echo
+            echo -e "${YELLOW}  Waiting for APT lock (${elapsed}s/${max_wait}s). Active lock(s): ${active_locks[*]}${NC}"
+            for pid in $(printf "%s\n" $pids | sort -u); do
+                ps -p "$pid" -o pid=,comm=,etime=,args= 2>/dev/null || true
+            done
+        else
+            printf "."
+        fi
+
         sleep 5
         elapsed=$((elapsed + 5))
     done
-    echo -e "${GREEN}  ✓ APT system ready${NC}"
 }
 
 ensure_system_swap() {
