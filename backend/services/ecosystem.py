@@ -413,33 +413,33 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
-ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI Senate. Your mission is to architect a 100% stable, zero-config, high-performance ecosystem of microservices.
+ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI Senate. Your mission is to architect a 100% stable, zero-config, high-performance ecosystem of microservices from multiple repositories.
     
-    ### ARCHITECTURAL REASONING PROCESS:
-    1. IDENTIFY THE CORE: Locate the "Platform API" or "Core" service. Everything else usually depends on this.
-    2. MAP THE FLOW: Trace how data flows between services. If Service A has an "API_URL" or "BACKEND_URL" env var, it depends on Service B.
-    3. INFRASTRUCTURE FIRST: Identify shared addons (Postgres, Redis, etc.). Shared databases are preferred for unified ecosystems.
-    4. GATEWAY AWARENESS: Identify which services are "Frontends" (public-facing) and which are "Internal" (API-only).
+    ### ADVANCED CONNECTIVITY REASONING:
+    1. CIRCULAR RESOLUTION: If Service A needs Service B and vice-versa, use internal Docker DNS names (e.g., http://service-b:8000) for internal traffic and public placeholders for client-side traffic.
+    2. SHARED SECRET VAULT: Identify variables like JWT_SECRET, AUTH_KEY, or ENCRYPTION_TOKEN. If multiple services use them, assign the SAME {{SHARED_SECRET:name}} placeholder so they can communicate.
+    3. CORS & OAUTH: Automatically detect if a backend needs a frontend's URL for `CORS_ALLOWED_ORIGINS` or `OAUTH_CALLBACK_URL`. Use {{SERVICE:frontend-repo}} to link them.
+    4. DATABASE CONSOLIDATION: If multiple services need POSTGRES, prefer a single shared instance with unique database names ({{POSTGRES_URL}}/service_name) unless they are strictly isolated.
     
     ### CRITICAL RULES:
-    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. If you find a var like `STRIPE_KEY` and it's not provided, use `{{GENERATE}}` if it's internal, or mark it as `USER_REQUIRED`.
-    2. DETERMINISTIC LINKING:
-    4. DEPLOY ORDER: Services that provide APIs (backends) must deploy before consumers (frontends).
+    1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. 
+    2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases, and {{GENERATE}} for unique secrets.
+    3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
     
     Return ONLY valid JSON matching this structure:
     {
+      "ecosystem_name": "string",
       "services": [
         {
           "repo": "owner/repo-name",
           "name": "short-name",
           "stack": "django|nextjs|node|python|etc",
           "port": 8000,
-          "build": "dockerfile|nixpacks",
-          "addons": ["POSTGRES", "REDIS", ...],
           "env_vars": {
             "DATABASE_URL": "{{POSTGRES_URL}}",
-            "SECRET_KEY": "{{GENERATE}}",
-            "API_URL": "{{SERVICE:backend-repo-name}}"
+            "API_URL": "{{SERVICE:backend-repo}}",
+            "FRONTEND_URL": "{{SERVICE:frontend-repo}}",
+            "JWT_SECRET": "{{SHARED_SECRET:auth_token}}"
           },
           "depends_on": ["other-repo-name"],
           "deploy_order": 1
@@ -567,7 +567,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None) -> dict:
                     svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
             
             _apply_plan_repo_defaults(plan["services"], repos_data)
-            _apply_smsly_core_intelligence(plan["services"])
+            _apply_generic_ecosystem_intelligence(plan["services"])
             plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
             plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
         
@@ -730,100 +730,68 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
     ]
 
 
-def _apply_smsly_core_intelligence(services: List[dict]):
+def _apply_generic_ecosystem_intelligence(services: List[dict]):
     """
-    Apply deterministic SMSLY ecosystem rules.
+    Elite Level 5: Zero-Hardcoding Service Discovery.
+    Analyzes the 'functional intent' of each service to build a generic mesh.
     """
-    deployable = [
-        svc for svc in services
-        if isinstance(svc, dict) and not svc.get("skip")
-    ]
+    deployable = [s for s in services if isinstance(s, dict) and not s.get("skip")]
     if not deployable:
         return
 
-    # Find the core platform service
-    core = next((svc for svc in deployable if _is_smsly_core_service(svc)), None)
-    if not core:
-        # Fallback: find any service with "platform" or "backend" in the name if no explicit core
-        core = next((svc for svc in deployable if "platform" in svc.get("name", "").lower() or "backend" in svc.get("name", "").lower()), None)
+    # 1. Functional Mapping
+    apis = [s for s in deployable if str(s.get("stack")).lower() in ["django", "fastapi", "express", "go", "rust", "backend"]]
+    frontends = [s for s in deployable if str(s.get("stack")).lower() in ["nextjs", "nuxt", "react", "vue", "frontend"]]
+    auth_providers = [s for s in deployable if any(k in s.get("name", "").lower() for k in ["auth", "identity", "keycloak", "login"])]
 
-    if not core:
-        return
-
-    core_name = str(core.get("name") or _repo_short_name(core) or "smsly-core").strip()
-    core_repo_short = _repo_short_name(core)
-    core_refs = {_normalize_token(core_name), _normalize_token(core_repo_short)}
-
-    core["name"] = core_name
-    core_env = _env_plan_map(core.get("env_vars", {}))
+    # 2. Dynamic Cross-Linking
+    for svc in deployable:
+        env_map = svc.get("env_vars", {})
     
-    # ── Enforce standard platform links ──
-    core_placeholder = f"{{{{SERVICE:{core_name}}}}}"
-    
-    for service in deployable:
-        env_map = _env_plan_map(service.get("env_vars", {}))
-        
-        # Link everything to core by default if it's a SMSLY service
-        if _is_smsly_service(service) and service is not core:
-            env_map.setdefault("SMSLY_PLATFORM_API_URL", core_placeholder)
-            env_map.setdefault("SMSLY_CORE_URL", core_placeholder)
-            
-            # Add dependency if not already there
-            depends = _coerce_depends_on(service.get("depends_on", []))
-            if core_name not in depends:
-                depends.append(core_name)
-            service["depends_on"] = depends
+        # Link Frontends to APIs
+        if svc in frontends and apis:
+            target_api = apis[0].get("name")
+            if target_api:
+                for key in list(env_map.keys()):
+                    if any(k in key.upper() for k in ["API_URL", "BACKEND_URL", "SERVER_URL"]):
+                        env_map[key] = f"{{{{SERVICE:{target_api}}}}}"
 
-        # Cross-link other common SMSLY services if detected
-        for other in deployable:
-            if other == service: continue
-            other_name = other.get("name")
-            if not other_name: continue
-            
-            # E.g. if we find "smsly-marketer", inject SMSLY_MARKETER_URL into others
-            if "marketer" in other_name.lower():
-                env_map.setdefault("SMSLY_MARKETER_URL", f"{{{{SERVICE:{other_name}}}}}")
-            elif "security" in other_name.lower():
-                env_map.setdefault("SMSLY_SECURITY_URL", f"{{{{SERVICE:{other_name}}}}}")
-            elif "intelligence" in other_name.lower():
-                env_map.setdefault("SMSLY_INTELLIGENCE_URL", f"{{{{SERVICE:{other_name}}}}}")
+        # Link everything to Auth Provider if detected
+        if auth_providers and svc not in auth_providers:
+            auth_name = auth_providers[0].get("name")
+            for key in list(env_map.keys()):
+                if any(k in key.upper() for k in ["AUTH_URL", "IDENTITY_URL", "OIDC_URL", "JWT_ISSUER"]):
+                    env_map[key] = f"{{{{SERVICE:{auth_name}}}}}"
 
-        # Addon auto-selection for SMSLY services
-        addon_set = {
-            str(addon or "").strip().upper()
-            for addon in (service.get("addons") or [])
-            if str(addon or "").strip()
-        }
-        service_key = _normalize_token(service.get("name") or _repo_short_name(service))
-        if "sms" in service_key or "core" in service_key or "platform" in service_key:
-            addon_set.update({"POSTGRES", "REDIS"})
-        elif "marketing" in service_key or "marketer" in service_key:
-            addon_set.add("POSTGRES")
-        elif "voice" in service_key:
-            addon_set.add("REDIS")
-        service["addons"] = sorted(addon_set)
-        
-        service["env_vars"] = env_map
+        # 3. Global Secret Synchronization
+        for key in list(env_map.keys()):
+            if any(k in key.upper() for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET"]):
+                # Assign a shared secret placeholder so they all get the same value across the cluster
+                env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
-    # Ensure stack/build/infra defaults for core
-    if not str(core.get("stack") or "").strip():
-        core["stack"] = "django"
-    if not str(core.get("build") or "").strip():
-        core["build"] = "nixpacks"
+        # 4. Standard Database Injection
+        if any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"]):
+            env_map.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
+        if "REDIS" in str(svc.get("addons", [])).upper():
+            env_map.setdefault("REDIS_URL", "{{REDIS_URL}}")
 
-    core_env.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
-    core_env.setdefault("REDIS_URL", "{{REDIS_URL}}")
-    core_env.setdefault("SECRET_KEY", "{{GENERATE}}")
-    core_env.setdefault("GATEWAY_SECRET", "{{GENERATE}}")
-    core["env_vars"] = core_env
+        svc["env_vars"] = env_map
+
+    # 5. Dependency Depth Sorting
+    # Infrastructure/Auth (10) > APIs (20) > Workers (30) > Frontends (40)
+    for svc in deployable:
+        order = 50
+        if svc in auth_providers: order = 10
+        elif svc in apis: order = 20
+        elif svc in frontends: order = 40
+        svc["deploy_order"] = order
 
     # Final sorting for deploy sequence
     ordered = sorted(
         deployable,
-        key=lambda svc: (
-            0 if svc is core else 1,
-            _safe_order(svc.get("deploy_order"), 99),
-            str(svc.get("name") or _repo_short_name(svc)),
+        key=lambda s: (
+            _safe_order(s.get("deploy_order"), 99),
+            str(s.get("name") or _repo_short_name(s)),
         ),
     )
     for index, service in enumerate(ordered, 1):

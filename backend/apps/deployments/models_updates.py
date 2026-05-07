@@ -42,6 +42,19 @@ class PlatformUpdate(models.Model):
     # Error
     error_message = models.TextField(blank=True)
 
+    # Federated Deployment Tracking (Elite Feature)
+    node_statuses = models.JSONField(
+        default=dict, blank=True,
+        help_text="Tracks update status per Lite Agent node {node_id: status}")
+    
+    addon_compatibility_results = models.JSONField(
+        default=dict, blank=True,
+        help_text="Results of pre-update addon compatibility checks")
+    
+    fleet_progress = models.JSONField(
+        default=dict, blank=True,
+        help_text="Step-by-step progress per node")
+
     # Timing
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
