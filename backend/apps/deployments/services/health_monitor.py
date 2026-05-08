@@ -496,7 +496,7 @@ def _trigger_restart(service, service_key: str) -> bool:
     try:
         from apps.cloud.models import CloudProvider
         from apps.deployments.models import Deployment
-        from apps.deployments.tasks import smart_deploy_task
+        from apps.deployments.tasks import enqueue_smart_deploy_task
 
         # Do not stack restarts while any deployment for this service is in flight.
         in_flight_statuses = [
@@ -546,7 +546,21 @@ def _trigger_restart(service, service_key: str) -> bool:
         service.health_status = "starting"
         service.save(update_fields=["health_status", "updated_at"])
 
-        smart_deploy_task.delay(str(new_deployment.id), str(provider.id), skip_review=True)
+        try:
+            enqueue_smart_deploy_task(str(new_deployment.id), str(provider.id), skip_review=True)
+        except Exception as exc:  # pragma: no cover - broker/runtime failure
+            logger.exception(
+                "Failed to enqueue auto-restart deployment %s",
+                new_deployment.id,
+            )
+            new_deployment.status = Deployment.Status.FAILED
+            new_deployment.finished_at = timezone.now()
+            new_deployment.build_logs = (
+                (new_deployment.build_logs or "")
+                + f"\n[ERROR] Failed to queue auto-restart task: {exc}\n"
+            )
+            new_deployment.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+            return False
         _record_restart_attempt(service_key)
 
         state = cache.get(_restart_key(service_key)) or {}

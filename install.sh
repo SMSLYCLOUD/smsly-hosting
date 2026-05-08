@@ -890,41 +890,50 @@ import traceback
 
 from django.utils import timezone
 
-from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, Service
-from apps.deployments.tasks import smart_deploy_task
+from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
 
 
 service_ids = [value.strip() for value in os.environ.get("SMSLY_SERVICE_IDS", "").split(",") if value.strip()]
 reason = os.environ.get("SMSLY_REDEPLOY_REASON", "Installer-triggered redeploy")
-provider = CloudProvider.objects.filter(is_active=True).first()
-if not provider:
-    print("WARN: No active cloud provider")
-else:
-    try:
-        queryset = Service.objects.filter(id__in=service_ids) if service_ids else Service.objects.all()
-        count = 0
-        for svc in queryset:
-            dep = svc.deployments.filter(status="ACTIVE").order_by("-created_at").first()
-            if not dep or not dep.commit_hash:
-                continue
-            svc.deployments.filter(status="ACTIVE").update(
-                status="CANCELLED",
-                finished_at=timezone.now(),
+try:
+    queryset = Service.objects.filter(id__in=service_ids) if service_ids else Service.objects.all()
+    count = 0
+    failed = 0
+    for svc in queryset.select_related("provider"):
+        dep = svc.deployments.filter(status="ACTIVE").order_by("-created_at").first()
+        if not dep or not dep.commit_hash:
+            continue
+        provider = _resolve_provider_for_service(svc)
+        if not provider:
+            failed += 1
+            print(f"  WARN: No active provider for {svc.name}")
+            continue
+        new_dep = Deployment.objects.create(
+            service=svc,
+            status="QUEUED",
+            commit_hash=dep.commit_hash,
+            commit_message=reason,
+        )
+        try:
+            enqueue_smart_deploy_task(str(new_dep.id), str(provider.id), skip_review=True)
+        except Exception as exc:
+            failed += 1
+            new_dep.status = "FAILED"
+            new_dep.finished_at = timezone.now()
+            new_dep.build_logs = (
+                (new_dep.build_logs or "")
+                + f"\n[ERROR] Failed to queue platform auto-redeploy task: {exc}\n"
             )
-            new_dep = Deployment.objects.create(
-                service=svc,
-                status="QUEUED",
-                commit_hash=dep.commit_hash,
-                commit_message=reason,
-            )
-            smart_deploy_task.delay(str(new_dep.id), str(provider.id), skip_review=True)
-            count += 1
-            print(f"  Queued: {svc.name} ({dep.commit_hash[:7]})")
-        print(f"OK: {count} service(s) queued for redeploy")
-    except Exception as exc:  # pragma: no cover - installer runtime path
-        print(f"WARN: {exc}")
-        traceback.print_exc()
+            new_dep.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+            print(f"  WARN: Failed to queue {svc.name}: {exc}")
+            continue
+        count += 1
+        print(f"  Queued: {svc.name} ({dep.commit_hash[:7]})")
+    print(f"OK: {count} service(s) queued for redeploy; {failed} failed/skipped")
+except Exception as exc:  # pragma: no cover - installer runtime path
+    print(f"WARN: {exc}")
+    traceback.print_exc()
 PY
 }
 
@@ -2703,15 +2712,18 @@ if not created and not cp.is_active:
     docker exec -i smsly-hosting-backend-1 python manage.py shell -c "
 from apps.deployments.models import Deployment
 from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import smart_deploy_task, provision_addon_task
+from apps.deployments.tasks import provision_addon_task, recover_stalled_queued_deployments
 from django.db.models import Count
 
 # Re-queue deployments
 q_count = Deployment.objects.filter(status='QUEUED').count()
 if q_count > 0:
     print(f'  [Jump-Start] Re-queueing {q_count} stalled deployments...')
-    for d in Deployment.objects.filter(status='QUEUED'):
-        smart_deploy_task.delay(str(d.id), str(d.service.provider.id))
+    result = recover_stalled_queued_deployments(limit=q_count)
+    print(
+        '  [Jump-Start] Deployments restored: queued={queued} '
+        'skipped={skipped} failed={failed}'.format(**result)
+    )
 
 # Re-queue addons
 a_count = Addon.objects.filter(status='QUEUED').count()

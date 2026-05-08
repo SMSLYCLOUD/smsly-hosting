@@ -83,7 +83,7 @@ class HealthMonitorServiceTests(TestCase):
         )
         self.assertTrue(hm._should_restart(self.service, service_key))
 
-    @patch("apps.deployments.tasks.smart_deploy_task.delay")
+    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
     @patch("apps.deployments.services.health_monitor.requests.get")
     def test_unhealthy_service_triggers_single_auto_restart(
         self,
@@ -106,7 +106,7 @@ class HealthMonitorServiceTests(TestCase):
         )
         deploy_delay_mock.assert_called_once()
 
-    @patch("apps.deployments.tasks.smart_deploy_task.delay")
+    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
     def test_inflight_deployment_blocks_auto_restart(self, deploy_delay_mock):
         Deployment.objects.create(
             service=self.service,
