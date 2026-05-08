@@ -59,8 +59,19 @@ def ai_providers_status(request):
     try:
         include_balance = request.query_params.get("include_balance", "").lower() == "true"
         degraded_reason = None
+        # ``get_available_providers`` returns provider objects which are not directly JSON‑serialisable.
+        # Convert each provider to a plain dict before adding to the payload.
         try:
-            providers = get_available_providers(include_balance=include_balance)
+            raw_providers = get_available_providers(include_balance=include_balance)
+            providers = []
+            for p in raw_providers:
+                if hasattr(p, "to_dict"):
+                    providers.append(p.to_dict())
+                elif hasattr(p, "as_dict"):
+                    providers.append(p.as_dict())
+                else:
+                    # Fallback: expose public attributes only.
+                    providers.append({k: v for k, v in vars(p).items() if not k.startswith("_") and not callable(v)})
         except Exception as exc:  # noqa: BLE001
             logger.exception("Failed to fetch AI provider statuses: %s", exc)
             providers = []
