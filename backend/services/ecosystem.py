@@ -452,7 +452,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     """
 
 
-def analyze_ecosystem(repos_data: List[dict], github_token: str = None) -> dict:
+def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provider: str = None) -> dict:
     """
     Use AI Senate to analyze all repos together in a temporary workspace.
     Clones repos, scans for cross-repo dependencies, and produces a plan.
@@ -550,7 +550,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None) -> dict:
         full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
 
         # 6. Call AI Senate
-        response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT)
+        response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
 
     # 7. Parse and structure the plan (Workspace is now deleted)
     try:
@@ -636,6 +636,14 @@ def _is_auth_service(service: dict) -> bool:
     name = str(service.get("name") or "").lower()
     indicators = {"auth", "identity", "sso", "login", "keycloak"}
     return any(ind in name for ind in indicators)
+
+
+def _is_intelligence_service(service: dict) -> bool:
+    """Return True when service looks like an AI/Intelligence service."""
+    name = str(service.get("name") or "").lower()
+    repo = str(service.get("repo") or "").lower()
+    indicators = {"intelligence", "ai", "brain", "senate", "neuron", "llm", "agent"}
+    return any(ind in name or ind in repo for ind in indicators)
 
 
 def _coerce_depends_on(raw_depends: Any) -> List[str]:
@@ -760,15 +768,30 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
 
         # 3. Global Secret Synchronization
         for key in list(env_map.keys()):
-            if any(k in key.upper() for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET"]):
+            key_u = key.upper()
+            if any(k in key_u for k in ["JWT_SECRET", "ENCRYPTION_KEY", "APP_SECRET", "GATEWAY_SECRET"]):
                 # Assign a shared secret placeholder so they all get the same value across the cluster
                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
+            
+            # AI Intelligence Inheritance
+            if any(k in key_u for k in ["AI_PROVIDER", "LLM_PROVIDER"]):
+                env_map[key] = "auto"
+            
+            if any(k in key_u for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "CLAUDE_API_KEY", "GROK_API_KEY", "ANTHROPIC_API_KEY"]):
+                 env_map[key] = f"{{{{SHARED_SECRET:{key.lower()}}}}}"
 
         # 4. Standard Database Injection
         if any(k in str(svc.get("addons", [])).upper() for k in ["POSTGRES", "DATABASE"]):
             env_map.setdefault("DATABASE_URL", "{{POSTGRES_URL}}")
         if "REDIS" in str(svc.get("addons", [])).upper():
             env_map.setdefault("REDIS_URL", "{{REDIS_URL}}")
+
+        # 4.5 Intelligence Service Specialization
+        if _is_intelligence_service(svc):
+            env_map.setdefault("AI_PROVIDER", "auto")
+            # If it's an intelligence service, it almost certainly needs a vector DB or similar
+            if "QDRANT" in str(svc.get("addons", [])).upper() or "VECTOR" in str(svc.get("addons", [])).upper():
+                 env_map.setdefault("QDRANT_URL", "{{QDRANT_URL}}")
 
         svc["env_vars"] = env_map
 
@@ -912,7 +935,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str) -> dict:
+def scan_and_analyze(token: str, ai_provider: str = None) -> dict:
     """
     Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
 
@@ -972,7 +995,20 @@ def scan_and_analyze(token: str) -> dict:
     logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
 
     # 3. AI ecosystem analysis
-    plan = analyze_ecosystem(repos_data, github_token=token)
+    plan = analyze_ecosystem(repos_data, github_token=token, ai_provider=ai_provider)
+    
+    # Propagate AI preference to individual services
+    actual_provider = plan.get("ai_provider")
+    services = plan.get("services", [])
+    for svc in services:
+        if isinstance(svc, dict):
+            # Ensure runtime environment has the provider selection
+            env = svc.get("env_vars", {})
+            if "AI_PROVIDER" not in env:
+                # If user selected a specific provider, force it. Otherwise use the Senate's choice.
+                env["AI_PROVIDER"] = ai_provider if (ai_provider and ai_provider != "auto") else actual_provider
+            svc["env_vars"] = env
+
     plan["total_repos_scanned"] = len(all_repos)
     plan["deployable_repos"] = len(repos_data)
     plan["scan_warning_count"] = len(scan_warnings)

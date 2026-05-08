@@ -111,21 +111,40 @@ class Command(BaseCommand):
         self.stdout.write("     It will auto-SSH into remote nodes and pull tokens if credentials exist.\n")
 
     def _test_connectivity(self, server: ManagedServer, has_token: bool, has_secret: bool):
-        base = server.api_url.rstrip("/")
+        from apps.deployments.views_servers import _candidate_api_urls
+        candidates = _candidate_api_urls(server)
+        
+        base = None
+        response = None
+        
+        self.stdout.write(f"     Probing candidates: {', '.join(candidates)}")
+        
+        for candidate in candidates:
+            try:
+                resp = requests.get(f"{candidate.rstrip('/')}/health", timeout=5, verify=False)
+                if resp.status_code < 500:
+                    base = candidate.rstrip("/")
+                    response = resp
+                    break
+                else:
+                    self.stdout.write(self.style.WARNING(f"       - {candidate} → HTTP {resp.status_code}"))
+            except Exception as e:
+                self.stdout.write(self.style.WARNING(f"       - {candidate} → FAILED: {str(e)[:60]}..."))
 
-        # Step A: Health check (no auth)
-        try:
-            resp = requests.get(f"{base}/health", timeout=10)
-            if resp.status_code < 500:
-                self.stdout.write(self.style.SUCCESS(f"     ✅ /health → HTTP {resp.status_code} (ONLINE)"))
-            else:
-                self.stdout.write(self.style.ERROR(f"     ❌ /health → HTTP {resp.status_code} (UNHEALTHY)"))
-                return
-        except Exception as e:
-            self.stdout.write(self.style.ERROR(f"     ❌ /health → CONNECTION FAILED: {e}"))
+        if not base:
+            self.stdout.write(self.style.ERROR(f"     ❌ ALL CANDIDATES FAILED for {server.name}"))
             return
 
+        self.stdout.write(self.style.SUCCESS(f"     ✅ Reachable via: {base} (HTTP {response.status_code})"))
+        
+        # Update server if base changed
+        if server.api_url != base:
+            self.stdout.write(f"        (Updating api_url from {server.api_url} to {base})")
+            server.api_url = base
+            server.save(update_fields=["api_url"])
+
         # Step B: Authenticated API call
+
         api_path = "/api/v1/services/"
         url = f"{base}{api_path}"
         headers = {"Accept": "application/json"}
@@ -208,11 +227,26 @@ class Command(BaseCommand):
             return
 
         host = config.server_ip or "127.0.0.1"
+        
+        # Primary node should use port 8090 (Nginx) or 80/443 (Traefik/Caddy) 
+        # when accessed from outside. Port 8000 is internal.
+        if host in ("localhost", "127.0.0.1"):
+            api_url = f"http://{host}:8000"
+        else:
+            # Use domain if available, fallback to IP:8090
+            domain = config.domain
+            if domain and domain not in ("localhost", "127.0.0.1"):
+                scheme = "https" if config.use_ssl else "http"
+                api_url = f"{scheme}://{domain}"
+            else:
+                api_url = f"http://{host}:8090"
+
         ManagedServer.objects.create(
             owner=admin_user,
             name="Master Node (Auto-generated)",
             host=host,
-            api_url=f"http://{host}:8000" if ":" not in host else f"http://{host}",
+            api_url=api_url,
+
             is_primary=True,
             status=ManagedServer.Status.ONLINE,
             provision_status=ManagedServer.ProvisionStatus.DONE,
