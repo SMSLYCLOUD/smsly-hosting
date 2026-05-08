@@ -917,9 +917,13 @@ class BackupService:
 
     @staticmethod
     def _prune_old_backups(model_cls, service_id=None):
-        """
-        Keep only the most recent BACKUP_RETENTION_COUNT backups (default 5).
-        Applies per-service for ServiceBackup and globally for ServerBackup.
+        """Delete old backup records and their files.
+
+        The retention count is controlled by the ``BACKUP_RETENTION_COUNT``
+        environment variable (default ``5``).  For ``ServiceBackup`` the pruning
+        is scoped to a single service; for ``ServerBackup`` it is global.
+        Both the database rows *and* the associated backup files on disk are
+        removed.
         """
         try:
             retain = int(os.environ.get("BACKUP_RETENTION_COUNT", "5"))
@@ -932,6 +936,24 @@ class BackupService:
         if service_id and hasattr(model_cls, "service_id"):
             qs = qs.filter(service_id=service_id)
 
+        # Determine which IDs are older than the retention window
         ids_to_delete = list(qs.values_list("id", flat=True)[retain:])
-        if ids_to_delete:
-            model_cls.objects.filter(id__in=ids_to_delete).delete()
+        if not ids_to_delete:
+            return
+
+        # Delete files first so we don't lose the path after the DB row is gone
+        for backup in model_cls.objects.filter(id__in=ids_to_delete):
+            try:
+                if backup.file_path and os.path.exists(backup.file_path):
+                    os.remove(backup.file_path)
+            except Exception as exc:  # pragma: no cover – defensive
+                logger.warning(
+                    "Failed to delete backup file %s for %s %s: %s",
+                    backup.file_path,
+                    model_cls.__name__,
+                    backup.id,
+                    exc,
+                )
+
+        # Finally delete the DB rows
+        model_cls.objects.filter(id__in=ids_to_delete).delete()

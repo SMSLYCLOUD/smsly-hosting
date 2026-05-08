@@ -1,3 +1,4 @@
+"use client"
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { servicesApi, Service } from '@/lib/api';
@@ -82,7 +83,7 @@ export default function ServiceDetailPage({ params }: { params: { id: string } }
     </DashboardShell>
   );
 }
-'use client';
+// removed stray directive (already declared at top)
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
