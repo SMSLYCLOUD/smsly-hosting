@@ -52,7 +52,6 @@ from apps.deployments.utils import (
     append_log,
     broadcast_status,
     build_local_source_bundle,
-    get_github_oauth_token_for_user,
     update_stage,
 )
 from services.addon_provisioner import addon_provisioner
@@ -3425,14 +3424,9 @@ def update_remote_server_task(server_id: str):
         if code != 0:
             raise RuntimeError(f"Remote update preflight failed with exit code {code}.")
 
-        # Resolve GitHub token for the server owner to handle private repos.
-        github_token = get_github_oauth_token_for_user(server.owner)
-        auth_url = None
-        if github_token:
-            from urllib.parse import quote
-            encoded = quote(github_token, safe="")
-            auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
-
+        # The platform installer repository is public/open source, so remote
+        # platform updates should use the unauthenticated default Git remote
+        # instead of depending on a user's linked GitHub OAuth token.
         branch = (os.environ.get('SMSLY_BRANCH') or 'main').strip() or 'main'
         logger.info("Update Task: Triggering installer update on %s (branch: %s)", server.host, branch)
         
@@ -3460,9 +3454,6 @@ def update_remote_server_task(server_id: str):
             env_vars.update(lite_env)
             update_args.append("--mode=agent-lite")
         
-        if auth_url:
-            env_vars["SMSLY_GIT_REMOTE"] = auth_url
-
         env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
         update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
         quoted_path = shlex.quote(hosting_path)

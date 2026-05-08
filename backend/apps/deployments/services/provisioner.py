@@ -12,19 +12,16 @@ import os
 import re
 import shlex
 import time
-import tarfile
-import tempfile
 import hashlib
 import secrets
 import requests
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 from datetime import timedelta
 
 from django.conf import settings
 from django.utils import timezone
 
 from apps.deployments.utils import (
-    get_github_oauth_token_for_user,
     build_local_source_bundle as utils_build_bundle,
     get_source_root_dir as utils_get_source_root,
 )
@@ -191,6 +188,78 @@ def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
         return False
 
 
+def _prepare_remote_install_lock(ssh, server: ManagedServer) -> None:
+    """Clear stale installer locks and optionally replace an active retry instance."""
+    replace_active = _env_bool("SMSLY_PROVISION_REPLACE_ACTIVE_INSTALLER", default=True)
+    command = f"""
+set -eu
+lock=/tmp/smsly-install.lock
+if [ ! -f "$lock" ]; then
+  exit 0
+fi
+pid=$(cat "$lock" 2>/dev/null | tr -dc '0-9' || true)
+if [ -z "$pid" ]; then
+  echo CLEAR_EMPTY_LOCK
+  rm -f "$lock"
+  exit 0
+fi
+if ! kill -0 "$pid" 2>/dev/null; then
+  echo CLEAR_STALE_LOCK:$pid
+  rm -f "$lock"
+  exit 0
+fi
+args=$(ps -p "$pid" -o args= 2>/dev/null || true)
+case "$args" in
+  *smsly-install.sh*|*install.sh*) ;;
+  *)
+    echo REFUSE_NON_INSTALLER_PID:$pid:$args
+    exit 42
+    ;;
+esac
+if [ {"1" if replace_active else "0"} -ne 1 ]; then
+  echo ACTIVE_INSTALLER:$pid:$args
+  exit 41
+fi
+echo REPLACE_ACTIVE_INSTALLER:$pid:$args
+kill "$pid" 2>/dev/null || true
+sleep 2
+if kill -0 "$pid" 2>/dev/null; then
+  kill -9 "$pid" 2>/dev/null || true
+fi
+rm -f "$lock"
+"""
+    stdin, stdout, stderr = ssh.exec_command(command)
+    exit_code = stdout.channel.recv_exit_status()
+    output = (
+        stdout.read().decode("utf-8", errors="replace")
+        + stderr.read().decode("utf-8", errors="replace")
+    ).strip()
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("CLEAR_STALE_LOCK:"):
+            _append_log(server, f"ℹ️ Removed stale installer lock for PID {line.split(':', 1)[1]}.")
+        elif line == "CLEAR_EMPTY_LOCK":
+            _append_log(server, "ℹ️ Removed empty installer lock file.")
+        elif line.startswith("REPLACE_ACTIVE_INSTALLER:"):
+            _append_log(
+                server,
+                "⚠️ Previous installer process was still running; stopped it before retrying.",
+            )
+        elif line.startswith("ACTIVE_INSTALLER:"):
+            _append_log(server, "⚠️ Another installer process is already running on this server.")
+        elif line.startswith("REFUSE_NON_INSTALLER_PID:"):
+            _append_log(server, "⚠️ Installer lock points at a non-installer process; refusing to remove it automatically.")
+
+    if exit_code != 0:
+        raise RuntimeError(
+            "Remote installer lock is active. Retry after the current install finishes "
+            "or clear /tmp/smsly-install.lock on the server if it is stale."
+        )
+
+
 def _source_root_dir() -> str:
     """Return container path to smsly-hosting source root."""
     return utils_get_source_root()
@@ -203,27 +272,6 @@ def _build_local_source_bundle() -> str:
     Returns local temporary file path.
     """
     return utils_build_bundle()
-
-
-def _is_github_token_known_invalid(token: str | None) -> bool:
-    """
-    Return True when GitHub explicitly reports token is invalid/revoked.
-    """
-    if not token:
-        return False
-    try:
-        response = requests.get(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"token {token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=10,
-        )
-    except requests.RequestException:
-        # Network/transient failures should not force fallback.
-        return False
-    return response.status_code == 401
 
 
 def _load_install_script():
@@ -467,21 +515,14 @@ def provision_server(self, server_id: str):
     ssh = None
     local_bundle_path = None
     try:
-        github_token = None
-        try:
-            from apps.deployments.utils import get_github_oauth_token_for_user
-            github_token = get_github_oauth_token_for_user(server.owner)
-        except Exception as token_exc:  # pragma: no cover
-            logger.debug("Could not resolve GitHub token for provisioning: %s", token_exc)
+        # The installer repository is public/open source, so provisioning should not
+        # depend on a user's linked GitHub OAuth token. Keep the local bundle path as
+        # an explicit operator override only; the normal path uses an unauthenticated
+        # public clone and avoids uploading a large tarball over SSH.
         prefer_local_bundle = str(
             os.environ.get("SMSLY_PROVISION_USE_LOCAL_BUNDLE", "false")
         ).strip().lower() not in ("0", "false", "no", "off")
-        token_known_invalid = (
-            _is_github_token_known_invalid(github_token)
-            if (github_token and not prefer_local_bundle)
-            else False
-        )
-        use_local_bundle = prefer_local_bundle or (not github_token) or token_known_invalid
+        use_local_bundle = prefer_local_bundle
 
         # -- Step 1: Connect --
         ssh = _get_ssh_client(server)
@@ -493,22 +534,15 @@ def provision_server(self, server_id: str):
 
         install_script_content, install_script_source = _load_install_script()
         _append_log(server, f"📥 Installer source: {install_script_source}")
-        if not token_known_invalid and not use_local_bundle and github_token:
-            _append_log(server, "🔐 Using linked GitHub token for installer repository clone.")
-        elif use_local_bundle and prefer_local_bundle:
+        if use_local_bundle:
             _append_log(
                 server,
                 "ℹ️ Provisioning in local-bundle mode (no GitHub clone required).",
             )
-        elif token_known_invalid:
+        else:
             _append_log(
                 server,
-                "⚠️ Linked GitHub token appears invalid; using local source bundle fallback.",
-            )
-        elif not github_token:
-            _append_log(
-                server,
-                "ℹ️ No linked GitHub token found; using local source bundle fallback.",
+                "ℹ️ Installer repository is public; using unauthenticated GitHub clone.",
             )
         remote_script = sftp.open("/tmp/smsly-install.sh", "w")
         try:
@@ -534,8 +568,14 @@ def provision_server(self, server_id: str):
                 sftp_bundle = ssh.open_sftp()
                 try:
                     sftp_bundle.put(local_bundle_path, "/tmp/smsly-hosting-src.tar.gz")
+                    remote_size = sftp_bundle.stat("/tmp/smsly-hosting-src.tar.gz").st_size
                 finally:
                     sftp_bundle.close()
+                if remote_size != bundle_size:
+                    raise RuntimeError(
+                        "Uploaded source bundle size mismatch: "
+                        f"local={bundle_size} remote={remote_size}"
+                    )
 
                 _append_log(server, "📦 Extracting source bundle on target...")
                 extract_cmd = (
@@ -562,6 +602,7 @@ def provision_server(self, server_id: str):
                         pass
 
         # -- Step 3: Run install script --
+        _prepare_remote_install_lock(ssh, server)
         _append_log(server, "⚙️ Running Grid installer (this may take 5-15 minutes)...")
 
         # Build non-interactive environment.
@@ -592,12 +633,6 @@ def provision_server(self, server_id: str):
         if "RESUME" in remote_mode:
             _append_log(server, "ℹ️ Found partial installation state. Resuming from last checkpoint...")
             install_args.append("--resume")
-
-        if github_token and not token_known_invalid:
-            from urllib.parse import quote
-            encoded = quote(github_token, safe="")
-            auth_url = f"https://x-access-token:{encoded}@github.com/SMSLYCLOUD/smsly-hosting.git"
-            install_env["SMSLY_GIT_REMOTE"] = auth_url
 
         if use_local_bundle:
             install_env["SMSLY_FORCE_SOURCE_SYNC"] = "1"
