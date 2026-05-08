@@ -9,6 +9,7 @@ set -euo pipefail
 
 WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
 UPDATE_FLAG="$WATCH_DIR/.update"
+STATUS_FILE="$WATCH_DIR/.update.status"
 INSTALL_DIR="/opt/smsly-hosting"
 INSTALL_LOCK_FILE="/tmp/smsly-install.lock"
 LOG_PREFIX="[update-watcher]"
@@ -33,6 +34,23 @@ install_lock_active() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
+write_status() {
+    local state="$1"
+    local request_id="$2"
+    local mode="$3"
+    local exit_code="${4:-}"
+    local message="${5:-}"
+
+    {
+        echo "STATE=$state"
+        echo "REQUEST_ID=$request_id"
+        echo "MODE=$mode"
+        echo "EXIT_CODE=$exit_code"
+        echo "UPDATED_AT=$(date -Is)"
+        echo "MESSAGE=$message"
+    } > "$STATUS_FILE"
+}
+
 while true; do
     # Check for update flag
     if [ -f "$UPDATE_FLAG" ]; then
@@ -42,10 +60,17 @@ while true; do
             continue
         fi
 
-        MODE=$(cat "$UPDATE_FLAG" | tr -d ' \n\r' || echo "update")
+        PAYLOAD=$(tr -d ' \n\r' < "$UPDATE_FLAG" 2>/dev/null || echo "update")
+        [ -z "$PAYLOAD" ] && PAYLOAD="update"
+        MODE="${PAYLOAD%%:*}"
+        REQUEST_ID=""
+        if [ "$PAYLOAD" != "$MODE" ]; then
+            REQUEST_ID="${PAYLOAD#*:}"
+        fi
         [ -z "$MODE" ] && MODE="update"
+        [ -z "$REQUEST_ID" ] && REQUEST_ID="manual-$(date +%s)"
         
-        echo "$LOG_PREFIX Update flag detected (mode: $MODE) — initiating platform update"
+        echo "$LOG_PREFIX Update flag detected (mode: $MODE, request: $REQUEST_ID) — initiating platform update"
         
         # Remove flag first to prevent loop
         rm -f "$UPDATE_FLAG"
@@ -57,20 +82,38 @@ while true; do
             FLAGS="--update"
             if [ "$MODE" = "frontend" ]; then
                 FLAGS="--update-frontend"
+            elif [ "$MODE" = "backend" ]; then
+                FLAGS="--update-backend"
             fi
 
+            write_status "running" "$REQUEST_ID" "$MODE" "" "Running bash install.sh $FLAGS --non-interactive on the host."
             echo "$LOG_PREFIX Executing in screen: sudo bash install.sh $FLAGS --non-interactive"
             # Kill any stale install screens before starting a new one
             sudo screen -ls | grep "Grid-install" | cut -d. -f1 | awk '{print $1}' | xargs sudo kill -9 2>/dev/null || true
             sudo screen -wipe > /dev/null 2>&1 || true
 
-            # We run in a detached screen so it's "wrapped in screen" but won't block the watcher.
-            # Output is still logged for persistence.
-            sudo screen -S Grid-install -d -m bash -c "bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1"
-            
-            echo "$LOG_PREFIX Update process backgrounded in screen session 'Grid-install'."
+            set +e
+            if command -v screen >/dev/null 2>&1; then
+                # -D -m keeps this watcher process attached to the command lifetime while
+                # still providing a named screen session for host-side inspection.
+                sudo screen -S Grid-install -D -m bash -c "bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1"
+                exit_code=$?
+            else
+                sudo bash install.sh $FLAGS --non-interactive >> /var/log/smsly-install.log 2>&1
+                exit_code=$?
+            fi
+            set -e
+
+            if [ "$exit_code" -eq 0 ]; then
+                echo "$LOG_PREFIX Update process completed successfully."
+                write_status "success" "$REQUEST_ID" "$MODE" "$exit_code" "Host update completed successfully."
+            else
+                echo "$LOG_PREFIX ERROR: update exited with code $exit_code"
+                write_status "failed" "$REQUEST_ID" "$MODE" "$exit_code" "Host update failed with exit code $exit_code. Check /var/log/smsly-install.log."
+            fi
         else
             echo "$LOG_PREFIX ERROR: install.sh not found in $INSTALL_DIR"
+            write_status "failed" "$REQUEST_ID" "$MODE" "127" "install.sh not found in $INSTALL_DIR."
         fi
     fi
 
