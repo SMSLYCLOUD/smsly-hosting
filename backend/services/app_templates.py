@@ -26,8 +26,18 @@ class AppTemplate:
     volumes: List[str] = field(default_factory=list)
     health_check: Optional[str] = None
     docs_url: Optional[str] = None
-    required_addons: List[str] = field(
-        default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
+    required_addons: List[str] = field(default_factory=list)  # e.g., ['POSTGRES', 'REDIS']
+    logo_url: Optional[str] = None
+    website_url: Optional[str] = None
+    source_url: Optional[str] = None
+    docker_url: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    dashboard_port: Optional[int] = None
+    supports_dashboard: bool = False
+    supports_public_url: bool = True
+    supports_private_url: bool = True
+    requires_persistence: bool = False
+    post_deploy_notes: Optional[str] = None
 
 
 # ============================================================================
