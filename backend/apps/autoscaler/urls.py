@@ -6,4 +6,5 @@ urlpatterns = [
     path('history/', views.autoscaler_history),
     path('config/', views.autoscaler_config),
     path('trigger/', views.autoscaler_trigger),
+    path('scale/', views.autoscaler_scale, name='autoscaler_scale'),
 ]

@@ -1,3 +1,79 @@
+import React, { useEffect, useState } from 'react';
+import { DashboardShell } from '@/components/layout/DashboardShell';
+import { projectsApi, Project } from '@/lib/api';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Loader2 } from 'lucide-react';
+
+/**
+ * High‑level ecosystem dashboard showing aggregated metrics.
+ * It re‑uses the existing ``projectsApi.list`` endpoint which returns an
+ * array of projects with their services.  The UI displays:
+ *   • Total number of projects
+ *   • Total services
+ *   • Services per status (active, building, failed, queued)
+ */
+export default function DashboardPage() {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    projectsApi
+      .list()
+      .then(setProjects)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const totalServices = projects.reduce((sum, p) => sum + (p.services?.length ?? 0), 0);
+  const statusCounts: Record<string, number> = {};
+  projects.forEach((p) => {
+    p.services?.forEach((svc) => {
+      const st = (svc.status || 'unknown').toUpperCase();
+      statusCounts[st] = (statusCounts[st] || 0) + 1;
+    });
+  });
+
+  return (
+    <DashboardShell>
+      <div className="container max-w-6xl py-10">
+        <h1 className="text-3xl font-bold mb-6">Ecosystem Dashboard</h1>
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="animate-spin w-8 h-8 text-muted-foreground" />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Projects</CardTitle>
+              </CardHeader>
+              <CardContent>{projects.length}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Services</CardTitle>
+              </CardHeader>
+              <CardContent>{totalServices}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Status Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {Object.entries(statusCounts).map(([status, count]) => (
+                  <Badge key={status} variant="secondary">
+                    {status}: {count}
+                  </Badge>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
+    </DashboardShell>
+  );
+}
 "use client";
 
 import { useState, useEffect, useRef } from "react";
