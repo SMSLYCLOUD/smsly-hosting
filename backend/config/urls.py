@@ -35,8 +35,7 @@ urlpatterns = [
 ]
 
 # ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────
-if 'django.contrib.admin' in settings.INSTALLED_APPS:
-    urlpatterns.insert(1, path('admin/', admin.site.urls))
+
 
 if 'apps.billing' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/billing/', include('apps.billing.urls')))
