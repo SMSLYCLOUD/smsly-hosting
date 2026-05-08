@@ -45,7 +45,7 @@ class RemediatorGuardTests(TestCase):
         )
         self.engine = RemediationEngine()
 
-    @patch("apps.intelligence.remediator.smart_deploy_task.delay")
+    @patch("apps.intelligence.remediator.enqueue_smart_deploy_task")
     def test_crash_loop_creates_marked_rollback_and_skips_review(self, mock_delay):
         result = self.engine.apply_fix("CRASH_LOOP", str(self.service.id))
         self.assertTrue(result)
@@ -66,7 +66,7 @@ class RemediatorGuardTests(TestCase):
         self.assertEqual(args[1], str(self.provider.id))
         self.assertTrue(kwargs.get("skip_review"))
 
-    @patch("apps.intelligence.remediator.smart_deploy_task.delay")
+    @patch("apps.intelligence.remediator.enqueue_smart_deploy_task")
     def test_crash_loop_skips_when_deployment_already_in_progress(self, mock_delay):
         Deployment.objects.create(
             service=self.service,
@@ -88,7 +88,7 @@ class RemediatorGuardTests(TestCase):
         )
         mock_delay.assert_not_called()
 
-    @patch("apps.intelligence.remediator.smart_deploy_task.delay")
+    @patch("apps.intelligence.remediator.enqueue_smart_deploy_task")
     def test_health_check_fix_skips_when_in_progress_exists(self, mock_delay):
         Deployment.objects.create(
             service=self.service,

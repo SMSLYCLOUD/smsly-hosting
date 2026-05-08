@@ -14,8 +14,16 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from apps.cloud.models import CloudProvider
+from ..models import Deployment, Service
 from ..models_servers import ManagedServer
-from ..tasks import enqueue_smart_deploy_task, update_remote_server_task
+from ..tasks import (
+    enqueue_smart_deploy_task,
+    fleet_build_lock,
+    recover_stalled_queued_deployments,
+    should_skip_review_for_commit_message,
+    update_remote_server_task,
+)
 from ..views_servers import _build_remote_headers
 
 User = get_user_model()
@@ -688,3 +696,67 @@ class LiteAgentQueueTests(TestCase):
             provider_id="provider-id",
             skip_review=False,
         )
+
+    def test_auto_deployment_messages_skip_review(self):
+        self.assertTrue(should_skip_review_for_commit_message("Platform update auto-redeploy"))
+        self.assertTrue(should_skip_review_for_commit_message("Auto-Remediation: HEALTH_CHECK_FAIL"))
+        self.assertTrue(should_skip_review_for_commit_message("[auto-fix] missing env"))
+        self.assertFalse(should_skip_review_for_commit_message("Manual Trigger: HEAD"))
+
+    @patch("apps.deployments.tasks.enqueue_smart_deploy_task")
+    def test_recover_stalled_auto_redeploy_preserves_auto_approval(self, enqueue_mock):
+        user = User.objects.create_user(username="queue-user", password="password123")
+        provider = CloudProvider.objects.create(
+            name="queue-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        service = Service.objects.create(
+            name="queue-service",
+            owner=user,
+            provider=provider,
+        )
+        deployment = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.QUEUED,
+            commit_hash="abc1234567",
+            commit_message="Platform update auto-redeploy",
+        )
+
+        result = recover_stalled_queued_deployments()
+
+        self.assertEqual(result["queued"], 1)
+        enqueue_mock.assert_called_once_with(
+            deployment_id=str(deployment.id),
+            provider_id=str(provider.id),
+            skip_review=True,
+        )
+
+    def test_fleet_build_lock_recovers_cancelled_owner(self):
+        user = User.objects.create_user(username="lock-user", password="password123")
+        provider = CloudProvider.objects.create(
+            name="lock-provider",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+        service = Service.objects.create(
+            name="lock-service",
+            owner=user,
+            provider=provider,
+        )
+        stale = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.CANCELLED,
+            commit_hash="stale1234",
+        )
+        current = Deployment.objects.create(
+            service=service,
+            status=Deployment.Status.BUILDING,
+            commit_hash="fresh1234",
+        )
+        cache.set("smsly_fleet_build_lock", str(stale.id), timeout=300)
+
+        with fleet_build_lock(current):
+            self.assertEqual(cache.get("smsly_fleet_build_lock"), str(current.id))
+
+        self.assertIsNone(cache.get("smsly_fleet_build_lock"))

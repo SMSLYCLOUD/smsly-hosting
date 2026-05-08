@@ -1,7 +1,42 @@
-# Ignoring frontend downloaded svgs to clean up git diff
+# Python / Django
 __pycache__/
-frontend/public/logos/addons/*.svg
-frontend/public/logos/templates/*.svg
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+backend/venv/
+venv/
+db.sqlite3
+*.sqlite3
+backend/staticfiles/
+staticfiles/
+
+# Node / Next.js
 node_modules/
-backend/venv
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+*.tsbuildinfo
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+!*.env.example
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+secrets/
+*.pem
+*.key
+
+# Local tooling / generated backups
+.agent/
+install.sh.bak
+frontend-dev-*.log
+frontend-dev-*.err.log
+
+# Ignoring downloaded svgs to clean up git diff
 *.svg

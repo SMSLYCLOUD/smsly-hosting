@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import AuditLog
-from apps.deployments.tasks import smart_deploy_task
+from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
 from .providers import ask_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -232,16 +232,35 @@ class RemediationEngine:
 
         last_deploy = service.deployments.filter(status='ACTIVE').first()
         if last_deploy:
+            provider = _resolve_provider_for_service(service)
+            if not provider:
+                logger.warning(
+                    "Skipping auto-remediation deploy for %s: no active provider",
+                    service.name,
+                )
+                return False
             new_deploy = Deployment.objects.create(
                 service=service,
                 status=Deployment.Status.QUEUED,
                 commit_hash=last_deploy.commit_hash,
                 commit_message=f"Auto-Remediation: {message}"
             )
-            provider_id = str(service.provider.id) if service.provider else None
-            if provider_id:
-                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
-                return True
+            try:
+                enqueue_smart_deploy_task(str(new_deploy.id), str(provider.id), skip_review=True)
+            except Exception as exc:  # pragma: no cover - broker/runtime failure
+                logger.exception(
+                    "Failed to enqueue auto-remediation deployment %s",
+                    new_deploy.id,
+                )
+                new_deploy.status = Deployment.Status.FAILED
+                new_deploy.finished_at = timezone.now()
+                new_deploy.build_logs = (
+                    (new_deploy.build_logs or "")
+                    + f"\n[ERROR] Failed to queue auto-remediation task: {exc}\n"
+                )
+                new_deploy.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+                return False
+            return True
         return False
 
     def _handle_rollback(self, service: Service) -> bool:
@@ -262,6 +281,13 @@ class RemediationEngine:
         ).order_by('-finished_at').first()
 
         if last_good_deploy:
+            provider = _resolve_provider_for_service(service)
+            if not provider:
+                logger.warning(
+                    "Skipping auto-rollback for %s: no active provider",
+                    service.name,
+                )
+                return False
             cutoff = timezone.now() - timedelta(minutes=self.AUTO_DEPLOY_COOLDOWN_MINUTES)
             recent_duplicate = service.deployments.filter(
                 is_rollback=True,
@@ -297,12 +323,23 @@ class RemediationEngine:
                 rollback_from=latest_deploy,
             )
 
-            provider_id = str(service.provider.id) if service.provider else None
-            if provider_id:
-                smart_deploy_task.delay(str(new_deploy.id), provider_id, skip_review=True)
-                logger.info("Rollback triggered for %s", service.name)
-                return True
-            return False
+            try:
+                enqueue_smart_deploy_task(str(new_deploy.id), str(provider.id), skip_review=True)
+            except Exception as exc:  # pragma: no cover - broker/runtime failure
+                logger.exception(
+                    "Failed to enqueue auto-rollback deployment %s",
+                    new_deploy.id,
+                )
+                new_deploy.status = Deployment.Status.FAILED
+                new_deploy.finished_at = timezone.now()
+                new_deploy.build_logs = (
+                    (new_deploy.build_logs or "")
+                    + f"\n[ERROR] Failed to queue auto-rollback task: {exc}\n"
+                )
+                new_deploy.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
+                return False
+            logger.info("Rollback triggered for %s", service.name)
+            return True
 
         logger.warning("No previous good deployment found for %s", service.name)
         return False

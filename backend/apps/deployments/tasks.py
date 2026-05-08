@@ -64,6 +64,30 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, value)
+
+
+AUTO_APPROVE_COMMIT_MARKERS = (
+    "auto-redeploy",
+    "auto-remediation",
+    "auto-rollback",
+    "auto-restart",
+    "[auto-fix]",
+    "service restart",
+)
+
+
+def should_skip_review_for_commit_message(message: str) -> bool:
+    """Return True for system-created deployments that must not pause at REVIEW."""
+    normalized = str(message or "").strip().lower()
+    return any(marker in normalized for marker in AUTO_APPROVE_COMMIT_MARKERS)
+
+
 def _current_agent_node_queue() -> str:
     """Return this lite agent's dedicated deploy queue, if running as an agent."""
     if str(os.environ.get("MODE", "")).strip().lower() != "agent":
@@ -105,6 +129,85 @@ def enqueue_smart_deploy_task(
     return smart_deploy_task.delay(**kwargs)
 
 
+def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
+    """
+    Resolve a provider for a deployment without assuming service.provider exists.
+
+    Kept in tasks.py so installer/runtime repair code can use the same logic
+    outside request/serializer paths.
+    """
+    if service.provider_id:
+        return service.provider if service.provider.is_active else None
+
+    if prefer_local:
+        local = CloudProvider.objects.filter(
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        ).first()
+        if local:
+            return local
+
+    remote = CloudProvider.objects.filter(
+        provider_type=CloudProvider.ProviderType.REMOTE,
+        is_active=True,
+    ).first()
+    if remote:
+        return remote
+
+    return CloudProvider.objects.filter(is_active=True).first()
+
+
+def recover_stalled_queued_deployments(limit: int = 100) -> dict:
+    """
+    Re-publish queued deployment tasks after a platform restart/update.
+
+    Automated deployments keep their auto-approval semantics even when the
+    original Celery publish was lost during an update.
+    """
+    results = {"seen": 0, "queued": 0, "skipped": 0, "failed": 0}
+    deployments = (
+        Deployment.objects.filter(status=Deployment.Status.QUEUED)
+        .select_related("service", "service__provider")
+        .order_by("created_at")[:limit]
+    )
+    for deployment in deployments:
+        results["seen"] += 1
+        provider = _resolve_provider_for_service(deployment.service)
+        if not provider:
+            append_log(
+                deployment,
+                "\n[queue-restore] No active provider available; leaving deployment queued.\n",
+            )
+            results["skipped"] += 1
+            continue
+
+        skip_review = deployment.is_rollback or should_skip_review_for_commit_message(
+            deployment.commit_message
+        )
+        try:
+            enqueue_smart_deploy_task(
+                deployment_id=str(deployment.id),
+                provider_id=str(provider.id),
+                skip_review=skip_review,
+            )
+            append_log(
+                deployment,
+                f"\n[queue-restore] Requeued deployment task (skip_review={skip_review}).\n",
+            )
+            results["queued"] += 1
+        except Exception as exc:  # pragma: no cover - broker/runtime failure
+            logger.exception(
+                "Failed to restore queued deployment task for deployment=%s",
+                deployment.id,
+            )
+            append_log(
+                deployment,
+                f"\n[queue-restore] Failed to requeue deployment task: {exc}\n",
+            )
+            results["failed"] += 1
+    return results
+
+
 def _regenerate_caddyfile():
     """Regenerate and apply the Caddyfile with current service domains.
 
@@ -142,23 +245,94 @@ def fleet_build_lock(deployment):
     # For now, we enforce a strict single-build lock for maximum safety on small VPS nodes.
     # A true semaphore can be implemented later if needed.
     lock_key = "smsly_fleet_build_lock"
-    lock_owner_key = f"smsly_fleet_build_owner_{deployment.id}"
+    heartbeat_key = f"{lock_key}:heartbeat"
+    lock_timeout = _env_int("SMSLY_FLEET_BUILD_LOCK_TIMEOUT_SECONDS", 3600, minimum=60)
+    max_wait = _env_int("SMSLY_FLEET_BUILD_LOCK_WAIT_SECONDS", 1800, minimum=30)
+    poll_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_POLL_SECONDS", 15, minimum=1)
+    stale_seconds = _env_int("SMSLY_FLEET_BUILD_LOCK_STALE_SECONDS", 600, minimum=60)
     
     acquired = False
-    max_wait = 1800  # 30 minutes
     start_time = time.monotonic()
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = None
+
+    def _normalize_cache_value(value):
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return str(value or "")
+
+    def _heartbeat_payload(owner_id: str) -> dict:
+        return {"owner": owner_id, "timestamp": time.time()}
+
+    def _refresh_heartbeat(owner_id: str) -> None:
+        while not heartbeat_stop.wait(max(1, min(30, poll_seconds))):
+            if _normalize_cache_value(cache.get(lock_key)) != owner_id:
+                return
+            cache.set(heartbeat_key, _heartbeat_payload(owner_id), timeout=lock_timeout)
+
+    def _owner_is_stale(owner_id: str) -> tuple[bool, str]:
+        try:
+            owner = Deployment.objects.only("id", "status", "updated_at").get(id=owner_id)
+        except Deployment.DoesNotExist:
+            return True, "owner deployment no longer exists"
+        except Exception as exc:  # pragma: no cover - transient DB/cache failure
+            logger.warning("Could not inspect fleet build lock owner %s: %s", owner_id, exc)
+            return False, "owner could not be inspected"
+
+        lock_owner_statuses = {
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.HEALTH_CHECK,
+        }
+        if owner.status not in lock_owner_statuses:
+            return True, f"owner status is {owner.status}"
+
+        heartbeat = cache.get(heartbeat_key)
+        if isinstance(heartbeat, dict) and str(heartbeat.get("owner")) == owner_id:
+            try:
+                heartbeat_age = time.time() - float(heartbeat.get("timestamp") or 0)
+            except (TypeError, ValueError):
+                heartbeat_age = stale_seconds + 1
+            if heartbeat_age <= stale_seconds:
+                return False, "owner heartbeat is fresh"
+            return True, f"owner heartbeat is stale ({int(heartbeat_age)}s old)"
+
+        if owner.updated_at:
+            updated_age = (timezone.now() - owner.updated_at).total_seconds()
+            if updated_age > stale_seconds:
+                return True, f"legacy owner has no heartbeat and is stale ({int(updated_age)}s old)"
+
+        return False, "legacy owner has no heartbeat but is still within grace period"
     
     while time.monotonic() - start_time < max_wait:
         # Try to set the lock if it doesn't exist
-        if cache.add(lock_key, str(deployment.id), timeout=3600):
+        deployment_id = str(deployment.id)
+        if cache.add(lock_key, deployment_id, timeout=lock_timeout):
             acquired = True
+            cache.set(heartbeat_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
             break
         
         # Check if the existing lock is stale (owner doesn't exist or is different but old)
         # This is a safety measure against worker crashes
-        current_owner = cache.get(lock_key)
+        current_owner = _normalize_cache_value(cache.get(lock_key))
         if not current_owner:
             # Race condition: lock was deleted between add and get
+            continue
+
+        if current_owner == deployment_id:
+            acquired = True
+            cache.set(heartbeat_key, _heartbeat_payload(deployment_id), timeout=lock_timeout)
+            break
+
+        is_stale, stale_reason = _owner_is_stale(current_owner)
+        if is_stale:
+            append_log(
+                deployment,
+                f"[fleet] Recovered stale build lock from {current_owner[:8]}: {stale_reason}.\n",
+            )
+            cache.delete(lock_key)
+            cache.delete(heartbeat_key)
             continue
             
         if attempt_count := getattr(fleet_build_lock, "_attempt_count", 0):
@@ -168,19 +342,30 @@ def fleet_build_lock(deployment):
             append_log(deployment, "[fleet] Another build is in progress across the node fleet. Waiting for a free slot...\n")
             broadcast_status(deployment)
 
-        time.sleep(15)
+        time.sleep(poll_seconds)
     
     if not acquired:
         append_log(deployment, "❌ Timed out waiting for a free build slot in the node fleet.\n")
         raise RuntimeError("Fleet build concurrency limit reached. Please try again later.")
+
+    heartbeat_thread = threading.Thread(
+        target=_refresh_heartbeat,
+        args=(str(deployment.id),),
+        daemon=True,
+    )
+    heartbeat_thread.start()
         
     try:
         append_log(deployment, "🚀 Build slot acquired. Starting build phase...\n")
         yield
     finally:
+        heartbeat_stop.set()
+        if heartbeat_thread and heartbeat_thread.is_alive():
+            heartbeat_thread.join(timeout=1)
         # Only release if we were the one who held it
-        if cache.get(lock_key) == str(deployment.id):
+        if _normalize_cache_value(cache.get(lock_key)) == str(deployment.id):
             cache.delete(lock_key)
+            cache.delete(heartbeat_key)
             if hasattr(fleet_build_lock, "_attempt_count"):
                 delattr(fleet_build_lock, "_attempt_count")
 
@@ -885,6 +1070,9 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         if deployment.status == Deployment.Status.CANCELLED:
             logger.info("Deployment %s cancelled before start", deployment_id)
             return
+        skip_review = skip_review or deployment.is_rollback or should_skip_review_for_commit_message(
+            deployment.commit_message
+        )
 
         service = deployment.service
         provider = CloudProvider.objects.get(id=provider_id)
@@ -2148,9 +2336,24 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
             is_rollback=False,
         )
         provider = CloudProvider.objects.get(id=provider_id)
-        smart_deploy_task.delay(
-            deployment_id=str(new_deployment.id), provider_id=str(provider.id), skip_review=True
-        )
+        try:
+            enqueue_smart_deploy_task(
+                deployment_id=str(new_deployment.id),
+                provider_id=str(provider.id),
+                skip_review=True,
+            )
+        except Exception as exc:  # pragma: no cover - broker/runtime failure
+            logger.exception(
+                "Failed to enqueue auto-fix deployment %s",
+                new_deployment.id,
+            )
+            new_deployment.status = Deployment.Status.FAILED
+            new_deployment.finished_at = timezone.now()
+            new_deployment.build_logs = (
+                (new_deployment.build_logs or "")
+                + f"\n[ERROR] Failed to queue auto-fix deploy task: {exc}\n"
+            )
+            new_deployment.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
         return
 
     # Step 2: No pattern match → escalate to AI models

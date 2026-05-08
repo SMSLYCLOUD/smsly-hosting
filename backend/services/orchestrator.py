@@ -257,9 +257,19 @@ class Orchestrator:
         )
 
         # Trigger async deployment (import here to avoid circular)
-        from apps.deployments.tasks import smart_deploy_task
+        from apps.deployments.tasks import enqueue_smart_deploy_task
         provider = service.provider
         if provider:
-            smart_deploy_task.delay(str(rollback.id), str(provider.id), skip_review=True)
+            try:
+                enqueue_smart_deploy_task(str(rollback.id), str(provider.id), skip_review=True)
+            except Exception as exc:  # pragma: no cover - broker/runtime failure
+                logger.exception("Failed to enqueue automatic rollback %s", rollback.id)
+                rollback.status = Deployment.Status.FAILED
+                rollback.finished_at = timezone.now()
+                rollback.build_logs = (
+                    (rollback.build_logs or "")
+                    + f"\n[ERROR] Failed to queue automatic rollback task: {exc}\n"
+                )
+                rollback.save(update_fields=["status", "finished_at", "build_logs", "updated_at"])
 
 
