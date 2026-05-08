@@ -1,9 +1,12 @@
+"use client"
 import React, { useEffect, useState } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { projectsApi, Project } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/use-toast';
 
 /**
  * High‑level ecosystem dashboard showing aggregated metrics.
@@ -70,11 +73,45 @@ export default function DashboardPage() {
             </Card>
           </div>
         )}
+        {/* New button to trigger a PaaS update / autoscaler run */}
+        <div className="mt-8 flex justify-end">
+          <Button
+            onClick={async () => {
+              try {
+                const resp = await fetch('/api/v1/autoscaler/trigger/', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                });
+                if (!resp.ok) {
+                  const err = await resp.text();
+                  throw new Error(err || resp.statusText);
+                }
+                const data = await resp.json();
+                toast({
+                  title: 'PaaS update triggered',
+                  description: 'Autoscaler check completed successfully.',
+                });
+                // Optionally refresh the dashboard data
+                setProjects([]);
+                setLoading(true);
+                projectsApi.list().then(setProjects).finally(() => setLoading(false));
+              } catch (e) {
+                console.error(e);
+                toast({
+                  title: 'Failed to trigger update',
+                  description: (e as Error).message,
+                  variant: 'destructive',
+                });
+              }
+            }}
+          >
+            Run PaaS Update
+          </Button>
+        </div>
       </div>
     </DashboardShell>
   );
 }
-"use client";
 
 import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
