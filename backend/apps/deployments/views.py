@@ -1755,7 +1755,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ),
         })
 
-    @action(detail=False, methods=['get'], url_path='check-domain', authentication_classes=[], permission_classes=[permissions.AllowAny])
+    def get_permissions(self):
+        """Allow unauthenticated check-domain for on-demand TLS validation."""
+        if self.action == 'check_domain':
+            from rest_framework.permissions import AllowAny
+            return [AllowAny()]
+        return super().get_permissions()
+
+    @action(detail=False, methods=['get'], url_path='check-domain')
     def check_domain(self, request):
         """
         Endpoint for Caddy's on_demand_tls 'ask' directive.

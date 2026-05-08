@@ -52,6 +52,9 @@ class Command(BaseCommand):
         for t in drf_tokens:
             self.stdout.write(f"     • [{t.user.username}] key={t.key[:8]}...")
 
+        if fix:
+            self._ensure_primary_server()
+
         if not all_tokens and not drf_tokens:
             self.stdout.write(self.style.ERROR(
                 "   ❌ NO API TOKENS EXIST ON THIS NODE! "
@@ -182,6 +185,39 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(
                 "     ⚠️  No api_token or gateway_secret stored - cannot authenticate!"
             ))
+
+    def _ensure_primary_server(self):
+        """Ensure a primary ManagedServer record exists for the local machine."""
+        from apps.deployments.models import PlatformConfig
+        config = PlatformConfig.load()
+        
+        primary = ManagedServer.get_primary()
+        if primary:
+            self.stdout.write(f"   ✅ Primary server already exists: {primary.name} ({primary.host})")
+            return
+
+        admin = APIToken.objects.filter(user__is_superuser=True).first()
+        if not admin:
+            from django.contrib.auth import get_user_model
+            admin_user = get_user_model().objects.filter(is_superuser=True).first()
+        else:
+            admin_user = admin.user
+
+        if not admin_user:
+            self.stdout.write(self.style.ERROR("   ❌ Cannot create primary server: No superuser found."))
+            return
+
+        host = config.server_ip or "127.0.0.1"
+        ManagedServer.objects.create(
+            owner=admin_user,
+            name="Master Node (Auto-generated)",
+            host=host,
+            api_url=f"http://{host}:8000" if ":" not in host else f"http://{host}",
+            is_primary=True,
+            status=ManagedServer.Status.ONLINE,
+            provision_status=ManagedServer.ProvisionStatus.DONE,
+        )
+        self.stdout.write(self.style.SUCCESS(f"   ✅ Created primary server record for {host}"))
 
     def _create_admin_token(self):
         """Create an API token for the admin user."""

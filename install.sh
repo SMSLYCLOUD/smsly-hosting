@@ -4949,6 +4949,19 @@ else
     echo -e "${YELLOW}  ⚠ CLI directory not found — skipping integration.${NC}"
 fi
 
+# -----------------------------------------------------------------------------
+# 11. Finalize Inter-Node Connectivity
+# -----------------------------------------------------------------------------
+echo -e "\n${YELLOW}[11/11] Finalizing Inter-Node Connectivity...${NC}"
+echo -e "${BLUE}  → Registering this node and creating authentication tokens...${NC}"
+# Use -T to avoid TTY issues in non-interactive mode
+if docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py help diagnose_nodes >/dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || true
+    echo -e "${GREEN}  ✓ Node registered as Primary (if Master) and API tokens verified${NC}"
+else
+    echo -e "${YELLOW}  ⚠ diagnose_nodes command not available in this version; skipping.${NC}"
+fi
+
 # ─── Final Verification Sync ──────────────────────────────────────────────────
 fi
 
