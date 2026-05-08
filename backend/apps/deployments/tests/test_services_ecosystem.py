@@ -4,7 +4,7 @@ from django.test import SimpleTestCase
 
 from services.ecosystem import (
     _apply_plan_repo_defaults,
-    _apply_smsly_core_intelligence,
+    _apply_generic_ecosystem_intelligence,
     _build_heuristic_plan,
 )
 
@@ -47,19 +47,20 @@ class EcosystemPlanningHelpersTests(SimpleTestCase):
         self.assertEqual(plan["services"][0]["branch"], "release")
 
     def test_smsly_core_intelligence_wires_dependencies_and_env(self):
+        """Test that heuristic intelligence discovers core API and wires it."""
         services = [
             {
-                "repo": "acme/smsly-sms",
-                "name": "smsly-sms",
+                "repo": "acme/worker-service",
+                "name": "worker-service",
                 "stack": "python",
                 "addons": [],
-                "env_vars": {},
+                "env_vars": {"CORE_API_URL": ""},
                 "depends_on": [],
                 "deploy_order": 5,
             },
             {
-                "repo": "acme/smsly-core",
-                "name": "smsly-core",
+                "repo": "acme/platform-api",
+                "name": "platform-api",
                 "stack": "django",
                 "addons": [],
                 "env_vars": {},
@@ -68,35 +69,38 @@ class EcosystemPlanningHelpersTests(SimpleTestCase):
             },
         ]
 
-        _apply_smsly_core_intelligence(services)
+        _apply_generic_ecosystem_intelligence(services)
 
-        core = next(s for s in services if s["name"] == "smsly-core")
-        sms = next(s for s in services if s["name"] == "smsly-sms")
+        core = next(s for s in services if s["name"] == "platform-api")
+        worker = next(s for s in services if s["name"] == "worker-service")
 
-        self.assertEqual(core["deploy_order"], 1)
+        # Verify Core specialized addons (Django defaults)
         self.assertIn("POSTGRES", core["addons"])
         self.assertIn("REDIS", core["addons"])
-        self.assertIn("smsly-core", sms["depends_on"])
+        
+        # Verify dependency wiring
+        self.assertIn("platform-api", worker["depends_on"])
         self.assertEqual(
-            sms["env_vars"]["SMSLY_PLATFORM_API_URL"],
-            "{{SERVICE:smsly-core}}",
+            worker["env_vars"]["CORE_API_URL"],
+            "{{SERVICE:platform-api}}",
         )
 
     def test_build_heuristic_plan_prioritizes_smsly_core(self):
+        """Test that platform-api gets lower deploy_order (higher priority)."""
         repos_data = [
             {
-                "repo": "acme/smsly-sms",
+                "repo": "acme/worker-service",
                 "default_branch": "main",
                 "heuristic": {
                     "stack": "python",
                     "port": 8000,
                     "build": "nixpacks",
                     "addons": [],
-                    "env_vars": {},
+                    "env_vars": {"CORE_API_URL": ""},
                 },
             },
             {
-                "repo": "acme/smsly-core",
+                "repo": "acme/platform-api",
                 "default_branch": "main",
                 "heuristic": {
                     "stack": "django",
@@ -109,8 +113,8 @@ class EcosystemPlanningHelpersTests(SimpleTestCase):
         ]
 
         plan = _build_heuristic_plan(repos_data)
-        core = next(s for s in plan["services"] if s["name"] == "smsly-core")
-        sms = next(s for s in plan["services"] if s["name"] == "smsly-sms")
+        core = next(s for s in plan["services"] if s["name"] == "platform-api")
+        worker = next(s for s in plan["services"] if s["name"] == "worker-service")
 
-        self.assertLess(core["deploy_order"], sms["deploy_order"])
-        self.assertIn("smsly-core", sms["depends_on"])
+        self.assertLess(core["deploy_order"], worker["deploy_order"])
+        self.assertIn("platform-api", worker["depends_on"])

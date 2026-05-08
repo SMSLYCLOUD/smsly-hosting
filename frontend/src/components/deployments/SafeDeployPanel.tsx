@@ -36,9 +36,11 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
   const fetchPreviews = async () => {
     try {
       const res = await api.get(`/services/${serviceId}/previews/`);
-      setPreviews(res.data);
+      const data = res.data;
+      setPreviews(Array.isArray(data) ? data : (data?.results || []));
     } catch (err) {
       console.error('Failed to fetch previews', err);
+      setPreviews([]);
     } finally {
       setLoading(false);
     }
@@ -190,14 +192,14 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-foreground">{preview.branch_name}</span>
                       <Badge variant="secondary" className="font-mono text-[10px]">
-                        {preview.commit_sha.substring(0, 7)}
+                        {String(preview.commit_sha || '').substring(0, 7) || 'N/A'}
                       </Badge>
                       <Badge className={`text-[10px] font-bold ${
                         preview.status === 'READY' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
-                        preview.status.includes('FAILED') ? 'bg-red-500/10 text-red-500 border-red-500/20' :
+                        (preview.status || '').includes('FAILED') ? 'bg-red-500/10 text-red-500 border-red-500/20' :
                         'bg-muted text-muted-foreground'
                       }`}>
-                        {preview.status}
+                        {preview.status || 'UNKNOWN'}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground font-medium">

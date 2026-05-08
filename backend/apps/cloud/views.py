@@ -640,9 +640,13 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 }
 
             if isinstance(payload, Exception):
+                exception_type = payload.__class__.__name__
+                message = str(payload) or exception_type
+                if exception_type == "SoftTimeLimitExceeded":
+                    message = "Background task timed out before it could finish. Retry with a smaller batch or try again later."
                 payload = {
-                    'error': str(payload),
-                    'exception_type': payload.__class__.__name__,
+                    'error': message,
+                    'exception_type': exception_type,
                 }
             else:
                 try:
@@ -655,6 +659,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
             'status': result.status,
             'result': payload,
         }
+        if isinstance(payload, dict) and payload.get('error'):
+            response_data['error'] = payload.get('error')
         return Response(response_data)
 
     @action(detail=False, methods=['post'])

@@ -1,5 +1,32 @@
 # Ecosystem Deploy Orchestration Audit
 
+> [!NOTE]
+> **Version**: 1.1.0
+> **Last Updated**: 2026-05-08
+> **Changelog**: 
+> - v1.1.0: Added architectural diagram and version tracking.
+> - v1.0.0: Initial audit of orchestration flow.
+
+## Orchestration Overview
+
+```mermaid
+sequenceDiagram
+    participant U as User/CLI
+    participant P as Manifest Parser
+    participant R as Env Resolver
+    participant N as Node Selector
+    participant D as Deployment Task
+
+    U->>P: Trigger Ecosystem Deploy
+    P->>P: Build Dependency Graph
+    P->>R: Resolve Global & Service Env
+    R->>R: Validate Contracts
+    R->>N: Request Node Assignment
+    N->>N: Verify Managed Server Eligibility
+    N->>D: Create Deployment Records
+    D->>D: Execute Build/Rollout
+```
+
 ## The Core Problem
 Grid's platform currently builds services individually and has an `ecosystem_deploy_task`, but it struggles with environment variable persistence and cross-service dependencies before actual deployment begins.
 

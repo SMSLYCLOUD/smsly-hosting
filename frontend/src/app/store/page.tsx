@@ -184,8 +184,16 @@ export default function AppStorePage() {
                             return (
                                 <Card key={app.id} className="group hover:border-primary/50 transition-all hover:shadow-md cursor-pointer" onClick={() => router.push(`/new?template=${app.id}`)}>
                                     <CardHeader className="flex flex-row items-start gap-4 space-y-0">
-                                        <div className={`p-3 rounded-xl text-white shadow-sm ${color}`}>
-                                            <Icon size={24} />
+                                        <div className={`p-3 rounded-xl shadow-sm flex items-center justify-center overflow-hidden ${app.logo_url || app.icon ? 'bg-background border' : `text-white ${color}`}`}>
+                                            {app.logo_url || app.icon ? (
+                                                <img 
+                                                    src={app.logo_url || app.icon} 
+                                                    alt={app.name} 
+                                                    className="w-7 h-7 object-contain"
+                                                />
+                                            ) : (
+                                                <Icon size={24} />
+                                            )}
                                         </div>
                                         <div className="flex-1">
                                             <CardTitle className="text-lg group-hover:text-primary transition-colors">{app.name}</CardTitle>

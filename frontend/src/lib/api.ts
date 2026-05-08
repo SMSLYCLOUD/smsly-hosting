@@ -411,8 +411,10 @@ export interface Volume {
 export const servicesApi = {
   list: async (): Promise<Service[]> => {
     const response = await api.get('/services/');
-    // Handle paginated (object with results) or direct array responses
-    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
   },
   create: async (data: any, requestConfig?: any): Promise<Service> => {
     // If it's a file upload, use FormData
@@ -458,7 +460,10 @@ export const servicesApi = {
   // Deployment Management
   getDeployments: async (serviceId: string): Promise<Deployment[]> => {
     const response = await api.get(`/services/${serviceId}/deployments/`);
-    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
   },
   getDeployment: async (id: string): Promise<Deployment> => {
     const response = await api.get(`/deployments/${id}/`);
@@ -502,7 +507,10 @@ export const servicesApi = {
   // Env Vars Management
   getEnvVars: async (serviceId: string): Promise<EnvVar[]> => {
     const response = await api.get(`/services/${serviceId}/env_vars/`);
-    return Array.isArray(response.data) ? response.data : (response.data?.results || []);
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
   },
   createEnvVar: async (serviceId: string, data: Partial<EnvVar>): Promise<EnvVar> => {
     const response = await api.post(`/services/${serviceId}/env_vars/`, data);
@@ -643,8 +651,11 @@ export const platformApi = {
 export const templatesApi = {
   list: async (): Promise<any[]> => {
     const response = await api.get('/templates/');
-    // Handle pagination if present, or raw list
-    return Array.isArray(response.data) ? response.data : response.data.results || [];
+    // Handle pagination if present, or raw list. Safely fallback to empty array.
+    const data = response.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.results)) return data.results;
+    return [];
   },
   get: async (id: string): Promise<any> => {
     const response = await api.get(`/templates/${id}/`);
@@ -1427,7 +1438,10 @@ export interface Addon {
 export const addonsApi = {
     list: async (): Promise<Addon[]> => {
         const res = await api.get('/addons/');
-        return Array.isArray(res.data) ? res.data : res.data.results || [];
+        const data = res.data;
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.results)) return data.results;
+        return [];
     },
     get: async (id: string): Promise<Addon> => {
         const res = await api.get(`/addons/${id}/`);

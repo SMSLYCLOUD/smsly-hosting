@@ -121,7 +121,7 @@ export default function EcosystemPage() {
                 if (data.status === 'SUCCESS' && data.result) {
                     onComplete(data.result);
                 } else if (data.status === 'FAILURE') {
-                    setError(data.error || 'Task failed');
+                    setError(data.error || data.result?.error || 'Task failed');
                     setStep('idle');
                 } else {
                     // Still running

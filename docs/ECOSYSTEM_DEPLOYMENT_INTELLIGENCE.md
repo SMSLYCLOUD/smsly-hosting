@@ -1,5 +1,12 @@
 # Ecosystem Deployment Intelligence
 
+> [!NOTE]
+> **Version**: 1.2.0
+> **Last Updated**: 2026-05-08
+> **Changelog**: 
+> - v1.2.0: Integrated direct links to orchestration and repair scripts.
+> - v1.1.0: Added Manifest-driven configuration details.
+
 Grid possesses a God-level ecosystem deployment intelligence layer that allows it to safely orchestrate multiple interconnected services without requiring explicit knowledge of external service logic or VPS runtime environments.
 
 ## Core Capabilities
@@ -8,7 +15,7 @@ Grid possesses a God-level ecosystem deployment intelligence layer that allows i
 2. **Environment Synchronization and Persistence**: Using the `EcosystemEnvResolver`, secrets and public URLs are dynamically generated and synchronized uniformly across dependent nodes. Missing external values hard-block deployments.
 3. **Primary/Control Plane Protection**: By classifying nodes using `is_control_plane` and `allow_user_workloads`, normal ecosystem services are safely routed to user-provisioned VPSs or explicit managed nodes.
 4. **AI Senate Advisory Intelligence**: The coded AI Senate parses service intents to auto-complete missing environment shapes securely and explicitly through JSON-schema validated outputs.
-5. **Self-Healing and Repair**: A Django management CLI (`repair_ecosystem_deploy`) permits Grid to introspect its known service database and safely assign unallocated nodes or recreate environment credentials.
+5. **Self-Healing and Repair**: A Django management CLI (`repair_ecosystem_deploy`) and supporting scripts (like [validate_production.py](file:///c:/Users/osaretin/Documents/SMSLY/SMSLY_CORE/smsly-hosting/scripts/validate_production.py)) permit Grid to introspect its known service database and safely assign unallocated nodes or recreate environment credentials.
 
 ## For More Information
 
