@@ -112,6 +112,7 @@ def _looks_like_model_error(exc: Exception) -> bool:
 
 class AIProvider(ABC):
     """Abstract base for all AI providers."""
+    id: str = ""
 
     @abstractmethod
     def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
@@ -1164,6 +1165,7 @@ def get_available_providers(include_balance: bool = False) -> List[dict]:
         if key == "mock":
             continue
         instance = cls()
+        instance.id = key
         provider_instances[key] = instance
         info = {
             "id": key,
@@ -1265,12 +1267,14 @@ def get_configured_providers() -> List[AIProvider]:
                 models = [m.strip() for m in raw_models.split(",") if m.strip()]
                 for model in models:
                     instance = cls(model_override=model)
+                    instance.id = key
                     if instance.is_configured():
                         configured.append(instance)
                 continue
 
         instance = cls()
         if instance.is_configured():
+            instance.id = key
             configured.append(instance)
     
     # Respect Senate Committee size limits if configured
@@ -1457,17 +1461,35 @@ def ask_collaborative(prompt: str, system_prompt: Optional[str] = None) -> Tuple
 # ask_with_fallback — Primary API (backwards-compatible)
 # ---------------------------------------------------------------------------
 
-def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None) -> Tuple[str, str]:
+def ask_with_fallback(prompt: str, system_prompt: Optional[str] = None, provider_id: str = None) -> Tuple[str, str]:
     """
     Smart multi-provider ask:
-    - If 2+ providers configured → collaborative consensus mode
-    - If 1 provider → single provider mode
-    - If 0 providers → mock fallback
+    - If provider_id specified -> try that one first, fallback to others
+    - If 2+ providers configured -> collaborative consensus mode
+    - If 1 provider -> single provider mode
+    - If 0 providers -> mock fallback
 
     Returns (response_text, provider_name).
     """
     _sync_db_to_env()
     configured = get_configured_providers()
+
+    # Priority 1: User-specified provider
+    if provider_id and provider_id != "auto":
+        target = next((p for p in configured if getattr(p, "id", "") == provider_id or p.__class__.__name__.lower().startswith(provider_id.lower())), None)
+        if not target:
+            # Try to instantiate even if not in 'configured' (maybe it just needs env check)
+            cls = PROVIDERS.get(provider_id)
+            if cls:
+                instance = cls()
+                if instance.is_configured():
+                    target = instance
+
+        if target:
+            try:
+                return _ask_single(target, prompt, system_prompt)
+            except Exception as e:
+                logger.warning("Target provider %s failed, falling back: %s", provider_id, e)
 
     senate_enabled = os.environ.get("SENATE_ENABLED", "True").lower() == "true"
     if len(configured) >= 2 and senate_enabled:

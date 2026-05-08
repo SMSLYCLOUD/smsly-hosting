@@ -3345,7 +3345,13 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     trap - EXIT
     release_install_lock
     echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
+    # Infrastructure Diagnostic & Auto-Fix
+    echo -e "\n${BLUE}  🔄 Running infrastructure diagnostic and auto-fix...${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || \
+        echo -e "${YELLOW}  ⚠️ Diagnostic fix failed (non-fatal). You can run it manually later.${NC}"
+
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
+
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
@@ -4978,7 +4984,13 @@ release_install_lock
 # Summary
 # -----------------------------------------------------------------------------
 echo -e "\n${GREEN}════════════════════════════════════════════════════════════${NC}"
+# Infrastructure Diagnostic & Auto-Fix
+echo -e "\n${BLUE}  🔄 Running infrastructure diagnostic and auto-fix...${NC}"
+docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py diagnose_nodes --fix || \
+    echo -e "${YELLOW}  ⚠️ Diagnostic fix failed (non-fatal). You can run it manually later.${NC}"
+
 echo -e "${GREEN}   ✓ INSTALLATION SUCCESSFUL!${NC}"
+
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
 SUMMARY_PUBLIC_IP="${PUBLIC_IP:-}"

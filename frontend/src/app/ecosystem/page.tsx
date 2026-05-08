@@ -107,9 +107,16 @@ export default function EcosystemPage() {
     const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
     const [servers, setServers] = useState<any[]>([]);
 
+    const [aiProviders, setAiProviders] = useState<any[]>([]);
+    const [selectedProvider, setSelectedProvider] = useState<string>('auto');
+
     useEffect(() => {
         apiGet('/api/v1/servers/').then(data => {
             setServers(data.results || data || []);
+        }).catch(() => {});
+
+        apiGet('/api/v1/cloud/intelligence/providers/').then(data => {
+            setAiProviders(data || []);
         }).catch(() => {});
     }, []);
 
@@ -142,7 +149,7 @@ export default function EcosystemPage() {
         setScanProgress('Connecting to GitHub...');
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/scan/');
+            const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { ai_provider: selectedProvider });
             setScanTaskId(data.task_id);
             setScanProgress('Scanning repositories...');
 
@@ -228,13 +235,31 @@ export default function EcosystemPage() {
     const updateServer = (idx: number, serverId: string) => {
         if (!plan) return;
         const newServices = [...plan.services];
-        newServices[idx].server_id = serverId === 'local' ? undefined : serverId;
+        newServices[idx] = { ...newServices[idx], server_id: serverId };
         setPlan({ ...plan, services: newServices });
+    };
+
+
+    const [syncing, setSyncing] = useState(false);
+    const syncHealth = async () => {
+        setSyncing(true);
+        try {
+            await apiPost('/api/v1/servers/health_check/');
+            // Also trigger the background fix
+            const data = await apiGet('/api/v1/servers/');
+            setServers(data.results || data || []);
+            alert('Fleet health check triggered. Nodes will update shortly.');
+        } catch (err: any) {
+            setError('Failed to sync health: ' + err.message);
+        } finally {
+            setSyncing(false);
+        }
     };
 
     // Handle paste .env
     const handlePasteEnv = async (serviceIndex: number) => {
         try {
+
             const text = await navigator.clipboard.readText();
             const lines = text.split('\n');
             const newEnvVars: Record<string, string> = {};
@@ -346,14 +371,69 @@ export default function EcosystemPage() {
                                 detect stacks, map dependencies, and deploy everything
                                 to your server — <strong>zero configuration needed</strong>.
                             </p>
+                            <div className="max-w-md mx-auto mb-10 space-y-4">
+                                <div className="flex items-center justify-between px-2">
+                                    <span className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">AI Intelligence Senate</span>
+                                    <span className="text-[10px] text-emerald-500 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full uppercase">Layer 5 Security</span>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2">
+                                    <button
+                                        onClick={() => setSelectedProvider('auto')}
+                                        className={`flex items-center justify-between p-4 rounded-xl border transition-all ${selectedProvider === 'auto'
+                                                ? 'bg-emerald-500/10 border-emerald-500/50 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/20'
+                                                : 'bg-card border-border hover:border-emerald-500/30'
+                                            }`}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className={`p-2 rounded-lg ${selectedProvider === 'auto' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
+                                                <Zap size={20} />
+                                            </div>
+                                            <div className="text-left">
+                                                <p className="font-bold text-sm">Automated Consensus</p>
+                                                <p className="text-xs text-muted-foreground">Highest accuracy: combines all available AI providers</p>
+                                            </div>
+                                        </div>
+                                        {selectedProvider === 'auto' && <CheckCircle2 size={16} className="text-emerald-500" />}
+                                    </button>
+
+                                    {aiProviders.filter(p => p.configured).map((provider) => (
+                                        <button
+                                            key={provider.id}
+                                            onClick={() => setSelectedProvider(provider.id)}
+                                            className={`flex items-center justify-between p-4 rounded-xl border transition-all ${selectedProvider === provider.id
+                                                    ? 'bg-primary/10 border-primary/50 shadow-lg shadow-primary/10 ring-1 ring-primary/20'
+                                                    : 'bg-card border-border hover:border-primary/30'
+                                                }`}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className={`p-2 rounded-lg ${selectedProvider === provider.id ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                                                    <Sparkles size={20} />
+                                                </div>
+                                                <div className="text-left">
+                                                    <p className="font-bold text-sm">{provider.name}</p>
+                                                    <p className="text-xs text-muted-foreground">Model: {provider.model || 'Standard'}</p>
+                                                </div>
+                                            </div>
+                                            {selectedProvider === provider.id && <CheckCircle2 size={16} className="text-primary" />}
+                                        </button>
+                                    ))}
+
+                                    {aiProviders.filter(p => !p.configured).length > 0 && (
+                                        <div className="pt-2 text-[10px] text-muted-foreground italic px-2">
+                                            Missing keys? Configure OpenAI, Anthropic, or Gemini in <Link href="/settings" className="text-primary hover:underline">System Settings</Link> to unlock deeper analysis.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
                             <motion.button
                                 whileHover={{ scale: 1.05 }}
                                 whileTap={{ scale: 0.95 }}
                                 onClick={startScan}
-                                className="btn-shimmer px-8 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold shadow-lg shadow-emerald-500/25 flex items-center gap-3 mx-auto text-lg"
+                                className="btn-shimmer px-10 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold shadow-lg shadow-emerald-500/25 flex items-center gap-3 mx-auto text-lg"
                             >
-                                <Scan size={22} />
-                                Scan My GitHub
+                                <Scan size={24} />
+                                Begin Ecosystem Discovery
                             </motion.button>
                         </motion.div>
                     )}
@@ -400,9 +480,20 @@ export default function EcosystemPage() {
                                     <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">Deployable</p>
                                     <p className="text-2xl font-bold mt-1 text-emerald-500">{plan.services?.length || 0}</p>
                                 </div>
-                                <div className="bg-card border border-border p-4 rounded-xl">
-                                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">AI Provider</p>
-                                    <p className="text-2xl font-bold mt-1 text-primary">{plan.ai_provider?.split(' ')[0] || '—'}</p>
+                                <div className="bg-card border border-border p-4 rounded-xl relative overflow-hidden group">
+                                    <p className="text-xs text-muted-foreground uppercase tracking-wider font-bold">AI Intelligence</p>
+                                    <div className="flex items-baseline gap-2">
+                                        <p className="text-2xl font-bold mt-1 text-primary">{plan.ai_provider?.split(' ')[0] || 'Heuristic'}</p>
+                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                            plan.ai_provider && plan.ai_provider !== 'Heuristic' && !plan.ai_provider.includes('Mock') 
+                                            ? 'bg-emerald-500/10 text-emerald-500' 
+                                            : 'bg-yellow-500/10 text-yellow-500'
+                                        }`}>
+                                            {plan.ai_provider && plan.ai_provider !== 'Heuristic' && !plan.ai_provider.includes('Mock') ? 'Active' : 'Heuristic'}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground truncate mt-0.5">{plan.ai_provider || 'Local Heuristics Only'}</p>
+                                    <Sparkles size={40} className="absolute -right-2 -bottom-2 text-primary/5 group-hover:text-primary/10 transition-colors" />
                                 </div>
                             </div>
 
@@ -424,9 +515,21 @@ export default function EcosystemPage() {
 
                             {/* Services List */}
                             <div className="space-y-3">
-                                <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                    <Server size={14} /> Services to Deploy
-                                </h3>
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                        <Server size={14} /> Services to Deploy
+                                    </h3>
+                                    <button
+                                        onClick={syncHealth}
+                                        disabled={syncing}
+                                        className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                        title="Synchronize health and tokens across all nodes"
+                                    >
+                                        <RefreshCw size={10} className={syncing ? 'animate-spin' : ''} />
+                                        {syncing ? 'Syncing...' : 'Sync Fleet Health'}
+                                    </button>
+                                </div>
+
                                 {plan.services
                                     .sort((a, b) => a.deploy_order - b.deploy_order)
                                     .map((svc, idx) => (

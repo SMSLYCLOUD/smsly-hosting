@@ -69,18 +69,26 @@ def _candidate_api_urls(server) -> list[str]:
     
     # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
     if _server_host_is_ip(host_port):
+        # Try port 8090 (Nginx) and 80 (Traefik) before 8000 (Internal)
+        _append_unique(urls, f"http://{host_port}:8090")
         _append_unique(urls, f"http://{host_port}")
         _append_unique(urls, f"https://{host_port}")
-        if not has_explicit_port:
-            _append_unique(urls, f"http://{host_port}:8090")
+        
+        # Only try 8000 if it's localhost or we are desperate
+        if host_port.startswith("127.0.0.1") or host_port.startswith("localhost"):
+            _append_unique(urls, f"http://{host_port}:8000")
     else:
         # Priority 2: If it's a domain, try HTTPS first
         _append_unique(urls, f"https://{host_port}")
         _append_unique(urls, f"http://{host_port}")
         if not has_explicit_port:
             _append_unique(urls, f"http://{host_port}:8090")
+        
+        if host_port.startswith("localhost"):
+            _append_unique(urls, f"http://{host_port}:8000")
 
     return urls
+
 
 
 def _extract_health_version(response) -> str:
