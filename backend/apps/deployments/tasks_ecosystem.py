@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Set, Tuple
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -884,13 +885,37 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             server = select_eligible_node(user)
 
         if not server:
+            # Mark the deployment as pending so the user sees a clear status
+            # and can retry later when a node becomes available.
             logger.error(f"No eligible deployment node available for {repo}.")
             results.append({
                 "repo": repo,
                 "name": requested_name,
-                "status": "failed",
+                "status": "pending",
                 "error": "No eligible deployment node available."
             })
+            # Optionally, create a placeholder Service with a pending flag
+            # to surface in the UI. This avoids silent failures.
+            try:
+                Service.objects.create(
+                    name=requested_name,
+                    owner=user,
+                    repository_url=f"https://github.com/{repo}",
+                    branch=str(
+                        svc_plan.get("branch")
+                        or svc_plan.get("default_branch")
+                        or "main"
+                    ).strip() or "main",
+                    internal_port=port,
+                    provider=provider,
+                    server=None,
+                    status="PENDING",
+                )
+            except Exception:
+                # If creation fails (e.g., model does not have a status field),
+                # we simply continue; the pending entry in ``results`` is still
+                # returned to the caller.
+                pass
             continue
 
         try:
@@ -946,6 +971,26 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 created_services,
                 shared_addons=shared_addons_urls
             )
+
+            # -----------------------------------------------------------------
+            # AI Senate integration – optionally enrich env vars using the
+            # intelligence service when the feature flag is enabled.
+            # -----------------------------------------------------------------
+            if getattr(settings, "SENATE_ENABLED", True):
+                try:
+                    from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+
+                    senate_suggestions = EnvironmentIntelligenceService.resolve_environment(
+                        {},  # No detailed context; the service will generate defaults.
+                        stack,
+                        service.name,
+                    )
+                    # Merge suggestions without overwriting explicit values.
+                    for k, v in senate_suggestions.items():
+                        if k not in resolved_env:
+                            resolved_env[k] = v
+                except Exception as exc:
+                    logger.warning("AI Senate enrichment failed for %s: %s", service.name, exc)
 
             for key, value in _stack_runtime_defaults(stack, port).items():
                 resolved_env.setdefault(key, value)

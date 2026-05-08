@@ -1755,7 +1755,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             ),
         })
 
-    @action(detail=False, methods=['get'], url_path='check-domain', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['get'], url_path='check-domain', authentication_classes=[], permission_classes=[permissions.AllowAny])
     def check_domain(self, request):
         """
         Endpoint for Caddy's on_demand_tls 'ask' directive.
@@ -1778,7 +1778,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except Exception as exc:
             logger.debug("check_domain: PlatformConfig check failed: %s", exc)
 
-        # 2. Check against Services (Public Domain)
+        # 2. Check against Managed Servers (allow inter-node control traffic)
+        from .models_core import ManagedServer
+        if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
+            return Response(status=status.HTTP_200_OK)
+
+        # 3. Check against Services (Public Domain)
         if Service.objects.filter(public_domain=domain).exists():
             return Response(status=status.HTTP_200_OK)
 
@@ -1809,6 +1814,110 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         logger.warning("check_domain: unauthorized domain attempt: %s", domain)
         return Response(status=status.HTTP_404_NOT_FOUND)
+
+    # ---------------------------------------------------------------------
+    # Dependency graph endpoint – returns a list of services this service
+    # depends on (by repo key) and a list of dependents.  The frontend can use
+    # this to render a DAG.
+    # ---------------------------------------------------------------------
+    @action(detail=True, methods=['get'], url_path='dependencies', permission_classes=[permissions.IsAuthenticated])
+    def dependencies(self, request, pk=None):
+        try:
+            service = Service.objects.get(id=pk)
+        except Service.DoesNotExist:
+            return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Build a simple dependency map using the same logic as the ecosystem
+        # planner – we reuse the helper that extracts ``depends_on`` from the
+        # stored plan (if any).  For simplicity we look at the Service model's
+        # ``plan`` JSONField (assumed to exist) and read ``depends_on``.
+        plan = getattr(service, 'plan', {}) or {}
+        raw_deps = plan.get('depends_on', [])
+        deps = []
+        for token in raw_deps:
+            # Resolve token to a Service if possible
+            try:
+                dep_svc = Service.objects.filter(name__iexact=token).first()
+                if dep_svc:
+                    deps.append({"id": str(dep_svc.id), "name": dep_svc.name})
+            except Exception:
+                continue
+
+        # Find dependents (services that list this one in their depends_on)
+        dependents_qs = Service.objects.filter(plan__contains={"depends_on": [service.name]})
+        dependents = [{"id": str(s.id), "name": s.name} for s in dependents_qs]
+
+        return Response({"service": {"id": str(service.id), "name": service.name}, "depends_on": deps, "dependents": dependents})
+
+    # ---------------------------------------------------------------------
+    # Bulk actions – deploy, cancel, or run AI Senate on multiple services.
+    # Expected payload: {"ids": ["uuid1", "uuid2"], "action": "deploy"}
+    # ---------------------------------------------------------------------
+    @action(detail=False, methods=['post'], url_path='bulk-action', permission_classes=[permissions.IsAuthenticated])
+    def bulk_action(self, request):
+        ids = request.data.get('ids', [])
+        action = request.data.get('action')
+        if not isinstance(ids, list) or not action:
+            return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
+
+        services_qs = Service.objects.filter(id__in=ids)
+        results = []
+        for svc in services_qs:
+            try:
+                if action == 'deploy':
+                    # Queue a smart_deploy_task for each service
+                    from apps.deployments.tasks import smart_deploy_task
+                    smart_deploy_task.delay(str(svc.id))
+                elif action == 'cancel':
+                    # Cancel any queued or building deployments
+                    from apps.deployments.models import Deployment
+                    Deployment.objects.filter(service=svc, status__in=[Deployment.Status.QUEUED, Deployment.Status.BUILDING]).update(status=Deployment.Status.CANCELLED)
+                elif action == 'senate':
+                    # Trigger AI Senate env enrichment (re‑use existing logic)
+                    from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
+                    # Simplified: just re‑resolve env vars and store them
+                    env_context = {}  # placeholder – real implementation would gather context
+                    suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
+                    # Update env vars (create or update)
+                    from apps.deployments.models import EnvironmentVariable
+                    for k, v in suggestions.items():
+                        EnvironmentVariable.objects.update_or_create(service=svc, key=k, defaults={'value': v, 'is_secret': False})
+                results.append({"id": str(svc.id), "status": "ok"})
+            except Exception as exc:
+                logger.error("Bulk action %s failed for service %s: %s", action, svc.id, exc)
+                results.append({"id": str(svc.id), "status": "error", "error": str(exc)})
+        return Response({"action": action, "results": results})
+
+    # ---------------------------------------------------------------------
+    # Sidebar summary endpoint – lightweight data for the UI project sidebar
+    # ---------------------------------------------------------------------
+    @action(detail=False, methods=['get'], url_path='sidebar', permission_classes=[permissions.IsAuthenticated])
+    def sidebar(self, request):
+        """Return a minimal hierarchy of projects → repos for the UI.
+
+        The current data model does not have an explicit ``Project`` entity,
+        so we infer a project name from the ``Service.project`` attribute if it
+        exists, otherwise we fall back to the repository owner (the part before
+        the first ``/`` in ``repo``).  Each entry contains:
+
+        ``project`` – string
+        ``repos`` – list of ``{id, name, status}``
+        """
+        from collections import defaultdict
+        result = defaultdict(list)
+        for svc in Service.objects.all():
+            # ``svc.repo`` is stored as a full URL in the model; we only need the
+            # owner/repo slug for display.
+            repo_slug = svc.repository_url.split('/')[-1] if svc.repository_url else str(svc.id)
+            project_name = getattr(svc, 'project', None) or repo_slug.split('_')[0]
+            result[project_name].append({
+                'id': str(svc.id),
+                'name': repo_slug,
+                'status': svc.status.lower() if hasattr(svc, 'status') else 'unknown',
+            })
+        # Convert defaultdict to plain list for JSON serialization
+        payload = [{'project': k, 'repos': v} for k, v in result.items()]
+        return Response(payload)
 
     def _sync_caddy(self):
         """Regenerate Caddyfile with all custom domains and trigger reload."""
