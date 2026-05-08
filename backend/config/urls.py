@@ -9,7 +9,8 @@ from apps.deployments.views_addons import toggle_bucket_public_api
 urlpatterns = [
     # ─── CRITICAL: Direct Addon Actions (Greedy Regex bypass for router shadowing) ───
     re_path(r'^api/v1/addons/(?P<pk>[^/.]+)/toggle_bucket_public/?$', toggle_bucket_public_api, name='addon-toggle-bucket-public-root'),
-    path('admin/', admin.site.urls),
+    # path('admin/', admin.site.urls), # Moved to conditional block below
+
 
     # Health probes
     path('health', health_check, name='health-check'),
@@ -35,6 +36,8 @@ urlpatterns = [
 ]
 
 # ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────
+if 'django.contrib.admin' in settings.INSTALLED_APPS:
+    urlpatterns.insert(1, path('admin/', admin.site.urls))
 
 
 if 'apps.billing' in settings.INSTALLED_APPS:

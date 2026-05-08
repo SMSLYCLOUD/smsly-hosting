@@ -289,9 +289,7 @@ if IS_AGENT_MODE:
         'django.contrib.admin', # Optional: Disable admin UI on nodes
     }
     INSTALLED_APPS = [app for app in INSTALLED_APPS if app not in APPS_TO_REMOVE]
-    
-    # Also prune Middleware to avoid Model Class registry errors (since apps are removed)
-    MIDDLEWARE = [m for m in MIDDLEWARE if not m.startswith('apps.licensing')]
+
 
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
@@ -311,6 +309,11 @@ MIDDLEWARE = [
     'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
     'allauth.account.middleware.AccountMiddleware',
 ]
+
+if IS_AGENT_MODE:
+    # Prune Middleware to avoid Model Class registry errors (since apps are removed)
+    MIDDLEWARE = [m for m in MIDDLEWARE if not m.startswith('apps.licensing')]
+
 
 ROOT_URLCONF = 'config.urls'
 
