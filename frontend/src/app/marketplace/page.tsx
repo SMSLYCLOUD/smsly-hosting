@@ -36,41 +36,9 @@ interface Backup {
     created_at: string
 }
 
+import { ADDON_REGISTRY, getAddonMetadata, AddonRegistryItem } from "@/lib/addonRegistry"
+
 type AddonType = Addon["addon_type"]
-
-const ADDON_TYPES = {
-    POSTGRES: { name: "PostgreSQL", icon: "PG", desc: "Relational Database" },
-    REDIS: { name: "Redis", icon: "RD", desc: "In-memory Store" },
-    MYSQL: { name: "MySQL", icon: "MY", desc: "Relational Database" },
-    MONGODB: { name: "MongoDB", icon: "MG", desc: "NoSQL Database" },
-} as const satisfies Record<AddonType, { name: string; icon: string; desc: string }>
-
-const ADDON_CATALOG = [
-    // Databases
-    { id: "postgres-16", addon_type: "POSTGRES" as AddonType, name: "PostgreSQL 16", desc: "Latest stable Postgres with JSONB, full-text search, and pgvector support.", icon: "PG" },
-    { id: "postgres-timescale", addon_type: "POSTGRES" as AddonType, name: "TimescaleDB", desc: "Time-series extension for PostgreSQL. Ideal for IoT and analytics.", icon: "TS" },
-    { id: "pgbouncer", addon_type: "POSTGRES" as AddonType, name: "PgBouncer", desc: "Lightweight connection pooler for PostgreSQL. Reduces connection overhead.", icon: "PB" },
-    { id: "mysql-8", addon_type: "MYSQL" as AddonType, name: "MySQL 8.0", desc: "Reliable relational database with InnoDB and window functions.", icon: "MY" },
-    { id: "mariadb-11", addon_type: "MYSQL" as AddonType, name: "MariaDB 11", desc: "MySQL-compatible with columnar storage and enhanced performance.", icon: "MA" },
-    { id: "mongodb-7", addon_type: "MONGODB" as AddonType, name: "MongoDB 7", desc: "Document database with aggregation pipelines and change streams.", icon: "MG" },
-    // Caching & Queues
-    { id: "redis-7", addon_type: "REDIS" as AddonType, name: "Redis 7", desc: "In-memory data store for caching, sessions, and pub/sub.", icon: "RD" },
-    { id: "redis-stack", addon_type: "REDIS" as AddonType, name: "Redis Stack", desc: "Redis with Search, JSON, Graph, and TimeSeries modules built-in.", icon: "RS" },
-    { id: "memcached", addon_type: "REDIS" as AddonType, name: "Memcached", desc: "High-performance distributed memory cache. Simple key-value.", icon: "MC" },
-    { id: "rabbitmq", addon_type: "REDIS" as AddonType, name: "RabbitMQ", desc: "Robust message broker with AMQP. Queues, routing, and dead-letter.", icon: "RQ" },
-    { id: "nats", addon_type: "REDIS" as AddonType, name: "NATS", desc: "Lightweight, high-performance messaging for microservices.", icon: "NT" },
-    // Search & Analytics
-    { id: "elasticsearch", addon_type: "REDIS" as AddonType, name: "Elasticsearch", desc: "Full-text search and analytics engine. Log aggregation and APM.", icon: "ES" },
-    { id: "meilisearch", addon_type: "REDIS" as AddonType, name: "Meilisearch", desc: "Lightning-fast, typo-tolerant search engine. Easy to set up.", icon: "MS" },
-    { id: "clickhouse", addon_type: "POSTGRES" as AddonType, name: "ClickHouse", desc: "Column-oriented OLAP database for real-time analytics at scale.", icon: "CH" },
-    // Storage & Other
-    { id: "minio", addon_type: "REDIS" as AddonType, name: "MinIO", desc: "S3-compatible object storage. Store blobs, backups, and assets.", icon: "MN" },
-    { id: "influxdb", addon_type: "POSTGRES" as AddonType, name: "InfluxDB", desc: "Purpose-built time-series database for metrics and monitoring.", icon: "IF" },
-    { id: "valkey", addon_type: "REDIS" as AddonType, name: "Valkey", desc: "Open-source Redis fork. Drop-in compatible, community-driven.", icon: "VK" },
-    { id: "dragonfly", addon_type: "REDIS" as AddonType, name: "Dragonfly", desc: "Modern in-memory store. 25x faster than Redis on a single node.", icon: "DF" },
-    { id: "neo4j", addon_type: "MONGODB" as AddonType, name: "Neo4j", desc: "Graph database for relationship-heavy data. Cypher query language.", icon: "N4" },
-    { id: "cassandra", addon_type: "MONGODB" as AddonType, name: "Cassandra", desc: "Distributed wide-column store. Massively scalable writes.", icon: "CS" },
-]
 
 export default function MarketplacePage() {
     const { toast } = useToast()
@@ -142,7 +110,7 @@ export default function MarketplacePage() {
         return out
     }
 
-    const handleOneClickProvision = async (item: (typeof ADDON_CATALOG)[number]) => {
+    const handleOneClickProvision = async (item: AddonRegistryItem) => {
         const token = localStorage.getItem("auth_token")
         if (!token) {
             toast({ title: "Login required", description: "Please login to provision addons.", variant: "destructive" })
@@ -297,16 +265,20 @@ export default function MarketplacePage() {
                 </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {ADDON_CATALOG.map((item) => (
+                {ADDON_REGISTRY.map((item) => (
                     <Card key={item.id} className="hover:border-primary/50 transition-colors cursor-pointer" onClick={() => {
                         handleOneClickProvision(item)
                     }}>
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle className="text-sm font-medium">{item.name}</CardTitle>
-                            <span className="text-sm font-mono">{item.icon}</span>
+                            {item.logo ? (
+                                <img src={item.logo} alt={item.name} className="h-6 w-6 object-contain" />
+                            ) : (
+                                <span className="text-sm font-mono text-muted-foreground">??</span>
+                            )}
                         </CardHeader>
                         <CardContent>
-                            <div className="text-xs text-muted-foreground">{item.desc}</div>
+                            <div className="text-xs text-muted-foreground">{item.description}</div>
                         </CardContent>
                         <CardFooter>
                             <Button size="sm" className="w-full" disabled={isProvisioning === item.id || !targetServiceId}>
@@ -327,36 +299,67 @@ export default function MarketplacePage() {
                     </div>
                 ) : (
                     <div className="grid gap-4">
-                        {addons.map(addon => (
-                            <Card key={addon.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-6">
-                                <div className="flex items-center gap-4 mb-4 sm:mb-0">
-                                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-xl">
-                                        {ADDON_TYPES[addon.addon_type]?.icon || "?"}
-                                    </div>
-                                    <div>
-                                        <div className="font-medium flex items-center gap-2">
-                                            {addon.name}
-                                            <span className={cn("text-[10px] px-2 py-0.5 rounded-full border", 
-                                                addon.status === 'ACTIVE' ? "bg-green-500/10 text-green-500 border-green-500/20" : 
-                                                addon.status === 'PROVISIONING' ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" : 
-                                                "bg-red-500/10 text-red-500 border-red-500/20"
-                                            )}>{addon.status}</span>
+                        {addons.map(addon => {
+                            const meta = getAddonMetadata(addon.addon_type);
+                            return (
+                                <Card key={addon.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-6">
+                                    <div className="flex items-center gap-4 mb-4 sm:mb-0">
+                                        <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-xl overflow-hidden p-2">
+                                            {meta?.logo ? (
+                                                <img src={meta.logo} alt={meta.name} className="w-full h-full object-contain" />
+                                            ) : (
+                                                <span className="text-sm font-mono text-muted-foreground">?</span>
+                                            )}
                                         </div>
-                                        <div className="text-xs text-muted-foreground">
-                                            {ADDON_TYPES[addon.addon_type]?.name} - Attached to service {addon.service}
+                                        <div>
+                                            <div className="font-medium flex items-center gap-2">
+                                                {addon.name}
+                                                <span className={cn("text-[10px] px-2 py-0.5 rounded-full border",
+                                                    addon.status === 'ACTIVE' ? "bg-green-500/10 text-green-500 border-green-500/20" :
+                                                    addon.status === 'PROVISIONING' ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/20" :
+                                                    "bg-red-500/10 text-red-500 border-red-500/20"
+                                                )}>{addon.status}</span>
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                                {meta?.name || addon.addon_type} - Attached to service {addon.service}
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                <div className="flex gap-2 w-full sm:w-auto">
-                                    <Button variant="outline" size="sm" onClick={() => loadBackups(addon)}>
-                                        <Archive className="mr-2 h-3.5 w-3.5" /> Backups
-                                    </Button>
-                                    <Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10">
-                                        <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                            </Card>
-                        ))}
+                                    <div className="flex gap-2 w-full sm:w-auto">
+                                        {/* Backups Button */}
+                                        <Button variant="outline" size="sm" onClick={() => loadBackups(addon)}>
+                                            <Archive className="h-4 w-4 mr-2" />
+                                            Backups
+                                        </Button>
+
+                                        {/* Delete Button */}
+                                        <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            onClick={async () => {
+                                                if (await confirm({ title: "Delete Addon", message: "Are you sure? All data will be lost." })) {
+                                                    try {
+                                                        const token = localStorage.getItem("auth_token")
+                                                        const res = await fetch(`/api/v1/addons/${addon.id}/`, {
+                                                            method: 'DELETE',
+                                                            headers: { 'Authorization': `Token ${token}` }
+                                                        })
+                                                        if (res.ok) {
+                                                            setAddons(prev => prev.filter(a => a.id !== addon.id))
+                                                            toast({ title: "Deleted", description: "Addon has been deleted." })
+                                                        }
+                                                    } catch (err) {
+                                                        toast({ title: "Error", description: "Could not delete addon.", variant: "destructive" })
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </Card>
+                            );
+                        })}
                     </div>
                 )}
             </div>
