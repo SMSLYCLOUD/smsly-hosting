@@ -114,6 +114,14 @@ class Command(BaseCommand):
         from apps.deployments.views_servers import _candidate_api_urls
         candidates = _candidate_api_urls(server)
         
+        # Local-first fallbacks for self-diagnostics
+        if server.is_primary or server.host in ("127.0.0.1", "localhost"):
+             local_candidates = ["http://localhost:8000", "http://backend:8000", "http://127.0.0.1:8000"]
+             for lc in local_candidates:
+                 if lc not in candidates:
+                     candidates.append(lc)
+
+        
         base = None
         response = None
         
