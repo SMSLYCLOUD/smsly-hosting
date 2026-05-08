@@ -121,7 +121,7 @@ class AddonProvisioner:
             default='smsly-net')
         self.proxy_network_name = config(
             'DOCKER_PROXY_NETWORK',
-            default='smsly-proxy')
+            default='smsly-net')
         self._network_checked = False
 
         # Register generic addons so they are recognized across the platform
@@ -245,18 +245,19 @@ class AddonProvisioner:
                 )
                 logger.info(f"Created Docker network: {self.network_name}")
 
-            # Also ensure proxy network exists
-            proxy_result = subprocess.run(
-                ['docker', 'network', 'inspect', self.proxy_network_name],
-                capture_output=True,
-                text=True
-            )
-            if proxy_result.returncode != 0:
-                subprocess.run(
-                    ['docker', 'network', 'create', self.proxy_network_name],
-                    check=False
+            # Also ensure proxy network exists if different from primary
+            if self.proxy_network_name != self.network_name:
+                proxy_result = subprocess.run(
+                    ['docker', 'network', 'inspect', self.proxy_network_name],
+                    capture_output=True,
+                    text=True
                 )
-                logger.info(f"Created Docker proxy network: {self.proxy_network_name}")
+                if proxy_result.returncode != 0:
+                    subprocess.run(
+                        ['docker', 'network', 'create', self.proxy_network_name],
+                        check=False
+                    )
+                    logger.info(f"Created Docker proxy network: {self.proxy_network_name}")
 
             self._network_checked = True
         except Exception as e:
