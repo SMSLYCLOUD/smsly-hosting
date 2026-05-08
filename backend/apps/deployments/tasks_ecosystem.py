@@ -17,6 +17,7 @@ from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from celery import shared_task
+from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,7 @@ def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
 def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
-    shared_addons: Dict[str, str] = None,
+    shared_addons_urls: Dict[str, str] = None,
 ) -> Dict[str, str]:
     """Resolve known placeholders into concrete values."""
     resolved: Dict[str, str] = {}
@@ -217,6 +218,28 @@ def _resolve_env_placeholders(
         resolved[key] = value_text
 
     return resolved
+
+
+def _validate_resolved_env(resolved_env: Dict[str, str]) -> None:
+    """Ensure no unresolved placeholders remain in resolved env vars."""
+    import re
+    for value in resolved_env.values():
+        if isinstance(value, str) and re.search(r"\{\{.*\}\}", value):
+            raise ValueError(f"Unresolved placeholder found in env var values: {value}")
+
+
+def _validate_required_env(resolved_env: Dict[str, str]) -> None:
+    """Validate that required production environment variables are present and resolved."""
+    required_keys = {
+        "POSTGRES_URL",
+        "REDIS_URL",
+        "ELASTICSEARCH_URL",
+        "DATABASE_URL",
+        "CACHE_URL",
+    }
+    missing = [k for k in required_keys if not resolved_env.get(k)]
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
 
 def _runtime_watch_defaults(user) -> Dict[str, str]:
@@ -557,7 +580,7 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     service.save()
 
 
-@shared_task(bind=True, soft_time_limit=120, time_limit=180)
+@shared_task(bind=True, soft_time_limit=1800, time_limit=2100)
 def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
@@ -581,6 +604,16 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30) -> dict:
 
     try:
         return scan_and_analyze(token)
+    except SoftTimeLimitExceeded:
+        logger.warning("Ecosystem scan timed out for user %s", user_id, exc_info=True)
+        return {
+            "error": (
+                "Ecosystem scan timed out before the full GitHub inventory finished. "
+                "Retry the scan; large accounts may take several minutes."
+            ),
+            "code": "ecosystem_scan_timeout",
+            "retryable": True,
+        }
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Ecosystem scan failed for user %s: %s", user_id, exc)
         return {"error": f"Scan failed: {str(exc)}"}
@@ -712,7 +745,7 @@ def ecosystem_release_wave_task(
     }
 
 
-@shared_task(bind=True, soft_time_limit=900, time_limit=1200)
+@shared_task(bind=True, soft_time_limit=1800, time_limit=2100)
 def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
@@ -918,6 +951,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 resolved_env.setdefault(key, value)
             for key, value in _runtime_watch_defaults(user).items():
                 resolved_env.setdefault(key, value)
+
+            _validate_resolved_env(resolved_env)
+
+            # Ensure required production env vars are present
+            _validate_required_env(resolved_env)
 
             for key, value in resolved_env.items():
                 key_upper = str(key or "").strip().upper()

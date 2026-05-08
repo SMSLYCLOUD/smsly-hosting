@@ -41,12 +41,17 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ─── Parse flags early ───────────────────────────────────────────────────────
-NON_INTERACTIVE=false
+NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 MODE_AGENT_LITE=false
 RESUME_MODE=false
 RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
+
+case "$NON_INTERACTIVE" in
+  1|true|TRUE|yes|YES|on|ON) NON_INTERACTIVE=true ;;
+  *) NON_INTERACTIVE=false ;;
+esac
 
 case "${SKIP_SCREEN:-}" in
   1|true|TRUE|yes|YES|on|ON) NO_SCREEN=true ;;
@@ -1203,6 +1208,104 @@ validate_env_file() {
 
     echo -e "${GREEN}  OK .env validation passed${NC}"
     return 0
+}
+
+load_install_env_defaults() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    local env_domain=""
+    local env_public_ip=""
+    local env_use_ssl=""
+    local env_wildcard=""
+    local env_acme_email=""
+    local env_cloudflare_token=""
+    local env_master_ip=""
+
+    if [ -f "$env_file" ]; then
+        env_domain="$(env_get_value "$env_file" "DOMAIN")"
+        env_public_ip="$(env_get_value "$env_file" "PUBLIC_IP")"
+        env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+        env_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
+        env_acme_email="$(env_get_value "$env_file" "ACME_EMAIL")"
+        env_cloudflare_token="$(env_get_value "$env_file" "CLOUDFLARE_API_TOKEN")"
+        env_master_ip="$(env_get_value "$env_file" "MASTER_IP")"
+    fi
+
+    PUBLIC_IP="${PUBLIC_IP:-$env_public_ip}"
+    if [ -z "${PUBLIC_IP:-}" ]; then
+        PUBLIC_IP="$(detect_public_ip)"
+    fi
+
+    DOMAIN="${DOMAIN:-$env_domain}"
+    DOMAIN="${DOMAIN:-$PUBLIC_IP}"
+    USE_SSL="${USE_SSL:-$env_use_ssl}"
+    USE_SSL="${USE_SSL:-false}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-$env_wildcard}"
+    WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
+    ACME_EMAIL="${ACME_EMAIL:-$env_acme_email}"
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-$env_cloudflare_token}"
+    MASTER_IP="${MASTER_IP:-$env_master_ip}"
+}
+
+compose_stack_drift() {
+    local services=""
+    local service=""
+    local container_id=""
+    local container_state=""
+
+    if ! services="$(docker compose -f "$COMPOSE_FILE" config --services 2>/tmp/smsly-compose-config.err)"; then
+        echo "__compose_config__:invalid"
+        sed 's/^/__compose_config_error__:/' /tmp/smsly-compose-config.err 2>/dev/null | head -5 || true
+        return 0
+    fi
+
+    printf '%s\n' "$services" | while IFS= read -r service; do
+        [ -n "$service" ] || continue
+        container_id="$(docker compose -f "$COMPOSE_FILE" ps -q "$service" 2>/dev/null || true)"
+        if [ -z "$container_id" ]; then
+            echo "$service:missing"
+            continue
+        fi
+        container_state="$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)"
+        if [ "$container_state" != "running" ]; then
+            echo "$service:${container_state:-unknown}"
+        fi
+    done
+}
+
+reconcile_compose_stack_after_resume() {
+    local drift=""
+    local reconcile_rc=0
+
+    drift="$(compose_stack_drift || true)"
+    if [ -z "$drift" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}  -> Resumed checkpoint is stale; reconciling compose stack:${NC}"
+    printf '%s\n' "$drift" | sed 's/^/     - /'
+
+    set +e
+    docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+    reconcile_rc=$?
+    if [ "$reconcile_rc" -ne 0 ]; then
+        echo -e "${YELLOW}  -> Compose reconciliation needs a rebuild; rebuilding stack...${NC}"
+        docker compose -f "$COMPOSE_FILE" build
+        reconcile_rc=$?
+        if [ "$reconcile_rc" -eq 0 ]; then
+            docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+            reconcile_rc=$?
+        fi
+    fi
+    set -e
+
+    if [ "$reconcile_rc" -ne 0 ]; then
+        echo -e "${RED}  x Compose reconciliation failed (exit $reconcile_rc).${NC}"
+        docker compose -f "$COMPOSE_FILE" ps 2>/dev/null || true
+        docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
+        exit "$reconcile_rc"
+    fi
+
+    echo -e "${GREEN}  OK Compose stack reconciled after resume${NC}"
 }
 
 LOG_FILE="/var/log/smsly-install.log"
@@ -3834,11 +3937,23 @@ EOF
 fi
     set_checkpoint "config_generated"
 fi
+if [ -f "$INSTALL_DIR/.env" ]; then
+    ensure_env_runtime_defaults "$INSTALL_DIR/.env"
+    apply_agent_lite_env_overrides "$INSTALL_DIR/.env"
+    if ! validate_env_file "$INSTALL_DIR/.env"; then
+        echo -e "${RED}x Existing .env is invalid after runtime-default reconciliation.${NC}"
+        exit 1
+    fi
+fi
+load_install_env_defaults "$INSTALL_DIR/.env"
 
 # -----------------------------------------------------------------------------
 # 4. Deployment
 # -----------------------------------------------------------------------------
-if ! is_checkpoint_done "stack_deployed"; then
+STACK_DEPLOYED_FROM_CHECKPOINT=false
+if is_checkpoint_done "stack_deployed"; then
+    STACK_DEPLOYED_FROM_CHECKPOINT=true
+else
     echo -e "\n${YELLOW}[4/9] Deploying Container Stack...${NC}"
 
 # Ensure networks exist
@@ -3885,6 +4000,9 @@ fi
         exit "$DEPLOY_RC"
     fi
     set_checkpoint "stack_deployed"
+fi
+if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
+    reconcile_compose_stack_after_resume
 fi
 
 # -----------------------------------------------------------------------------
@@ -4625,15 +4743,26 @@ else
 fi
 
 echo -e "${BLUE}  → [3/4] Checking Lite Agent backend...${NC}"
-BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
-if echo "$BACKEND_STATUS" | grep -qi "unhealthy"; then
-    echo -e "${RED}  ✗ Lite Agent backend is unhealthy${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
-elif echo "$BACKEND_STATUS" | grep -qiE "healthy|running|Up"; then
-    echo -e "${GREEN}  ✓ Lite Agent backend is running${NC}"
+BACKEND_OK=false
+BACKEND_STATUS=""
+for attempt in $(seq 1 24); do
+    BACKEND_STATUS="$(docker compose -f "$COMPOSE_FILE" ps backend --format "{{.Status}}" 2>/dev/null || true)"
+    if docker compose -f "$COMPOSE_FILE" exec -T backend curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+        BACKEND_OK=true
+        break
+    fi
+    if echo "$BACKEND_STATUS" | grep -qi "unhealthy"; then
+        break
+    fi
+    echo -ne "\r${YELLOW}  → Lite Agent backend warmup $attempt/24...${NC}"
+    sleep 5
+done
+echo ""
+if [ "$BACKEND_OK" = "true" ]; then
+    echo -e "${GREEN}  ✓ Lite Agent backend liveness endpoint passed${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
-    echo -e "${RED}  ✗ Lite Agent backend is not healthy/running${NC}"
+    echo -e "${RED}  ✗ Lite Agent backend is not live (status: ${BACKEND_STATUS:-unknown})${NC}"
     docker compose -f "$COMPOSE_FILE" logs --tail=80 backend 2>/dev/null || true
 fi
 
@@ -4672,7 +4801,7 @@ HEALTH_OK=false
 # ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
+    if curl -sfL http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -4687,6 +4816,9 @@ echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
+    if ! curl -sfL http://127.0.0.1:8090/health/ready >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
+    fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Health check failed after $MAX_ATTEMPTS attempts.${NC}"
@@ -4697,8 +4829,16 @@ fi
 echo -e "${BLUE}  → [3/5] Checking container status...${NC}"
 RUNNING_COUNT=$(docker compose -f "$COMPOSE_FILE" ps --status running -q 2>/dev/null | wc -l)
 TOTAL_COUNT=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
-if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
-    echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running${NC}"
+UNHEALTHY_STATUS="$(docker compose -f "$COMPOSE_FILE" ps --format "{{.Service}}\t{{.Status}}" 2>/dev/null | awk 'tolower($0) ~ /unhealthy/ {print}' || true)"
+if [ -n "$UNHEALTHY_STATUS" ]; then
+    echo -e "${RED}  ✗ One or more containers are unhealthy:${NC}"
+    printf '%s\n' "$UNHEALTHY_STATUS" | sed 's/^/     - /'
+    UNHEALTHY_SERVICES="$(printf '%s\n' "$UNHEALTHY_STATUS" | awk '{print $1}' | xargs 2>/dev/null || true)"
+    if [ -n "$UNHEALTHY_SERVICES" ]; then
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 $UNHEALTHY_SERVICES 2>/dev/null || true
+    fi
+elif [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}  ✓ All $TOTAL_COUNT containers running and none are unhealthy${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Only $RUNNING_COUNT/$TOTAL_COUNT containers running${NC}"
@@ -4787,9 +4927,14 @@ if [ -d "$INSTALL_DIR/cli" ]; then
         echo -e "${GREEN}  ✓ CLI installed: run 'smsly login' or 'smsly --help'${NC}"
 
         # Auto-configuration for local host
-        if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
-            URL_SCHEME="https" && [ "$USE_SSL" != "true" ] && URL_SCHEME="http"
-            API_URL="${URL_SCHEME}://${DOMAIN}"
+        CLI_DOMAIN="${DOMAIN:-}"
+        CLI_USE_SSL="${USE_SSL:-false}"
+        if [ -z "$CLI_DOMAIN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+            CLI_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" || true)"
+        fi
+        if [ -n "$CLI_DOMAIN" ] && [ "$CLI_DOMAIN" != "localhost" ]; then
+            URL_SCHEME="https" && [ "$CLI_USE_SSL" != "true" ] && URL_SCHEME="http"
+            API_URL="${URL_SCHEME}://${CLI_DOMAIN}"
         else
             API_URL="http://127.0.0.1:8090"
         fi
@@ -4823,15 +4968,34 @@ echo -e "\n${GREEN}════════════════════�
 echo -e "${GREEN}   ✓ INSTALLATION SUCCESSFUL!${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 
+SUMMARY_PUBLIC_IP="${PUBLIC_IP:-}"
+if [ -z "$SUMMARY_PUBLIC_IP" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_PUBLIC_IP="$(env_get_value "$INSTALL_DIR/.env" "PUBLIC_IP" || true)"
+fi
+if [ -z "$SUMMARY_PUBLIC_IP" ]; then
+    SUMMARY_PUBLIC_IP="$(detect_public_ip)"
+fi
+
+SUMMARY_MASTER_IP="${MASTER_IP:-}"
+if [ -z "$SUMMARY_MASTER_IP" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_MASTER_IP="$(env_get_value "$INSTALL_DIR/.env" "MASTER_IP" || true)"
+fi
+SUMMARY_MASTER_IP="${SUMMARY_MASTER_IP:-unknown}"
+
+SUMMARY_DOMAIN="${DOMAIN:-}"
+if [ -z "$SUMMARY_DOMAIN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    SUMMARY_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" || true)"
+fi
+
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "   Mode:        Lite Agent"
-    echo -e "   Agent Edge:  http://$PUBLIC_IP"
-    echo -e "   Master:      $MASTER_IP"
+    echo -e "   Agent Edge:  http://$SUMMARY_PUBLIC_IP"
+    echo -e "   Master:      $SUMMARY_MASTER_IP"
 else
-    if [ "$USE_SSL" = "true" ]; then
-        echo -e "   URL:         https://$DOMAIN"
+    if [ "${USE_SSL:-false}" = "true" ] && [ -n "$SUMMARY_DOMAIN" ]; then
+        echo -e "   URL:         https://$SUMMARY_DOMAIN"
     else
-        echo -e "   URL:         http://$PUBLIC_IP"
+        echo -e "   URL:         http://$SUMMARY_PUBLIC_IP"
     fi
     echo -e "   Admin:       /admin"
     echo -e "   Credentials: $CREDENTIALS_FILE"
@@ -4882,3 +5046,5 @@ else
         exit 1
     fi
 fi
+
+exit 0

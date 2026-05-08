@@ -22,6 +22,7 @@ const FleetRadar = dynamic(() => import('@/components/canvas/FleetRadar').then(m
 });
 
 function buildServiceFingerprint(services: Service[]): string {
+  if (!Array.isArray(services)) return '';
   return services
     .map((service) => [
       service.id,

@@ -507,7 +507,7 @@ export default function ServiceDetailPage() {
                             <div className="space-y-5 text-sm">
                                 <div className="flex justify-between items-center border-b border-border pb-3">
                                     <span className="text-muted-foreground font-medium">Commit</span>
-                                    <span className="font-mono bg-muted border border-border px-2 py-1 rounded text-foreground font-bold">{deployment.commit_hash.substring(0, 7)}</span>
+                                    <span className="font-mono bg-muted border border-border px-2 py-1 rounded text-foreground font-bold">{String(deployment.commit_hash || '').substring(0, 7) || 'N/A'}</span>
                                 </div>
                                 <div className="flex justify-between items-center border-b border-border pb-3">
                                     <span className="text-muted-foreground font-medium">Status</span>

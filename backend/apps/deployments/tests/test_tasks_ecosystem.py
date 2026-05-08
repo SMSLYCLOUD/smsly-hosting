@@ -1,8 +1,11 @@
 """Unit tests for ecosystem task normalization helpers."""
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from celery.exceptions import SoftTimeLimitExceeded
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 
 from apps.deployments.tasks_ecosystem import (
     _apply_service_profile,
@@ -10,6 +13,7 @@ from apps.deployments.tasks_ecosystem import (
     _resolve_env_placeholders,
     _runtime_watch_defaults,
     _select_shared_addon_anchor,
+    ecosystem_scan_task,
 )
 
 
@@ -97,3 +101,21 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
 
         self.assertIsNotNone(anchor)
         self.assertEqual(anchor.name, "payments-api")
+
+
+class EcosystemScanTaskTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ecosystem-scan",
+            email="ecosystem-scan@example.com",
+            password="password123",
+        )
+
+    @patch("services.ecosystem.scan_and_analyze", side_effect=SoftTimeLimitExceeded())
+    @patch("apps.deployments.views_github._get_github_token", return_value="gh-token")
+    def test_scan_timeout_returns_actionable_error(self, _token_mock, _scan_mock):
+        result = ecosystem_scan_task.run(str(self.user.id), 30)
+
+        self.assertEqual(result["code"], "ecosystem_scan_timeout")
+        self.assertTrue(result["retryable"])
+        self.assertIn("timed out", result["error"])

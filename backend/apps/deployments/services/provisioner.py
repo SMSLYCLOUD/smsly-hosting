@@ -59,6 +59,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _installer_logs_confirm_success(logs: str) -> bool:
+    """Return True only when installer output has a success marker and no failure marker."""
+    text = logs or ""
+    if "INSTALLATION FAILED" in text:
+        return False
+    return bool(
+        "INSTALLATION SUCCESSFUL!" in text
+        or re.search(r"All\s+\d+/\d+\s+verification checks passed", text)
+    )
+
+
 def _shell_env_assignments(values: dict[str, object]) -> str:
     """Render shell-safe KEY=value assignments for remote installer commands."""
     parts = []
@@ -699,15 +710,14 @@ def provision_server(self, server_id: str):
         exit_code = channel.recv_exit_status()
         _append_log(server, f"\n[installer] Install script exited with code: {exit_code}")
 
-        # If exit code is -1 (SSH disconnected) but logs show success, treat as success
-        is_success_in_logs = (
-            "INSTALLATION SUCCESSFUL!" in server.provision_logs
-            or "All 6/6 verification checks passed" in server.provision_logs
-        )
+        # Older installer revisions could return a stale non-zero status after
+        # printing the final success banner. Treat that as success only when no
+        # failure banner was emitted.
+        is_success_in_logs = _installer_logs_confirm_success(server.provision_logs)
 
         if exit_code != 0:
-            if exit_code == -1 and is_success_in_logs:
-                _append_log(server, "✅ SSH disconnected during final phase (likely reboot), but logs confirm success.")
+            if is_success_in_logs:
+                _append_log(server, "Installer logs confirm success despite a non-zero SSH exit status.")
                 server.provision_status = ManagedServer.ProvisionStatus.DONE
                 server.save(update_fields=["provision_status"])
             else:

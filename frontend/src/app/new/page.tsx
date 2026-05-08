@@ -554,11 +554,11 @@ export default function NewServicePage() {
                         )}
                         onClick={() => setSelectedTemplate(t.slug || t.id)}
                       >
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900/50 border border-zinc-800">
-                          {t.icon?.startsWith('http') ? (
-                            <img src={t.icon} alt={t.name} className="h-6 w-6 object-contain" />
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-900/50 border border-zinc-800 overflow-hidden p-1">
+                          {(t.icon || t.logo_url)?.startsWith('http') || (t.icon || t.logo_url)?.startsWith('/') ? (
+                            <img src={t.icon || t.logo_url} alt={t.name} className="h-7 w-7 object-contain" />
                           ) : (
-                            <span className="text-xl">{t.icon || '📦'}</span>
+                            <span className="text-xl">{t.icon || t.logo_url || '📦'}</span>
                           )}
                         </div>
                         <div className="min-w-0 flex-1">

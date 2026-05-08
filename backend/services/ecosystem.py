@@ -310,7 +310,6 @@ _ENV_HINTS: Dict[str, dict] = {
     'OPENAI_API_KEY':      {'hint': 'sk-... from platform.openai.com', 'is_secret': True, 'required': True, 'user_required': True},
     'GEMINI_API_KEY':      {'hint': 'From aistudio.google.com',        'is_secret': True, 'required': True, 'user_required': True},
     'ANTHROPIC_API_KEY':   {'hint': 'sk-ant-... from console.anthropic.com', 'is_secret': True, 'required': True, 'user_required': True},
-    'JULES_API_KEY':       {'hint': 'From your Jules console/provider', 'is_secret': True, 'required': True, 'user_required': True},
     'STRIPE_SECRET_KEY':   {'hint': 'sk_live_... from Stripe', 'is_secret': True, 'required': True, 'user_required': True},
     'STRIPE_PUBLISHABLE_KEY': {'hint': 'pk_live_... from Stripe', 'required': True, 'user_required': True},
     'NEXT_PUBLIC_API_URL': {'hint': 'https://api.example.com', 'required': False},
@@ -320,7 +319,7 @@ _ENV_HINTS: Dict[str, dict] = {
     'RUST_LOG':            {'hint': 'info, debug, or warn',   'default': 'info',  'required': False},
     'PORT':                {'hint': 'Listening port',         'required': False},
     'ALLOWED_HOSTS':       {'hint': 'Comma-separated or *',  'default': '*',     'required': False},
-    'AI_PROVIDER':         {'hint': 'openai | grok | gemini | claude | jules | auto', 'required': True, 'user_required': True},
+    'AI_PROVIDER':         {'hint': 'openai | grok | gemini | claude | auto', 'required': True, 'user_required': True},
     'QDRANT_PORT':         {'hint': 'Default: 6333',         'default': '6333',  'required': True},
     'QDRANT_HOST':         {'hint': 'Qdrant hostname',       'required': True,   'user_required': True},
     'SENTRY_DSN':          {'hint': 'https://...@sentry.io/...', 'is_secret': True, 'required': False, 'user_required': True},
@@ -462,7 +461,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None) -> dict:
     import re as _re
 
     # 1. Create a temporary workspace for the analysis
-    with tempfile.TemporaryDirectory(prefix="smsly-ecosystem-") as workspace_dir:
+    with tempfile.TemporaryDirectory(prefix="cloud-ecosystem-") as workspace_dir:
         logger.info(f"Created ecosystem workspace: {workspace_dir}")
         
         # 2. Clone all repos into the workspace
@@ -620,48 +619,23 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
     return env_map
 
 
-_SMSLY_CORE_ALIASES = {
-    "smsly-core",
-    "smsly-platform-api",
-    "platform-api",
-    "smsly-core-api",
-}
+# ──────────────────────────────────────────────────────────────────────────────
+# Generic Ecosystem Intelligence Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _is_core_service(service: dict) -> bool:
+    """Return True when service looks like a core/platform API."""
+    name = str(service.get("name") or "").lower()
+    repo = str(service.get("repo") or "").lower()
+    indicators = {"core", "platform", "api", "backend", "main", "server"}
+    return any(ind in name or ind in repo for ind in indicators)
 
 
-def _normalize_token(value: Any) -> str:
-    """Normalize names/repo refs for fuzzy matching."""
-    token = str(value or "").strip().lower()
-    token = token.replace("_", "-").replace(" ", "-")
-    return token.strip("-")
-
-
-def _repo_short_name(service: dict) -> str:
-    """Extract short repo name from owner/repo ref."""
-    repo_ref = str(service.get("repo") or "").strip().lower()
-    if not repo_ref:
-        return ""
-    return repo_ref.split("/")[-1]
-
-
-def _is_smsly_service(service: dict) -> bool:
-    """Return True when service looks like part of the SMSLY family."""
-    repo_name = _repo_short_name(service)
-    svc_name = _normalize_token(service.get("name"))
-    return "smsly" in repo_name or "smsly" in svc_name
-
-
-def _is_smsly_core_service(service: dict) -> bool:
-    """Return True when service is the ecosystem core/platform API."""
-    repo_name = _normalize_token(_repo_short_name(service))
-    svc_name = _normalize_token(service.get("name"))
-    candidates = {repo_name, svc_name}
-    if any(item in _SMSLY_CORE_ALIASES for item in candidates):
-        return True
-    return any(
-        item.startswith("smsly") and ("core" in item or "platform-api" in item)
-        for item in candidates
-        if item
-    )
+def _is_auth_service(service: dict) -> bool:
+    """Return True when service looks like an identity/auth provider."""
+    name = str(service.get("name") or "").lower()
+    indicators = {"auth", "identity", "sso", "login", "keycloak"}
+    return any(ind in name for ind in indicators)
 
 
 def _coerce_depends_on(raw_depends: Any) -> List[str]:
@@ -736,32 +710,53 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
     Analyzes the 'functional intent' of each service to build a generic mesh.
     """
     deployable = [s for s in services if isinstance(s, dict) and not s.get("skip")]
-    if not deployable:
-        return
+    # 0. Role Discovery
+    core_svc = next((s for s in deployable if _is_core_service(s)), None)
+    auth_svc = next((s for s in deployable if _is_auth_service(s)), None)
 
-    # 1. Functional Mapping
-    apis = [s for s in deployable if str(s.get("stack")).lower() in ["django", "fastapi", "express", "go", "rust", "backend"]]
-    frontends = [s for s in deployable if str(s.get("stack")).lower() in ["nextjs", "nuxt", "react", "vue", "frontend"]]
-    auth_providers = [s for s in deployable if any(k in s.get("name", "").lower() for k in ["auth", "identity", "keycloak", "login"])]
-
-    # 2. Dynamic Cross-Linking
     for svc in deployable:
         env_map = svc.get("env_vars", {})
-    
-        # Link Frontends to APIs
-        if svc in frontends and apis:
-            target_api = apis[0].get("name")
-            if target_api:
-                for key in list(env_map.keys()):
-                    if any(k in key.upper() for k in ["API_URL", "BACKEND_URL", "SERVER_URL"]):
-                        env_map[key] = f"{{{{SERVICE:{target_api}}}}}"
+        svc_name = str(svc.get("name") or "").lower()
+        stack = str(svc.get("stack") or "").lower()
+        addons = set(svc.get("addons", []) or [])
 
-        # Link everything to Auth Provider if detected
-        if auth_providers and svc not in auth_providers:
-            auth_name = auth_providers[0].get("name")
+        # 1. Stack-based Addon Defaults
+        if stack == "django":
+            addons.add("POSTGRES")
+            addons.add("REDIS")
+        elif stack in ["node", "nextjs", "nuxt"]:
+            if any("DATABASE_URL" in k.upper() for k in env_map.keys()):
+                addons.add("POSTGRES")
+
+        svc["addons"] = list(addons)
+
+        # 2. Dynamic Cross-Linking (Intelligent Mesh)
+        
+        # Link to Core API
+        if core_svc and svc != core_svc:
+            # If service has vars that look like they need the Core/Platform URL
             for key in list(env_map.keys()):
-                if any(k in key.upper() for k in ["AUTH_URL", "IDENTITY_URL", "OIDC_URL", "JWT_ISSUER"]):
-                    env_map[key] = f"{{{{SERVICE:{auth_name}}}}}"
+                key_u = key.upper()
+                if any(k in key_u for k in ["API_URL", "CORE_URL", "PLATFORM_URL", "BACKEND_URL"]):
+                    # If it's a prefixed var (e.g. MYPROJECT_PLATFORM_API_URL), preserve the key
+                    # but wire it to the detected core service
+                    env_map[key] = f"{{{{SERVICE:{core_svc.get('name')}}}}}"
+                    
+                    # Also add implicit dependency
+                    deps = set(svc.get("depends_on", []) or [])
+                    deps.add(core_svc.get("name"))
+                    svc["depends_on"] = list(deps)
+
+        # Link to Auth Provider
+        if auth_svc and svc != auth_svc:
+            for key in list(env_map.keys()):
+                key_u = key.upper()
+                if any(k in key_u for k in ["AUTH_URL", "IDENTITY_URL", "OIDC_URL", "SSO_URL"]):
+                    env_map[key] = f"{{{{SERVICE:{auth_svc.get('name')}}}}}"
+                    
+                    deps = set(svc.get("depends_on", []) or [])
+                    deps.add(auth_svc.get("name"))
+                    svc["depends_on"] = list(deps)
 
         # 3. Global Secret Synchronization
         for key in list(env_map.keys()):
@@ -778,12 +773,13 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
         svc["env_vars"] = env_map
 
     # 5. Dependency Depth Sorting
-    # Infrastructure/Auth (10) > APIs (20) > Workers (30) > Frontends (40)
+    # Auth (10) > Core (20) > Others (50)
     for svc in deployable:
         order = 50
-        if svc in auth_providers: order = 10
-        elif svc in apis: order = 20
-        elif svc in frontends: order = 40
+        if _is_auth_service(svc):
+            order = 10
+        elif _is_core_service(svc):
+            order = 20
         svc["deploy_order"] = order
 
     # 6. Elite 100% Exhaustive Sweep
@@ -814,7 +810,7 @@ def _ensure_100_percent_env_coverage(services: List[dict]):
 
     # Final sorting for deploy sequence
     ordered = sorted(
-        deployable,
+        services,
         key=lambda s: (
             _safe_order(s.get("deploy_order"), 99),
             str(s.get("name") or _repo_short_name(s)),
@@ -900,7 +896,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
         s["deploy_order"] = i
         sorted_services.append(s)
 
-    _apply_smsly_core_intelligence(sorted_services)
+    _apply_generic_ecosystem_intelligence(sorted_services)
     addons_list = _rebuild_addons_manifest(sorted_services, [])
     deploy_sequence = _build_deploy_sequence(sorted_services)
 
@@ -930,6 +926,7 @@ def scan_and_analyze(token: str) -> dict:
 
     # 2. Analyze each repo
     repos_data = []
+    scan_warnings = []
     for repo in all_repos:
         full_name = repo["full_name"]
         description = repo.get("description", "") or ""
@@ -940,8 +937,14 @@ def scan_and_analyze(token: str) -> dict:
         if is_fork or repo.get("size", 0) == 0:
             continue
 
-        # Fetch file tree
-        files = fetch_repo_tree(token, full_name, default_branch)
+        # Fetch file tree. A single inaccessible repo should not fail the
+        # whole ecosystem scan.
+        try:
+            files = fetch_repo_tree(token, full_name, default_branch)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Skipping %s during ecosystem scan: %s", full_name, exc)
+            scan_warnings.append(f"{full_name}: {exc}")
+            continue
         if not files:
             continue
 
@@ -969,9 +972,12 @@ def scan_and_analyze(token: str) -> dict:
     logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
 
     # 3. AI ecosystem analysis
-    plan = analyze_ecosystem(repos_data)
+    plan = analyze_ecosystem(repos_data, github_token=token)
     plan["total_repos_scanned"] = len(all_repos)
     plan["deployable_repos"] = len(repos_data)
+    plan["scan_warning_count"] = len(scan_warnings)
+    if scan_warnings:
+        plan["scan_warnings"] = scan_warnings[:20]
 
     return plan
 
@@ -1050,6 +1056,17 @@ def sync_ecosystem_envs(project_id: str) -> dict:
     except Exception as e:
         logger.exception("Failed to sync ecosystem envs: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+def _sanitize_git_output(text: str, token: str = None) -> str:
+    """Remove credentials from git output before logging."""
+    sanitized = text or ""
+    if token:
+        sanitized = sanitized.replace(token, "***")
+    sanitized = sanitized.replace("https://x-access-token:***@", "https://")
+    return sanitized[:1200]
+
+
 def _clone_repo(repo_full: str, target_dir: str, token: str = None) -> bool:
     """Clone a repository into a target directory using Git."""
     try:
@@ -1068,9 +1085,9 @@ def _clone_repo(repo_full: str, target_dir: str, token: str = None) -> bool:
         
         if result.returncode == 0:
             return True
-        else:
-            logger.error(f"Git clone failed for {repo_full}: {result.stderr}")
-            return False
+
+        logger.error("Git clone failed for %s: %s", repo_full, _sanitize_git_output(result.stderr, token))
+        return False
     except Exception as e:
-        logger.error(f"Error cloning {repo_full}: {e}")
+        logger.error("Error cloning %s: %s", repo_full, _sanitize_git_output(str(e), token))
         return False
