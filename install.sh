@@ -2032,8 +2032,14 @@ GUARDTIMER
 bust_core_build_cache() {
     echo -e "${BLUE}  -> Busting frontend/backend build cache (safe mode)...${NC}"
 
+    # Define core services for cache busting
+    local core_svcs="frontend backend celery celery-deploy celery-fast celery-beat"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        core_svcs="backend celery-worker"
+    fi
+
     # Remove old app image layers for deterministic rebuilds (no DB/data touched).
-    for svc in frontend backend celery celery-deploy celery-fast celery-beat; do
+    for svc in $core_svcs; do
         local image_ids=""
         image_ids="$(docker compose -f "$COMPOSE_FILE" images -q "$svc" 2>/dev/null | awk 'NF' | sort -u || true)"
         if [ -n "$image_ids" ]; then
@@ -2691,7 +2697,12 @@ fi
             ;;
         backend)
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build backend celery
+            local build_svcs="backend celery"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                build_svcs="backend"
+            fi
+            docker compose -f "$COMPOSE_FILE" build $build_svcs
+
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
@@ -2716,13 +2727,20 @@ fi
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps celery celery-deploy celery-fast celery-beat
+            local celery_svcs="celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                celery_svcs="celery-worker"
+            fi
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
             ;;
         full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
+            local CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                CORE_SERVICES="backend celery-worker"
+            fi
 
             # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
             # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
@@ -2776,7 +2794,12 @@ fi
             # 9. Clean celerybeat-schedule and restart beat
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
-            docker compose -f "$COMPOSE_FILE" restart celery-beat celery-deploy celery-fast 2>/dev/null || true
+            
+            local restart_svcs="celery-beat celery-deploy celery-fast"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                restart_svcs="celery-worker"
+            fi
+            docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
             set_checkpoint "update_db_migrated"
             ;;
     esac
@@ -2840,11 +2863,15 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' smsly-hosting-celery-deploy-1 2>/dev/null || echo "")"
-    if docker exec -i smsly-hosting-celery-deploy-1 celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
+    local worker_container="smsly-hosting-celery-deploy-1"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        worker_container="smsly-hosting-celery-worker-1"
+    fi
+    DEPLOY_WORKER_HEALTH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$worker_container" 2>/dev/null || echo "")"
+    if docker exec -i "$worker_container" celery -A config inspect active_queues --timeout=10 2>/dev/null | grep -q "deploy"; then
         echo -e "${GREEN}  ✓ Deployment worker successfully bound to 'deploy' queue${NC}"
-    elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ]; then
-        echo -e "${GREEN}  ✓ Deployment worker container is healthy (queue inspect timed out)${NC}"
+    elif [ "$DEPLOY_WORKER_HEALTH" = "healthy" ] || [ "$DEPLOY_WORKER_HEALTH" = "running" ]; then
+        echo -e "${GREEN}  ✓ Deployment worker container is healthy/running (queue inspect timed out)${NC}"
     else
         echo -e "${YELLOW}  ⚠ WARNING: Deployment worker not detected on 'deploy' queue. Check logs.${NC}"
     fi
@@ -3334,7 +3361,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
+    local oom_containers="smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
+    fi
+    for CONTAINER in $oom_containers; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
