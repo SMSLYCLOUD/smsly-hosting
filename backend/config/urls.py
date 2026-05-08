@@ -37,7 +37,10 @@ urlpatterns = [
 
 # ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────
 if 'django.contrib.admin' in settings.INSTALLED_APPS:
-    urlpatterns.insert(1, path('admin/', admin.site.urls))
+    # Defensively check if admin is already in urlpatterns to avoid W005 warning
+    if not any(getattr(p, 'app_name', None) == 'admin' for p in urlpatterns):
+        urlpatterns.insert(1, path('admin/', admin.site.urls))
+
 
 
 if 'apps.billing' in settings.INSTALLED_APPS:
