@@ -3412,7 +3412,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
     cd "$INSTALL_DIR"
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
-        echo -e "${YELLOW}  ⚠️ Git update failed. If this is a private repo, ensure your token is valid.${NC}"
+        echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
     fi
 else
     echo -e "${BLUE}  → Cloning repository ($SMSLY_BRANCH)...${NC}"
