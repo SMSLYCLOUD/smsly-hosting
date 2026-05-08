@@ -528,7 +528,15 @@ else:
     _REDIS_BASE_URL = f"{REDIS_SCHEME}://{REDIS_HOST}:{REDIS_PORT}"
 
 # Prefer explicit REDIS_URL override when provided; otherwise build from host/port.
-CELERY_BROKER_URL = config('CELERY_BROKER_URL', default="amqp://smsly_user:smsly_password@rabbitmq:5672//")
+# Prefer explicit CELERY_BROKER_URL override; otherwise build from user/pass.
+_RABBITMQ_USER = config('RABBITMQ_DEFAULT_USER', default='smsly_user')
+_RABBITMQ_PASS = config('RABBITMQ_PASSWORD', default='smsly_password')
+_RABBITMQ_HOST = config('RABBITMQ_HOST', default='rabbitmq')
+_RABBITMQ_PORT = config('RABBITMQ_PORT', default='5672')
+_RABBITMQ_VHOST = config('RABBITMQ_DEFAULT_VHOST', default='')
+
+_FALLBACK_BROKER_URL = f"amqp://{_RABBITMQ_USER}:{_RABBITMQ_PASS}@{_RABBITMQ_HOST}:{_RABBITMQ_PORT}/{_RABBITMQ_VHOST}"
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default=_FALLBACK_BROKER_URL)
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = config(
     'CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP',
     default=True,

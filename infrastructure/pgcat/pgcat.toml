@@ -72,5 +72,5 @@ username = "smsly_admin"
 # Password is injected via environment variable substitution at runtime.
 # PgCat reads PGCAT_PASSWORD_0 or we template it in the entrypoint.
 password = "${POSTGRES_PASSWORD}"
-pool_size = 15
-min_pool_size = 5
+pool_size = 100
+min_pool_size = 20
