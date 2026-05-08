@@ -20,9 +20,6 @@ urlpatterns = [
     path('api/v1/', include('apps.deployments.urls')),
     path('api/v1/cloud/', include('apps.cloud.urls')),
     path('api/v1/teams/', include('apps.teams.urls')),
-    path('api/v1/billing/', include('apps.billing.urls')),
-    path('api/v1/licensing/', include('apps.licensing.urls')),
-    path('api/v1/ai/', include('apps.intelligence.urls')),
     path('api/v1/autoscaler/', include('apps.autoscaler.urls')),
     path('api/v1/', include('apps.notifications.urls')),
     path('api/v1/', include('apps.core.urls')),
@@ -36,6 +33,19 @@ urlpatterns = [
         include('dj_rest_auth.registration.urls')),
     path('accounts/', include('allauth.urls')),
 ]
+
+# ─── Conditional App Routes (Agent Mode Resiliency) ───────────────────────
+if 'django.contrib.admin' in settings.INSTALLED_APPS:
+    urlpatterns.insert(1, path('admin/', admin.site.urls))
+
+if 'apps.billing' in settings.INSTALLED_APPS:
+    urlpatterns.append(path('api/v1/billing/', include('apps.billing.urls')))
+
+if 'apps.licensing' in settings.INSTALLED_APPS:
+    urlpatterns.append(path('api/v1/licensing/', include('apps.licensing.urls')))
+
+if 'apps.intelligence' in settings.INSTALLED_APPS:
+    urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))
 
 # ─── Tunnel API (function-based views, not DRF router) ────────────────────
 try:

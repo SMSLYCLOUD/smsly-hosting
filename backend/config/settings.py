@@ -116,6 +116,8 @@ ENABLE_LEGACY_TUNNEL_API = config(
 )
 _ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
+# Ensure common cPanel/CloudNode hostnames are allowed for automated checks
+ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
 APPEND_SLASH = False
 
 # ---------------------------------------------------------------------------
@@ -287,6 +289,9 @@ if IS_AGENT_MODE:
         'django.contrib.admin', # Optional: Disable admin UI on nodes
     }
     INSTALLED_APPS = [app for app in INSTALLED_APPS if app not in APPS_TO_REMOVE]
+    
+    # Also prune Middleware to avoid Model Class registry errors (since apps are removed)
+    MIDDLEWARE = [m for m in MIDDLEWARE if not m.startswith('apps.licensing')]
 
 AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876')
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")

@@ -572,7 +572,11 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     if server_id:
         from apps.deployments.models import ManagedServer
         try:
-            server = ManagedServer.objects.filter(id=server_id, owner=service.owner).first()
+            if str(server_id).lower() in ("local", "primary"):
+                server = ManagedServer.get_primary()
+            else:
+                server = ManagedServer.objects.filter(id=server_id, owner=service.owner).first()
+            
             if server:
                 service.server = server
         except Exception:

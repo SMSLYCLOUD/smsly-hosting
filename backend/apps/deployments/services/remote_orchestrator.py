@@ -242,7 +242,7 @@ class RemoteOrchestrator:
             for index, mode in enumerate(modes):
                 headers = self._get_headers(
                     method_upper,
-                    path,  # Use base path for signing, NOT request_path.
+                    request_path,  # Use full path with query params to match server-side get_full_path()
                     body=body,
                     auth_mode=None if mode == "none" else mode,
                 )
