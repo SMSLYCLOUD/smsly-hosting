@@ -119,6 +119,13 @@ services:
       start_period: 600s
     networks:
     - smsly-net
+    labels:
+    - traefik.enable=true
+    - traefik.http.routers.backend.rule=PathPrefix(`/api/v1/`) || PathPrefix(`/admin/`) || PathPrefix(`/health/`) || PathPrefix(`/accounts/`) || PathPrefix(`/dj-rest-auth/`)
+    - traefik.http.routers.backend.entrypoints=web
+    - traefik.http.routers.backend.priority=10
+    - traefik.http.services.backend.loadbalancer.server.port=8000
+    - traefik.docker.network=smsly-net
   celery:
     build:
       context: ./backend
@@ -212,6 +219,13 @@ services:
       start_period: 20s
     networks:
     - smsly-net
+    labels:
+    - traefik.enable=true
+    - traefik.http.routers.frontend.rule=PathPrefix(`/`)
+    - traefik.http.routers.frontend.entrypoints=web
+    - traefik.http.routers.frontend.priority=5
+    - traefik.http.services.frontend.loadbalancer.server.port=3000
+    - traefik.docker.network=smsly-net
   celery-fast:
     build:
       context: ./backend
