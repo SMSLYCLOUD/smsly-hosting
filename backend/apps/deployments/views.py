@@ -18,7 +18,6 @@ from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from django.utils.http import content_disposition_header
 from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
-from apps.licensing.models import PlatformLicense
 from .ai_router import (
     DEFAULT_AI_ROUTER_API_BASE,
     DEFAULT_AI_ROUTER_UI_BASE,
