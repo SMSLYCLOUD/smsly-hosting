@@ -65,7 +65,9 @@ def ai_providers_status(request):
             raw_providers = get_available_providers(include_balance=include_balance)
             providers = []
             for p in raw_providers:
-                if hasattr(p, "to_dict"):
+                if isinstance(p, dict):
+                    providers.append(p)
+                elif hasattr(p, "to_dict"):
                     providers.append(p.to_dict())
                 elif hasattr(p, "as_dict"):
                     providers.append(p.as_dict())
