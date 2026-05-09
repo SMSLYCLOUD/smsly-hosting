@@ -24,8 +24,6 @@ from django.core.cache import cache
 from django.utils import timezone
 from django.db.models import Sum
 
-from apps.billing.models import UsageRecord, UserSubscription, Invoice, PricingPlan, DailyRevenue, InfrastructureCost
-from apps.billing.services.metering import UsageMeter
 from apps.cloud.models import CloudProvider
 from apps.cloud.services.builder import NixpacksBuilder
 from apps.cloud.services.compute import ComputeService
