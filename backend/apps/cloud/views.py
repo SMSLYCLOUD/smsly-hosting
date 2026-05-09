@@ -6,10 +6,6 @@ import logging
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.intelligence.analyzer import LogAnalyzer
-from apps.intelligence.remediator import RemediationEngine
-from apps.intelligence.cost import CostAdvisor
-from apps.intelligence.providers import get_available_providers, ask_with_fallback, SYSTEM_PROMPT
 from .models import CloudProvider, CloudResource
 from .serializers import CloudProviderSerializer, CloudProviderCreateSerializer, CloudResourceSerializer
 
@@ -177,6 +173,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def analyze_logs(self, request):
         """Analyze logs for errors and anomalies."""
+        from apps.intelligence.analyzer import LogAnalyzer
         logs = request.data.get('logs', [])
         # service_id = request.data.get('service_id')
 
@@ -192,6 +189,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'])
     def suggest_remediation(self, request):
         """Suggest fixes for a specific error."""
+        from apps.intelligence.remediator import RemediationEngine
         error_msg = request.data.get('error')
         # context = request.data.get('context', {})
 
@@ -204,6 +202,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['get'])
     def optimize_cost(self, request):
         """Analyze current usage and suggest cost optimizations."""
+        from apps.intelligence.cost import CostAdvisor
         advisor = CostAdvisor()
         from apps.deployments.models import Service
 
@@ -302,6 +301,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         context = "User is asking about cloud infrastructure."
 
         try:
+            from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
             response, provider_name = ask_with_fallback(
                 prompt=f"{context}\nUser: {message}",
                 system_prompt=SYSTEM_PROMPT
@@ -324,6 +324,7 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
     def providers(self, request):
         """List available AI providers and their status."""
         try:
+            from apps.intelligence.providers import get_available_providers
             return Response(get_available_providers())
         except Exception as exc:  # noqa: BLE001
             logger.exception("Cloud intelligence providers degraded: %s", exc)
@@ -378,6 +379,8 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        from apps.intelligence.analyzer import LogAnalyzer
+        from apps.intelligence.remediator import RemediationEngine
         analyzer = LogAnalyzer()
         issues = analyzer.analyze_logs(error_trace)
         diagnosis = analyzer.generate_diagnosis(error_trace)

@@ -4,7 +4,6 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,6 +18,7 @@ class AIChatView(GenericAPIView):
     permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
 
     def post(self, request):
+        from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
         message = request.data.get('message')
         if not message:
             return Response({"detail": "Message required"},

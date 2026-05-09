@@ -10,7 +10,6 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_addons import Addon
-from apps.billing.services.metering import UsageMeter
 from .models import APIKey
 import secrets
 from django.contrib.auth.hashers import make_password
@@ -105,6 +104,7 @@ class DashboardOverviewView(GenericAPIView):
         }
 
         # Cost Estimate
+        from apps.billing.services.metering import UsageMeter
         meter = UsageMeter()
         cost = meter.calculate_cost(user, start_of_month, now)
 
