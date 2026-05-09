@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:16-alpine
+    ports:
+      - "5432:5432" # Required for Lite Agents
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
@@ -43,6 +45,8 @@ services:
     - smsly-net
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379" # Required for Lite Agents
     command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
     restart: unless-stopped
     volumes:
@@ -442,6 +446,8 @@ services:
     - smsly-net
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672" # Required for Lite Agents
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user

@@ -2697,7 +2697,7 @@ fi
             ;;
         backend)
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
-            local build_svcs="backend celery"
+            build_svcs="backend celery"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 build_svcs="backend"
             fi
@@ -2727,7 +2727,7 @@ fi
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
             echo -e "${BLUE}  → Restarting celery workers...${NC}"
-            local celery_svcs="celery celery-deploy celery-fast celery-beat"
+            celery_svcs="celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 celery_svcs="celery-worker"
             fi
@@ -2737,7 +2737,7 @@ fi
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            local CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
+            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 CORE_SERVICES="backend celery-worker"
             fi
@@ -2795,7 +2795,7 @@ fi
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
             
-            local restart_svcs="celery-beat celery-deploy celery-fast"
+            restart_svcs="celery-beat celery-deploy celery-fast"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
@@ -4737,6 +4737,11 @@ if command -v ufw >/dev/null 2>&1; then
     # Allow Docker Mirror (Option B) if this is the Master/Leader
     if [ -z "${MASTER_IP:-}" ] || [ "$MASTER_IP" = "127.0.0.1" ] || [ "$MASTER_IP" = "$(detect_public_ip)" ]; then
         ufw allow 5001/tcp >/dev/null 2>&1 || true
+        # Allow Lite Agents to reach core services
+        echo -e "${YELLOW}  ⚠ Master node: Exposing DB/Redis/MQ ports for Lite Agents (protected by password)${NC}"
+        ufw allow 5432/tcp >/dev/null 2>&1 || true
+        ufw allow 6379/tcp >/dev/null 2>&1 || true
+        ufw allow 5672/tcp >/dev/null 2>&1 || true
     fi
     echo "y" | ufw enable >/dev/null 2>&1 || true
     echo -e "${GREEN}  ✓ Firewall hardened (Inbound blocked, SSH/Web permitted)${NC}"
@@ -4762,6 +4767,7 @@ AGENT_SERVICES="$(docker compose -f "$COMPOSE_FILE" config --services 2>/dev/nul
 if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "socket-proxy" \
    && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|nginx|db|pgcat|redis|rabbitmq)$"; then
     echo -e "${GREEN}  ✓ Lite Agent profile selected; no frontend/control-plane services included${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
