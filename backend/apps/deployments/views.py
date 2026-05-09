@@ -1772,10 +1772,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
         raw_domain = request.query_params.get('domain', '').strip().lower()
         if not raw_domain:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        import ipaddress
+        is_ip = False
         try:
-            domain = normalize_domain(raw_domain)
+            ipaddress.ip_address(raw_domain)
+            is_ip = True
+            domain = raw_domain
         except ValueError:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+            try:
+                domain = normalize_domain(raw_domain)
+            except ValueError:
+                return Response(status=status.HTTP_404_NOT_FOUND)
 
         # 1. Check against PlatformConfig primary domain
         try:
@@ -1787,7 +1794,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # 2. Check against Managed Servers (allow inter-node control traffic)
         from .models_core import ManagedServer
-        if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
+        query = Q(host=domain)
+        if is_ip:
+            query |= Q(private_ip=domain)
+        
+        if ManagedServer.objects.filter(query).exists():
             return Response(status=status.HTTP_200_OK)
 
         # 3. Check against Services (Public Domain)
