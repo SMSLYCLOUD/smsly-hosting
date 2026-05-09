@@ -2863,7 +2863,7 @@ if a_count > 0:
     echo -e "${BLUE}  → Verifying worker connectivity and queue bindings...${NC}"
     # Give workers a moment to connect to Redis and report active queues
     sleep 15
-    local worker_container="smsly-hosting-celery-deploy-1"
+    worker_container="smsly-hosting-celery-deploy-1"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         worker_container="smsly-hosting-celery-worker-1"
     fi
@@ -3361,7 +3361,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    local oom_containers="smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
+    oom_containers="smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
     fi
