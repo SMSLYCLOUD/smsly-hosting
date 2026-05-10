@@ -7,7 +7,7 @@ import re
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
-def normalize_domain(value: str, allow_wildcard: bool = False) -> str:
+def normalize_domain(value: str, allow_wildcard: bool = False, allow_ip: bool = False) -> str:
     """
     Return a normalized ASCII FQDN or raise ValueError.
 
@@ -15,6 +15,7 @@ def normalize_domain(value: str, allow_wildcard: bool = False) -> str:
     - my-app.example.com
     - EXAMPLE.COM.
     - *.example.com (only if allow_wildcard=True)
+    - 1.2.3.4 (only if allow_ip=True)
     """
     raw = str(value or "").strip().lower().rstrip(".")
     if not raw:
@@ -43,7 +44,9 @@ def normalize_domain(value: str, allow_wildcard: bool = False) -> str:
 
     try:
         ipaddress.ip_address(ascii_domain)
-        raise ValueError("IP addresses are not valid custom domains")
+        if not allow_ip:
+            raise ValueError("IP addresses are not valid custom domains")
+        return ascii_domain
     except ValueError as exc:
         if str(exc) == "IP addresses are not valid custom domains":
             raise

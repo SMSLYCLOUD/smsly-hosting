@@ -1237,7 +1237,14 @@ load_install_env_defaults() {
 
     DOMAIN="${DOMAIN:-$env_domain}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-    USE_SSL="${USE_SSL:-$env_use_ssl}"
+    
+    # IP detection - force USE_SSL=false if DOMAIN is a raw IP
+    if [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo -e "${YELLOW}  ⚠ Detected IP-only domain ($DOMAIN). Forcing USE_SSL=false.${NC}"
+        USE_SSL="false"
+    else
+        USE_SSL="${USE_SSL:-$env_use_ssl}"
+    fi
     USE_SSL="${USE_SSL:-false}"
     WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-$env_wildcard}"
     WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
