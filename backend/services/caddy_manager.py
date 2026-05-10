@@ -5,6 +5,7 @@ Generates Caddyfile content from PlatformConfig and writes it
 to a shared volume for the host-side watcher to pick up.
 """
 
+import ipaddress
 import logging
 import os
 
@@ -29,6 +30,17 @@ def _table_exists(table_name: str) -> bool:
     try:
         return table_name in connection.introspection.table_names()
     except Exception:  # pylint: disable=broad-exception-caught
+        return False
+
+
+def _is_ip(domain: str) -> bool:
+    """Return True if the domain string is a raw IP address."""
+    if not domain:
+        return False
+    try:
+        ipaddress.ip_address(domain)
+        return True
+    except ValueError:
         return False
 
 
@@ -144,7 +156,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                     seen.add(public_domain)
                 elif wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
                     logger.debug(
-                        "Skipping %s — covered by wildcard *.%s",
+                        "Skipping %s \u2014 covered by wildcard *.%s",
                         public_domain,
                         wildcard_domain,
                     )
@@ -219,7 +231,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
             if public_domain and public_domain not in seen:
                 if wildcard_domain and public_domain.endswith(f".{wildcard_domain}"):
                     logger.debug(
-                        "Skipping addon %s — covered by wildcard *.%s",
+                        "Skipping addon %s \u2014 covered by wildcard *.%s",
                         public_domain,
                         wildcard_domain,
                     )
@@ -375,9 +387,6 @@ def generate_caddyfile(config) -> str:
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
     
     # Global options for On-Demand TLS
-    # The 'ask' endpoint re-uses the existing backend server.
-    # Caddy is on the host, backend is in docker. 
-    # Usually port 8000 or 8090 on localhost is mapped to the backend.
     sections.append("""{
     on_demand_tls {
         ask http://localhost:8090/api/v1/services/check-domain/
@@ -389,13 +398,18 @@ def generate_caddyfile(config) -> str:
     if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
         cloudflare_token = ""
 
+    use_ssl = config.use_ssl
     if config.domain:
         try:
-            domain = normalize_domain(config.domain)
+            # Allow IP for platform domain normalization
+            domain = normalize_domain(config.domain, allow_ip=True)
+            if _is_ip(domain):
+                # IPs cannot have SSL certs (Let's Encrypt restriction)
+                use_ssl = False
         except ValueError:
             logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
 
-    if config.use_ssl and domain:
+    if use_ssl and domain:
         # Keep the apex platform domain independent from wildcard DNS
         # validation. Wildcard routes need Cloudflare DNS-01, but the apex can
         # use Caddy's default HTTP-01 flow and should stay healthy even if the
@@ -414,8 +428,6 @@ def generate_caddyfile(config) -> str:
         sections.append("\n".join(platform_block))
 
         # Wildcard subdomains for deployed services.
-        # Use {env.CLOUDFLARE_API_TOKEN} (Caddy env syntax) instead of the
-        # raw token to match install.sh and avoid embedding secrets in files.
         if config.wildcard_subdomains:
             wildcard_known_hosts = _get_wildcard_known_hosts(domain)
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
@@ -457,8 +469,6 @@ def generate_caddyfile(config) -> str:
 
             wildcard_lines.extend(
                 [
-                    # Default: forward other *.domain traffic to Traefik so
-                    # services stay reachable while DNS sync/verification catches up.
                     "    handle {",
                     "        respond \"Service Not Found\" 404",
                     "    }",
@@ -468,8 +478,7 @@ def generate_caddyfile(config) -> str:
             sections.append("\n".join(wildcard_lines))
 
         # Keep a real TCP/443 listener present even if Caddy's implicit HTTPS
-        # server is delayed or skipped during reload. Host-specific site blocks
-        # above still win for the platform domain and wildcard/service routes.
+        # server is delayed or skipped during reload.
         sections.append(
             """:443 {
     tls {
@@ -479,14 +488,27 @@ def generate_caddyfile(config) -> str:
 }"""
         )
 
+    # Site block for the primary access point (Domain or IP)
+    if domain:
+        if _is_ip(domain):
+            # Explicitly use http:// for IP to prevent Caddy's auto-HTTPS loop
+            sections.append(
+                f"""http://{domain} {{
+    reverse_proxy localhost:8090
+    encode gzip
+}}"""
+            )
+        elif not use_ssl:
+            sections.append(
+                f"""http://{domain} {{
+    reverse_proxy localhost:8090
+    encode gzip
+}}"""
+            )
+
     # Always include :80 catch-all so the IP always works.
-    # In SSL+domain mode this should only handle unmatched hosts and route to
-    # a controlled notice page. In IP/HTTP mode it remains the primary route.
-    # Never generate domain-specific HTTP blocks — they break IP access
-    # because Caddy won't match requests by IP to a domain-named block.
-    if config.use_ssl and domain:
+    if use_ssl and domain:
         # Only redirect if the host is NOT an IP address.
-        # This prevents breaking "IP mode" access when SSL is enabled for domains.
         sections.append(
             """:80 {
     @not_ip {
@@ -500,11 +522,14 @@ def generate_caddyfile(config) -> str:
 }"""
         )
     else:
-        sections.append(
-            """:80 {
+        # Check if we already added a block for the domain/IP on :80
+        # If we didn't, add the catch-all.
+        if not domain or (not _is_ip(domain) and not use_ssl):
+            sections.append(
+                """:80 {
     reverse_proxy localhost:8090
 }"""
-        )
+            )
 
     # Per-service custom domains routed to Traefik.
     # Skip subdomains already covered by the *.domain wildcard.
