@@ -70,24 +70,29 @@ def _service_slug_base(service):
 def populate_service_slugs(apps, schema_editor):
     Service = apps.get_model('deployments', 'Service')
     used_slugs = set()
-    to_update = []
     batch_size = 500
 
-    queryset = Service.objects.all().only('id', 'name', 'slug').order_by('id')
-    for service in queryset.iterator(chunk_size=batch_size):
-        slug = _dedupe_slug(_service_slug_base(service), used_slugs)
-        if service.slug == slug:
-            continue
+    last_id = 0
+    while True:
+        # Use direct ID filtering to avoid server-side cursors in non-atomic migrations.
+        # This is safer when running through proxies like pgcat.
+        batch = list(Service.objects.filter(id__gt=last_id)
+                     .only('id', 'name', 'slug')
+                     .order_by('id')[:batch_size])
+        
+        if not batch:
+            break
+            
+        to_update = []
+        for service in batch:
+            slug = _dedupe_slug(_service_slug_base(service), used_slugs)
+            if service.slug != slug:
+                service.slug = slug
+                to_update.append(service)
+            last_id = service.id
 
-        service.slug = slug
-        to_update.append(service)
-
-        if len(to_update) >= batch_size:
+        if to_update:
             Service.objects.bulk_update(to_update, ['slug'])
-            to_update = []
-
-    if to_update:
-        Service.objects.bulk_update(to_update, ['slug'])
 
 
 def cleanup_service_slug_artifacts(apps, schema_editor):

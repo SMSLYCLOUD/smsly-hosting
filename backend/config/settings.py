@@ -447,15 +447,16 @@ if _DIRECT_DB_URL:
         conn_health_checks=True,
     )
 
-# Bound failed database connects so health/login requests do not pin workers.
+# Disable server-side cursors – incompatible with PgCat transaction pooling
+DISABLE_SERVER_SIDE_CURSORS = True
+
+# Apply PostgreSQL-specific settings to all configured databases
 for _db_cfg in DATABASES.values():
     if 'postgresql' not in str(_db_cfg.get('ENGINE', '')):
         continue
     _db_cfg.setdefault('OPTIONS', {})
     _db_cfg['OPTIONS'].setdefault('connect_timeout', DATABASE_CONNECT_TIMEOUT)
-
-# Disable server-side cursors – incompatible with PgCat transaction pooling
-DISABLE_SERVER_SIDE_CURSORS = True
+    _db_cfg['OPTIONS']['disable_server_side_cursors'] = DISABLE_SERVER_SIDE_CURSORS
 
 AUTH_PASSWORD_VALIDATORS = [
     {
