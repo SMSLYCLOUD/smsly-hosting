@@ -4107,6 +4107,13 @@ else
         2>&1 || echo -e "${RED}  ✗ Could not sync password. Check pg_hba.conf${NC}"
 fi
 
+# ─── Ensure PgCat is fresh and connected ──────────────────────────────────────
+if docker compose -f "$COMPOSE_FILE" ps pgcat >/dev/null 2>&1; then
+    echo -e "${BLUE}  → Restarting PgCat balancer...${NC}"
+    docker compose -f "$COMPOSE_FILE" restart pgcat >/dev/null 2>&1
+    sleep 5
+fi
+
 # ─── Restart backend so it picks up the correct DB credentials ──────────────
 echo -e "${BLUE}  → Restarting backend with synced credentials...${NC}"
 docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
@@ -4124,7 +4131,7 @@ if [ "$RUST_TWIN_MODE" != "true" ]; then
         fi
         WAIT=$((attempt * 10))
         echo -e "${YELLOW}  ⚠ Migration attempt $attempt/3 failed — retrying in ${WAIT}s...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart backend >/dev/null 2>&1
+        docker compose -f "$COMPOSE_FILE" restart pgcat backend >/dev/null 2>&1
         sleep "$WAIT"
     done
 
