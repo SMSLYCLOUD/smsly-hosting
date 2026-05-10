@@ -2743,16 +2743,17 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             Deployment.Status.QUEUED,
             Deployment.Status.REVIEW,
             Deployment.Status.BUILDING,
+            Deployment.Status.AWAITING_APPROVAL,
         ):
             return Response(
                 {'error': f'Cannot cancel deployment in {deployment.status} '
-                          f'status. Only QUEUED, REVIEW, or BUILDING '
+                          f'status. Only QUEUED, REVIEW, BUILDING, or AWAITING_APPROVAL '
                           f'deployments can be cancelled.'},
                 status=status.HTTP_409_CONFLICT)
 
         deployment.status = Deployment.Status.CANCELLED
         deployment.finished_at = timezone.now()
-        deployment.build_logs += "\n\n[CANCELLED] Deployment cancelled by user."
+        deployment.build_logs += "\n\n[Cancelled] Deployment cancelled by user."
 
         # Clean up any running containers associated with this deployment
         try:
