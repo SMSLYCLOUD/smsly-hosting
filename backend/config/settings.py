@@ -456,7 +456,7 @@ for _db_cfg in DATABASES.values():
         continue
     _db_cfg.setdefault('OPTIONS', {})
     _db_cfg['OPTIONS'].setdefault('connect_timeout', DATABASE_CONNECT_TIMEOUT)
-    _db_cfg['OPTIONS']['disable_server_side_cursors'] = DISABLE_SERVER_SIDE_CURSORS
+    _db_cfg['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 AUTH_PASSWORD_VALIDATORS = [
     {
