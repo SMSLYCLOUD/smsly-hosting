@@ -683,6 +683,11 @@ apply_env_platform_overrides() {
     else
         desired_use_ssl="${current_use_ssl}"
     fi
+
+    # IP detection - force USE_SSL=false if DOMAIN is a raw IP
+    if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        desired_use_ssl="false"
+    fi
     if [ "${ACME_EMAIL+x}" = "x" ]; then
         desired_acme_email="${ACME_EMAIL}"
     else
