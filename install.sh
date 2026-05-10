@@ -4238,7 +4238,7 @@ fi
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access)
 # -----------------------------------------------------------------------------
-if ! is_checkpoint_done "caddy_configured"; then
+if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     echo -e "\n${YELLOW}[7/9] Configuring Lite Agent Edge...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d socket-proxy backend celery-worker traefik >/dev/null 2>&1 || true
