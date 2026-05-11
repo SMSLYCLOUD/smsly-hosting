@@ -1425,8 +1425,15 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
     max_retries = 90  # 15 minutes (10s intervals)
     max_empty_polls = 12  # 2 minutes of unreachable/invalid poll responses.
     empty_polls = 0
-    for _ in range(max_retries):
+    logger.info("Starting polling for remote deployment %s on node %s", remote_dep_id, orchestrator.server.host)
+    append_log(deployment, f"[Remote] Initializing poller for remote deployment: {remote_dep_id}\n")
+
+    for i in range(max_retries):
         time.sleep(10)
+        
+        if i % 6 == 0:  # Log every 60 seconds
+             logger.debug("Polling remote deployment %s (attempt %d/%d)", remote_dep_id, i+1, max_retries)
+             
         remote_status = orchestrator.poll_deployment(remote_dep_id)
         if not remote_status:
             empty_polls += 1
@@ -1481,20 +1488,50 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
             deployment.save(update_fields=['status', 'updated_at'])
             broadcast_status(deployment)
 
+        # [STALE DETECTION]
+        # If the remote is still QUEUED after 3 minutes (18 polls), it might mean 
+        # the remote worker is stuck or down. 
+        if status == Deployment.Status.QUEUED and i > 18:
+            warning_msg = (
+                "[Remote] Warning: Deployment has been QUEUED on the remote node for >3 minutes. "
+                "The remote worker may be offline or overloaded.\n"
+            )
+            if i % 6 == 0: # Only log every minute to avoid spam
+                append_log(deployment, warning_msg)
+                logger.warning("Remote deployment %s stuck in QUEUED for %d polls", remote_dep_id, i)
+
         if status == Deployment.Status.ACTIVE:
             deployment.status = Deployment.Status.ACTIVE
             deployment.finished_at = timezone.now()
-            deployment.save(update_fields=['status', 'finished_at'])
+            deployment.save(update_fields=['status', 'finished_at', 'updated_at'])
             update_stage(deployment, 'Remote Deploy', 'success')
             broadcast_status(deployment)
-            append_log(deployment, "Remote deployment successful.\n")
+            append_log(deployment, "Remote deployment completed successfully.\n")
             return
 
-        if status in (Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED, Deployment.Status.CANCELLED):
-            _handle_failure(None, deployment, f"Remote deployment failed with status: {status}", "Remote Execution Failure")
+        if status == Deployment.Status.FAILED:
+            _handle_failure(
+                None,
+                deployment,
+                remote_status.get("error") or "Remote deployment failed.",
+                "Remote Execution Failure",
+            )
             return
 
-    _handle_failure(None, deployment, "Remote deployment timed out", "Remote Timeout")
+        if status == Deployment.Status.CANCELLED:
+            deployment.status = Deployment.Status.CANCELLED
+            deployment.finished_at = timezone.now()
+            deployment.save(update_fields=['status', 'finished_at', 'updated_at'])
+            broadcast_status(deployment)
+            append_log(deployment, "Remote deployment was cancelled.\n")
+            return
+
+    # If we exit the loop without a terminal state
+    logger.info("Polling finished for remote deployment %s after %d attempts", remote_dep_id, max_retries)
+    if deployment.status in (Deployment.Status.QUEUED, Deployment.Status.BUILDING):
+        append_log(deployment, "\n[Remote] Polling timed out after 15 minutes. The deployment might still be running on the remote node, but the controller is no longer tracking it actively.\n")
+        # We don't mark as FAILED here because it might still succeed on the remote.
+        # But we notify the user.
 
 
 def _build_function(deployment, service) -> str:

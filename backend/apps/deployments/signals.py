@@ -3,7 +3,9 @@ from django.dispatch import receiver
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .models_audit import AuditLog
 from .utils import log_event
+from services.caddy_manager import generate_caddyfile, apply_caddyfile
 import secrets
+import logging
 
 
 @receiver(post_save, sender=Service)
@@ -111,11 +113,42 @@ def audit_deployment_lifecycle(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=PlatformConfig)
-def update_allowed_hosts_on_config_change(sender, instance, **kwargs):
-    """Update settings in real-time when PlatformConfig changes."""
+def sync_infrastructure_on_config_change(sender, instance, **kwargs):
+    """
+    Update Caddy configuration and system environment when PlatformConfig changes.
+    This enables full UI autonomy for domain and SSL management.
+    """
+    logger = logging.getLogger(__name__)
     try:
+        # 1. Update ALLOWED_HOSTS in memory
         from config.settings import _patch_allowed_hosts_from_db
         _patch_allowed_hosts_from_db()
+
+        # 2. Re-generate and apply Caddyfile
+        logger.info("Signal: Re-generating Caddyfile for domain %s", instance.domain)
+        content = generate_caddyfile(instance)
+        apply_caddyfile(
+            content,
+            cloudflare_token=instance.cloudflare_api_token,
+            preserve_existing_token=True
+        )
+
+        # 3. Log the event
+        log_event(
+            actor='system',
+            action='INFRA_SYNC',
+            target='Caddyfile',
+            metadata={
+                'domain': instance.domain,
+                'use_ssl': instance.use_ssl,
+                'wildcard': instance.wildcard_subdomains,
+            }
+        )
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error("Failed to patch ALLOWED_HOSTS from signal: %s", e)
+        logger.error("Failed to sync infrastructure from signal: %s", e)
+
+
+@receiver(post_save, sender=PlatformConfig)
+def update_allowed_hosts_on_config_change(sender, instance, **kwargs):
+    # This is now handled by sync_infrastructure_on_config_change
+    pass

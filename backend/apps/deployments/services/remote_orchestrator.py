@@ -60,6 +60,51 @@ class RemoteOrchestrator:
         """Human-readable reason for the most recent remote request failure."""
         return self.last_error
 
+    def check_connectivity(self) -> dict:
+        """
+        Perform a tiered connectivity check:
+        1. Ping /health (Network)
+        2. GET /api/v1/services/ (Auth/Application)
+        """
+        results = {
+            "network": False,
+            "auth": False,
+            "error": "",
+            "latency_ms": 0,
+        }
+        
+        # 1. Network Check
+        try:
+            start = time.time()
+            # Try a raw request to health endpoint first to isolate network vs auth
+            base_urls = self._candidate_base_urls()
+            if not base_urls:
+                 results["error"] = "No candidate base URLs found."
+                 return results
+                 
+            # Try the primary base URL's health endpoint
+            health_url = f"{base_urls[0]}/health"
+            resp = requests.get(health_url, timeout=10)
+            results["latency_ms"] = int((time.time() - start) * 1000)
+            
+            if resp.status_code < 500:
+                results["network"] = True
+            else:
+                results["error"] = f"Health check returned {resp.status_code}"
+                return results
+        except requests.RequestException as e:
+            results["error"] = f"Network unreachable: {str(e)}"
+            return results
+
+        # 2. Auth/API Check
+        resp = self._request("GET", "/api/v1/services/", timeout=10)
+        if resp and resp.status_code == 200:
+            results["auth"] = True
+        else:
+            results["error"] = self.describe_last_error() or f"API returned {resp.status_code if resp else 'no response'}"
+            
+        return results
+
     def auto_authenticate(self) -> bool:
         """
         Attempt to retrieve API token and Gateway Secret via SSH.

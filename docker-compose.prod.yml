@@ -463,7 +463,25 @@ services:
       retries: 10
       start_period: 60s
     networks:
-    - smsly-net
+      - smsly-net
+  caddy:
+    build:
+      context: .
+      dockerfile: infrastructure/caddy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - caddy_config:/etc/caddy
+      - caddy_data:/data
+    depends_on:
+      - nginx
+    networks:
+      - smsly-net
 networks:
   smsly-net:
     external: true
@@ -484,5 +502,6 @@ volumes:
       type: none
       o: bind
       device: /opt/smsly-hosting/caddy-config
-  backups_data: null
+  caddy_data:
+    driver: local
   rabbitmq_data: null
