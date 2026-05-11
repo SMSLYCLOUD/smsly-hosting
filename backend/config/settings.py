@@ -114,7 +114,9 @@ ENABLE_LEGACY_TUNNEL_API = config(
     default=False,
     cast=bool,
 )
-_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,nginx,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,nginx,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16'
+_ALLOWED_HOSTS_DEFAULT = 'localhost,127.0.0.1,nginx,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,.smsly.cloud'
+if DOMAIN and DOMAIN != 'localhost' and DOMAIN not in _ALLOWED_HOSTS_DEFAULT:
+    _ALLOWED_HOSTS_DEFAULT += f',{DOMAIN}'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 # Ensure common cPanel/CloudNode hostnames are allowed for automated checks
 ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
@@ -141,9 +143,8 @@ except Exception:
 def _patch_allowed_hosts_from_db():
     """Add PlatformConfig.domain to host/origin settings after Django is ready."""
     import sys
-    # Avoid DB access during migrations or common management tasks to prevent RuntimeWarning
-    if any(arg in sys.argv for arg in ('makemigrations', 'migrate', 'collectstatic', 'test', 'check')):
-        return
+    # Removed sys.argv guard to ensure patching runs under gunicorn/uvicorn.
+    # The try-except block below will safely handle cases where the DB is not ready.
 
     if IS_TESTING:
         return
@@ -217,6 +218,8 @@ def _patch_allowed_hosts_from_db():
                 )
     except Exception:
         pass  # DB not ready yet (first boot / migrations)
+
+_patch_allowed_hosts_from_db()
 
 SITE_URL = config(
     'SITE_URL',
@@ -753,4 +756,4 @@ EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=10, cast=int)
 _DEFAULT_FROM = f"noreply@{DOMAIN}" if DOMAIN != 'localhost' else 'noreply@smsly.cloud'
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_DEFAULT_FROM)
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
-_patch_allowed_hosts_from_db()
+# (Patching moved higher up)
