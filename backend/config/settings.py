@@ -159,8 +159,12 @@ def _patch_allowed_hosts_from_db():
         _effective_use_ssl = pc.use_ssl if pc.domain else (not DEBUG)
 
         # Patch ALLOWED_HOSTS
+        print(f"[settings] Patching ALLOWED_HOSTS with domain: {_effective_domain}")
         if _effective_domain and _effective_domain not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(_effective_domain)
+            print(f"[settings] Added {_effective_domain} to ALLOWED_HOSTS. Current: {ALLOWED_HOSTS}")
+        else:
+            print(f"[settings] Domain {_effective_domain} already in ALLOWED_HOSTS or empty.")
         
         # Patch CSRF_TRUSTED_ORIGINS
         if _effective_domain:
