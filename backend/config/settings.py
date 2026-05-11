@@ -216,7 +216,9 @@ def _patch_allowed_hosts_from_db():
                     domain=_effective_domain,
                     name=f'CloudNeuron ({_effective_domain})'
                 )
-    except Exception:
+    except Exception as exc:
+        import sys as _sys
+        _sys.stderr.write(f"[settings] DB Patch skipped: {exc}\n")
         pass  # DB not ready yet (first boot / migrations)
 
 _patch_allowed_hosts_from_db()
