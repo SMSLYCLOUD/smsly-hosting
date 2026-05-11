@@ -83,9 +83,9 @@ export function OAuthTab() {
     try {
       const payload: Record<string, unknown> = {};
       if (provider === "github") {
-        payload.github = { client_id: githubClientId, client_secret: githubSecret };
+        payload.github = { client_id: githubClientId.trim(), client_secret: githubSecret.trim() };
       } else {
-        payload.google = { client_id: googleClientId, client_secret: googleSecret };
+        payload.google = { client_id: googleClientId.trim(), client_secret: googleSecret.trim() };
       }
 
       await api.post("/oauth/credentials/", payload);
