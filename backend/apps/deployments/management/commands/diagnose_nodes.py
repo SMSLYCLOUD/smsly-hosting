@@ -139,15 +139,30 @@ class Command(BaseCommand):
             except Exception as e:
                 self.stdout.write(self.style.WARNING(f"       - {candidate} → FAILED: {str(e)[:60]}..."))
 
-        if not base:
-            self.stdout.write(self.style.ERROR(f"     ❌ ALL CANDIDATES FAILED for {server.name}"))
+        self.stdout.write(f"     Connectivity Audit:")
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        orch = RemoteOrchestrator(server)
+        
+        audit = orch.check_connectivity()
+        if audit["network"]:
+            self.stdout.write(self.style.SUCCESS(f"       ✅ Network Reachable ({audit['latency_ms']}ms)"))
+        else:
+            self.stdout.write(self.style.ERROR(f"       ❌ Network Unreachable: {audit['error']}"))
             return
 
-        self.stdout.write(self.style.SUCCESS(f"     ✅ Reachable via: {base} (HTTP {response.status_code})"))
-        
-        # Update server if base changed
+        if audit["auth"]:
+            self.stdout.write(self.style.SUCCESS(f"       ✅ API Authentication Valid"))
+        else:
+            self.stdout.write(self.style.ERROR(f"       ❌ API Authentication Failed: {audit['error']}"))
+            if "401" in str(audit['error']) or "403" in str(audit['error']):
+                self.stdout.write("          Suggestion: Run --fix on the target or this master to sync tokens.")
+
+        # Update server if primary candidate works
+        base = orch._candidate_base_urls()[0]
         if server.api_url != base:
             self.stdout.write(f"        (Updating api_url from {server.api_url} to {base})")
+            server.api_url = base
+            server.save(update_fields=["api_url"])
             server.api_url = base
             server.save(update_fields=["api_url"])
 

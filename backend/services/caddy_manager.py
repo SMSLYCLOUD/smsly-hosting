@@ -99,9 +99,9 @@ def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: s
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
     elif upstream_host and upstream_host != domain:
-        _append_reverse_proxy(lines, "localhost:8081", upstream_host)
+        _append_reverse_proxy(lines, "nginx:80", upstream_host)
     else:
-        _append_reverse_proxy(lines, "localhost:8081")
+        _append_reverse_proxy(lines, "nginx:80")
 
     lines.extend(
         [
@@ -213,9 +213,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 if upstream_url:
                     _append_reverse_proxy(lines, upstream_url, target_host or value)
                 elif target_host and target_host != value:
-                    _append_reverse_proxy(lines, "localhost:8081", target_host)
+                    _append_reverse_proxy(lines, "nginx:80", target_host)
                 else:
-                    _append_reverse_proxy(lines, "localhost:8081")
+                    _append_reverse_proxy(lines, "nginx:80")
                 lines.append("    encode gzip")
                 lines.append("}")
                 blocks.append("\n".join(lines))
@@ -238,7 +238,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 else:
                     blocks.append(
                         f"""{public_domain} {{
-    reverse_proxy localhost:8081
+    reverse_proxy nginx:80
 }}"""
                     )
                     seen.add(public_domain)
@@ -389,7 +389,7 @@ def generate_caddyfile(config) -> str:
     # Global options for On-Demand TLS
     sections.append("""{
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://nginx:80/api/v1/services/check-domain/
     }
 }""")
 
@@ -417,7 +417,7 @@ def generate_caddyfile(config) -> str:
         platform_block = [f"{domain} {{"]
         platform_block.extend(
             [
-                "    reverse_proxy localhost:8090",
+                "    reverse_proxy nginx:80",
                 "    encode gzip",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
@@ -462,7 +462,7 @@ def generate_caddyfile(config) -> str:
                     [
                         f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
                         "    handle @known_hosts {",
-                        "        reverse_proxy localhost:8081",
+                        "        reverse_proxy nginx:80",
                         "    }",
                     ]
                 )
@@ -494,14 +494,14 @@ def generate_caddyfile(config) -> str:
             # Explicitly use http:// for IP to prevent Caddy's auto-HTTPS loop
             sections.append(
                 f"""http://{domain} {{
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
     encode gzip
 }}"""
             )
         elif not use_ssl:
             sections.append(
                 f"""http://{domain} {{
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
     encode gzip
 }}"""
             )
@@ -517,7 +517,7 @@ def generate_caddyfile(config) -> str:
     }
     redir @not_ip https://{host}{uri} 308
     handle {
-        reverse_proxy localhost:8090
+        reverse_proxy nginx:80
     }
 }"""
         )
@@ -527,7 +527,7 @@ def generate_caddyfile(config) -> str:
         if not domain or (not _is_ip(domain) and not use_ssl):
             sections.append(
                 """:80 {
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }"""
             )
 
@@ -605,18 +605,26 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             # Signal watcher to explicitly remove any stale systemd override.
             with open(CADDY_TOKEN_CLEAR_FILE, "w", encoding="utf-8") as handle:
                 handle.write("clear")
-            os.chmod(CADDY_TOKEN_CLEAR_FILE, 0o600)
 
-        # Create reload flag - the host watcher will pick this up
-        with open(CADDY_RELOAD_FLAG, "w", encoding="utf-8") as handle:
-            handle.write("reload")
+        # Trigger reload via Docker API
+        import subprocess
+        logger.info("Triggering Caddy reload via Docker...")
+        res = subprocess.run(
+            ["docker", "exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
+            capture_output=True,
+            text=True
+        )
+        if res.returncode != 0:
+            logger.error("Caddy reload failed: %s", res.stderr)
+            result["message"] = f"Caddy reload failed: {res.stderr}"
+            return result
 
         result["ok"] = True
-        result["message"] = "Caddyfile written and reload flag set"
+        result["message"] = "Caddyfile written and reloaded successfully"
         logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
 
-    except OSError as exc:
-        result["message"] = f"Failed to write Caddyfile: {exc}"
+    except Exception as exc:
+        result["message"] = f"Failed to apply Caddyfile: {exc}"
         if isinstance(exc, PermissionError):
             result["message"] += (
                 " | Fix host dir perms: sudo chown -R 1000:1000 /opt/smsly-hosting/caddy-config "

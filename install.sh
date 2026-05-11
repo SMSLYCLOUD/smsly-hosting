@@ -4243,343 +4243,40 @@ fi
 fi
 
 # -----------------------------------------------------------------------------
-# 7. Caddy Reverse Proxy (Public Access)
+# 7. Caddy Reverse Proxy (Public Access — Dockerized)
 # -----------------------------------------------------------------------------
 if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
-if [ "$MODE_AGENT_LITE" = "true" ]; then
-    echo -e "\n${YELLOW}[7/9] Configuring Lite Agent Edge...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d socket-proxy backend celery-worker traefik >/dev/null 2>&1 || true
-    echo -e "${GREEN}  ✓ Lite Agent edge services are managed by Traefik; skipping Caddy.${NC}"
+    echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
+
+    # Ensure caddy-config directory exists and has correct permissions
+    mkdir -p /opt/smsly-hosting/caddy-config
+    chown -R 1000:1000 /opt/smsly-hosting/caddy-config
+
+    # SEED: Create a temporary safety Caddyfile so the container doesn't crash on first start.
+    # The backend will overwrite this within seconds of starting up.
+    if [ ! -f /opt/smsly-hosting/caddy-config/Caddyfile ]; then
+        echo -e "${BLUE}  → Seeding initial safety Caddyfile...${NC}"
+        cat > /opt/smsly-hosting/caddy-config/Caddyfile <<EOF
+:80 {
+    respond "System initializing... Please refresh in 30 seconds." 200
+}
+EOF
+        chown 1000:1000 /opt/smsly-hosting/caddy-config/Caddyfile
+    fi
+
+    # Build and start Caddy container
+    echo -e "${BLUE}  → Building and starting Caddy container...${NC}"
+    docker compose -f "$COMPOSE_FILE" build caddy
+    docker compose -f "$COMPOSE_FILE" up -d caddy
+
+    # Cleanup legacy host-side services if they exist
+    echo -e "${BLUE}  → Cleaning up legacy host-side Caddy services (if any)...${NC}"
+    systemctl stop caddy caddy-watcher smsly-update-watcher 2>/dev/null || true
+    systemctl disable caddy caddy-watcher smsly-update-watcher 2>/dev/null || true
+    rm -f /etc/systemd/system/caddy.service /etc/systemd/system/caddy-watcher.service /etc/systemd/system/smsly-update-watcher.service
+    systemctl daemon-reload
+
     set_checkpoint "caddy_configured"
-else
-    echo -e "\n${YELLOW}[7/9] Setting up Caddy Reverse Proxy...${NC}"
-
-if [ "$RUST_TWIN_MODE" = "true" ]; then
-    echo -e "${BLUE}  → Formatting Rust Twin Caddyfile...${NC}"
-    cd rust_twin && export DOMAIN && export ACME_EMAIL && caddy fmt --overwrite Caddyfile 2>/dev/null || true
-    cd ..
-    # Swap the default Caddyfile path to point to the Rust Twin version
-    install_caddyfile_atomically rust_twin/Caddyfile "Rust Twin Caddyfile" || true
-fi
-
-# ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
-# Always build custom Caddy with Cloudflare DNS support, even in IP mode.
-# This ensures users can enable SSL + wildcard from the web UI later without SSH.
-if caddy list-modules 2>/dev/null | grep -q 'dns.providers.cloudflare'; then
-    echo -e "${GREEN}  ✓ Caddy already has cloudflare DNS module${NC}"
-elif command -v caddy &> /dev/null; then
-    echo -e "${BLUE}  → Caddy found but missing Cloudflare DNS plugin — rebuilding...${NC}"
-    _BUILD_CADDY=true
-else
-    echo -e "${BLUE}  → Installing Caddy with Cloudflare DNS plugin...${NC}"
-    _BUILD_CADDY=true
-fi
-
-if [ "${_BUILD_CADDY:-}" = "true" ]; then
-    if ! command -v xcaddy &> /dev/null; then
-        # xcaddy needs Go 1.21+. Ubuntu apt repos ship Go 1.18 which is
-        # too old (go.mod 'toolchain' directive is unsupported). Use snap
-        # or direct binary download to get a compatible version.
-        _GO_OK=false
-        if command -v go &> /dev/null; then
-            _GO_VER=$(go version | grep -oP 'go1\.(\d+)' | grep -oP '\d+$')
-            [ "${_GO_VER:-0}" -ge 21 ] && _GO_OK=true
-        fi
-        if [ "$_GO_OK" != "true" ]; then
-            echo -e "${BLUE}  → Installing Go 1.22 (xcaddy requires Go 1.21+)...${NC}"
-            GO_TAR="go1.22.10.linux-amd64.tar.gz"
-            curl -fsSL "https://go.dev/dl/$GO_TAR" -o "/tmp/$GO_TAR"
-            rm -rf /usr/local/go
-            tar -C /usr/local -xzf "/tmp/$GO_TAR"
-            rm -f "/tmp/$GO_TAR"
-            export PATH="/usr/local/go/bin:$PATH"
-            echo -e "${GREEN}  ✓ Go $(go version | awk '{print $3}') installed${NC}"
-        fi
-        export GOPATH="${GOPATH:-/root/go}"
-        export PATH="$PATH:$GOPATH/bin"
-        go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-    fi
-
-    # Build custom Caddy with Cloudflare DNS
-    CADDY_TMP=$(mktemp -d)
-    cd "$CADDY_TMP"
-    if xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5; then
-        # Replace system Caddy
-        systemctl stop caddy 2>/dev/null || true
-        mv ./caddy /usr/bin/caddy
-        chmod +x /usr/bin/caddy
-        echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Custom Caddy build failed — trying pre-built download...${NC}"
-        # Fallback 1: Download pre-built Caddy with Cloudflare DNS from Caddy's download API
-        if curl -fsSL -o /usr/bin/caddy \
-            "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/cloudflare" 2>/dev/null; then
-            chmod +x /usr/bin/caddy
-            echo -e "${GREEN}  ✓ Pre-built Caddy with Cloudflare DNS downloaded${NC}"
-        elif ! command -v caddy &> /dev/null; then
-            # Fallback 2: Install stock Caddy from apt (no wildcard SSL, but basic HTTPS works)
-            echo -e "${YELLOW}  ⚠ Download also failed — installing stock Caddy (no wildcard SSL)...${NC}"
-            apt_run apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null 2>&1
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
-            curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-            apt_run apt-get update >/dev/null 2>&1
-            apt_run apt-get install -y caddy >/dev/null 2>&1
-        fi
-    fi
-    cd "$INSTALL_DIR"
-    rm -rf "$CADDY_TMP"
-fi
-
-if ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
-    echo -e "${BLUE}  → Installing Caddy systemd service...${NC}"
-    # Add a dedicated caddy user and group
-    groupadd --system caddy 2>/dev/null || true
-    useradd --system --gid caddy --create-home --home-dir /var/lib/caddy \
-        --shell /usr/sbin/nologin --comment "Caddy web server" caddy 2>/dev/null || true
-
-    cat > /etc/systemd/system/caddy.service <<'CADDYSRV'
-[Unit]
-Description=Caddy
-Documentation=https://caddyserver.com/docs/
-After=network.target network-online.target
-Requires=network-online.target
-
-[Service]
-Type=exec
-User=caddy
-Group=caddy
-ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
-Restart=always
-RestartSec=3
-TimeoutStopSec=5s
-LimitNOFILE=1048576
-LimitNPROC=512
-PrivateTmp=true
-ProtectSystem=full
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-
-[Install]
-WantedBy=multi-user.target
-CADDYSRV
-    systemctl daemon-reload
-    echo -e "${GREEN}  ✓ Caddy systemd service installed${NC}"
-fi
-
-# ─── Configure Caddyfile ──────────────────────────────────────────────────────
-echo -e "${BLUE}  → Configuring Caddyfile...${NC}"
-mkdir -p /var/log/caddy
-mkdir -p /etc/caddy
-touch /var/log/caddy/access.log
-if id caddy >/dev/null 2>&1; then
-    chown -R caddy:caddy /var/log/caddy
-fi
-chmod 755 /var/log/caddy
-chmod 640 /var/log/caddy/access.log
-
-CADDY_OVERRIDE_DIR="/etc/systemd/system/caddy.service.d"
-CADDY_OVERRIDE_FILE="$CADDY_OVERRIDE_DIR/override.conf"
-
-if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ]; then
-    # Ensure token is sourced from .env if present (idempotent runs)
-    if [ -z "$CLOUDFLARE_API_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-        CLOUDFLARE_API_TOKEN="$(grep -m1 '^CLOUDFLARE_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
-    fi
-
-    if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
-        # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
-        cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
-# Grid Reverse Proxy — Auto-generated
-# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
-# Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
-
-{
-    on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
-    }
-}
-
-$DOMAIN {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-*.$DOMAIN {
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-    }
-    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
-    handle @platform_assets {
-        reverse_proxy localhost:8090
-    }
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
-}
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy localhost:8090
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-CADDYEOF
-
-        # Set Cloudflare token in systemd environment
-        mkdir -p "$CADDY_OVERRIDE_DIR"
-        cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
-[Service]
-ExecStart=
-ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
-Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
-ENVEOF
-        chmod 600 "$CADDY_OVERRIDE_FILE"
-        systemctl daemon-reload
-        install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh wildcard Caddyfile" || generate_safe_caddyfile "fresh wildcard fallback"
-        rm -f /etc/caddy/Caddyfile.tmp
-
-        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
-    else
-        # ─── Standard SSL (no wildcard) ──────────────────────────────────
-        cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
-# Grid Reverse Proxy — Auto-generated
-# Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
-
-{
-    on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
-    }
-}
-
-$DOMAIN {
-    reverse_proxy localhost:8090
-    encode gzip
-    log {
-        output file /var/log/caddy/access.log
-    }
-}
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy localhost:8090
-}
-
-:80 {
-    reverse_proxy localhost:8090
-}
-CADDYEOF
-        if [ -f "$CADDY_OVERRIDE_FILE" ]; then
-            rm -f "$CADDY_OVERRIDE_FILE"
-            rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
-            systemctl daemon-reload
-        fi
-        install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh HTTPS Caddyfile" || generate_safe_caddyfile "fresh HTTPS fallback"
-        rm -f /etc/caddy/Caddyfile.tmp
-        echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
-    fi
-else
-    cat > /etc/caddy/Caddyfile.tmp <<CADDYEOF
-# Grid Reverse Proxy — Auto-generated
-:80 {
-    reverse_proxy localhost:8090
-}
-CADDYEOF
-    if [ -f "$CADDY_OVERRIDE_FILE" ]; then
-        rm -f "$CADDY_OVERRIDE_FILE"
-        rmdir "$CADDY_OVERRIDE_DIR" 2>/dev/null || true
-        systemctl daemon-reload
-    fi
-    install_caddyfile_atomically /etc/caddy/Caddyfile.tmp "fresh IP-mode Caddyfile" || true
-    rm -f /etc/caddy/Caddyfile.tmp
-    echo -e "${GREEN}  ✓ Caddy configured for HTTP: :80 → 8090${NC}"
-fi
-
-# ─── Create caddy-config volume directory for Settings UI writes ──────────────
-ensure_infrastructure_permissions
-
-# ─── Install caddy-watcher service (picks up UI-driven Caddyfile changes) ─────
-if [ -f "$INSTALL_DIR/scripts/caddy-reload.sh" ]; then
-    chmod +x "$INSTALL_DIR/scripts/caddy-reload.sh"
-    cat > /etc/systemd/system/caddy-watcher.service <<WATCHEREOF
-[Unit]
-Description=Caddy Config Watcher (SMSLY)
-After=caddy.service
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/scripts/caddy-reload.sh /opt/smsly-hosting/caddy-config
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-WATCHEREOF
-    systemctl daemon-reload
-    systemctl enable caddy-watcher >/dev/null 2>&1
-    restart_caddy_watcher_safely "${DOMAIN:-}" "fresh install Caddy watcher verification"
-    install_caddy_health_guard "${DOMAIN:-}"
-    echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
-fi
-
-# ─── Install update-watcher service (picks up UI-driven platform updates) ─────
-if [ -f "$INSTALL_DIR/scripts/platform-update.sh" ]; then
-    chmod +x "$INSTALL_DIR/scripts/platform-update.sh"
-    cat > /etc/systemd/system/smsly-update-watcher.service <<UPDATEWATCHEREOF
-[Unit]
-Description=Platform Update Watcher (SMSLY)
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/scripts/platform-update.sh /opt/smsly-hosting/caddy-config
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-UPDATEWATCHEREOF
-    systemctl daemon-reload
-    systemctl enable smsly-update-watcher >/dev/null 2>&1
-    systemctl restart smsly-update-watcher
-    echo -e "${GREEN}  ✓ Platform update watcher service installed and running${NC}"
-fi
-
-# Kill non-Caddy/non-Docker processes holding port 80/443 before Caddy binds
-for port in 80 443; do
-    PID=$(lsof -ti :$port 2>/dev/null || ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' || true)
-    if [ -n "$PID" ] && [ "$PID" != "0" ]; then
-        PNAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
-        # Don't kill Caddy or Docker processes
-        if [[ "$PNAME" != "caddy" ]] && [[ "$PNAME" != "docker"* ]]; then
-            echo -e "${YELLOW}  → Killing $PNAME (PID: $PID) holding port $port${NC}"
-            kill -9 $PID 2>/dev/null || true
-            sleep 1
-        fi
-    fi
-done
-
-reload_caddy_preserving_previous "" || true
-systemctl enable caddy >/dev/null 2>&1
-
-# Verify Caddy is running
-sleep 2
-if systemctl is-active --quiet caddy; then
-    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
-    fi
-
-    safe_refresh_runtime_services
-    set_checkpoint "caddy_configured"
-fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -5000,7 +4697,7 @@ if [ -d "$INSTALL_DIR/cli" ]; then
             URL_SCHEME="https" && [ "$CLI_USE_SSL" != "true" ] && URL_SCHEME="http"
             API_URL="${URL_SCHEME}://${CLI_DOMAIN}"
         else
-            API_URL="http://127.0.0.1:8090"
+            API_URL="http://127.0.0.1"
         fi
 
         # Best effort: don't auto-login yet (token is in creds file),
