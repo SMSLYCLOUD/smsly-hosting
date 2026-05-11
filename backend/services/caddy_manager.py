@@ -434,7 +434,7 @@ def generate_caddyfile(config) -> str:
             wildcard_lines = [
                 f"*.{domain} {{",
                 "    tls {",
-                "        dns cloudflare {env.CLOUDFLARE_API_TOKEN}",
+                f"        dns cloudflare {cloudflare_token}",
                 "    }",
             ]
 
