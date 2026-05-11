@@ -67,8 +67,8 @@ def print_secrets(secrets_dict: dict[str, str]) -> None:
     print("=" * 70)
     print("  SMSLY HOSTING — REQUIRED SECRETS")
     print("=" * 70)
-    for name, _desc in SECRET_DEFINITIONS:
-        print(f"\n  # {_desc}")
+    for name, _length, desc in SECRET_DEFINITIONS:
+        print(f"\n  # {desc}")
         print(f"  {name:<{max_name_len}} = {secrets_dict[name]}")
     print()
     print("  Copy these into your .env file and keep them SECURE.")
@@ -84,7 +84,7 @@ def append_to_env(env_path: str, secrets_dict: dict[str, str], dry_run: bool = F
     try:
         with open(env_path, "a", encoding="utf-8") as f:
             f.write(f"\n# Auto-generated secrets ({__file__})\n")
-            for name, _desc in SECRET_DEFINITIONS:
+            for name, _length, _desc in SECRET_DEFINITIONS:
                 f.write(f"{name}={secrets_dict[name]}\n")
         print(f"Secrets appended to {env_path}")
     except OSError as e:
