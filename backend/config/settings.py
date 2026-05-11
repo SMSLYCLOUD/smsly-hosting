@@ -112,13 +112,15 @@ TUNNEL_BASE_DOMAIN = (
 ENABLE_LEGACY_TUNNEL_API = config(
     'ENABLE_LEGACY_TUNNEL_API',
     default=False,
-    cast=bool,
-)
-# Generic ALLOWED_HOSTS for containerized reverse-proxy trust model.
-# Caddy handles external domain filtering; the backend trusts the ingress.
-ALLOWED_HOSTS = ['*']
-USE_X_FORWARDED_HOST = True
-USE_X_FORWARDED_PORT = True
+# Restrictive ALLOWED_HOSTS with mandatory internal whitelisting.
+_BASE_HOSTS = ['localhost', '127.0.0.1', 'nginx', 'backend', 'smsly-hosting-backend-1']
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=','.join(_BASE_HOSTS), cast=Csv())
+for host in _BASE_HOSTS:
+    if host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(host)
+
+if DOMAIN and DOMAIN != 'localhost' and DOMAIN not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(DOMAIN)
 # Ensure common cPanel/CloudNode hostnames are allowed for automated checks
 ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
 APPEND_SLASH = False
@@ -160,9 +162,10 @@ def _patch_allowed_hosts_from_db():
         _effective_domain = pc.domain or DOMAIN
         _effective_use_ssl = pc.use_ssl if pc.domain else (not DEBUG)
 
-        # Patch ALLOWED_HOSTS (Now generic, but kept for legacy sync if needed)
+        # Patch ALLOWED_HOSTS (Force-inject the UI-set domain)
         if _effective_domain and _effective_domain not in ALLOWED_HOSTS:
-            pass # ALLOWED_HOSTS is now ['*']
+            ALLOWED_HOSTS.append(_effective_domain)
+            print(f"[settings] Precise patch: Added {_effective_domain} to ALLOWED_HOSTS")
         
         # Patch CSRF_TRUSTED_ORIGINS
         if _effective_domain:
