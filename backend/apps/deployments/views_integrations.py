@@ -181,7 +181,7 @@ def github_oauth_url(request):
     cache.set(f"github_oauth_state:{state}", str(request.user.id), timeout=600)
 
     params = {
-        "client_id": app.client_id,
+        "client_id": app.client_id.strip(),
         "redirect_uri": callback_url,
         "scope": " ".join(scopes),
         "response_type": "code",

@@ -75,6 +75,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 title: "Domain added",
                 description: res.data?.message || "Custom domain saved and routing sync triggered.",
             });
+            // Signal the rest of the UI that a domain change occurred
+            window.dispatchEvent(new CustomEvent('DOMAIN_SYNC_TRIGGER', { detail: { domain, serviceId: service.id } }));
             setNewDomain('');
             await loadDomains();
         } catch (err: any) {
@@ -97,6 +99,8 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
                 title: "Domain removed",
                 description: res.data?.message || "Custom domain removed and routing sync triggered.",
             });
+            // Signal the rest of the UI that a domain change occurred
+            window.dispatchEvent(new CustomEvent('DOMAIN_SYNC_TRIGGER', { detail: { domain, serviceId: service.id } }));
             await loadDomains();
         } catch (err: any) {
             console.error(err);

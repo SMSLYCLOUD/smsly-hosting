@@ -464,6 +464,8 @@ export default function SettingsPage() {
       }
       const result = await systemApi.updateDomainConfig(payload);
       toast({ title: 'Domain Config Saved', description: result.message || 'Configuration applied.' });
+      // Signal the rest of the UI that a domain change occurred
+      window.dispatchEvent(new CustomEvent('DOMAIN_SYNC_TRIGGER', { detail: { domain: payload.domain, type: 'PLATFORM' } }));
       setCfTokenTouched(false);
       fetchDomainConfig();
     } catch (err: any) {
