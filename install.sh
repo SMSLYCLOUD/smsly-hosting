@@ -4617,11 +4617,11 @@ fi
 
 # ─── Check 5: Caddy running ───────────────────────────────────────────────
 echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-if systemctl is-active --quiet caddy 2>/dev/null; then
-    echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
+if docker inspect -f '{{.State.Running}}' smsly-hosting-caddy-1 2>/dev/null | grep -q "true"; then
+    echo -e "${GREEN}  ✓ Caddy reverse proxy container active${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
-    echo -e "${RED}  ✗ Caddy is not running${NC}"
+    echo -e "${RED}  ✗ Caddy container is not running${NC}"
 fi
 fi
 
