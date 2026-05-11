@@ -89,10 +89,10 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
         SCREEN_SESSION="${SMSLY_SCREEN_SESSION:-smsly-install-$$}"
         if screen -help 2>&1 | grep -q -- '-Logfile'; then
             exec screen -L -Logfile /var/log/smsly-screen.log -S "$SCREEN_SESSION" \
-                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
+                bash -c 'exec bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         else
             exec screen -L -S "$SCREEN_SESSION" \
-                bash -c 'bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
+                bash -c 'exec bash "$0" --no-screen "$@"; rc=$?; echo; echo "Installer exited with code $rc."; echo "Press ENTER to close this screen."; read -r _; exit "$rc"' "$SCRIPT_PATH" "$@"
         fi
     else
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
@@ -1871,7 +1871,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }
 TLS443
 )
@@ -1885,12 +1885,12 @@ TLS443
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://nginx:80/api/v1/services/check-domain/
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -1899,7 +1899,7 @@ ${domain_block_label} {
 ${tls_block}
 
 :80 {
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }
 
 ${svc_blocks}
@@ -2638,9 +2638,9 @@ fi
         export SMSLY_REEXEC=1
         export NO_SCREEN=true
         export SKIP_SCREEN=1
-        # NOTE: Do NOT release the lock here — the re-exec'd process inherits
-        # the flock fd (9), preventing a race window where another installer
-        # could slip in between lock release and exec.
+        # Release the lock before re-exec so the new process can acquire it.
+        # Closing FD 9 releases the flock.
+        exec 9>&- 2>/dev/null || true
         exec bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
@@ -3067,12 +3067,12 @@ for domain in Domain.objects.select_related('service').filter(
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://nginx:80/api/v1/services/check-domain/
     }
 }
 
 ${cf_domain} {
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -3086,11 +3086,11 @@ ${cf_domain} {
 ${cf_known_stanza}
     @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
     handle @platform_assets {
-        reverse_proxy localhost:8090
+        reverse_proxy nginx:80
     }
     handle {
         rewrite * /notice
-        reverse_proxy localhost:8090
+        reverse_proxy nginx:80
     }
 }
 
@@ -3098,11 +3098,11 @@ ${cf_known_stanza}
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }
 
 ${cf_svc_blocks}
