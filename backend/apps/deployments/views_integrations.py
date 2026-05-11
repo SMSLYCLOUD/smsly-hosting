@@ -164,7 +164,10 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    origin = settings.SITE_URL.rstrip("/")
+    # Use the current request origin to ensure the redirect_uri matches exactly 
+    # what the user is seeing in their browser.
+    scheme = "https" if request.is_secure() else "http"
+    origin = f"{scheme}://{request.get_host()}"
     callback_url = f"{origin}/auth/github/callback"
 
     scopes = settings.SOCIALACCOUNT_PROVIDERS.get("github", {}).get(
@@ -226,7 +229,8 @@ def github_oauth_callback(request):
         )
 
     # Build the same callback URL the frontend used
-    origin = settings.SITE_URL.rstrip("/")
+    scheme = "https" if request.is_secure() else "http"
+    origin = f"{scheme}://{request.get_host()}"
     callback_url = f"{origin}/auth/github/callback"
 
     # ── Step 1: Exchange code for access token ──────────────────────────

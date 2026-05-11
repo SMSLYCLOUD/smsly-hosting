@@ -71,8 +71,8 @@ def oauth_credentials(request):
                         provider='github',
                         defaults={
                             'name': 'GitHub',
-                            'client_id': github_data['client_id'],
-                            'secret': github_data['client_secret'],
+                            'client_id': github_data['client_id'].strip(),
+                            'secret': github_data['client_secret'].strip(),
                         }
                     )
                     github_app.sites.add(site)
@@ -85,8 +85,8 @@ def oauth_credentials(request):
                         provider='google',
                         defaults={
                             'name': 'Google',
-                            'client_id': google_data['client_id'],
-                            'secret': google_data['client_secret'],
+                            'client_id': google_data['client_id'].strip(),
+                            'secret': google_data['client_secret'].strip(),
                         }
                     )
                     google_app.sites.add(site)
