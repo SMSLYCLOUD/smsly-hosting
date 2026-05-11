@@ -504,4 +504,5 @@ volumes:
       device: /opt/smsly-hosting/caddy-config
   caddy_data:
     driver: local
+  backups_data: null
   rabbitmq_data: null
