@@ -22,18 +22,32 @@ def _env_bool(name: str, default: str = 'False') -> bool:
     return raw in ('1', 'true', 'yes', 'on')
 
 
-# Self-hosted resilience:
-# do not hard-crash app boot if these keys are missing.
+from django.core.exceptions import ImproperlyConfigured
+
 _SECRET_KEY_RAW = str(config('SECRET_KEY', default='')).strip()
 _FIELD_ENCRYPTION_KEY_RAW = str(config('FIELD_ENCRYPTION_KEY', default='')).strip()
 
 if not _SECRET_KEY_RAW:
-    print("[settings] WARNING: SECRET_KEY missing; using fallback self-host key.")
+    raise ImproperlyConfigured(
+        "SECRET_KEY is not set.\n\n"
+        "  Run the included helper to generate all secrets:\n"
+        "    python scripts/generate_env_secrets.py --env .env\n\n"
+        "  Or generate just this key:\n"
+        "    python -c \"from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())\"\n\n"
+        "  Then add SECRET_KEY=<value> to your .env file."
+    )
 if not _FIELD_ENCRYPTION_KEY_RAW:
-    print("[settings] WARNING: FIELD_ENCRYPTION_KEY missing; using fallback self-host key.")
+    raise ImproperlyConfigured(
+        "FIELD_ENCRYPTION_KEY is not set.\n\n"
+        "  Run the included helper to generate all secrets:\n"
+        "    python scripts/generate_env_secrets.py --env .env\n\n"
+        "  Or generate just this key:\n"
+        "    python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"\n\n"
+        "  Then add FIELD_ENCRYPTION_KEY=<value> to your .env file."
+    )
 
-SECRET_KEY = _SECRET_KEY_RAW or 'smsly-self-host-fallback-secret-key-change-me'
-FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW or 'T6bKnU4z9gSMGFsQ2B054nIyrkJslnyWgI6djrtbORQ='
+SECRET_KEY = _SECRET_KEY_RAW
+FIELD_ENCRYPTION_KEY = _FIELD_ENCRYPTION_KEY_RAW
 GATEWAY_SECRET = str(config('GATEWAY_SECRET', default=SECRET_KEY)).strip() or SECRET_KEY
 
 # Validate encryption key format (Fernet requirement: 32 bytes, URL-safe base64)
@@ -41,7 +55,10 @@ try:
     from cryptography.fernet import Fernet
     Fernet(FIELD_ENCRYPTION_KEY.encode() if isinstance(FIELD_ENCRYPTION_KEY, str) else FIELD_ENCRYPTION_KEY)
 except Exception as e:
-    raise ValueError(f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'") from e
+    raise ImproperlyConfigured(
+        f"Invalid FIELD_ENCRYPTION_KEY: {e}. Generate with:\n"
+        "  python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+    ) from e
 DOMAIN = (config('DOMAIN', default='localhost') or 'localhost').strip()
 DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
@@ -60,15 +77,17 @@ if not DEBUG and not IS_TESTING:
     # SEC-001: Automatic IP-Bypass for SSL Redirection
     # If the domain is an IP address, disable the redirect to prevent ERR_SSL_PROTOCOL_ERROR.
     _is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN))
-    SECURE_SSL_REDIRECT = _use_ssl if not _is_ip else False
+    _is_local_host = DOMAIN.lower() in ('localhost', '127.0.0.1')
+    _ssl_enabled = _use_ssl and not _is_ip and not _is_local_host
+    SECURE_SSL_REDIRECT = _ssl_enabled
 
     SECURE_REDIRECT_EXEMPT = [
         r'^api/v1/services/check-domain/',
         r'^health/',
     ]
-    SESSION_COOKIE_SECURE = _use_ssl if not _is_ip else False
-    CSRF_COOKIE_SECURE = _use_ssl if not _is_ip else False
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if not _is_ip else None
+    SESSION_COOKIE_SECURE = _ssl_enabled
+    CSRF_COOKIE_SECURE = _ssl_enabled
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if _ssl_enabled else None
 else:
     # Explicitly disable for tests and debug mode
     SECURE_HSTS_SECONDS = 0
@@ -152,7 +171,7 @@ try:
             port=parsed.port
         )
         with conn.cursor() as cursor:
-            cursor.execute("SELECT domain FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
+            cursor.execute("SELECT domain, use_ssl FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
             row = cursor.fetchone()
             if row and row[0]:
                 db_domain = str(row[0]).strip().lower().rstrip('.')
@@ -162,9 +181,16 @@ try:
                         ALLOWED_HOSTS.append(db_domain)
                     # Override DOMAIN in memory so that other settings depend on the DB state
                     DOMAIN = db_domain
-                    # Update SITE_URL to match the DB domain if we are in production
+                    # Sync USE_SSL from DB so security settings stay consistent
+                    db_use_ssl = bool(row[1]) if len(row) > 1 else False
+                    # Only override USE_SSL from DB if it was explicitly set
+                    if len(row) > 1:
+                        os.environ['USE_SSL'] = 'True' if db_use_ssl else 'False'
+                    # Update SITE_URL to match the DB domain
+                    _db_is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', db_domain))
+                    _db_proto = 'https' if (db_use_ssl and not _db_is_ip) else 'http'
                     if not DEBUG:
-                        SITE_URL = f"https://{db_domain}"
+                        SITE_URL = f"{_db_proto}://{db_domain}"
         conn.close()
 except Exception as e:
     print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
@@ -179,7 +205,11 @@ _env_site_url = config('SITE_URL', default=None)
 if _env_site_url:
     SITE_URL = _env_site_url
 elif 'SITE_URL' not in locals():
-    SITE_URL = ('http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
+    _use_ssl_site = _env_bool('USE_SSL', default='False')
+    _is_ip_site = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', DOMAIN))
+    _is_local_site = DOMAIN.lower() in ('localhost', '127.0.0.1')
+    _proto_site = 'https' if (_use_ssl_site and not _is_ip_site and not _is_local_site) else 'http'
+    SITE_URL = ('http://localhost:3000' if DEBUG else f'{_proto_site}://{DOMAIN}')
 
 # Stripe Billing (optional but required for paid plans)
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')

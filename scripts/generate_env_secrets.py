@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""
+Generate all required .env secrets for SMSLY Hosting.
+
+Usage:
+    python scripts/generate_env_secrets.py          # print to stdout
+    python scripts/generate_env_secrets.py --env     # append to .env
+    python scripts/generate_env_secrets.py --env .env.production
+
+Dependencies: cryptography (pip install cryptography)
+"""
+
+import argparse
+import secrets
+import string
+import sys
+
+try:
+    from cryptography.fernet import Fernet
+except ImportError:
+    print("ERROR: 'cryptography' package is required.", file=sys.stderr)
+    print("  pip install cryptography", file=sys.stderr)
+    sys.exit(1)
+
+
+SECRET_DEFINITIONS = [
+    ("SECRET_KEY", 50, "Django secret key for cryptographic signing"),
+    ("FIELD_ENCRYPTION_KEY", None, "Fernet key for encrypting model fields at rest"),
+    ("POSTGRES_PASSWORD", 32, "PostgreSQL database password"),
+    ("REDIS_PASSWORD", 32, "Redis authentication password"),
+    ("RABBITMQ_PASSWORD", 32, "RabbitMQ message broker password"),
+    ("GATEWAY_SECRET", 64, "Inter-service HMAC authentication secret"),
+    ("GITHUB_WEBHOOK_SECRET", 64, "GitHub webhook signature verification"),
+    ("AUTOSCALER_API_TOKEN", 64, "Autoscaler API bearer token"),
+    ("FRP_AUTH_TOKEN", 64, "FRP tunnel relay authentication token"),
+    ("PGCAT_ADMIN_PASSWORD", 48, "PgCat administration password"),
+]
+
+
+def generate_secret_key(length: int = 50) -> str:
+    chars = string.ascii_letters + string.digits
+    return "".join(secrets.choice(chars) for _ in range(length))
+
+
+def generate_fernet_key() -> str:
+    return Fernet.generate_key().decode()
+
+
+def generate_hex_secret(bytes_count: int) -> str:
+    return secrets.token_hex(bytes_count)
+
+
+def generate_all() -> dict[str, str]:
+    result = {}
+    for name, length_or_none, _desc in SECRET_DEFINITIONS:
+        if name == "FIELD_ENCRYPTION_KEY":
+            result[name] = generate_fernet_key()
+        elif name == "SECRET_KEY":
+            result[name] = generate_secret_key(length_or_none)
+        else:
+            result[name] = generate_hex_secret(length_or_none)
+    return result
+
+
+def print_secrets(secrets_dict: dict[str, str]) -> None:
+    max_name_len = max(len(k) for k in secrets_dict)
+    print("=" * 70)
+    print("  SMSLY HOSTING — REQUIRED SECRETS")
+    print("=" * 70)
+    for name, _desc in SECRET_DEFINITIONS:
+        print(f"\n  # {_desc}")
+        print(f"  {name:<{max_name_len}} = {secrets_dict[name]}")
+    print()
+    print("  Copy these into your .env file and keep them SECURE.")
+    print("  Run with --env to append directly to .env.")
+    print("=" * 70)
+
+
+def append_to_env(env_path: str, secrets_dict: dict[str, str], dry_run: bool = False) -> None:
+    if dry_run:
+        print(f"[dry-run] Would append secrets to: {env_path}")
+        return
+
+    try:
+        with open(env_path, "a", encoding="utf-8") as f:
+            f.write(f"\n# Auto-generated secrets ({__file__})\n")
+            for name, _desc in SECRET_DEFINITIONS:
+                f.write(f"{name}={secrets_dict[name]}\n")
+        print(f"Secrets appended to {env_path}")
+    except OSError as e:
+        print(f"ERROR: Could not write to {env_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate .env secrets for SMSLY Hosting")
+    parser.add_argument(
+        "--env",
+        nargs="?",
+        const=".env",
+        default=None,
+        help="Append secrets to .env file (default: print to stdout)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be written without modifying files",
+    )
+    args = parser.parse_args()
+
+    secrets_dict = generate_all()
+
+    if args.env:
+        append_to_env(args.env, secrets_dict, dry_run=args.dry_run)
+    else:
+        print_secrets(secrets_dict)
+
+
+if __name__ == "__main__":
+    main()

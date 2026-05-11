@@ -514,14 +514,17 @@ def generate_caddyfile(config) -> str:
 
     # Always include :80 catch-all so the IP always works.
     if use_ssl and domain:
-        # Only redirect if the host is NOT an IP address.
+        # Only redirect if the host is a routable domain name (not IP, not localhost, not .local).
         sections.append(
             """:80 {
-    @not_ip {
+    @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
         header_regexp host .+
     }
-    redir @not_ip https://{host}{uri} 308
+    redir @redirectable https://{host}{uri} 308
     handle {
         reverse_proxy nginx:80
     }
@@ -591,16 +594,16 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             handle.write(content)
 
         if cloudflare_token:
+            # SEC-003: Restrict shared volume directory to owner-only read
+            os.chmod(CADDY_CONFIG_DIR, 0o700)
             # Write Cloudflare token to shared volume for the host watcher
             # to sync into Caddy's systemd environment override.
-            with open(CADDY_TOKEN_FILE, "w", encoding="utf-8") as handle:
+            with os.fdopen(os.open(CADDY_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write(cloudflare_token)
-            os.chmod(CADDY_TOKEN_FILE, 0o600)
             # Persist a cache so future apply runs without an explicit token
             # do not unintentionally clear wildcard TLS.
-            with open(CADDY_TOKEN_CACHE, "w", encoding="utf-8") as handle:
+            with os.fdopen(os.open(CADDY_TOKEN_CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write(cloudflare_token)
-            os.chmod(CADDY_TOKEN_CACHE, 0o600)
             if os.path.exists(CADDY_TOKEN_CLEAR_FILE):
                 os.remove(CADDY_TOKEN_CLEAR_FILE)
         else:
@@ -609,7 +612,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             if os.path.exists(CADDY_TOKEN_CACHE):
                 os.remove(CADDY_TOKEN_CACHE)
             # Signal watcher to explicitly remove any stale systemd override.
-            with open(CADDY_TOKEN_CLEAR_FILE, "w", encoding="utf-8") as handle:
+            with os.fdopen(os.open(CADDY_TOKEN_CLEAR_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write("clear")
 
         # Trigger reload via Docker API
