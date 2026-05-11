@@ -1,0 +1,128 @@
+"""
+Runtime patching for Django settings.
+Allows dynamic domain whitelisting and SITE_URL updates from PlatformConfig.
+"""
+import re
+import logging
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
+
+def patch_runtime_settings():
+    """
+    Sync PlatformConfig values (domain, use_ssl) to Django settings.
+    Updates ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, and SITE_URL.
+    """
+    logger.info("[patch] Attempting to sync settings from PlatformConfig...")
+    try:
+        from apps.deployments.models import PlatformConfig
+        from django.contrib.sites.models import Site
+        
+        pc = PlatformConfig.load()
+        
+        # 1. Determine Effective Domain/Protocol
+        effective_domain = pc.domain or getattr(settings, 'DOMAIN', 'localhost')
+        effective_use_ssl = pc.use_ssl if pc.domain else (not getattr(settings, 'DEBUG', False))
+        
+        logger.info("[patch] Effective domain: %s (SSL: %s)", effective_domain, effective_use_ssl)
+
+        # 2. Patch ALLOWED_HOSTS
+        if effective_domain and effective_domain not in settings.ALLOWED_HOSTS:
+            settings.ALLOWED_HOSTS.append(effective_domain)
+            logger.info("[patch] Added %s to ALLOWED_HOSTS", effective_domain)
+            
+        # 3. Patch Security Origins
+        is_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', effective_domain))
+        scheme = 'http' if is_ip else ('https' if (effective_use_ssl and not getattr(settings, 'DEBUG', False)) else 'http')
+        origin = f'{scheme}://{effective_domain}'
+        
+        if origin not in settings.CSRF_TRUSTED_ORIGINS:
+            settings.CSRF_TRUSTED_ORIGINS.append(origin)
+        if origin not in settings.CORS_ALLOWED_ORIGINS:
+            settings.CORS_ALLOWED_ORIGINS.append(origin)
+            
+        # 4. Patch SITE_URL and allauth protocol
+        settings.SITE_URL = origin
+        settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
+        
+        # 5. Sync Django Site table (required for allauth)
+        try:
+            site = Site.objects.get(id=settings.SITE_ID)
+            if site.domain != effective_domain:
+                site.domain = effective_domain
+                site.name = f'CloudNeuron ({effective_domain})'
+                site.save()
+        except Site.DoesNotExist:
+            Site.objects.create(
+                id=settings.SITE_ID,
+                domain=effective_domain,
+                name=f'CloudNeuron ({effective_domain})'
+            )
+        logger.info("[patch] Runtime settings synchronized successfully.")
+            
+    except Exception as exc:
+        logger.warning("[patch] Runtime patching skipped or failed: %s", exc)
+
+def is_valid_host(host_str: str) -> bool:
+    """
+    Checks if an incoming HTTP host is explicitly authorized in the database.
+    Used by middleware to dynamically append to ALLOWED_HOSTS.
+    """
+    if not host_str:
+        return False
+        
+    domain = host_str.strip().lower()
+    
+    # 1. PlatformConfig primary domain (and First-Run bypass)
+    try:
+        from apps.deployments.models import PlatformConfig
+        cfg = PlatformConfig.load()
+        if not cfg.domain:
+            # Chicken-and-egg fix: If the database is completely empty (no domain set),
+            # we must trust the incoming host (which Caddy already allowed) so the user 
+            # can access the UI to run the initial setup.
+            return True
+        if cfg.domain and domain == cfg.domain.strip().lower():
+            return True
+    except Exception:
+        pass
+        
+    # 2. Managed Servers (Nodes)
+    try:
+        from apps.deployments.models_core import ManagedServer
+        from django.db.models import Q
+        if ManagedServer.objects.filter(Q(host=domain) | Q(private_ip=domain)).exists():
+            return True
+    except Exception:
+        pass
+        
+    # 3. Services (Public Domain)
+    try:
+        from apps.deployments.models import Service
+        if Service.objects.filter(public_domain=domain).exists():
+            return True
+    except Exception:
+        pass
+        
+    # 4. Verified Custom Domains
+    try:
+        from apps.domains.models import Domain, DomainStatus
+        from django.db.models import Q
+        routable = Domain.objects.filter(
+            domain_name=domain,
+            status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING]
+        ).filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE)).exists()
+        if routable:
+            return True
+    except Exception:
+        pass
+        
+    # 5. Addons
+    try:
+        from apps.deployments.models_addons import Addon
+        if Addon.objects.filter(public_domain=domain).exists():
+            return True
+    except Exception:
+        pass
+        
+    return False
