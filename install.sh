@@ -438,7 +438,7 @@ gen_hex_secret() {
 env_get_value() {
     local env_file="$1"
     local var_name="$2"
-    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- || true
+    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//' || true
 }
 
 env_set_value() {
@@ -1074,14 +1074,8 @@ ensure_env_runtime_defaults() {
             echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
         fi
 
-        # Migrate legacy @pgcat:5432 URLs to @pgcat:5432 (sanity check)
-        if [[ "$current_database_url" =~ @pgcat:5432 ]]; then
-            echo -e "${BLUE}  -> Migrating DATABASE_URL from pgcat to pgcat${NC}"
-            local migrated_url="${current_database_url/@pgcat:5432/@pgcat:5432}"
-            env_set_value "$env_file" "DATABASE_URL" "$migrated_url"
-            current_database_url="$migrated_url"
-            echo -e "${GREEN}  OK DATABASE_URL migrated to pgcat${NC}"
-        fi
+        # NOTE: Removed no-op pgcat→pgcat migration block (was a no-op that
+        # matched all pgcat URLs and wrote the same value back).
 
         if [ -z "$current_database_url" ]; then
             env_ensure_var "$env_file" "DATABASE_URL" "$expected_database_url" "PostgreSQL connection string (via PgCat)"
@@ -1551,7 +1545,7 @@ WIPE_MODE="false"
 RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
-RUST_TWIN_MODE="false"
+RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 
 # Simple loop to parse multiple arguments like `--update --rust`
 for arg in "$@"; do
@@ -1618,6 +1612,11 @@ echo "════════════════════════�
 # ─── Rollback Trap ──────────────────────────────────────────────────────────
 cleanup_on_failure() {
     local exit_code=$?
+    # Kill any lingering heartbeat process from the build step
+    if [ -n "${HEARTBEAT_PID:-}" ]; then
+        kill "$HEARTBEAT_PID" 2>/dev/null || true
+        wait "$HEARTBEAT_PID" 2>/dev/null || true
+    fi
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}════════════════════════════════════════════════════════════${NC}"
         echo -e "${RED}  INSTALLATION FAILED (exit code: $exit_code)${NC}"
@@ -1673,7 +1672,7 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}   Grid - Production Installer v3.1${NC}"
+echo -e "${BLUE}   Grid - Production Installer v3.2.4${NC}"
 echo -e "${BLUE}   Target: Ubuntu LTS (Fresh Install Recommended)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}\n"
 
@@ -1861,7 +1860,27 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         fi
     fi
 
-    # 4. Build the Caddyfile
+    # 4. Build the Caddyfile — IP-aware
+    local domain_block_label="$domain"
+    local tls_block=""
+    if [ "$is_real_domain" = "true" ]; then
+        # Real domain: enable on-demand TLS on :443
+        tls_block=$(cat <<'TLS443'
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy localhost:8090
+}
+TLS443
+)
+    else
+        # IP mode: force http:// prefix to prevent Caddy auto-HTTPS
+        domain_block_label="http://${domain}"
+        echo -e "${YELLOW}  → IP mode detected — disabling :443 TLS block in fallback Caddyfile${NC}"
+    fi
+
     cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 {
@@ -1870,20 +1889,14 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     }
 }
 
-${domain} {
+${domain_block_label} {
     reverse_proxy localhost:8090
     encode gzip
     log {
         output file /var/log/caddy/access.log
     }
 }
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy localhost:8090
-}
+${tls_block}
 
 :80 {
     reverse_proxy localhost:8090
@@ -2625,7 +2638,9 @@ fi
         export SMSLY_REEXEC=1
         export NO_SCREEN=true
         export SKIP_SCREEN=1
-        release_install_lock
+        # NOTE: Do NOT release the lock here — the re-exec'd process inherits
+        # the flock fd (9), preventing a race window where another installer
+        # could slip in between lock release and exec.
         exec bash "$SCRIPT_PATH" --no-screen "$@"
     fi
 
@@ -2832,7 +2847,8 @@ if not created and not cp.is_active:
 " | docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell 2>/dev/null || true
     # ─── Self-Healing: Docker Socket Permissions ──────────────────────────────
     echo -e "${BLUE}  → Hardening Docker socket permissions...${NC}"
-    chmod 666 /var/run/docker.sock 2>/dev/null || true
+    # NOTE: Removed chmod 666 — world-writable docker.sock is a security risk.
+    # Group membership (docker group) is the correct access control mechanism.
     if ! groups smsly 2>/dev/null | grep -q "docker"; then
         usermod -aG docker smsly 2>/dev/null || true
     fi
@@ -3106,20 +3122,9 @@ CFCADDY
             # No valid token — generate safe Caddyfile (no dns cloudflare)
             generate_safe_caddyfile "update flow caddy regen"
 
-            # Strip any leftover dns cloudflare blocks to prevent crash
-            if false && grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
-                echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
-                python3 -c "
-import re
-with open('/etc/caddy/Caddyfile') as f:
-    content = f.read()
-content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
-with open('/etc/caddy/Caddyfile', 'w') as f:
-    f.write(content)
-print('Stripped tls blocks')
-" 2>/dev/null || true
-                echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Set CLOUDFLARE_API_TOKEN in .env to re-enable.${NC}"
-            fi
+            # NOTE: Cloudflare dns-challenge stripping is now handled by
+            # generate_safe_caddyfile itself, which never emits 'dns cloudflare'
+            # blocks when no token is present. (Removed dead 'if false' block.)
         fi
 
         # Final validation — if still broken, regenerate safe fallback
@@ -3947,10 +3952,10 @@ EOF
         # Detect physical RAM for optimized build limits
         current_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
         build_mem=2048
-        if [ "$current_ram_mb" -ge 8192 ]; then
-            build_mem=4096
-        elif [ "$current_ram_mb" -ge 16384 ]; then
+        if [ "$current_ram_mb" -ge 16384 ]; then
             build_mem=8192
+        elif [ "$current_ram_mb" -ge 8192 ]; then
+            build_mem=4096
         fi
         echo "FRONTEND_BUILD_MEMORY_MB=$build_mem" >> "$ENV_TMP"
         echo -e "${BLUE}  → Allocated ${build_mem}MB for frontend build (System RAM: ${current_ram_mb}MB)${NC}"
