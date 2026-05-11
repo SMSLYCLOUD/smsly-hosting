@@ -610,7 +610,7 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         import subprocess
         logger.info("Triggering Caddy reload via Docker...")
         res = subprocess.run(
-            ["docker", "exec", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
+            ["docker", "exec", "smsly-hosting-caddy-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
             capture_output=True,
             text=True
         )
