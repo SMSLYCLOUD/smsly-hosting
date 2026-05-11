@@ -164,11 +164,15 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    # Use the current request origin to ensure the redirect_uri matches exactly 
-    # what the user is seeing in their browser.
-    scheme = "https" if request.is_secure() else "http"
-    origin = f"{scheme}://{request.get_host()}"
-    callback_url = f"{origin}/auth/github/callback"
+    # Use SITE_URL as the preferred base for callback to ensure https in production
+    site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+    if site_url and 'localhost' not in site_url:
+        callback_url = f"{site_url}/auth/github/callback"
+    else:
+        # Fallback to request-based derivation
+        scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
+        origin = f"{scheme}://{request.get_host()}"
+        callback_url = f"{origin}/auth/github/callback"
 
     scopes = settings.SOCIALACCOUNT_PROVIDERS.get("github", {}).get(
         "SCOPE", ["user", "repo", "read:org"]
