@@ -155,23 +155,31 @@ try:
             cursor.execute("SELECT domain FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
             row = cursor.fetchone()
             if row and row[0]:
-                db_domain = str(row[0]).strip().lower()
-                if db_domain and db_domain not in ALLOWED_HOSTS:
-                    ALLOWED_HOSTS.append(db_domain)
+                db_domain = str(row[0]).strip().lower().rstrip('.')
+                if db_domain:
+                    # Sync to ALLOWED_HOSTS
+                    if db_domain not in ALLOWED_HOSTS:
+                        ALLOWED_HOSTS.append(db_domain)
+                    # Override DOMAIN in memory so that other settings depend on the DB state
+                    DOMAIN = db_domain
+                    # Update SITE_URL to match the DB domain if we are in production
+                    if not DEBUG:
+                        SITE_URL = f"https://{db_domain}"
         conn.close()
 except Exception as e:
-    print(f"[settings] Could not sync PlatformConfig domain to ALLOWED_HOSTS on boot: {e}")
+    print(f"[settings] Could not sync PlatformConfig domain to memory on boot: {e}")
 
 
 # ---------------------------------------------------------------------------
 # SITE_URL and Protocol
 # ---------------------------------------------------------------------------
 
-SITE_URL = config(
-    'SITE_URL',
-    # NOTE: Used for OAuth/billing redirects. Override in env if you terminate TLS elsewhere.
-    default=('http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
-)
+# Finalize SITE_URL: Explicit .env > DB Sync > Fallback
+_env_site_url = config('SITE_URL', default=None)
+if _env_site_url:
+    SITE_URL = _env_site_url
+elif 'SITE_URL' not in locals():
+    SITE_URL = ('http://localhost:3000' if DEBUG else f'https://{DOMAIN}')
 
 # Stripe Billing (optional but required for paid plans)
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
