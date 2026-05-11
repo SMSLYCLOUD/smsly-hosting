@@ -121,8 +121,8 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
     logger = logging.getLogger(__name__)
     try:
         # 1. Update ALLOWED_HOSTS in memory
-        from config.settings import _patch_allowed_hosts_from_db
-        _patch_allowed_hosts_from_db()
+        from apps.deployments.patching import patch_runtime_settings
+        patch_runtime_settings()
 
         # 2. Re-generate and apply Caddyfile
         logger.info("Signal: Re-generating Caddyfile for domain %s", instance.domain)

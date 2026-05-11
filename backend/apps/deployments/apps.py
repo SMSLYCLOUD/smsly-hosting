@@ -26,15 +26,12 @@ def _is_serving_process() -> bool:
 
     argv = [Path(str(arg)).name for arg in sys.argv if arg]
     if not argv:
-        return False
+        return True  # Assume serving if we can't determine (e.g. embedded)
 
     command = argv[0]
-    if command in {"gunicorn", "uvicorn", "daphne"}:
-        return True
-
-    return command in {"manage.py", "django-admin"} and any(
-        arg in {"runserver", "runserver_plus"} for arg in argv[1:]
-    )
+    # Include common web servers and management commands that serve traffic
+    serving_commands = {"gunicorn", "uvicorn", "daphne", "runserver", "runserver_plus"}
+    return any(cmd in " ".join(argv) for cmd in serving_commands)
 
 
 class DeploymentsConfig(AppConfig):
@@ -62,9 +59,15 @@ class DeploymentsConfig(AppConfig):
         except ImportError:
             pass
 
+        # 3. Dynamic Domain Patching (Zero Trust Whitelisting)
+        try:
+            from .patching import patch_runtime_settings
+            patch_runtime_settings()
+        except Exception:
+            pass
+
         # Startup proxy sync is opt-in because AppConfig.ready() must not
         # perform database/proxy side effects during management commands.
-        from django.conf import settings
         if not getattr(settings, 'IS_TESTING', False) and _is_serving_process():
             try:
                 from .startup import schedule_startup_caddy_sync

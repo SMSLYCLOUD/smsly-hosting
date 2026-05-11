@@ -398,16 +398,22 @@ def generate_caddyfile(config) -> str:
     if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
         cloudflare_token = ""
 
-    use_ssl = config.use_ssl
-    if config.domain:
+    import os
+    env_domain = os.environ.get("DOMAIN", "").strip()
+    
+    # 1. Determine Effective Domain/Protocol (Fallback to .env)
+    effective_domain = config.domain if config.domain else env_domain
+    use_ssl = config.use_ssl if config.domain else (os.environ.get("DEBUG", "False").lower() not in {"true", "1", "t"})
+
+    if effective_domain:
         try:
             # Allow IP for platform domain normalization
-            domain = normalize_domain(config.domain, allow_ip=True)
+            domain = normalize_domain(effective_domain, allow_ip=True)
             if _is_ip(domain):
                 # IPs cannot have SSL certs (Let's Encrypt restriction)
                 use_ssl = False
         except ValueError:
-            logger.warning("Ignoring invalid platform domain in config: %r", config.domain)
+            logger.warning("Ignoring invalid platform domain in config: %r", effective_domain)
 
     if use_ssl and domain:
         # Keep the apex platform domain independent from wildcard DNS
@@ -484,7 +490,7 @@ def generate_caddyfile(config) -> str:
     tls {
         on_demand
     }
-    reverse_proxy localhost:8090
+    reverse_proxy nginx:80
 }"""
         )
 
