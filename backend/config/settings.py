@@ -109,6 +109,9 @@ TUNNEL_BASE_DOMAIN = (
     config('TUNNEL_DOMAIN', default=_DEFAULT_TUNNEL_BASE_DOMAIN)
     or _DEFAULT_TUNNEL_BASE_DOMAIN
 ).strip()
+# Infrastructure Version Control
+INFRA_VERSION = '2026.05.11.10.35'
+
 ENABLE_LEGACY_TUNNEL_API = config(
     'ENABLE_LEGACY_TUNNEL_API',
     default=False,
@@ -133,97 +136,36 @@ APPEND_SLASH = False
 # without requiring manual .env edits.
 # ---------------------------------------------------------------------------
 try:
-    import django
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
-    # Only read the DB if migrations have run (avoid startup crash on first boot)
-    import importlib
-    _db_url = config('DATABASE_URL', default='')
-    if _db_url and 'manage.py' not in sys.argv[0:1]:
-        # Defer actual import to avoid circular dependency during startup.
-        # Runtime domain patches are applied after explicit PlatformConfig saves.
-        pass
-except Exception:
-    pass
+    import dj_database_url
+    from urllib.parse import urlparse
+    import psycopg2
+    
+    # Manually extract DB credentials from the DATABASE_URL since Django apps aren't loaded yet.
+    db_url = config('DATABASE_URL', default='')
+    if db_url:
+        parsed = urlparse(db_url)
+        conn = psycopg2.connect(
+            dbname=parsed.path.lstrip('/'),
+            user=parsed.username,
+            password=parsed.password,
+            host=parsed.hostname,
+            port=parsed.port
+        )
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT domain FROM deployments_platformconfig ORDER BY id ASC LIMIT 1;")
+            row = cursor.fetchone()
+            if row and row[0]:
+                db_domain = str(row[0]).strip().lower()
+                if db_domain and db_domain not in ALLOWED_HOSTS:
+                    ALLOWED_HOSTS.append(db_domain)
+        conn.close()
+except Exception as e:
+    print(f"[settings] Could not sync PlatformConfig domain to ALLOWED_HOSTS on boot: {e}")
 
-def _patch_allowed_hosts_from_db():
-    """Add PlatformConfig.domain to host/origin settings after Django is ready."""
-    import sys
-    # Removed sys.argv guard to ensure patching runs under gunicorn/uvicorn.
-    # The try-except block below will safely handle cases where the DB is not ready.
 
-    if IS_TESTING:
-        return
-
-    try:
-        from apps.deployments.models import PlatformConfig
-        pc = PlatformConfig.load()
-        
-        # ── Site/Protocol Fallback ──────────────────────────────────────
-        # If the DB config is empty, ensure we still sync the Site framework
-        # and protocol from the .env DOMAIN to prevent OAuth mismatches.
-        _effective_domain = pc.domain or DOMAIN
-        _effective_use_ssl = pc.use_ssl if pc.domain else (not DEBUG)
-
-        # Patch ALLOWED_HOSTS (Force-inject the UI-set domain)
-        if _effective_domain and _effective_domain not in ALLOWED_HOSTS:
-            ALLOWED_HOSTS.append(_effective_domain)
-            print(f"[settings] Precise patch: Added {_effective_domain} to ALLOWED_HOSTS")
-        
-        # Patch CSRF_TRUSTED_ORIGINS
-        if _effective_domain:
-            # IP-Aware Protocol Detection
-            _is_effective_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', _effective_domain))
-            if _is_effective_ip:
-                scheme = 'http'
-            else:
-                scheme = 'https' if (_effective_use_ssl and not DEBUG) else 'http'
-            
-            origin = f'{scheme}://{_effective_domain}'
-            if origin not in CSRF_TRUSTED_ORIGINS:
-                CSRF_TRUSTED_ORIGINS.append(origin)
-            
-            # Patch CORS
-            if origin not in CORS_ALLOWED_ORIGINS:
-                CORS_ALLOWED_ORIGINS.append(origin)
-
-        # Patch SITE_URL so OAuth redirects use the correct domain
-        # IMPORTANT: Must patch django.conf.settings directly (the LazySettings
-        # proxy), not the raw module — Django caches values at init time.
-        # ── Site/Protocol Fallback ──────────────────────────────────────
-        if _effective_domain:
-            from django.conf import settings as django_settings
-            from django.contrib.sites.models import Site
-            
-            # IP-Aware Protocol Detection
-            _is_effective_ip = bool(re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', _effective_domain))
-            if _is_effective_ip:
-                scheme = 'http'
-            else:
-                scheme = 'https' if (_effective_use_ssl and not DEBUG) else 'http'
-            
-            # Patch Settings
-            django_settings.SITE_URL = f'{scheme}://{_effective_domain}'
-            django_settings.ACCOUNT_DEFAULT_HTTP_PROTOCOL = scheme
-            
-            # Sync Django Site table
-            try:
-                site = Site.objects.get(id=SITE_ID)
-                if site.domain != _effective_domain:
-                    site.domain = _effective_domain
-                    site.name = f'CloudNeuron ({_effective_domain})'
-                    site.save()
-            except Site.DoesNotExist:
-                Site.objects.create(
-                    id=SITE_ID,
-                    domain=_effective_domain,
-                    name=f'CloudNeuron ({_effective_domain})'
-                )
-    except Exception as exc:
-        import sys as _sys
-        _sys.stderr.write(f"[settings] DB Patch skipped: {exc}\n")
-        pass  # DB not ready yet (first boot / migrations)
-
-_patch_allowed_hosts_from_db()
+# ---------------------------------------------------------------------------
+# SITE_URL and Protocol
+# ---------------------------------------------------------------------------
 
 SITE_URL = config(
     'SITE_URL',
@@ -306,6 +248,7 @@ AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
 MIDDLEWARE = [
+    'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
