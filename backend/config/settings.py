@@ -114,7 +114,7 @@ ENABLE_LEGACY_TUNNEL_API = config(
     default=False,
     cast=bool,
 )
-_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16'
+_ALLOWED_HOSTS_DEFAULT = f'localhost,127.0.0.1,nginx,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,{DOMAIN}' if DOMAIN else 'localhost,127.0.0.1,nginx,backend,smsly-hosting-backend-1,172.16.0.0/12,10.0.0.0/8,192.168.0.0/16'
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=_ALLOWED_HOSTS_DEFAULT, cast=Csv())
 # Ensure common cPanel/CloudNode hostnames are allowed for automated checks
 ALLOWED_HOSTS.extend(['.cprapid.com', '.sslip.io'])
@@ -749,3 +749,4 @@ EMAIL_TIMEOUT = config('EMAIL_TIMEOUT', default=10, cast=int)
 _DEFAULT_FROM = f"noreply@{DOMAIN}" if DOMAIN != 'localhost' else 'noreply@smsly.cloud'
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=_DEFAULT_FROM)
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
+_patch_allowed_hosts_from_db()
