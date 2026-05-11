@@ -3864,30 +3864,26 @@ else
     pip3 install cryptography -q --break-system-packages 2>/dev/null || \
         pip3 install cryptography -q 2>/dev/null || true
 
-    # Use the dedicated secrets generation script instead of inline Python
+    # Use the dedicated secrets generation script (single source of truth)
     SECRETS_GENERATED=false
-    if python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
-        # Parse the script output into shell variables (lines look like "KEY=value")
-        while IFS='=' read -r key value; do
-            [ -z "$key" ] && continue
-            case "$key" in
-                SECRET_KEY) SECRET_KEY="$value" ;;
-                FIELD_ENCRYPTION_KEY) FIELD_ENCRYPTION_KEY="$value" ;;
-                POSTGRES_PASSWORD) POSTGRES_PASSWORD="$value" ;;
-                REDIS_PASSWORD) REDIS_PASSWORD="$value" ;;
-                RABBITMQ_PASSWORD) RABBITMQ_PASSWORD="$value" ;;
-                GATEWAY_SECRET) GATEWAY_SECRET="$value" ;;
-                GITHUB_WEBHOOK_SECRET) GITHUB_WEBHOOK_SECRET="$value" ;;
-                AUTOSCALER_API_TOKEN) AUTOSCALER_API_TOKEN="$value" ;;
-                FRP_AUTH_TOKEN) FRP_AUTH_TOKEN="$value" ;;
-                PGCAT_ADMIN_PASSWORD) PGCAT_ADMIN_PASSWORD="$value" ;;
-            esac
-        done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=')
+    rm -f "$INSTALL_DIR/.secrets.tmp"
+    python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=' > "$INSTALL_DIR/.secrets.tmp" || true
+    if [ -s "$INSTALL_DIR/.secrets.tmp" ]; then
+        SECRET_KEY="$(grep -m1 '^SECRET_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        FIELD_ENCRYPTION_KEY="$(grep -m1 '^FIELD_ENCRYPTION_KEY=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        POSTGRES_PASSWORD="$(grep -m1 '^POSTGRES_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        REDIS_PASSWORD="$(grep -m1 '^REDIS_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        RABBITMQ_PASSWORD="$(grep -m1 '^RABBITMQ_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        GATEWAY_SECRET="$(grep -m1 '^GATEWAY_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        GITHUB_WEBHOOK_SECRET="$(grep -m1 '^GITHUB_WEBHOOK_SECRET=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        AUTOSCALER_API_TOKEN="$(grep -m1 '^AUTOSCALER_API_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        FRP_AUTH_TOKEN="$(grep -m1 '^FRP_AUTH_TOKEN=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
+        PGCAT_ADMIN_PASSWORD="$(grep -m1 '^PGCAT_ADMIN_PASSWORD=' "$INSTALL_DIR/.secrets.tmp" | cut -d= -f2-)"
         if [ -n "$SECRET_KEY" ] && [ -n "$FIELD_ENCRYPTION_KEY" ]; then
             SECRETS_GENERATED=true
+            echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
+        fi
         rm -f "$INSTALL_DIR/.secrets.tmp"
-        SECRETS_GENERATED=true
-        echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
     fi
 
     if [ "$SECRETS_GENERATED" != "true" ]; then
