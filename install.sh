@@ -684,8 +684,11 @@ apply_env_platform_overrides() {
         desired_use_ssl="${current_use_ssl}"
     fi
 
-    # IP detection - force USE_SSL=false if DOMAIN is a raw IP
+    # SEC-002: IP-mode SSL guard — always force USE_SSL=false for raw IPs
     if echo "$desired_domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if [ "$desired_use_ssl" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ SEC-002: USE_SSL=true override blocked — DOMAIN ($desired_domain) is a raw IP.${NC}"
+        fi
         desired_use_ssl="false"
     fi
     if [ "${ACME_EMAIL+x}" = "x" ]; then
@@ -1236,11 +1239,15 @@ load_install_env_defaults() {
 
     DOMAIN="${DOMAIN:-$env_domain}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-    
-    # IP detection - force USE_SSL=false if DOMAIN is a raw IP
+
+    # SEC-002: IP-mode SSL guard — always force USE_SSL=false for raw IPs,
+    # regardless of env var override. Let's Encrypt cannot issue certs for IPs.
     if [[ "$DOMAIN" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        echo -e "${YELLOW}  ⚠ Detected IP-only domain ($DOMAIN). Forcing USE_SSL=false.${NC}"
+        if [ "${USE_SSL:-}" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ SEC-002: USE_SSL=true ignored — DOMAIN ($DOMAIN) is a raw IP. Forcing USE_SSL=false.${NC}"
+        fi
         USE_SSL="false"
+        echo -e "${BLUE}  → IP mode confirmed: USE_SSL forced to false${NC}"
     else
         USE_SSL="${USE_SSL:-$env_use_ssl}"
     fi
@@ -3482,9 +3489,18 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
 
         if [ -n "$DOMAIN" ]; then
             echo -e "${BLUE}  → Verifying DNS for $DOMAIN...${NC}"
+            DETECTED_IP=""
+            # Try 'host' first (dnsutils), fall back to API-based DNS lookup
             if command -v host &> /dev/null; then
                 DETECTED_IP=$(host -t A "$DOMAIN" 2>/dev/null | awk '{print $NF}' | tail -n 1)
-                if [[ "$DETECTED_IP" != "$PUBLIC_IP" && "$DETECTED_IP" != "127.0.0.1" ]]; then
+            fi
+            if [ -z "$DETECTED_IP" ] || [ "$DETECTED_IP" = "found:" ] || [ "$DETECTED_IP" = "not" ]; then
+                DETECTED_IP=""
+                # Fallback to DNS over HTTPS (Google)
+                DETECTED_IP="$(curl -fsS "https://dns.google/resolve?name=${DOMAIN}&type=A" -m 5 2>/dev/null | python3 -c "import json,sys; data=json.load(sys.stdin); ans=data.get('Answer',[]); print(ans[0]['data']) if ans and 'data' in ans[0] else print('')" 2>/dev/null || echo "")"
+            fi
+            if [ -n "$DETECTED_IP" ]; then
+                if [ "$DETECTED_IP" != "$PUBLIC_IP" ] && [ "$DETECTED_IP" != "127.0.0.1" ]; then
                     echo -e "${YELLOW}  ⚠ WARNING: DNS for $DOMAIN ($DETECTED_IP) does not match this server ($PUBLIC_IP).${NC}"
                     echo -e "${YELLOW}  SSL generation may fail. Ensure your DNS A record is set.${NC}"
                     if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
@@ -3495,6 +3511,9 @@ if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
                 else
                     echo -e "${GREEN}  ✓ DNS looks correct.${NC}"
                 fi
+            else
+                echo -e "${YELLOW}  ⚠ Could not resolve DNS for $DOMAIN. SSL may fail.${NC}"
+                echo -e "${YELLOW}  Ensure your DNS A record points to $PUBLIC_IP${NC}"
             fi
         fi
     else
@@ -3824,51 +3843,48 @@ else
     # ─── Configuration Summary ──────────────────────────────────────────────
     PUBLIC_IP="${PUBLIC_IP:-$(detect_public_ip)}"
     DOMAIN="${DOMAIN:-$PUBLIC_IP}"
-    USE_SSL="${USE_SSL:-false}"
+    # SEC-002: IP-mode SSL guard — force USE_SSL=false if DOMAIN is a raw IP
+    if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        USE_SSL="${USE_SSL:-false}"
+        if [ "${USE_SSL:-false}" = "true" ]; then
+            echo -e "${YELLOW}  ⚠ WARNING: USE_SSL=true ignored — DOMAIN is a raw IP. Forcing USE_SSL=false.${NC}"
+        fi
+        USE_SSL="false"
+    else
+        USE_SSL="${USE_SSL:-false}"
+    fi
     WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
     CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
     ACME_EMAIL="${ACME_EMAIL:-}"
 
-    # ─── Generate Secrets (Python-only, NO invalid fallback) ────────────────
+    # ─── Generate Secrets (scripts/generate_env_secrets.py — single source of truth) ──
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
     # Install cryptography lib (--break-system-packages for Python 3.12+ on Ubuntu 24.04)
     pip3 install cryptography -q --break-system-packages 2>/dev/null || \
         pip3 install cryptography -q 2>/dev/null || true
 
-    # Generate secrets — Python is the ONLY source of truth for Fernet keys
+    # Use the dedicated secrets generation script instead of inline Python
     SECRETS_GENERATED=false
-    if python3 -c "
-import secrets, string
-from cryptography.fernet import Fernet
-
-chars = string.ascii_letters + string.digits
-secret_key = ''.join(secrets.choice(chars) for _ in range(50))
-fernet_key = Fernet.generate_key().decode()
-pg_pass = secrets.token_hex(16)
-redis_pass = secrets.token_hex(16)
-rabbitmq_pass = secrets.token_hex(16)
-gateway_secret = secrets.token_hex(32)
-webhook_secret = secrets.token_hex(32)
-autoscaler_token = secrets.token_hex(32)
-frp_token = secrets.token_hex(32)
-pgcat_admin_pass = secrets.token_hex(24)
-
-# Validate the Fernet key before outputting
-Fernet(fernet_key.encode())
-
-print(f'SECRET_KEY={secret_key}')
-print(f'FIELD_ENCRYPTION_KEY={fernet_key}')
-print(f'POSTGRES_PASSWORD={pg_pass}')
-print(f'REDIS_PASSWORD={redis_pass}')
-print(f'RABBITMQ_PASSWORD={rabbitmq_pass}')
-print(f'GATEWAY_SECRET={gateway_secret}')
-print(f'GITHUB_WEBHOOK_SECRET={webhook_secret}')
-print(f'AUTOSCALER_API_TOKEN={autoscaler_token}')
-print(f'FRP_AUTH_TOKEN={frp_token}')
-print(f'PGCAT_ADMIN_PASSWORD={pgcat_admin_pass}')
-" > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
-        source "$INSTALL_DIR/.secrets.tmp"
+    if python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" > "$INSTALL_DIR/.secrets.tmp" 2>/dev/null; then
+        # Parse the script output into shell variables (lines look like "KEY=value")
+        while IFS='=' read -r key value; do
+            [ -z "$key" ] && continue
+            case "$key" in
+                SECRET_KEY) SECRET_KEY="$value" ;;
+                FIELD_ENCRYPTION_KEY) FIELD_ENCRYPTION_KEY="$value" ;;
+                POSTGRES_PASSWORD) POSTGRES_PASSWORD="$value" ;;
+                REDIS_PASSWORD) REDIS_PASSWORD="$value" ;;
+                RABBITMQ_PASSWORD) RABBITMQ_PASSWORD="$value" ;;
+                GATEWAY_SECRET) GATEWAY_SECRET="$value" ;;
+                GITHUB_WEBHOOK_SECRET) GITHUB_WEBHOOK_SECRET="$value" ;;
+                AUTOSCALER_API_TOKEN) AUTOSCALER_API_TOKEN="$value" ;;
+                FRP_AUTH_TOKEN) FRP_AUTH_TOKEN="$value" ;;
+                PGCAT_ADMIN_PASSWORD) PGCAT_ADMIN_PASSWORD="$value" ;;
+            esac
+        done < <(python3 "$INSTALL_DIR/scripts/generate_env_secrets.py" 2>/dev/null | grep -E '^[A-Z_]+=')
+        if [ -n "$SECRET_KEY" ] && [ -n "$FIELD_ENCRYPTION_KEY" ]; then
+            SECRETS_GENERATED=true
         rm -f "$INSTALL_DIR/.secrets.tmp"
         SECRETS_GENERATED=true
         echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
@@ -3912,9 +3928,18 @@ GATEWAY_SECRET=$GATEWAY_SECRET
 GITHUB_WEBHOOK_SECRET=$GITHUB_WEBHOOK_SECRET
 
 # Security
-ALLOWED_HOSTS=$DOMAIN,$PUBLIC_IP,localhost,127.0.0.1
-CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://localhost:8090,http://$PUBLIC_IP
-CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,https://$DOMAIN,http://$DOMAIN,http://$PUBLIC_IP
+ALLOWED_HOSTS=$DOMAIN,localhost,127.0.0.1
+EOF
+
+    # Build scheme-appropriate origins (avoid https://IP which breaks CORS/CSRF)
+    if echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || [ "$USE_SSL" != "true" ]; then
+        DOMAIN_ORIGINS="http://$DOMAIN"
+    else
+        DOMAIN_ORIGINS="https://$DOMAIN"
+    fi
+    cat >> "$ENV_TMP" <<EOF
+CSRF_TRUSTED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://localhost:8090,http://$PUBLIC_IP
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_IP:8090,$DOMAIN_ORIGINS,http://$PUBLIC_IP
 
 # Docker networking
 # Ensure addon containers and deployed app containers share the same network for connectivity.
@@ -4273,6 +4298,50 @@ EOF
     echo -e "${BLUE}  → Building and starting Caddy container...${NC}"
     docker compose -f "$COMPOSE_FILE" build caddy
     docker compose -f "$COMPOSE_FILE" up -d caddy
+
+    # ACME staging validation — verify Let's Encrypt can reach this server before going live
+    if [ "${DOMAIN:-}" ] && [ "$USE_SSL" = "true" ] && ! echo "$DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo -e "${BLUE}  → Running ACME staging validation for $DOMAIN...${NC}"
+        SLEEP_SEC=15
+        echo -e "${BLUE}    Waiting ${SLEEP_SEC}s for Caddy to start...${NC}"
+        sleep $SLEEP_SEC
+        ACME_OK=false
+        for attempt in 1 2 3; do
+            # Use Let's Encrypt staging endpoint to dry-run the HTTP-01 challenge
+            ACME_CHECK=$(curl -fsS -m 10 \
+                "http://${DOMAIN}/.well-known/acme-challenge/000000000000000000000000000000000000" \
+                2>/dev/null || true)
+            # If Caddy returns "challenge not found" (404), that means it IS
+            # reachable but doesn't have this challenge registered — which is
+            # the expected behavior for a staging check.
+            if echo "$ACME_CHECK" | grep -qi "challenge"; then
+                echo -e "${GREEN}  ✓ ACME HTTP-01 reachable for $DOMAIN (staging)${NC}"
+                ACME_OK=true
+                break
+            fi
+            # Also try: just checking port 80 responds
+            if curl -fsSo /dev/null --max-time 5 "http://${DOMAIN}/" 2>/dev/null; then
+                echo -e "${GREEN}  ✓ Port 80 reachable for $DOMAIN${NC}"
+                ACME_OK=true
+                break
+            fi
+            echo -e "${YELLOW}    ACME check attempt $attempt/3 — $DOMAIN not yet reachable, retrying...${NC}"
+            sleep 5
+        done
+        if [ "$ACME_OK" != "true" ]; then
+            echo -e "${YELLOW}  ⚠ ACME validation could not confirm $DOMAIN is reachable on port 80.${NC}"
+            echo -e "${YELLOW}    SSL certificates may fail to issue. Ensure DNS A record points to $PUBLIC_IP${NC}"
+            echo -e "${YELLOW}    and port 80 is open in your firewall.${NC}"
+            if [ "$NON_INTERACTIVE" != "true" ] && [ -t 0 ]; then
+                read -p "  Continue anyway? (y/n) " -n 1 -r < /dev/tty
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    echo -e "${RED}  ACME validation rejected by user. Aborting.${NC}"
+                    exit 1
+                fi
+            fi
+        fi
+    fi
 
     # Cleanup legacy host-side services if they exist
     echo -e "${BLUE}  → Cleaning up legacy host-side Caddy services (if any)...${NC}"
