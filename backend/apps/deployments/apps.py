@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from django.apps import AppConfig
+from django.conf import settings
 
 
 def _is_serving_process() -> bool:
