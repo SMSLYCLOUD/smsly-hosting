@@ -1761,6 +1761,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         return super().get_permissions()
 
+    def get_throttles(self):
+        """Disable rate limiting for internal check-domain endpoint."""
+        if self.action == 'check_domain':
+            return []
+        return super().get_throttles()
+
     @action(detail=False, methods=['get'], url_path='check-domain')
     def check_domain(self, request):
         """

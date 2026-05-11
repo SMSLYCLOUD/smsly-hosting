@@ -98,6 +98,7 @@ services:
       UVICORN_WS_PING_TIMEOUT: 20
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
+      SMSLY_ENABLE_STARTUP_CADDY_SYNC: "True"
     depends_on:
       pgcat:
         condition: service_healthy
