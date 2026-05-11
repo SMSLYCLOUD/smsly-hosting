@@ -112,6 +112,8 @@ TUNNEL_BASE_DOMAIN = (
 ENABLE_LEGACY_TUNNEL_API = config(
     'ENABLE_LEGACY_TUNNEL_API',
     default=False,
+    cast=bool,
+)
 # Restrictive ALLOWED_HOSTS with mandatory internal whitelisting.
 _BASE_HOSTS = ['localhost', '127.0.0.1', 'nginx', 'backend', 'smsly-hosting-backend-1']
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default=','.join(_BASE_HOSTS), cast=Csv())
