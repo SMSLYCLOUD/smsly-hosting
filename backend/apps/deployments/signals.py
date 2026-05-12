@@ -174,19 +174,13 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                         _lines.append(f"{_key}{_val}\n")
                         _updated = True
                 if _updated:
-                    import tempfile
-                    _tmp = tempfile.NamedTemporaryFile(
-                        mode='w', dir=os.path.dirname(_env_path),
-                        delete=False, encoding='utf-8',
-                    )
-                    try:
-                        _tmp.writelines(_lines)
-                        _tmp.close()
-                        os.replace(_tmp.name, _env_path)
-                    except Exception:
-                        if os.path.exists(_tmp.name):
-                            os.unlink(_tmp.name)
-                        raise
+                    # Direct write instead of atomic rename.
+                    # os.replace() (rename across filesystems) fails with
+                    # "Device or resource busy" on Docker bind mounts because
+                    # the .env is mounted into multiple containers simul-
+                    # taneously.  Direct write keeps all containers consistent.
+                    with open(_env_path, "w", encoding="utf-8") as _fh:
+                        _fh.writelines(_lines)
                     logger.info(
                         "Synced %s: DOMAIN=%s, USE_SSL=%s", _env_path, _new_domain, _new_ssl
                     )
