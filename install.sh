@@ -3189,6 +3189,11 @@ if a_count > 0:
         echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
     fi
 
+    # ─── Fix .env permissions (must be readable by Docker container) ──
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+    fi
+
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
     ensure_selfsigned_cert
     if command -v caddy &> /dev/null; then
@@ -4319,8 +4324,9 @@ EOF
     # Atomic move and validation
     if validate_env_file "$ENV_TMP"; then
         mv "$ENV_TMP" "$INSTALL_DIR/.env"
-        chmod 600 "$INSTALL_DIR/.env"
-        echo -e "${GREEN}  ✓ Configuration saved to .env (chmod 600)${NC}"
+        # 644 so the Docker container (runs as root) can read it when mounted
+        chmod 644 "$INSTALL_DIR/.env"
+        echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
         rm -f "$ENV_TMP"

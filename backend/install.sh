@@ -2920,7 +2920,8 @@ EOF
     fi
     echo "TUNNEL_DOMAIN=$EXPECTED_TUNNEL_DOMAIN" >> "$INSTALL_DIR/.env"
 
-    chmod 600 "$INSTALL_DIR/.env"
+    # 644 so the Docker container (runs as root) can read it when mounted
+    chmod 644 "$INSTALL_DIR/.env"
     if ! validate_env_file "$INSTALL_DIR/.env"; then
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
         exit 1
