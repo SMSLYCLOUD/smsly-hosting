@@ -3,11 +3,13 @@
 Generate all required .env secrets for SMSLY Hosting.
 
 Usage:
-    python scripts/generate_env_secrets.py          # print to stdout
+    python scripts/generate_env_secrets.py          # KEY=value lines to stdout
     python scripts/generate_env_secrets.py --env     # append to .env
     python scripts/generate_env_secrets.py --env .env.production
 
-Dependencies: cryptography (pip install cryptography)
+All secrets except FIELD_ENCRYPTION_KEY are generated using Python stdlib only.
+FIELD_ENCRYPTION_KEY requires the 'cryptography' package; if missing,
+a placeholder instruction is printed instead.
 """
 
 import argparse
@@ -15,12 +17,15 @@ import secrets
 import string
 import sys
 
-try:
-    from cryptography.fernet import Fernet
-except ImportError:
-    print("ERROR: 'cryptography' package is required.", file=sys.stderr)
-    print("  pip install cryptography", file=sys.stderr)
-    sys.exit(1)
+
+# Lazy import: cryptography is only needed for the Fernet key.
+# If not installed, we generate all other secrets and print a clear instruction.
+def _generate_fernet_key() -> str:
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return ""
+    return Fernet.generate_key().decode()
 
 
 SECRET_DEFINITIONS = [
@@ -43,7 +48,13 @@ def generate_secret_key(length: int = 50) -> str:
 
 
 def generate_fernet_key() -> str:
-    return Fernet.generate_key().decode()
+    key = _generate_fernet_key()
+    if not key:
+        # Print a clear instruction that will be visible in the script output
+        print("FIELD_ENCRYPTION_KEY=__INSTALL_CRYPTOGRAPHY__", file=sys.stderr)
+        print("# Install cryptography and re-run to get FIELD_ENCRYPTION_KEY", file=sys.stderr)
+        return "__INSTALL_CRYPTOGRAPHY__"
+    return key
 
 
 def generate_hex_secret(bytes_count: int) -> str:

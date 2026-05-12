@@ -3860,9 +3860,20 @@ else
     # ─── Generate Secrets (scripts/generate_env_secrets.py — single source of truth) ──
     echo -e "${BLUE}  → Generating secure credentials...${NC}"
 
-    # Install cryptography lib (--break-system-packages for Python 3.12+ on Ubuntu 24.04)
+    # Ensure cryptography is installed (required for Fernet key generation).
+    # Retry with and without --break-system-packages for different Ubuntu versions.
     pip3 install cryptography -q --break-system-packages 2>/dev/null || \
-        pip3 install cryptography -q 2>/dev/null || true
+        pip3 install cryptography -q 2>/dev/null || \
+        (echo -e "${YELLOW}  → Retrying cryptography install...${NC}" && \
+         pip3 install cryptography 2>&1 | tail -3) || true
+
+    # Verify cryptography is importable before proceeding
+    if ! python3 -c "from cryptography.fernet import Fernet; print('ok')" 2>/dev/null; then
+        echo -e "${RED}  ✗ CRITICAL: cryptography package is not installable.${NC}"
+        echo -e "${RED}    The 'cryptography' package is required to generate a Fernet encryption key.${NC}"
+        echo -e "${RED}    Install it manually: pip3 install cryptography${NC}"
+        exit 1
+    fi
 
     # Use the dedicated secrets generation script (single source of truth)
     SECRETS_GENERATED=false
@@ -3882,16 +3893,45 @@ else
         if [ -n "$SECRET_KEY" ] && [ -n "$FIELD_ENCRYPTION_KEY" ]; then
             SECRETS_GENERATED=true
             echo -e "${GREEN}  ✓ Secrets generated (Fernet key validated)${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Secrets script ran but Fernet key is missing — generating inline...${NC}"
         fi
         rm -f "$INSTALL_DIR/.secrets.tmp"
     fi
 
-    if [ "$SECRETS_GENERATED" != "true" ]; then
-        echo -e "${RED}  ✗ CRITICAL: Cannot generate valid Fernet encryption key.${NC}"
-        echo -e "${RED}    Install Python 3 and the 'cryptography' package, then re-run.${NC}"
+    # Fallback: if the script didn't produce a valid Fernet key, generate it inline
+    # (cryptography is guaranteed importable at this point from the check above).
+    if [ -z "${FIELD_ENCRYPTION_KEY:-}" ]; then
+        FIELD_ENCRYPTION_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)"
+    fi
+    # Ensure all other secrets have fallback values just in case
+    [ -n "${SECRET_KEY:-}" ] || SECRET_KEY="$(python3 -c "import secrets,string; chars=string.ascii_letters+string.digits; print(''.join(secrets.choice(chars) for _ in range(50)))" 2>/dev/null || true)"
+    [ -n "${POSTGRES_PASSWORD:-}" ] || POSTGRES_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${REDIS_PASSWORD:-}" ] || REDIS_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${RABBITMQ_PASSWORD:-}" ] || RABBITMQ_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || true)"
+    [ -n "${GATEWAY_SECRET:-}" ] || GATEWAY_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${GITHUB_WEBHOOK_SECRET:-}" ] || GITHUB_WEBHOOK_SECRET="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${AUTOSCALER_API_TOKEN:-}" ] || AUTOSCALER_API_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${FRP_AUTH_TOKEN:-}" ] || FRP_AUTH_TOKEN="$(python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null || true)"
+    [ -n "${PGCAT_ADMIN_PASSWORD:-}" ] || PGCAT_ADMIN_PASSWORD="$(python3 -c "import secrets; print(secrets.token_hex(24))" 2>/dev/null || true)"
+
+    # Validate Fernet key format
+    if ! echo "$FIELD_ENCRYPTION_KEY" | python3 -c "
+import sys
+from cryptography.fernet import Fernet
+try:
+    Fernet(sys.stdin.read().strip().encode())
+    print('valid')
+except Exception:
+    print('invalid')
+" 2>/dev/null | grep -q valid; then
+        echo -e "${RED}  ✗ CRITICAL: Failed to generate a valid Fernet encryption key.${NC}"
+        echo -e "${RED}    Ensure the 'cryptography' package is installed and retry.${NC}"
         echo -e "${RED}    pip3 install cryptography${NC}"
         exit 1
     fi
+
+    echo -e "${GREEN}  ✓ All secrets generated successfully${NC}"
 
     # Create .env (Atomic)
     ENV_TMP="$INSTALL_DIR/.env.tmp"
