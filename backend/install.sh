@@ -2193,22 +2193,7 @@ ${cf_known_stanza}
     }
 }
 
-:443 {
-    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy localhost:8090
-        }
-    }
+
 }
 
 :80 {
@@ -3295,22 +3280,7 @@ $DOMAIN {
     }
 }
 
-:443 {
-    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy localhost:8090
-        }
-    }
+
 }
 
 :80 {
@@ -3366,22 +3336,7 @@ $DOMAIN {
     }
 }
 
-:443 {
-    @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy localhost:8090
-        }
-    }
+
 }
 
 :80 {
@@ -3413,22 +3368,7 @@ else
     }
 }
 
-:443 {
-    @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy localhost:8090
-        }
-    }
+
 }
 
 :80 {
@@ -3928,3 +3868,7 @@ else
         exit 1
     fi
 fi
+:443 {
+    tls internal
+    redir http://{host}{uri} 308
+}
