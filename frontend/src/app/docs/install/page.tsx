@@ -32,16 +32,18 @@ function CodeBlock({ children, lang = 'bash' }: { children: string; lang?: strin
 }
 
 // ────────────────────────────────────────────────────────────────
-// Table of Contents navigation
+// TOC navigation
 // ────────────────────────────────────────────────────────────────
 const tocItems = [
   { id: 'system-requirements', label: 'System Requirements', icon: Server },
   { id: 'fresh-installation', label: 'Fresh Installation', icon: Download },
   { id: 'deployment-modes', label: 'Deployment Modes', icon: Globe },
+  { id: 'accessing-the-dashboard', label: 'Accessing the Dashboard', icon: Terminal },
+  { id: 'domain--ssl-setup', label: 'Domain & SSL Setup', icon: Key },
+  { id: 'common-edge-cases', label: 'Common Edge Cases', icon: Wrench },
   { id: 'updating-grid', label: 'Updating Grid', icon: RefreshCw },
   { id: 'managing-services', label: 'Managing Services', icon: Terminal },
   { id: 'database-operations', label: 'Database Operations', icon: Database },
-  { id: 'ssl--custom-domains', label: 'SSL & Custom Domains', icon: Key },
   { id: 'troubleshooting', label: 'Troubleshooting', icon: Wrench },
   { id: 'security-hardening', label: 'Security Hardening', icon: Shield },
 ];
@@ -161,7 +163,7 @@ export default function InstallGuidePage() {
             </table>
           </div>
 
-          <p>Software dependencies (Docker, Python 3, Caddy, Git) are installed automatically.</p>
+          <p>Software dependencies (Docker, Python 3, Caddy, Git) are installed automatically by the installer.</p>
 
 
           {/* ──── Fresh Installation ──── */}
@@ -188,7 +190,7 @@ sudo bash /tmp/install.sh`}</CodeBlock>
               { step: '5', title: 'Database', desc: 'Waits for PostgreSQL, syncs passwords, runs Django migrations' },
               { step: '6', title: 'Admin User', desc: 'Creates admin superuser (credentials saved to /opt/smsly-hosting/.credentials)' },
               { step: '7', title: 'Reverse Proxy', desc: 'Installs Caddy for HTTP or HTTPS with auto-SSL' },
-              { step: '8', title: 'Verification', desc: 'Runs health checks, prints container status' },
+              { step: '8', title: 'Verification', desc: 'Runs health checks, prints container status, shows access URL' },
             ].map(item => (
               <div key={item.step} className="flex items-start gap-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800">
                 <span className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold">{item.step}</span>
@@ -200,13 +202,17 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             ))}
           </div>
 
-          <h3>After Installation</h3>
-          <ol>
-            <li>Open the URL shown in the terminal</li>
-            <li>Log in with <code>admin</code> and the password in <code>/opt/smsly-hosting/.credentials</code></li>
-            <li>(Recommended) Change the admin password (Settings → Security)</li>
-            <li>Configure your cloud providers (Settings → Cloud)</li>
-          </ol>
+          <h3>Installation Output</h3>
+          <p>When the installer finishes, it prints a summary like this:</p>
+          <CodeBlock>{`═══════════════════════════════════════════
+  Grid Installation Complete!
+═══════════════════════════════════════════
+  Access URL: http://203.0.113.42
+  Admin: admin
+  Password: /opt/smsly-hosting/.credentials
+═══════════════════════════════════════════`}</CodeBlock>
+
+          <p>The <strong>Access URL</strong> is always <code>http://YOUR_SERVER_IP</code> for a fresh install — never HTTPS. See "Accessing the Dashboard" below for why.</p>
 
 
           {/* ──── Deployment Modes ──── */}
@@ -214,25 +220,311 @@ sudo bash /tmp/install.sh`}</CodeBlock>
             <Globe className="w-5 h-5 text-emerald-600" /> Deployment Modes
           </h2>
 
+          <p>
+            The installer offers two modes. Choose during the interactive prompts. You can switch from IP mode to SSL mode at any time through the Settings UI.
+          </p>
+
           <div className="not-prose grid md:grid-cols-2 gap-4 my-6">
             <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
               <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">IP Mode (Quick Start)</h4>
               <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                <li>• Access: <code className="text-xs bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">http://YOUR_IP</code></li>
-                <li>• No domain needed</li>
-                <li>• Best for testing</li>
+                <li>• Access via <code className="text-xs bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">http://&lt;IP&gt;</code></li>
+                <li>• No domain required</li>
+                <li>• No SSL certificate</li>
+                <li>• Best for testing / evaluation</li>
                 <li>• Select option <strong>1</strong> during install</li>
               </ul>
             </div>
             <div className="p-5 rounded-xl border border-emerald-200 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
               <h4 className="font-bold text-emerald-800 dark:text-emerald-300 mb-2 text-sm">SSL Mode (Production) ✦</h4>
               <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                <li>• Access: <code className="text-xs bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">https://your-domain.com</code></li>
-                <li>• Auto Let&apos;s Encrypt SSL</li>
-                <li>• Requires DNS A record</li>
+                <li>• Access via <code className="text-xs bg-emerald-100 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded">https://your-domain.com</code></li>
+                <li>• Auto Let&apos;s Encrypt SSL via Caddy</li>
+                <li>• Requires DNS A record pointing to your server</li>
+                <li>• Ports 80 + 443 must be publicly reachable</li>
                 <li>• Select option <strong>2</strong> during install</li>
               </ul>
             </div>
+          </div>
+
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-xl p-4 my-4 text-sm text-blue-800 dark:text-blue-200">
+            <strong>Note about HTTPS in IP mode:</strong> When no domain is configured, the server only binds port 80 (HTTP). Port 443 has a self-signed certificate that redirects to HTTP. Browsers will show a &quot;Your connection is not private&quot; warning if you manually type <code>https://&lt;IP&gt;</code>. Click &quot;Advanced&quot; → &quot;Proceed&quot; to be redirected to HTTP. <strong>Always use plain HTTP in IP mode</strong> to avoid this warning entirely.
+          </div>
+
+
+          {/* ──── Accessing the Dashboard ──── */}
+          <h2 id="accessing-the-dashboard" className="text-2xl font-bold flex items-center gap-2">
+            <Terminal className="w-5 h-5 text-emerald-600" /> Accessing the Dashboard
+          </h2>
+
+          <h3>IP Mode (No Domain)</h3>
+          <ol>
+            <li>Open your browser and go to <code>http://YOUR_SERVER_IP</code> (e.g. <code>http://203.0.113.42</code>)</li>
+            <li>Do <strong>not</strong> use <code>https://</code> — there is no valid certificate in IP mode</li>
+            <li>If you accidentally visit <code>https://</code>, you will see a &quot;Your connection is not private&quot; warning. Click <strong>Advanced</strong> → <strong>Proceed to site</strong>. This redirects you to HTTP automatically</li>
+            <li>Log in with username <code>admin</code> and the password stored in <code>/opt/smsly-hosting/.credentials</code></li>
+          </ol>
+
+          <h3>SSL Mode (With Domain)</h3>
+          <ol>
+            <li>Ensure your domain has an A record pointing to your server IP</li>
+            <li>Open your browser and go to <code>https://your-domain.com</code></li>
+            <li>Caddy automatically provisions a Let&apos;s Encrypt certificate on the first visit (may take 5-10 seconds the first time)</li>
+            <li>Subsequent visits are instant with a valid, browser-trusted certificate</li>
+          </ol>
+
+          <h3>Why HTTP in IP Mode?</h3>
+          <p>
+            Let&apos;s Encrypt cannot issue certificates for raw IP addresses. The self-signed fallback certificate exists on port 443 only to redirect HTTPS traffic back to HTTP. Browsers warn on self-signed certificates before following the redirect. For a zero-warning experience, always access via <strong>HTTP</strong> when no domain is configured.
+          </p>
+
+          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4 my-4 text-sm text-emerald-800 dark:text-emerald-200">
+            <strong>Already set up a domain?</strong> Go to <strong>Settings → Domain &amp; SSL</strong> in the dashboard, enter your domain, toggle SSL on, and save. Caddy will automatically provision a Let&apos;s Encrypt certificate. No SSH required.
+          </div>
+
+
+          {/* ──── Domain & SSL Setup ──── */}
+          <h2 id="domain--ssl-setup" className="text-2xl font-bold flex items-center gap-2">
+            <Key className="w-5 h-5 text-emerald-600" /> Domain & SSL Setup
+          </h2>
+
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4 my-4 text-sm text-amber-800 dark:text-amber-200">
+            <strong>Important:</strong> You do <em>not</em> need to SSH into the server to set up a domain. Everything is configurable from the dashboard under <strong>Settings → Domain &amp; SSL</strong>.
+          </div>
+
+          <h3>How It Works</h3>
+          <p>
+            The system uses <strong>Caddy</strong> as its reverse proxy and TLS terminator. Caddy automatically provisions and renews Let&apos;s Encrypt certificates. The backend generates the Caddyfile dynamically based on your configuration in the database (<code>PlatformConfig</code> model) and applies it without downtime.
+          </p>
+
+          <h3>Step 1: DNS Setup</h3>
+          <p>Before configuring SSL, your domain must resolve to your server:</p>
+          <div className="overflow-x-auto not-prose my-6">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Record Type</th>
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Name</th>
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Value</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-700 dark:text-slate-300">
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">A</td>
+                  <td className="py-2.5 px-4 font-mono text-xs">@</td>
+                  <td className="py-2.5 px-4 font-mono text-xs">YOUR_SERVER_IP</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Verify propagation:</p>
+          <CodeBlock>{`dig +short your-domain.com
+# Should return your server IP`}</CodeBlock>
+
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4 my-4 text-sm text-red-800 dark:text-red-200">
+            <strong>SSL will fail if DNS is not propagated.</strong> Caddy&apos;s ACME challenge (Let&apos;s Encrypt) must be able to reach your server on port 80. If DNS is wrong, the certificate cannot be issued.
+          </div>
+
+          <h3>Step 2: Configure via Dashboard</h3>
+          <ol>
+            <li>
+              <strong>Navigate to Settings → Domain &amp; SSL</strong>
+            </li>
+            <li>Enter your domain (e.g. <code>grid.your-domain.com</code>)</li>
+            <li>Toggle <strong>SSL Enabled</strong> ON</li>
+            <li>Enter the server public IP (usually pre-filled)</li>
+            <li>Click <strong>Save &amp; Apply</strong></li>
+          </ol>
+
+          <p>After saving, the backend:</p>
+          <ol>
+            <li>Updates the <code>PlatformConfig</code> model in the database</li>
+            <li>Regenerates the Caddyfile with your domain</li>
+            <li>Reloads Caddy with zero downtime</li>
+            <li>Syncs the domain back to the <code>.env</code> file (for future updates)</li>
+            <li>Updates <code>ALLOWED_HOSTS</code>, <code>CSRF_TRUSTED_ORIGINS</code>, <code>CORS_ALLOWED_ORIGINS</code>, and <code>SITE_URL</code> at runtime</li>
+          </ol>
+
+          <h3>Step 3: Access via HTTPS</h3>
+          <p>
+            Visit <code>https://your-domain.com</code>. The first visit may take 5-10 seconds as Caddy obtains the Let&apos;s Encrypt certificate on-demand. Subsequent visits are instant.
+          </p>
+
+          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4 my-4 text-sm text-emerald-800 dark:text-emerald-200">
+            <strong>Tip:</strong> The first visitor triggers certificate issuance. If the certificate doesn&apos;t appear after 30 seconds, check Caddy logs via <code>docker logs smsly-hosting-caddy-1</code> on the server.
+          </div>
+
+          <h3>What the Backend Updates Automatically</h3>
+          <p>
+            When you save domain config via the dashboard, the backend runtime patches all the following Django settings (no restart needed):
+          </p>
+          <div className="overflow-x-auto not-prose my-6">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Setting</th>
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Source</th>
+                  <th className="text-left py-3 px-4 text-slate-500 font-semibold">Updated</th>
+                </tr>
+              </thead>
+              <tbody className="text-slate-700 dark:text-slate-300">
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">ALLOWED_HOSTS</td>
+                  <td className="py-2.5 px-4"><code>patching.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">Runtime + DB</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">CSRF_TRUSTED_ORIGINS</td>
+                  <td className="py-2.5 px-4"><code>patching.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">Runtime</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">CORS_ALLOWED_ORIGINS</td>
+                  <td className="py-2.5 px-4"><code>patching.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">Runtime</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">SITE_URL</td>
+                  <td className="py-2.5 px-4"><code>patching.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">Runtime</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">DOMAIN= (in .env)</td>
+                  <td className="py-2.5 px-4"><code>signals.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">File (if writable)</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">Caddyfile</td>
+                  <td className="py-2.5 px-4"><code>caddy_manager.py</code></td>
+                  <td className="py-2.5 px-4 text-emerald-600">File + Reload</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>How .env Gets Updated</h3>
+          <p>
+            When the <code>PlatformConfig</code> model is saved (via the UI or API), a Django <code>post_save</code> signal fires (<code>signals.py</code>). This signal attempts to write the new <code>DOMAIN</code>, <code>USE_SSL</code>, <code>SITE_URL</code>, <code>CSRF_TRUSTED_ORIGINS</code>, and <code>CORS_ALLOWED_ORIGINS</code> values back to the <code>.env</code> file on the host.
+          </p>
+          <p>
+            The backend container runs as user <code>smsly</code> (UID 1000). The installer sets <code>.env</code> permissions to <code>664</code> with group ownership by GID 1000, so the container can write to it. If the permissions are wrong (e.g. <code>600</code> or <code>644</code> owned by root), the signal logs a warning and skips the file update — the domain still works because the database is the source of truth, but a future <code>--update</code> run would not pick up the new domain.
+          </p>
+          <p>To fix this manually if it occurs:</p>
+          <CodeBlock>{`sudo chown root:1000 /opt/smsly-hosting/.env
+sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
+
+          <h3>Switching from IP Mode to SSL Mode</h3>
+          <ol>
+            <li>Create an A record for your domain → your server IP</li>
+            <li>Wait for DNS propagation (verify with <code>dig +short your-domain.com</code>)</li>
+            <li>Go to <strong>Settings → Domain &amp; SSL</strong></li>
+            <li>Enter your domain, toggle SSL ON, click <strong>Save &amp; Apply</strong></li>
+            <li>Access via <code>https://your-domain.com</code></li>
+          </ol>
+
+          <h3>Removing a Domain (Revert to IP Mode)</h3>
+          <ol>
+            <li>Go to <strong>Settings → Domain &amp; SSL</strong></li>
+            <li>Clear the domain field, toggle SSL OFF</li>
+            <li>Click <strong>Save &amp; Apply</strong></li>
+            <li>Access via <code>http://&lt;IP&gt;</code></li>
+          </ol>
+
+          <h3>Wildcard Subdomains</h3>
+          <p>
+            If you enable <strong>Wildcard Subdomains</strong>, Caddy provisions a <code>*.your-domain.com</code> certificate via Cloudflare&apos;s DNS-01 challenge. This requires:
+          </p>
+          <ol>
+            <li>Setting <strong>Cloudflare API Token</strong> (DNS: Edit zone DNS permission) in Settings → Domain &amp; SSL</li>
+            <li>Your domain must be on Cloudflare DNS</li>
+            <li>The wildcard cert covers all <code>*.your-domain.com</code> subdomains automatically</li>
+          </ol>
+
+
+          {/* ──── Common Edge Cases ──── */}
+          <h2 id="common-edge-cases" className="text-2xl font-bold flex items-center gap-2">
+            <Wrench className="w-5 h-5 text-emerald-600" /> Common Edge Cases
+          </h2>
+
+          <div className="not-prose space-y-4 my-6">
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;Your connection is not private&quot; / <code>ERR_CERT_AUTHORITY_INVALID</code></h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                You accessed <code>https://&lt;IP&gt;</code> in IP mode (no domain). The server has a self-signed certificate on port 443 that redirects to HTTP, but browsers warn before following the redirect.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                <strong>Fix:</strong> Use <code>http://&lt;IP&gt;</code> instead. If you already set up a domain, use <code>https://your-domain.com</code>. If you clicked through the warning, you are automatically redirected to HTTP.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">SSL Certificate Not Issued (HTTPS shows self-signed after domain config)</h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                This usually means Caddy&apos;s on-demand TLS &quot;ask&quot; endpoint rejected the domain, or DNS hasn&apos;t propagated.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Diagnose from the server:</p>
+              <CodeBlock>{`# 1. Check the ask endpoint (must return 200)
+curl -s -w "\nHTTP %{http_code}\n" \\
+  "http://localhost:8090/api/v1/services/check-domain/?domain=your-domain.com"
+
+# 2. Check Caddy logs for ACME errors
+docker logs smsly-hosting-caddy-1 --tail 50
+
+# 3. Force a Caddy reload to retry cert issuance
+docker exec smsly-hosting-caddy-1 caddy reload --config /etc/caddy/Caddyfile`}</CodeBlock>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                If the ask endpoint returns <strong>200</strong>, Caddy should get the cert on the next HTTPS visit. If <strong>404</strong>, the domain is not in the <code>PlatformConfig</code> database — re-save it via Settings → Domain &amp; SSL.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Gateway Timeout After Reboot</h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                On first boot after a restart, the backend runs database migrations and waits for PostgreSQL to be healthy. This can take 1-3 minutes.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Check progress:</p>
+              <CodeBlock>{`docker compose -f docker-compose.prod.yml logs backend --tail 30`}</CodeBlock>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                You will see messages like <code>Waiting for database...</code> followed by <code>Starting gunicorn</code>. The dashboard becomes available once the backend is healthy.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Frontend API Calls to HTTP Instead of HTTPS</h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                The frontend uses relative API paths (<code>/api/v1/...</code>), so the scheme (HTTP vs HTTPS) matches whatever the browser is using. If you access via <code>http://&lt;IP&gt;</code>, API calls use HTTP. If via <code>https://domain</code>, they use HTTPS.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                If you see mixed-content errors or API calls going to the wrong scheme, ensure you&apos;re accessing via the correct URL for your mode.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">Domain Saved via UI but .env Not Updated</h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                The backend container (user <code>smsly</code>, UID 1000) needs write permission on the host <code>.env</code> file. If the file is owned by root with <code>644</code>, the write fails with <code>PermissionError</code>.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Check and fix:</p>
+              <CodeBlock>{`ls -la /opt/smsly-hosting/.env
+# If owned by root:root, fix with:
+sudo chown root:1000 /opt/smsly-hosting/.env
+sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                The domain still works because it&apos;s stored in the database. The <code>.env</code> is only needed for future <code>--update</code> runs and container restarts.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
+              <h4 className="font-bold text-slate-900 dark:text-white mb-2 text-sm">&quot;403 Forbidden&quot; or &quot;CSRF token missing&quot; After Domain Change</h4>
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+                The <code>patch_runtime_settings()</code> function should update <code>CSRF_TRUSTED_ORIGINS</code> and <code>CORS_ALLOWED_ORIGINS</code> automatically when you save domain config. If these didn&apos;t update, re-save the domain config via Settings → Domain &amp; SSL.
+              </p>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                If the issue persists, the backend may need a restart: <code>docker compose -f docker-compose.prod.yml restart backend</code>
+              </p>
+            </div>
+
           </div>
 
 
@@ -294,14 +586,16 @@ docker compose -f docker-compose.prod.yml logs -f
 
 # Specific service
 docker compose -f docker-compose.prod.yml logs -f backend
-docker compose -f docker-compose.prod.yml logs -f frontend`}</CodeBlock>
+docker compose -f docker-compose.prod.yml logs -f frontend
+docker compose -f docker-compose.prod.yml logs -f caddy`}</CodeBlock>
 
           <h3>Restart Services</h3>
           <CodeBlock>{`# Restart everything
 docker compose -f docker-compose.prod.yml restart
 
 # Restart specific service
-docker compose -f docker-compose.prod.yml restart backend`}</CodeBlock>
+docker compose -f docker-compose.prod.yml restart backend
+docker compose -f docker-compose.prod.yml restart caddy`}</CodeBlock>
 
           <h3 id="health-check">Health Check</h3>
           <CodeBlock>{`curl http://localhost:8090/health`}</CodeBlock>
@@ -318,13 +612,16 @@ docker compose -f docker-compose.prod.yml restart backend`}</CodeBlock>
               </thead>
               <tbody className="text-slate-700 dark:text-slate-300">
                 {[
-                  ['backend', '8000', 'Django API (Gunicorn)'],
+                  ['caddy', '80 / 443', 'Reverse proxy, TLS termination, Let\'s Encrypt'],
+                  ['backend', '8000', 'Django API (Gunicorn + Uvicorn)'],
                   ['frontend', '3000', 'Next.js SSR'],
-                  ['nginx', '8090', 'Internal routing'],
+                  ['nginx', '8090', 'Internal routing (behind Caddy)'],
                   ['db', '5432', 'PostgreSQL 16'],
                   ['redis', '6379', 'Cache + Celery broker'],
                   ['celery', '—', 'Background task worker'],
                   ['celery-beat', '—', 'Periodic task scheduler'],
+                  ['rabbitmq', '5672', 'Message broker for Celery'],
+                  ['socket-proxy', '2375', 'Secured Docker API proxy'],
                 ].map(([svc, port, desc]) => (
                   <tr key={svc} className="border-b border-slate-100 dark:border-slate-800">
                     <td className="py-2.5 px-4 font-mono text-emerald-600 dark:text-emerald-400 text-xs">{svc}</td>
@@ -335,6 +632,9 @@ docker compose -f docker-compose.prod.yml restart backend`}</CodeBlock>
               </tbody>
             </table>
           </div>
+          <p>
+            <strong>Architecture note:</strong> All external traffic enters through <strong>Caddy</strong> (ports 80/443). Caddy terminates TLS and proxies to <strong>nginx</strong> (port 80 internal), which routes to the appropriate backend or frontend service. The stack does <em>not</em> expose backend/frontend ports directly to the internet.
+          </p>
 
 
           {/* ──── Database Operations ──── */}
@@ -368,26 +668,6 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
   "from django.contrib.auth import get_user_model; User = get_user_model(); u = User.objects.get(username='admin'); u.set_password('your_new_password'); u.save(); print('Done.')"`}</CodeBlock>
 
 
-          {/* ──── SSL & Custom Domains ──── */}
-          <h2 id="ssl--custom-domains" className="text-2xl font-bold flex items-center gap-2">
-            <Key className="w-5 h-5 text-emerald-600" /> SSL & Custom Domains
-          </h2>
-
-          <h3>Switch from IP Mode to SSL</h3>
-          <ol>
-            <li>Create a DNS A record pointing to your server IP</li>
-            <li>Edit Caddyfile: <code>nano /etc/caddy/Caddyfile</code></li>
-          </ol>
-          <CodeBlock>{`your-domain.com {
-    reverse_proxy localhost:8090
-    encode gzip
-}`}</CodeBlock>
-          <ol start={3}>
-            <li>Update <code>.env</code> — set <code>DOMAIN</code>, <code>USE_SSL=true</code>, <code>ALLOWED_HOSTS</code>, <code>CSRF_TRUSTED_ORIGINS</code></li>
-            <li>Restart: <code>systemctl restart caddy && docker compose -f docker-compose.prod.yml restart backend</code></li>
-          </ol>
-
-
           {/* ──── Troubleshooting ──── */}
           <h2 id="troubleshooting" className="text-2xl font-bold flex items-center gap-2">
             <Wrench className="w-5 h-5 text-emerald-600" /> Troubleshooting
@@ -395,11 +675,46 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
 
           <div className="not-prose space-y-3 my-6">
             {[
-              { q: 'Dashboard Not Loading', a: 'Check containers (docker compose ps), verify nginx on port 8090, check firewall (ufw status), check Caddy.' },
-              { q: 'Database Connection Error', a: 'Check backend logs, verify .env POSTGRES_PASSWORD matches DATABASE_URL. Re-sync with --update.' },
-              { q: 'Build Fails During Update', a: 'Check disk space (df -h), clean Docker cache (docker system prune -f), retry update.' },
-              { q: 'Caddy SSL Error', a: 'Verify DNS resolves (host your-domain.com), check Caddy logs (journalctl -u caddy), ensure ports 80/443 are open.' },
-              { q: 'Container Keeps Restarting', a: 'Check which container (docker compose ps), view its logs (docker compose logs --tail=100 <service>).' },
+              {
+                q: 'Dashboard Not Loading (blank page or 502)',
+                a: 'Check that all containers are running: docker compose -f docker-compose.prod.yml ps. Wait for backend migrations to finish (may take 1-3 min after reboot). Check nginx on port 8090: curl http://localhost:8090/health. Verify firewall allows ports 80/443: ufw status.'
+              },
+              {
+                q: 'ERR_CERT_AUTHORITY_INVALID',
+                a: 'You are likely accessing https://SERVER_IP in IP mode. Use http://SERVER_IP instead. If you have configured a domain, ensure DNS resolves correctly (dig +short your-domain.com) and the domain is saved in Settings → Domain & SSL.'
+              },
+              {
+                q: 'Gateway Timeout (504)',
+                a: 'The backend is still starting up. Run docker compose -f docker-compose.prod.yml logs backend --tail 30 to check progress. Common causes: database migrations, waiting for PostgreSQL health check, or slow build on first boot. Wait 2-3 minutes.'
+              },
+              {
+                q: 'Caddy SSL Error — Certificate Not Issued',
+                a: 'Verify DNS resolves (host your-domain.com), check Caddy logs (docker logs smsly-hosting-caddy-1), ensure ports 80/443 are open from outside (curl -v http://your-domain.com/.well-known/acme-challenge/check should not timeout). The ask endpoint must return 200 for your domain: curl -s "http://localhost:8090/api/v1/services/check-domain/?domain=your-domain.com".'
+              },
+              {
+                q: 'Database Connection Error',
+                a: 'Check backend logs (docker compose -f docker-compose.prod.yml logs backend --tail 20). Verify POSTGRES_PASSWORD in .env matches what was set during install. Re-sync with: sudo bash install.sh --update.'
+              },
+              {
+                q: 'Build Fails During Update',
+                a: 'Check disk space (df -h), clean Docker cache (docker system prune -f), re-run the update. If the issue persists, the error may be in the build logs at /var/log/smsly-install.log.'
+              },
+              {
+                q: 'Container Keeps Restarting (CrashLoop)',
+                a: 'Run docker compose -f docker-compose.prod.yml ps to identify the unhealthy container, then check its logs: docker compose -f docker-compose.prod.yml logs --tail=50 <service>. Common causes: database not reachable, port conflicts, or missing environment variables.'
+              },
+              {
+                q: '403 Forbidden or CSRF Validation Failed',
+                a: 'The backend\'s CSRF_TRUSTED_ORIGINS may not include your current origin. Re-save the domain config via Settings → Domain & SSL to trigger the runtime patch. If that fails, restart the backend: docker compose -f docker-compose.prod.yml restart backend.'
+              },
+              {
+                q: 'After Reboot, Everything Is Down',
+                a: 'Containers with restart: unless-stopped will auto-start after a Docker daemon restart. Give it 2-3 minutes for the stack to fully initialize. Run docker compose -f docker-compose.prod.yml ps to check status. If containers are not running, start manually: docker compose -f docker-compose.prod.yml up -d.'
+              },
+              {
+                q: 'How Do I Force Caddy to Renew / Retry a Certificate?',
+                a: 'Run: docker exec smsly-hosting-caddy-1 caddy reload --config /etc/caddy/Caddyfile. This reloads the config and triggers ACME retries for any domains without valid certificates.'
+              },
             ].map(item => (
               <details key={item.q} className="group rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 overflow-hidden">
                 <summary className="flex items-center justify-between p-4 cursor-pointer text-sm font-semibold text-slate-900 dark:text-white">
@@ -424,7 +739,7 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
               'Verify DEBUG=False in .env',
               'Configure ALLOWED_HOSTS to only your domain',
               'Enable SSL mode for production',
-              'Set up UFW firewall (ports 80, 443 only)',
+              'Set up UFW firewall (ports 80, 443, SSH only)',
             ].map((item, i) => (
               <div key={i} className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300">
                 <div className="w-5 h-5 rounded-md border-2 border-slate-300 dark:border-slate-600 flex-shrink-0" />
@@ -441,7 +756,11 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw enable`}</CodeBlock>
 
-          <h3 id="credential-locations">Credential Locations</h3>
+          <p>
+            Port <strong>8090</strong> (nginx direct access) should not be exposed externally — it is bound to <code>127.0.0.1</code> by default. Ports <strong>5432</strong> (PostgreSQL), <strong>6379</strong> (Redis), and other internal ports are only accessible within the Docker network and should not be exposed to the internet.
+          </p>
+
+          <h3>.env File Permissions</h3>
           <div className="overflow-x-auto not-prose my-6">
             <table className="w-full text-sm border-collapse">
               <thead>
@@ -454,17 +773,57 @@ ufw enable`}</CodeBlock>
               <tbody className="text-slate-700 dark:text-slate-300">
                 <tr className="border-b border-slate-100 dark:border-slate-800">
                   <td className="py-2.5 px-4 font-mono text-xs">/opt/smsly-hosting/.env</td>
-                  <td className="py-2.5 px-4">All secrets & config</td>
-                  <td className="py-2.5 px-4 font-mono text-xs">chmod 600</td>
+                  <td className="py-2.5 px-4">All secrets &amp; config (database passwords, API keys)</td>
+                  <td className="py-2.5 px-4 font-mono text-xs">664 (root:1000)</td>
                 </tr>
                 <tr className="border-b border-slate-100 dark:border-slate-800">
                   <td className="py-2.5 px-4 font-mono text-xs">/opt/smsly-hosting/.credentials</td>
                   <td className="py-2.5 px-4">Admin login info</td>
-                  <td className="py-2.5 px-4 font-mono text-xs">chmod 600</td>
+                  <td className="py-2.5 px-4 font-mono text-xs">600</td>
+                </tr>
+                <tr className="border-b border-slate-100 dark:border-slate-800">
+                  <td className="py-2.5 px-4 font-mono text-xs">/opt/smsly-hosting/caddy-config/</td>
+                  <td className="py-2.5 px-4">Caddy configuration &amp; certificates</td>
+                  <td className="py-2.5 px-4 font-mono text-xs">775 (1000:1000)</td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <p>
+            The <code>.env</code> file needs <code>664</code> permissions with group ownership by GID 1000 because the backend Docker container runs as user <code>smsly</code> (UID 1000). This allows the domain-config signal to persist domain changes from the UI back to <code>.env</code> without requiring SSH access.
+          </p>
+
+
+          {/* ──── Architecture Reference (Quick Summary) ──── */}
+          <h2 id="architecture-summary" className="text-2xl font-bold flex items-center gap-2 mt-12">
+            <Server className="w-5 h-5 text-emerald-600" /> Architecture Summary
+          </h2>
+
+          <p>Understanding the request flow helps diagnose issues:</p>
+
+          <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-5 my-4 not-prose">
+            <pre className="text-xs text-slate-700 dark:text-slate-300 font-mono leading-relaxed">
+{`Browser → https://your-domain.com
+  │
+  ▼
+Caddy (port 443)
+  ├─ Terminates TLS (Let's Encrypt cert)
+  ├─ On-demand TLS: asks backend "is this domain allowed?"
+  │    → GET /api/v1/services/check-domain/?domain=your-domain.com
+  │    → 200 OK = proceed, 404 = reject
+  └─ Proxies to → nginx (port 80 internal)
+                      │
+                      ├─ /api/*      → backend (port 8000)
+                      ├─ /ws/*       → backend (WebSocket)
+                      ├─ /admin/*    → backend
+                      ├─ /static/*   → served directly
+                      └─ /*          → frontend (port 3000)`}
+            </pre>
+          </div>
+
+          <p>
+            <strong>Key insight:</strong> Caddy&apos;s on-demand TLS &quot;ask&quot; endpoint at <code>/api/v1/services/check-domain/</code> is the gatekeeper for certificate issuance. If it returns 404, Caddy will not obtain a Let&apos;s Encrypt certificate for that domain. The endpoint checks (in order): PlatformConfig primary domain, managed servers, service public domains, verified custom domains, and addon domains.
+          </p>
 
         </article>
       </div>
