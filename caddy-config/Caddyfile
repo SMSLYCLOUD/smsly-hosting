@@ -15,10 +15,7 @@
     }
 }
 
-:443 {
-    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
-    redir http://{host}{uri} 308
-}
+# :443 removed — auto-HTTPS handles domain
 
 :80 {
     @acme {
