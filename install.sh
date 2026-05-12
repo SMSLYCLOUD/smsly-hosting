@@ -1573,7 +1573,10 @@ EOF
     }
     rm -f "$ssl_config"
 
-    chmod 600 "$key_file" "$cert_file" 2>/dev/null || true
+    # Caddy container runs as UID 1000; install runs as root.
+    # 0644 ensures Caddy can read both cert and key.
+    chmod 644 "$cert_file" 2>/dev/null || true
+    chmod 644 "$key_file" 2>/dev/null || true
     echo -e "${GREEN}  ✓ Self-signed cert generated for $public_ip${NC}"
 }
 
