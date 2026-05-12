@@ -1863,36 +1863,25 @@ $target_domain {
 }
 
 :443 {
-    # Handle raw IP requests with self-signed TLS redirecting to HTTP
-    # (Let's Encrypt cannot issue certificates for IP addresses)
-    @ip host \`(\d{1,3}\.){3}\d{1,3}\`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    # Handle real domain requests with on-demand TLS
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy nginx:80
-        }
-    }
+    tls internal
+    redir http://{host}{uri} 308
 }
 
 :80 {
-    # Handle ACME challenges before the redirect
     @acme {
         path /.well-known/acme-challenge/*
     }
     handle @acme {
         reverse_proxy nginx:80
     }
-    # Redirect everything else to HTTPS
-    redir https://{host}{uri} 308
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
     handle {
         reverse_proxy nginx:80
     }
@@ -2065,27 +2054,15 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         domain_block_label="http://${domain}"
     fi
 
-    # Unified :443 block — handles both IPs (self-signed + HTTP redirect) and
-    # real domains (on-demand Let's Encrypt). The @ip matcher runs first.
+    # :443 catch-all with self-signed TLS for IP/non-domain requests.
+    # Real domain requests match the named site block above via SNI
+    # and get automatic Let's Encrypt HTTPS from Caddy.
     local tls_block
     tls_block=$(cat <<'TLS443'
 
 :443 {
-    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy nginx:80
-        }
-    }
+    tls internal
+    redir http://{host}{uri} 308
 }
 TLS443
 )
@@ -2104,12 +2081,17 @@ ${domain_block_label} {
     log {
         output file /var/log/caddy/access.log
     }
+:443 {
+    tls internal
+    redir http://{host}{uri} 308
 }
-${tls_block}
 
 :80 {
     @acme {
         path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy nginx:80
     }
     handle @acme {
         reverse_proxy nginx:80
@@ -3319,22 +3301,7 @@ ${cf_known_stanza}
     }
 }
 
-:443 {
-    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy nginx:80
-        }
-    }
+
 }
 
 :80 {

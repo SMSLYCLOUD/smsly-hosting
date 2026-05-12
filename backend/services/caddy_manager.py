@@ -501,25 +501,13 @@ def generate_caddyfile(config) -> str:
 }}"""
             )
 
-    # Unified :443 block — handles both IPs (self-signed + HTTP redirect) and
-    # real domains (on-demand Let's Encrypt). The @ip matcher runs first.
+    # Catch-all :443 with self-signed TLS for non-domain requests (IPs, etc.).
+    # Real domain requests are handled by the named site block above via
+    # Caddy's automatic HTTPS (SNI matching picks the right TLS config).
     sections.append(
         """:443 {
-    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
-    handle @ip {
-        route {
-            tls internal
-            redir http://{host}{uri} 308
-        }
-    }
-    handle {
-        route {
-            tls {
-                on_demand
-            }
-            reverse_proxy nginx:80
-        }
-    }
+    tls internal
+    redir http://{host}{uri} 308
 }"""
     )
 
