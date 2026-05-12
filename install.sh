@@ -2812,6 +2812,15 @@ if [ -n "$UPDATE_MODE" ]; then
     chmod 775 /opt/smsly-cache
     chown -R 1000:1000 /opt/smsly-cache 2>/dev/null || true
 
+    # ─── Fix .env permissions BEFORE any containers start ────────────────────
+    # The docker-compose.prod.yml mounts .env into the backend container.
+    # If .env has 600 permissions (created by old install.sh), the container
+    # can't read it and Django crashes with PermissionError.
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+        echo -e "${BLUE}  → Fixed .env permissions to 644${NC}"
+    fi
+
     # ─── Pre-flight ──────────────────────────────────────────────────────────
     if [ "$EUID" -ne 0 ]; then
         echo -e "${RED}✗ Please run as root (sudo bash install.sh --update)${NC}"
