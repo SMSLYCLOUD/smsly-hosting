@@ -15,6 +15,11 @@
     }
 }
 
+:443 {
+    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    redir http://{host}{uri} 308
+}
+
 :80 {
     @acme {
         path /.well-known/acme-challenge/*
