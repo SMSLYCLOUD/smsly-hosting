@@ -506,12 +506,16 @@ def generate_caddyfile(config) -> str:
     # includes the server's public IP as a Subject Alternative Name.
     # (Caddy's built-in tls internal does not support IP SANs.)
     import os as _os
-    _cert = "/etc/caddy/certs/ip.crt"
-    _key = "/etc/caddy/certs/ip.key"
-    if _os.path.exists(_cert) and _os.path.exists(_key):
+    # Path inside the backend container (config is mounted at /caddy-config)
+    _backend_cert = "/caddy-config/certs/ip.crt"
+    _backend_key = "/caddy-config/certs/ip.key"
+    # Path inside the Caddy container (same volume mounted at /etc/caddy)
+    _caddy_cert = "/etc/caddy/certs/ip.crt"
+    _caddy_key = "/etc/caddy/certs/ip.key"
+    if _os.path.exists(_backend_cert) and _os.path.exists(_backend_key):
         sections.append(
             f""":443 {{
-    tls {_cert} {_key}
+    tls {_caddy_cert} {_caddy_key}
     redir http://{{host}}{{uri}} 308
 }}"""
         )
