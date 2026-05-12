@@ -72,6 +72,7 @@ for arg in "$@"; do
                        NO_SCREEN=true ;;
     --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
     --fix-domain)      NO_SCREEN=true ;;
+    --fix-permissions) NO_SCREEN=true ;;
     --recover|--refresh|--debug|--verify|--clear|--help|-h)
                        NO_SCREEN=true ;;
   esac
@@ -1669,14 +1670,16 @@ for arg in "$@"; do
         --mode=agent-lite|--agent-lite) MODE_AGENT_LITE="true" ;;
         --clear)           CLEAR_MODE="true" ;;
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
+        --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain]"
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services"
             echo "  --clear            Wipes stale addons and frees up docker resources"
             echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
+            echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
             exit 0
             ;;
     esac
@@ -1866,6 +1869,44 @@ if [ "$WIPE_MODE" = "true" ]; then
 fi
 
 # =============================================================================
+# FIX-PERMISSIONS — Fix .env and shared directory permissions for container
+# =============================================================================
+fix_env_permissions() {
+    local env_file="${1:-$INSTALL_DIR/.env}"
+    echo -e "${BLUE}  → Fixing .env permissions...${NC}"
+
+    if [ ! -f "$env_file" ]; then
+        echo -e "${YELLOW}  ⚠ .env not found at $env_file${NC}"
+        return 1
+    fi
+
+    # The backend container runs as UID 1000 (smsly user).
+    # .env must be group-writable by GID 1000 so the domain-config
+    # signal can persist DOMAIN/USE_SSL changes back to .env.
+    chown root:1000 "$env_file" 2>/dev/null || true
+    chmod 664 "$env_file" 2>/dev/null || true
+
+    local owner mode
+    owner="$(stat -c '%u:%g' "$env_file" 2>/dev/null || echo "?")"
+    mode="$(stat -c '%a' "$env_file" 2>/dev/null || echo "?")"
+    echo -e "${GREEN}  ✓ .env permissions: $mode owner=$owner${NC}"
+
+    # Also fix caddy-config directory for good measure
+    if [ -d "$INSTALL_DIR/caddy-config" ]; then
+        chown -R 1000:1000 "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+        chmod -R u+rwX,g+rwX "$INSTALL_DIR/caddy-config" 2>/dev/null || true
+        echo -e "${GREEN}  ✓ caddy-config permissions fixed${NC}"
+    fi
+
+    # Fix staticfiles/media directories
+    for dir in staticfiles media backups; do
+        if [ -d "$INSTALL_DIR/$dir" ]; then
+            chown -R 1000:1000 "$INSTALL_DIR/$dir" 2>/dev/null || true
+        fi
+    done
+}
+
+# =============================================================================
 # FIX-DOMAIN MODE — Fix domain/IP sync between .env, DB PlatformConfig, and Caddy
 # =============================================================================
 fix_domain_sync() {
@@ -1998,6 +2039,28 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
     export DOMAIN="$FIX_DOMAIN"
     export USE_SSL="true"
     exec bash "$SCRIPT_PATH" --update --no-screen "$@"
+fi
+
+# =============================================================================
+# FIX-PERMISSIONS MODE handler
+# =============================================================================
+if [ "${FIX_PERMISSIONS_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --fix-permissions)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/.env" ]; then
+        echo -e "${RED}x SMSLY installation not found at $INSTALL_DIR. Run fresh install first.${NC}"
+        exit 1
+    fi
+    fix_env_permissions "$INSTALL_DIR/.env"
+    echo -e "${GREEN}✅ Permissions fixed.${NC}"
+    echo -e "  You may need to rebuild the backend for the signal code to take effect:"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE build backend"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE down"
+    echo -e "    docker compose -f $INSTALL_DIR/$COMPOSE_FILE up -d"
+    echo -e "  Then re-save the domain via Settings → Domain & SSL."
+    exit 0
 fi
 
 ensure_update_networks() {
@@ -3700,11 +3763,15 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     bash scripts/grid-handshake.sh || \
         echo -e "${YELLOW}  ⚠️ Handshake stabilization failed (non-fatal). You can run it manually later.${NC}"
 
+    # ─── Fix .env permissions (ensures domain signal can write back) ─────
+    fix_env_permissions "$INSTALL_DIR/.env" || true
+
     echo -e "${GREEN}   ✓ UPDATE SUCCESSFUL ($UPDATE_MODE)${NC}"
 
     echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}  Debug snapshot:    sudo bash install.sh --debug${NC}"
     echo -e "${YELLOW}  Runtime recovery:  sudo bash install.sh --recover${NC}"
+    echo -e "${YELLOW}  Fix permissions:   sudo bash install.sh --fix-permissions${NC}"
     exit 0
 fi
 
