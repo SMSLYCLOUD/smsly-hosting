@@ -2194,14 +2194,37 @@ ${cf_known_stanza}
 }
 
 :443 {
-    tls {
-        on_demand
+    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
     }
-    reverse_proxy localhost:8090
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy localhost:8090
+    }
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy localhost:8090
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy localhost:8090
+    }
 }
 
 ${cf_svc_blocks}
@@ -3269,14 +3292,37 @@ $DOMAIN {
 }
 
 :443 {
-    tls {
-        on_demand
+    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
     }
-    reverse_proxy localhost:8090
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy localhost:8090
+    }
 }
 
 :80 {
-    reverse_proxy localhost:8090
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy localhost:8090
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy localhost:8090
+    }
 }
 CADDYEOF
 
@@ -3298,6 +3344,12 @@ ENVEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
 $DOMAIN {
     reverse_proxy localhost:8090
     encode gzip
@@ -3306,9 +3358,29 @@ $DOMAIN {
     }
 }
 
-:80 {
+:443 {
+    @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
+    }
     handle {
-        rewrite * /notice
+        tls {
+            on_demand
+        }
+        reverse_proxy localhost:8090
+    }
+}
+
+:80 {
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy localhost:8090
+    }
+    redir https://{host}{uri} 308
+    handle {
         reverse_proxy localhost:8090
     }
 }
@@ -3323,6 +3395,26 @@ CADDYEOF
 else
     cat > /etc/caddy/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
+{
+    on_demand_tls {
+        ask http://localhost:8090/api/v1/services/check-domain/
+    }
+}
+
+:443 {
+    @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
+    }
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy localhost:8090
+    }
+}
+
 :80 {
     reverse_proxy localhost:8090
 }
