@@ -1867,15 +1867,19 @@ $target_domain {
     # (Let's Encrypt cannot issue certificates for IP addresses)
     @ip host \`(\d{1,3}\.){3}\d{1,3}\`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     # Handle real domain requests with on-demand TLS
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy nginx:80
         }
-        reverse_proxy nginx:80
     }
 }
 
@@ -2069,14 +2073,18 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 :443 {
     @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy nginx:80
         }
-        reverse_proxy nginx:80
     }
 }
 TLS443
@@ -3314,14 +3322,18 @@ ${cf_known_stanza}
 :443 {
     @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy nginx:80
         }
-        reverse_proxy nginx:80
     }
 }
 
