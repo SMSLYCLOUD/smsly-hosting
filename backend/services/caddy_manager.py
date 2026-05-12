@@ -617,12 +617,19 @@ def generate_caddyfile(config) -> str:
                     except OSError:
                         pass
         if os.path.exists(_crt_path) and os.path.exists(_key_path):
-            sections.append(
-                f""":443 {{
+            # Skip the :443 self-signed catch-all when a real domain is configured with SSL.
+            # The platform domain block handles HTTPS via auto-HTTPS (Let's Encrypt).
+            # The :443 catch-all is only needed when accessing by IP directly (no domain).
+            # Including it alongside the domain block causes Caddy to serve the self-signed
+            # cert instead of obtaining a valid Let's Encrypt certificate.
+            _needs_selfsigned_fallback = not (use_ssl and domain and not _is_ip(domain))
+            if _needs_selfsigned_fallback:
+                sections.append(
+                    f""":443 {{
     tls {_caddy_crt} {_caddy_key}
     redir http://{{host}}{{uri}} 308
 }}"""
-            )
+                )
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 

@@ -127,33 +127,78 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         from apps.deployments.patching import patch_runtime_settings
         patch_runtime_settings()
 
-        # 2. Sync domain back to .env so future --update runs pick it up
-        _env_path = "/app/.env"
+        # 2. Sync domain to .env so future --update runs pick up correct values.
+        #    The host .env is bind-mounted at /app/.env (rw) but the container
+        #    user (smsly, UID 1000) may not have write permission if the host
+        #    file is owned by root.  We try multiple paths and log clearly.
         _new_domain = (instance.domain or "").strip()
         _new_ssl = instance.use_ssl
-        if _new_domain and os.path.isfile(_env_path):
-            _updated = False
-            _lines = []
-            with open(_env_path, "r", encoding="utf-8") as _fh:
-                for _line in _fh:
-                    if _line.startswith("DOMAIN="):
-                        _lines.append(f"DOMAIN={_new_domain}\n")
+        _new_scheme = 'https' if _new_ssl else 'http'
+        _new_origin = f'{_new_scheme}://{_new_domain}' if _new_domain else ''
+
+        # Env vars to sync (value providers mapped to (line_prefix, value_or_none))
+        _env_sync_map = {
+            'DOMAIN=': _new_domain,
+            'USE_SSL=': 'true' if _new_ssl else 'false',
+            'SITE_URL=': _new_origin or None,
+            'ALLOWED_HOSTS=': None,  # handled by patch_runtime_settings; don't clobber
+        }
+
+        _env_sync_map['CSRF_TRUSTED_ORIGINS='] = (
+            _new_origin if _new_origin else None
+        )
+        _env_sync_map['CORS_ALLOWED_ORIGINS='] = (
+            _new_origin if _new_origin else None
+        )
+
+        for _env_path in ("/app/.env", "/caddy-config/.env"):
+            if not (_new_domain and os.path.isfile(_env_path)):
+                continue
+            try:
+                _updated = False
+                _lines = []
+                with open(_env_path, "r", encoding="utf-8") as _fh:
+                    for _line in _fh:
+                        _matched = False
+                        for _key, _val in _env_sync_map.items():
+                            if _line.startswith(_key):
+                                if _val is not None:
+                                    _lines.append(f"{_key}{_val}\n")
+                                    _updated = True
+                                _matched = True
+                                break
+                        if not _matched:
+                            _lines.append(_line)
+                for _key, _val in _env_sync_map.items():
+                    if _val is not None and not any(l.startswith(_key) for l in _lines):
+                        _lines.append(f"{_key}{_val}\n")
                         _updated = True
-                    elif _line.startswith("USE_SSL="):
-                        _lines.append(f"USE_SSL={'true' if _new_ssl else 'false'}\n")
-                        _updated = True
-                    else:
-                        _lines.append(_line)
-            if not any(l.startswith("DOMAIN=") for l in _lines):
-                _lines.append(f"DOMAIN={_new_domain}\n")
-                _updated = True
-            if not any(l.startswith("USE_SSL=") for l in _lines):
-                _lines.append(f"USE_SSL={'true' if _new_ssl else 'false'}\n")
-                _updated = True
-            if _updated:
-                with open(_env_path, "w", encoding="utf-8") as _fh:
-                    _fh.writelines(_lines)
-                logger.info("Synced .env: DOMAIN=%s, USE_SSL=%s", _new_domain, _new_ssl)
+                if _updated:
+                    import tempfile
+                    _tmp = tempfile.NamedTemporaryFile(
+                        mode='w', dir=os.path.dirname(_env_path),
+                        delete=False, encoding='utf-8',
+                    )
+                    try:
+                        _tmp.writelines(_lines)
+                        _tmp.close()
+                        os.replace(_tmp.name, _env_path)
+                    except Exception:
+                        if os.path.exists(_tmp.name):
+                            os.unlink(_tmp.name)
+                        raise
+                    logger.info(
+                        "Synced %s: DOMAIN=%s, USE_SSL=%s", _env_path, _new_domain, _new_ssl
+                    )
+            except PermissionError:
+                logger.warning(
+                    "Cannot write to %s (Permission denied). "
+                    "Run on the VPS host: sudo chown 1000:1000 /opt/smsly-hosting/.env "
+                    "&& sudo chmod 664 /opt/smsly-hosting/.env",
+                    _env_path,
+                )
+            except OSError as _exc:
+                logger.error("Failed to sync %s: %s", _env_path, _exc)
 
         # 3. Re-generate and apply Caddyfile
         logger.info("Signal: Re-generating Caddyfile for domain %s", instance.domain)
