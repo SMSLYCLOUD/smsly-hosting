@@ -2196,14 +2196,18 @@ ${cf_known_stanza}
 :443 {
     @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy localhost:8090
         }
-        reverse_proxy localhost:8090
     }
 }
 
@@ -3294,14 +3298,18 @@ $DOMAIN {
 :443 {
     @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy localhost:8090
         }
-        reverse_proxy localhost:8090
     }
 }
 
@@ -3361,14 +3369,18 @@ $DOMAIN {
 :443 {
     @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy localhost:8090
         }
-        reverse_proxy localhost:8090
     }
 }
 
@@ -3404,14 +3416,18 @@ else
 :443 {
     @ip host \`([0-9]{1,3}[.]){3}[0-9]{1,3}$\`
     handle @ip {
-        tls internal
-        redir http://{host}{uri} 308
+        route {
+            tls internal
+            redir http://{host}{uri} 308
+        }
     }
     handle {
-        tls {
-            on_demand
+        route {
+            tls {
+                on_demand
+            }
+            reverse_proxy localhost:8090
         }
-        reverse_proxy localhost:8090
     }
 }
 
