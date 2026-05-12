@@ -52,6 +52,16 @@ if 'apps.licensing' in settings.INSTALLED_APPS:
 if 'apps.intelligence' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))
 
+# ─── Server Identity Attestation (Zero-Trust challenge-response) ──────────
+try:
+    from apps.deployments.views_attestation import attestation_challenge, attestation_verify
+    urlpatterns += [
+        path('api/v1/internal/attest/challenge/', attestation_challenge, name='attest-challenge'),
+        path('api/v1/internal/attest/verify/', attestation_verify, name='attest-verify'),
+    ]
+except ImportError:
+    pass
+
 # ─── Tunnel API (function-based views, not DRF router) ────────────────────
 try:
     if getattr(settings, 'ENABLE_LEGACY_TUNNEL_API', False):

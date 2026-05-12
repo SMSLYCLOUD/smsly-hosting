@@ -8,6 +8,7 @@ can be executed with zero manual configuration.
 
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -19,6 +20,44 @@ from apps.intelligence.providers import ask_with_fallback
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 
 logger = logging.getLogger(__name__)
+
+# SEC-ZT-009: GitHub API rate-limit tracking
+# Remaining calls are checked before each paginated fetch.
+_GITHUB_API_BASE = "https://api.github.com"
+_RATE_LIMIT_WARN_THRESHOLD = 100  # Warn below this many remaining calls
+
+
+def _check_github_rate_limit(headers: dict) -> tuple[int, int]:
+    """
+    Check GitHub API rate-limit remaining. Returns (remaining, limit).
+    Logs warning when remaining is low.
+    """
+    try:
+        resp = requests.get(
+            f"{_GITHUB_API_BASE}/rate_limit",
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            core = data.get("resources", {}).get("core", {})
+            remaining = core.get("remaining", 0)
+            limit = core.get("limit", 5000)
+            reset = core.get("reset", 0)
+            if remaining < _RATE_LIMIT_WARN_THRESHOLD:
+                reset_time = time.strftime(
+                    "%H:%M:%S UTC", time.gmtime(reset)
+                ) if reset else "unknown"
+                logger.warning(
+                    "SEC-ZT-009: GitHub API rate-limit low: %d/%d remaining "
+                    "(resets at %s). Consider reducing scan_window_days.",
+                    remaining, limit, reset_time,
+                )
+            return remaining, limit
+    except requests.RequestException as e:
+        logger.warning("SEC-ZT-009: Could not check GitHub rate-limit: %s", e)
+    return 0, 0
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # GitHub helpers
@@ -33,15 +72,41 @@ def _github_headers(token: str) -> dict:
 
 def fetch_all_repos(token: str) -> List[dict]:
     """Fetch ALL repos visible to *token* (paginated)."""
+    headers = _github_headers(token)
+    # SEC-ZT-009: Check rate-limit before starting
+    remaining, limit = _check_github_rate_limit(headers)
+    if remaining < 10:
+        logger.error(
+            "SEC-ZT-009: GitHub API rate-limit exhausted (%d/%d). "
+            "Cannot scan repos.", remaining, limit,
+        )
+        return []
+
     repos: List[dict] = []
     page = 1
     while True:
+        # SEC-ZT-009: Re-check rate-limit every 10 pages
+        if page % 10 == 0:
+            remaining, _ = _check_github_rate_limit(headers)
+            if remaining < 10:
+                logger.warning(
+                    "SEC-ZT-009: Stopping pagination early due to low rate-limit "
+                    "(%d remaining at page %d)", remaining, page,
+                )
+                break
+
         resp = requests.get(
-            "https://api.github.com/user/repos",
-            headers=_github_headers(token),
+            f"{_GITHUB_API_BASE}/user/repos",
+            headers=headers,
             params={"per_page": 100, "page": page, "sort": "updated"},
             timeout=15,
         )
+
+        # If rate-limited, GitHub returns 403 with a rate-limit message
+        if resp.status_code == 403 and "rate limit" in resp.text.lower():
+            logger.error("SEC-ZT-009: GitHub rate-limit hit during repo fetch")
+            break
+
         resp.raise_for_status()
         batch = resp.json()
         if not batch:
@@ -55,14 +120,18 @@ def fetch_all_repos(token: str) -> List[dict]:
 
 def fetch_repo_tree(token: str, full_name: str, branch: str = "main") -> List[str]:
     """Fetch the top-level file tree for a repo (plus key nested files)."""
+    headers = _github_headers(token)
     # Try the default branch first, fall back to master
     for ref in [branch, "main", "master"]:
         resp = requests.get(
-            f"https://api.github.com/repos/{full_name}/git/trees/{ref}",
-            headers=_github_headers(token),
+            f"{_GITHUB_API_BASE}/repos/{full_name}/git/trees/{ref}",
+            headers=headers,
             params={"recursive": "1"},
             timeout=15,
         )
+        if resp.status_code == 403 and "rate limit" in resp.text.lower():
+            logger.warning("SEC-ZT-009: Rate-limited fetching tree for %s", full_name)
+            return []
         if resp.status_code == 200:
             tree = resp.json().get("tree", [])
             return [item["path"] for item in tree if item["type"] == "blob"]
@@ -71,12 +140,16 @@ def fetch_repo_tree(token: str, full_name: str, branch: str = "main") -> List[st
 
 def fetch_file_content(token: str, full_name: str, path: str) -> Optional[str]:
     """Download a single file's text content (for env var detection, etc.)."""
+    headers = _github_headers(token)
     resp = requests.get(
-        f"https://api.github.com/repos/{full_name}/contents/{path}",
-        headers=_github_headers(token),
+        f"{_GITHUB_API_BASE}/repos/{full_name}/contents/{path}",
+        headers=headers,
         params={"ref": "main"},
         timeout=15,
     )
+    if resp.status_code == 403 and "rate limit" in resp.text.lower():
+        logger.warning("SEC-ZT-009: Rate-limited fetching file %s from %s", path, full_name)
+        return None
     if resp.status_code != 200:
         return None
     import base64

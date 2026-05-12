@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import hashlib
 import hmac as hmac_mod
@@ -7,6 +8,7 @@ import requests
 import re
 from typing import Optional
 from urllib.parse import urlencode, urlparse
+from django.conf import settings
 from .ssh_client import SSHClient
 from apps.deployments.models import (
     Service,
@@ -17,6 +19,17 @@ from apps.deployments.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# SEC-ZT-005: Inter-server TLS enforcement.
+# Set SMSLY_ENFORCE_INTERSERVER_TLS=true to reject non-HTTPS connections.
+_ENFORCE_TLS = os.environ.get("SMSLY_ENFORCE_INTERSERVER_TLS", "false").lower() in (
+    "1", "true", "yes", "on",
+)
+# SEC-ZT-005: TLS certificate verification for inter-server requests.
+# Set SMSLY_REMOTE_VERIFY=0 to disable (self-signed certs, lab environments).
+_REMOTE_VERIFY = os.environ.get("SMSLY_REMOTE_VERIFY", "1").lower() not in (
+    "0", "false", "no", "off",
+)
 
 
 REMOTE_RESPONSE_SNIPPET_CHARS = 1200
@@ -84,7 +97,8 @@ class RemoteOrchestrator:
                  
             # Try the primary base URL's health endpoint
             health_url = f"{base_urls[0]}/health"
-            resp = requests.get(health_url, timeout=10)
+            verify_health = _REMOTE_VERIFY if health_url.startswith("https://") else False
+            resp = requests.get(health_url, timeout=10, verify=verify_health)
             results["latency_ms"] = int((time.time() - start) * 1000)
             
             if resp.status_code < 500:
@@ -239,10 +253,16 @@ class RemoteOrchestrator:
             return urls
 
         has_explicit_port = host_port.count(":") == 1
-        append(f"http://{host_port}")
+        # SEC-ZT-005: When TLS enforcement is active, skip plain HTTP URLs
+        if not _ENFORCE_TLS:
+            append(f"http://{host_port}")
         append(f"https://{host_port}")
-        if not has_explicit_port:
+        if not has_explicit_port and not _ENFORCE_TLS:
             append(f"http://{host_port}:8090")
+        if _ENFORCE_TLS and urls:
+            https_urls = [u for u in urls if u.startswith("https://")]
+            if https_urls:
+                return https_urls
         return urls
 
     @staticmethod
@@ -295,6 +315,11 @@ class RemoteOrchestrator:
 
                 for attempt in range(attempts):
                     try:
+                        # SEC-ZT-005: TLS verification for inter-server requests.
+                        # _REMOTE_VERIFY defaults to True; set SMSLY_REMOTE_VERIFY=0 to disable.
+                        verify_ssl = _REMOTE_VERIFY
+                        if verify_ssl and not url.startswith("https://"):
+                            verify_ssl = False  # No SSL to verify on plain HTTP
                         response = requests.request(
                             method_upper,
                             url,
@@ -302,6 +327,7 @@ class RemoteOrchestrator:
                             headers=headers,
                             timeout=self._timeout(timeout),
                             allow_redirects=False,
+                            verify=verify_ssl,
                         )
                     except requests.RequestException as exc:
                         message = (

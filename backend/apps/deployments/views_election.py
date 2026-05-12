@@ -4,22 +4,105 @@ Leader election and cluster management views.
 Public endpoints (admin-authenticated):
 - ClusterViewSet: CRUD + actions (force-election, status)
 
-Internal endpoints (no auth, WireGuard-only access):
+Internal endpoints (HMAC-authenticated, WireGuard mesh):
 - heartbeat_receive: Accept heartbeats from leader
 - vote_request: Handle vote requests from candidates
 """
 
+import hashlib
+import hmac as hmac_mod
 import logging
+import time
+
+from django.conf import settings
 
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import IsAdminUser, AllowAny
+from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .models_election import ClusterState, HeartbeatLog, ElectionVote
 from .services.election_service import ElectionService
 
 logger = logging.getLogger(__name__)
+
+# SEC-ZT-001: HMAC authentication for election protocol.
+# Election heartbeat and vote endpoints require HMAC V2 signatures.
+# The HMAC secret is the sender's gateway_secret, verified against
+# the corresponding ManagedServer record by wg_address.
+HMAC_TIMEOUT_SECONDS = 300  # 5-minute timestamp window for replay protection
+
+
+def _verify_election_hmac(request) -> tuple[bool, str]:
+    """
+    Verify HMAC V2 signature on election protocol messages.
+
+    Validates:
+    1. X-Request-Timestamp is within HMAC_TIMEOUT_SECONDS of now
+    2. X-Election-Signature matches HMAC-SHA256 of body using the
+       sender's gateway_secret
+
+    Returns (is_valid, error_reason).
+    """
+    from .models_mesh import WireGuardPeer
+
+    signature = request.headers.get("X-Election-Signature", "")
+    timestamp_str = request.headers.get("X-Request-Timestamp", "")
+    sender_wg = request.data.get("sender_wg_address", "")
+
+    if not signature or not timestamp_str or not sender_wg:
+        return False, "Missing required HMAC headers"
+
+    try:
+        timestamp = int(timestamp_str)
+    except (ValueError, TypeError):
+        return False, "Invalid X-Request-Timestamp"
+
+    now = int(time.time())
+    if abs(now - timestamp) > HMAC_TIMEOUT_SECONDS:
+        return False, f"Timestamp outside {HMAC_TIMEOUT_SECONDS}s window"
+
+    # Find the peer by wg_address to get their gateway_secret
+    try:
+        peer = WireGuardPeer.objects.select_related("server").filter(
+            wg_address=sender_wg, is_active=True,
+        ).first()
+    except Exception:
+        return False, "Database error resolving peer"
+
+    if not peer or not peer.server:
+        return False, "Unknown peer wg_address"
+
+    gateway_secret = str(getattr(peer.server, "gateway_secret", "") or "").strip()
+    if not gateway_secret:
+        return False, "No gateway_secret configured for peer"
+
+    body_bytes = request.body or b""
+    payload = f"{sender_wg}|{timestamp_str}|{hashlib.sha256(body_bytes).hexdigest()}"
+    expected = hmac_mod.new(
+        gateway_secret.encode(),
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac_mod.compare_digest(signature, expected):
+        return False, "HMAC signature mismatch"
+
+    return True, ""
+
+
+def _election_hmac_required(view_func):
+    """Decorator that enforces HMAC auth on election endpoints."""
+    def _wrapped(request, *args, **kwargs):
+        is_valid, error = _verify_election_hmac(request)
+        if not is_valid:
+            logger.warning("Election HMAC rejected: %s", error)
+            return Response(
+                {"error": f"Election HMAC rejected: {error}"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        return view_func(request, *args, **kwargs)
+    return _wrapped
 
 
 # ─── Serializers ─────────────────────────────────────────────────────────────
@@ -107,17 +190,18 @@ class ClusterViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
 
-# ─── Internal Endpoints (WireGuard-only, no auth) ───────────────────────────
-# These are called by peer servers over the WireGuard mesh.
-# No authentication is needed because the WireGuard tunnel itself is
-# the authentication layer (only peers with valid keys can connect).
+# ─── Internal Endpoints (HMAC-authenticated, WireGuard mesh) ────────────────
+# SEC-ZT-001: Election protocol messages require HMAC V2 signature verification.
+# The HMAC secret is the sender's per-node gateway_secret, verified against
+# the WireGuardPeer's ManagedServer record.
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@_election_hmac_required
 def heartbeat_receive(request):
     """
     Receive a heartbeat from the cluster leader.
 
+    Authenticated via HMAC V2 using the sender's per-node gateway_secret.
     Called by peer servers over WireGuard mesh.
     """
     term = request.data.get("term")
@@ -129,7 +213,6 @@ def heartbeat_receive(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Get or create cluster for the requesting mesh
     from .models_mesh import MeshNetwork
     meshes = MeshNetwork.objects.filter(is_active=True)
     for mesh in meshes:
@@ -149,11 +232,12 @@ def heartbeat_receive(request):
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
+@_election_hmac_required
 def vote_request(request):
     """
     Handle a vote request from a candidate server.
 
+    Authenticated via HMAC V2 using the sender's per-node gateway_secret.
     Called during leader election over WireGuard mesh.
     """
     term = request.data.get("term")

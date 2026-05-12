@@ -1,3 +1,4 @@
+import re
 import secrets
 import string
 from typing import Dict, Any, Tuple, List
@@ -5,7 +6,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-WEAK_PLACEHOLDERS = {"changeme", "secret", "password", "test", "demo"}
+# SEC-ZT-008: Weak value detection with non-alphanumeric boundaries.
+# Prevents substring false positives (e.g., "testing" no longer matches "test")
+# while catching delimiter-separated weak words (e.g., "my_password", "test_value").
+_WEAK_PATTERNS_RE = re.compile(
+    r'(?:^|[^a-zA-Z0-9])(changeme|secret|password|test|demo)(?:$|[^a-zA-Z0-9])',
+    re.IGNORECASE,
+)
+_WEAK_LEET_RE = re.compile(
+    r'(?:^|[^a-zA-Z0-9])(ch@ng3m3|s3cr3t|p@ssw0rd|t3st|d3m0)(?:$|[^a-zA-Z0-9])',
+    re.IGNORECASE,
+)
 
 def generate_strong_secret(length: int = 48) -> str:
     alphabet = string.ascii_letters + string.digits
@@ -15,7 +26,11 @@ def is_weak_value(value: str) -> bool:
     if not value:
         return True
     val_lower = str(value).lower().strip()
-    return any(p in val_lower for p in WEAK_PLACEHOLDERS) or val_lower == ""
+    if _WEAK_PATTERNS_RE.search(val_lower):
+        return True
+    if _WEAK_LEET_RE.search(val_lower):
+        return True
+    return False
 
 class EcosystemEnvResolver:
     def __init__(self, graph):

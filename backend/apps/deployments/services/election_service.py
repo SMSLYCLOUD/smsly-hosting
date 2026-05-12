@@ -8,13 +8,42 @@ Simplified Raft-like protocol for 2-5 server clusters.
 - Old leader demotes to follower on discovering higher term.
 """
 
+import hashlib
+import hmac as hmac_mod
+import json
 import logging
 import time
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _build_election_hmac_headers(
+    payload: dict,
+    wg_address: str,
+    gateway_secret: str,
+) -> dict:
+    """
+    Build HMAC V2 headers for election protocol messages.
+
+    The signature covers (sender_wg|timestamp|sha256(body)).
+    """
+    timestamp = str(int(time.time()))
+    body_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    sign_input = f"{wg_address}|{timestamp}|{body_hash}"
+    signature = hmac_mod.new(
+        gateway_secret.encode(),
+        sign_input.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Election-Signature": signature,
+        "X-Request-Timestamp": timestamp,
+    }
 
 
 class ElectionService:
@@ -49,6 +78,15 @@ class ElectionService:
 
         remote_peers = mesh.peers.filter(is_active=True).exclude(is_local=True)
 
+        # Get local gateway_secret for HMAC signing
+        local_server = local_peer.server if local_peer else None
+        local_gateway_secret = str(
+            getattr(local_server, "gateway_secret", "") or ""
+        ).strip()
+        if not local_gateway_secret:
+            local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
+        local_wg = local_peer.wg_address if local_peer else ""
+
         for peer in remote_peers:
             start = time.monotonic()
             success = False
@@ -58,12 +96,18 @@ class ElectionService:
             try:
                 # Send heartbeat via WireGuard IP to internal API
                 url = f"http://{peer.wg_address}:8000/api/v1/internal/heartbeat/"
+                payload = {
+                    "term": cluster.term,
+                    "leader_wg_address": local_wg,
+                    "sender_wg_address": local_wg,
+                }
+                hmac_headers = _build_election_hmac_headers(
+                    payload, local_wg, local_gateway_secret,
+                )
                 resp = requests.post(
                     url,
-                    json={
-                        "term": cluster.term,
-                        "leader_wg_address": local_peer.wg_address,
-                    },
+                    json=payload,
+                    headers=hmac_headers,
                     timeout=5,
                 )
                 latency = (time.monotonic() - start) * 1000
@@ -212,16 +256,31 @@ class ElectionService:
         total_servers = len(remote_peers) + 1  # +1 for self
         majority = (total_servers // 2) + 1
 
+        # Get local gateway_secret for HMAC signing
+        local_server = local_peer.server if local_peer else None
+        local_gateway_secret = str(
+            getattr(local_server, "gateway_secret", "") or ""
+        ).strip()
+        if not local_gateway_secret:
+            local_gateway_secret = str(getattr(settings, "GATEWAY_SECRET", ""))
+        local_wg = local_peer.wg_address if local_peer else ""
+
         # Request votes from peers
         for peer in remote_peers:
             try:
                 url = f"http://{peer.wg_address}:8000/api/v1/internal/vote/"
+                payload = {
+                    "term": new_term,
+                    "candidate_wg_address": local_wg,
+                    "sender_wg_address": local_wg,
+                }
+                hmac_headers = _build_election_hmac_headers(
+                    payload, local_wg, local_gateway_secret,
+                )
                 resp = requests.post(
                     url,
-                    json={
-                        "term": new_term,
-                        "candidate_wg_address": local_peer.wg_address if local_peer else "",
-                    },
+                    json=payload,
+                    headers=hmac_headers,
                     timeout=5,
                 )
                 if resp.status_code == 200:
