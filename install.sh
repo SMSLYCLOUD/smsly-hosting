@@ -1521,6 +1521,62 @@ reload_caddy_preserving_previous() {
     return 1
 }
 
+ensure_selfsigned_cert() {
+    # Generate a self-signed certificate for the server's public IP address.
+    # Caddy's built-in tls internal doesn't support IP SANs (causes
+    # ERR_SSL_PROTOCOL_ERROR), so we generate a proper cert with
+    # OpenSSL that includes the IP as a Subject Alternative Name.
+    local cert_dir="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config/certs"
+    local cert_file="$cert_dir/ip.crt"
+    local key_file="$cert_dir/ip.key"
+    local public_ip="${PUBLIC_IP:-$(detect_public_ip)}"
+    local ssl_config="$cert_dir/openssl.cnf"
+
+    mkdir -p "$cert_dir"
+    chmod 700 "$cert_dir" 2>/dev/null || true
+
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${YELLOW}  ⚠ openssl not available; skipping self-signed cert generation${NC}"
+        return 0
+    fi
+
+    # Always regenerate (cheap operation, ensures IP is current)
+    echo -e "${BLUE}  → Generating self-signed cert for IP: $public_ip...${NC}"
+
+    # Create a temporary OpenSSL config with the IP SAN
+    cat > "$ssl_config" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = $public_ip
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+IP.1 = $public_ip
+EOF
+
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$key_file" \
+        -out "$cert_file" \
+        -config "$ssl_config" \
+        2>/dev/null || {
+        echo -e "${YELLOW}  ⚠ Failed to generate self-signed cert (non-fatal)${NC}"
+        rm -f "$ssl_config"
+        return 0
+    }
+    rm -f "$ssl_config"
+
+    chmod 600 "$key_file" "$cert_file" 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Self-signed cert generated for $public_ip${NC}"
+}
+
 reload_container_caddy() {
     # Reload the Docker container Caddy (the one that handles actual traffic).
     # This is needed because the host Caddy (systemd) may not be running.
@@ -1844,7 +1900,8 @@ print(f'PlatformConfig domain set to: {cfg.domain}')
         echo -e "${YELLOW}  ⚠ Backend not running; DB sync deferred to --update${NC}"
     fi
 
-    # 3. Regenerate shared Caddyfile
+    # 3. Generate self-signed cert + regenerate Caddyfile
+    ensure_selfsigned_cert
     if [ -d "caddy-config" ]; then
         cat > caddy-config/Caddyfile <<CADDYFIX
 # SMSLY Caddyfile — Fixed by --fix-domain
@@ -1860,6 +1917,11 @@ $target_domain {
     log {
         output file /var/log/caddy/access.log
     }
+}
+
+:443 {
+    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    redir http://{host}{uri} 308
 }
 
 :80 {
@@ -2054,6 +2116,18 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     # a failed SSL handshake from tls internal (Caddy's internal CA
     # cannot issue certificates with IP SANs).
     local tls_block=""
+    local cert_file="/etc/caddy/certs/ip.crt"
+    local key_file="/etc/caddy/certs/ip.key"
+    if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        tls_block=$(cat <<TLS443
+
+:443 {
+    tls $cert_file $key_file
+    redir http://{host}{uri} 308
+}
+TLS443
+)
+    fi
 
     cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
@@ -3111,7 +3185,8 @@ if a_count > 0:
         echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
     fi
 
-    # ─── Caddy: Regenerate Caddyfile with service domains (writes directly to host) ──
+    # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
+    ensure_selfsigned_cert
     if command -v caddy &> /dev/null; then
         echo -e "${BLUE}  → Regenerating Caddyfile with current service domains...${NC}"
 
@@ -3283,6 +3358,9 @@ ${cf_known_stanza}
 }
 
 
+:443 {
+    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    redir http://{host}{uri} 308
 }
 
 :80 {
