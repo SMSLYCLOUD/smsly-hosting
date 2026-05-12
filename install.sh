@@ -1521,6 +1521,16 @@ reload_caddy_preserving_previous() {
     return 1
 }
 
+reload_container_caddy() {
+    # Reload the Docker container Caddy (the one that handles actual traffic).
+    # This is needed because the host Caddy (systemd) may not be running.
+    local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
+    if command -v docker &>/dev/null && docker compose -f "$compose_f" ps -q caddy 2>/dev/null | grep -q .; then
+        docker compose -f "$compose_f" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            docker compose -f "$compose_f" restart caddy 2>/dev/null || true
+    fi
+}
+
 sync_active_caddyfile_to_shared() {
     local source="${1:-/etc/caddy/Caddyfile}"
     local shared_dir="${INSTALL_DIR:-/opt/smsly-hosting}/caddy-config"
@@ -1536,8 +1546,9 @@ sync_active_caddyfile_to_shared() {
         chown 1000:1000 "$shared_file" 2>/dev/null || true
     fi
 
-    # Prevent the watcher from immediately replaying a stale pending reload.
-    rm -f "$shared_dir/.reload" 2>/dev/null || true
+    # Signal the container watcher to reload, and also reload directly.
+    touch "$shared_dir/.reload" 2>/dev/null || true
+    reload_container_caddy 2>/dev/null || true
 }
 
 install_caddyfile_atomically() {
