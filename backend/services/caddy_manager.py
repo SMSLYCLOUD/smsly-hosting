@@ -483,17 +483,6 @@ def generate_caddyfile(config) -> str:
             )
             sections.append("\n".join(wildcard_lines))
 
-        # Keep a real TCP/443 listener present even if Caddy's implicit HTTPS
-        # server is delayed or skipped during reload.
-        sections.append(
-            """:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy nginx:80
-}"""
-        )
-
     # Site block for the primary access point (Domain or IP)
     if domain:
         if _is_ip(domain):
@@ -504,15 +493,6 @@ def generate_caddyfile(config) -> str:
     encode gzip
 }}"""
             )
-            # SEC-ZT-010: For IP mode, add a :443 block with self-signed TLS
-            # that redirects HTTPS to HTTP. This prevents browser SSL errors
-            # and lets users access the dashboard via http://IP.
-            sections.append(
-                """:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}"""
-            )
         elif not use_ssl:
             sections.append(
                 f"""http://{domain} {{
@@ -521,11 +501,34 @@ def generate_caddyfile(config) -> str:
 }}"""
             )
 
-    # Always include :80 catch-all so the IP always works.
+    # Unified :443 block — handles both IPs (self-signed + HTTP redirect) and
+    # real domains (on-demand Let's Encrypt). The @ip matcher runs first.
+    sections.append(
+        """:443 {
+    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
+    }
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy nginx:80
+    }
+}"""
+    )
+
+    # Always include :80 catch-all with ACME challenge exemption.
     if use_ssl and domain:
-        # Only redirect if the host is a routable domain name (not IP, not localhost, not .local).
         sections.append(
             """:80 {
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy nginx:80
+    }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
         not host localhost

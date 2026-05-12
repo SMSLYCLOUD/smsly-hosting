@@ -1852,21 +1852,32 @@ $target_domain {
 }
 
 :443 {
-    tls {
-        on_demand
+    # Handle raw IP requests with self-signed TLS redirecting to HTTP
+    # (Let's Encrypt cannot issue certificates for IP addresses)
+    @ip host \`(\d{1,3}\.){3}\d{1,3}\`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
     }
-    reverse_proxy nginx:80
+    # Handle real domain requests with on-demand TLS
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy nginx:80
+    }
 }
 
 :80 {
-    @redirectable {
-        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
-        not host localhost
-        not host 127.0.0.1
-        not host *.local
-        header_regexp host .+
+    # Handle ACME challenges before the redirect
+    @acme {
+        path /.well-known/acme-challenge/*
     }
-    redir @redirectable https://{host}{uri} 308
+    handle @acme {
+        reverse_proxy nginx:80
+    }
+    # Redirect everything else to HTTPS
+    redir https://{host}{uri} 308
     handle {
         reverse_proxy nginx:80
     }
@@ -2035,34 +2046,30 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # 4. Build the Caddyfile — IP-aware
     local domain_block_label="$domain"
-    local tls_block=""
-    if [ "$is_real_domain" = "true" ]; then
-        # Real domain: enable on-demand TLS on :443
-        tls_block=$(cat <<'TLS443'
+    if ! echo "$domain" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' && [ "$is_real_domain" = "false" ]; then
+        domain_block_label="http://${domain}"
+    fi
+
+    # Unified :443 block — handles both IPs (self-signed + HTTP redirect) and
+    # real domains (on-demand Let's Encrypt). The @ip matcher runs first.
+    local tls_block
+    tls_block=$(cat <<'TLS443'
 
 :443 {
-    tls {
-        on_demand
+    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
     }
-    reverse_proxy nginx:80
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy nginx:80
+    }
 }
 TLS443
 )
-    else
-        # IP mode: force http:// prefix to prevent Caddy auto-HTTPS loop
-        domain_block_label="http://${domain}"
-        # SEC-ZT-010: Add :443 with self-signed TLS that redirects to HTTP.
-        # This prevents browser SSL errors when users type https://IP.
-        tls_block=$(cat <<'TLSIP'
-
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}
-TLSIP
-)
-        echo -e "${YELLOW}  → IP mode detected — adding :443 self-signed redirect to HTTP${NC}"
-    fi
 
     cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
@@ -2082,7 +2089,23 @@ ${domain_block_label} {
 ${tls_block}
 
 :80 {
-    reverse_proxy nginx:80
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy nginx:80
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy nginx:80
+    }
 }
 
 ${svc_blocks}
@@ -3278,14 +3301,37 @@ ${cf_known_stanza}
 }
 
 :443 {
-    tls {
-        on_demand
+    @ip host `([0-9]{1,3}[.]){3}[0-9]{1,3}$`
+    handle @ip {
+        tls internal
+        redir http://{host}{uri} 308
     }
-    reverse_proxy nginx:80
+    handle {
+        tls {
+            on_demand
+        }
+        reverse_proxy nginx:80
+    }
 }
 
 :80 {
-    reverse_proxy nginx:80
+    @acme {
+        path /.well-known/acme-challenge/*
+    }
+    handle @acme {
+        reverse_proxy nginx:80
+    }
+    @redirectable {
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy nginx:80
+    }
 }
 
 ${cf_svc_blocks}
