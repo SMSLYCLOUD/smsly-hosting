@@ -16,10 +16,8 @@
 }
 
 :443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy nginx:80
+    tls internal
+    redir http://{host}{uri} 308
 }
 
 :80 {
