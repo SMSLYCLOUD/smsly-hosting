@@ -2816,9 +2816,12 @@ if [ -n "$UPDATE_MODE" ]; then
     # The docker-compose.prod.yml mounts .env into the backend container.
     # If .env has 600 permissions (created by old install.sh), the container
     # can't read it and Django crashes with PermissionError.
+    # The backend container runs as UID 1000 (smsly user), so the file must be
+    # writable by that user to allow the domain-config signal to sync back to .env.
     if [ -f "$INSTALL_DIR/.env" ]; then
-        chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
-        echo -e "${BLUE}  → Fixed .env permissions to 644${NC}"
+        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
+        echo -e "${BLUE}  → Fixed .env permissions to 664 (group-writable by container UID 1000)${NC}"
     fi
 
     # ─── Pre-flight ──────────────────────────────────────────────────────────
@@ -3198,9 +3201,10 @@ if a_count > 0:
         echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
     fi
 
-    # ─── Fix .env permissions (must be readable by Docker container) ──
+    # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
     if [ -f "$INSTALL_DIR/.env" ]; then
-        chmod 644 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chown root:1000 "$INSTALL_DIR/.env" 2>/dev/null || true
+        chmod 664 "$INSTALL_DIR/.env" 2>/dev/null || true
     fi
 
     # ─── Caddy: Generate self-signed cert + regenerate Caddyfile ──
@@ -4333,8 +4337,11 @@ EOF
     # Atomic move and validation
     if validate_env_file "$ENV_TMP"; then
         mv "$ENV_TMP" "$INSTALL_DIR/.env"
-        # 644 so the Docker container (runs as root) can read it when mounted
-        chmod 644 "$INSTALL_DIR/.env"
+        # 664 so the backend container (runs as UID 1000) can read AND write it.
+        # This allows the domain-config signal to persist DOMAIN/USE_SSL back to
+        # .env when the user updates settings via the web UI — no SSH needed.
+        chown root:1000 "$INSTALL_DIR/.env"
+        chmod 664 "$INSTALL_DIR/.env"
         echo -e "${GREEN}  ✓ Configuration saved to .env${NC}"
     else
         echo -e "${RED}  x Generated .env failed validation. Aborting install.${NC}"
