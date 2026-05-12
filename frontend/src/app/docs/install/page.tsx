@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, BookOpen, Download, RefreshCw, Server, Database, Shield, Key, Terminal, Globe, Wrench, Copy, Check, ChevronRight, ExternalLink } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, Download, RefreshCw, Server, Database, Shield, Key, Terminal, Globe, Wrench, Copy, Check, ChevronRight, ExternalLink } from 'lucide-react';
 
 
 // ────────────────────────────────────────────────────────────────
@@ -824,6 +824,13 @@ Caddy (port 443)
           <p>
             <strong>Key insight:</strong> Caddy&apos;s on-demand TLS &quot;ask&quot; endpoint at <code>/api/v1/services/check-domain/</code> is the gatekeeper for certificate issuance. If it returns 404, Caddy will not obtain a Let&apos;s Encrypt certificate for that domain. The endpoint checks (in order): PlatformConfig primary domain, managed servers, service public domains, verified custom domains, and addon domains.
           </p>
+
+          {/* Navigation */}
+          <div className="not-prose mt-12 pt-8 border-t border-slate-200 dark:border-slate-700">
+            <Link href="/docs/getting-started" className="inline-flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 hover:underline font-medium">
+              Next: Getting Started <ArrowRight size={14} />
+            </Link>
+          </div>
 
         </article>
       </div>
