@@ -1883,9 +1883,19 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 TLS443
 )
     else
-        # IP mode: force http:// prefix to prevent Caddy auto-HTTPS
+        # IP mode: force http:// prefix to prevent Caddy auto-HTTPS loop
         domain_block_label="http://${domain}"
-        echo -e "${YELLOW}  → IP mode detected — disabling :443 TLS block in fallback Caddyfile${NC}"
+        # SEC-ZT-010: Add :443 with self-signed TLS that redirects to HTTP.
+        # This prevents browser SSL errors when users type https://IP.
+        tls_block=$(cat <<'TLSIP'
+
+:443 {
+    tls internal
+    redir http://{host}{uri} 308
+}
+TLSIP
+)
+        echo -e "${YELLOW}  → IP mode detected — adding :443 self-signed redirect to HTTP${NC}"
     fi
 
     cat > "$candidate" <<SAFECADDY

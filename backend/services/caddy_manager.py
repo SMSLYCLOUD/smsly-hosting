@@ -504,6 +504,15 @@ def generate_caddyfile(config) -> str:
     encode gzip
 }}"""
             )
+            # SEC-ZT-010: For IP mode, add a :443 block with self-signed TLS
+            # that redirects HTTPS to HTTP. This prevents browser SSL errors
+            # and lets users access the dashboard via http://IP.
+            sections.append(
+                """:443 {
+    tls internal
+    redir http://{host}{uri} 308
+}"""
+            )
         elif not use_ssl:
             sections.append(
                 f"""http://{domain} {{
