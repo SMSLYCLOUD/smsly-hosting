@@ -501,15 +501,9 @@ def generate_caddyfile(config) -> str:
 }}"""
             )
 
-    # Catch-all :443 with self-signed TLS for non-domain requests (IPs, etc.).
-    # Real domain requests are handled by the named site block above via
-    # Caddy's automatic HTTPS (SNI matching picks the right TLS config).
-    sections.append(
-        """:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}"""
-    )
+    # No catch-all :443 block. Caddy's auto-HTTPS handles the domain block.
+    # For raw IP access, port 443 is not listening — browser gets
+    # ERR_CONNECTION_REFUSED which is cleaner than a failed SSL handshake.
 
     # Always include :80 catch-all with ACME challenge exemption.
     if use_ssl and domain:

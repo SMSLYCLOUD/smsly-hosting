@@ -3868,7 +3868,3 @@ else
         exit 1
     fi
 fi
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}

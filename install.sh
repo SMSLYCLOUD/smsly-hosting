@@ -1862,11 +1862,6 @@ $target_domain {
     }
 }
 
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}
-
 :80 {
     @acme {
         path /.well-known/acme-challenge/*
@@ -2054,18 +2049,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
         domain_block_label="http://${domain}"
     fi
 
-    # :443 catch-all with self-signed TLS for IP/non-domain requests.
-    # Real domain requests match the named site block above via SNI
-    # and get automatic Let's Encrypt HTTPS from Caddy.
-    local tls_block
-    tls_block=$(cat <<'TLS443'
-
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}
-TLS443
-)
+    # No explicit :443 block. Caddy's auto-HTTPS handles the domain.
+    # Raw IP access on port 443 gets connection refused — cleaner than
+    # a failed SSL handshake from tls internal (Caddy's internal CA
+    # cannot issue certificates with IP SANs).
+    local tls_block=""
 
     cat > "$candidate" <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
@@ -2081,17 +2069,10 @@ ${domain_block_label} {
     log {
         output file /var/log/caddy/access.log
     }
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}
 
 :80 {
     @acme {
         path /.well-known/acme-challenge/*
-    }
-    handle @acme {
-        reverse_proxy nginx:80
     }
     handle @acme {
         reverse_proxy nginx:80
