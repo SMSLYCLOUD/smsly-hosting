@@ -15,11 +15,6 @@
     }
 }
 
-:443 {
-    tls internal
-    redir http://{host}{uri} 308
-}
-
 :80 {
     @acme {
         path /.well-known/acme-challenge/*
