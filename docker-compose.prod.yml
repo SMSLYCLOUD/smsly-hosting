@@ -113,6 +113,7 @@ services:
     - media_volume:/app/media
     - caddy_config:/caddy-config
     - ./install.sh:/app/install.sh:ro
+    - ./.env:/app/.env:rw
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
     - backups_data:/app/backups

@@ -1,11 +1,13 @@
+import logging
+import os
+import secrets
+
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .models_audit import AuditLog
 from .utils import log_event
 from services.caddy_manager import generate_caddyfile, apply_caddyfile
-import secrets
-import logging
 
 
 @receiver(post_save, sender=Service)
@@ -117,6 +119,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
     """
     Update Caddy configuration and system environment when PlatformConfig changes.
     This enables full UI autonomy for domain and SSL management.
+    Also syncs domain back to .env so future --update runs pick up the correct values.
     """
     logger = logging.getLogger(__name__)
     try:
@@ -124,7 +127,35 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         from apps.deployments.patching import patch_runtime_settings
         patch_runtime_settings()
 
-        # 2. Re-generate and apply Caddyfile
+        # 2. Sync domain back to .env so future --update runs pick it up
+        _env_path = "/app/.env"
+        _new_domain = (instance.domain or "").strip()
+        _new_ssl = instance.use_ssl
+        if _new_domain and os.path.isfile(_env_path):
+            _updated = False
+            _lines = []
+            with open(_env_path, "r", encoding="utf-8") as _fh:
+                for _line in _fh:
+                    if _line.startswith("DOMAIN="):
+                        _lines.append(f"DOMAIN={_new_domain}\n")
+                        _updated = True
+                    elif _line.startswith("USE_SSL="):
+                        _lines.append(f"USE_SSL={'true' if _new_ssl else 'false'}\n")
+                        _updated = True
+                    else:
+                        _lines.append(_line)
+            if not any(l.startswith("DOMAIN=") for l in _lines):
+                _lines.append(f"DOMAIN={_new_domain}\n")
+                _updated = True
+            if not any(l.startswith("USE_SSL=") for l in _lines):
+                _lines.append(f"USE_SSL={'true' if _new_ssl else 'false'}\n")
+                _updated = True
+            if _updated:
+                with open(_env_path, "w", encoding="utf-8") as _fh:
+                    _fh.writelines(_lines)
+                logger.info("Synced .env: DOMAIN=%s, USE_SSL=%s", _new_domain, _new_ssl)
+
+        # 3. Re-generate and apply Caddyfile
         logger.info("Signal: Re-generating Caddyfile for domain %s", instance.domain)
         content = generate_caddyfile(instance)
         apply_caddyfile(
@@ -133,7 +164,7 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             preserve_existing_token=True
         )
 
-        # 3. Log the event
+        # 4. Log the event
         log_event(
             actor='system',
             action='INFRA_SYNC',

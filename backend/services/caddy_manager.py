@@ -27,7 +27,11 @@ CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 
 
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
-    """Generate a self-signed X.509 cert with the IP as SAN using cryptography."""
+    """Generate a self-signed X.509 cert with the IP as SAN using cryptography.
+    
+    Always regenerates to ensure the cert stays current with the server's IP.
+    (The RSA key generation + self-sign takes <100ms.)
+    """
     try:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
@@ -36,9 +40,6 @@ def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
     except ImportError:
         logger.warning("cryptography not available; skipping self-signed cert")
         return
-
-    if os.path.exists(cert_path) and os.path.exists(key_path):
-        return  # Already exists
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([
@@ -50,7 +51,8 @@ def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
         .subject_name(subject)
         .issuer_name(issuer)
         .public_key(key.public_key())
-        .serial_number(int.from_bytes(secrets.token_bytes(8), "big"))
+        # Mask high bit to ensure positive serial number (RFC 5280 §4.1.2.2)
+        .serial_number(int.from_bytes(secrets.token_bytes(8), "big") & 0x7FFFFFFFFFFFFFFF)
         .not_valid_before(now)
         .not_valid_after(now + datetime.timedelta(days=3650))
         .add_extension(
@@ -86,8 +88,10 @@ def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
             serialization.PrivateFormat.TraditionalOpenSSL,
             serialization.NoEncryption(),
         ))
+    # Caddy container runs as UID 1000; backend creates files as root.
+    # chmod 644 ensures Caddy can read both cert and key.
     os.chmod(cert_path, 0o644)
-    os.chmod(key_path, 0o600)
+    os.chmod(key_path, 0o644)
     logger.info("Generated self-signed cert for IP: %s", ip_address)
 
 
@@ -573,19 +577,45 @@ def generate_caddyfile(config) -> str:
     # guaranteed to exist regardless of install script timing.
     # Caddy's built-in tls internal does not support IP SANs, so we
     # generate a proper cert with Python's cryptography library.
-    _cert_dir = "/caddy-config/certs"
+    # Backend container sees volume at CADDY_CONFIG_DIR (default /caddy-config).
+    # Caddy container sees same volume at /etc/caddy (fixed in docker-compose).
+    _cert_dir = os.path.join(CADDY_CONFIG_DIR, "certs")
     _server_ip = str(getattr(config, "server_ip", "") or "").strip()
     _crt_path = os.path.join(_cert_dir, "ip.crt")
     _key_path = os.path.join(_cert_dir, "ip.key")
-    # Path inside the Caddy container (same volume mounted at /etc/caddy)
+    # Paths from Caddy container's perspective (always /etc/caddy)
     _caddy_crt = "/etc/caddy/certs/ip.crt"
     _caddy_key = "/etc/caddy/certs/ip.key"
     try:
         os.makedirs(_cert_dir, exist_ok=True)
-        # Only generate cert if we have a valid IP (avoids errors on first boot
-        # before PlatformConfig.server_ip is synced)
         if _server_ip and ipaddress.ip_address(_server_ip):
-            _generate_selfsigned_cert(_crt_path, _key_path, _server_ip)
+            # Regenerate only if the IP in the cert doesn't match current IP
+            # (avoids RSA keygen on every Caddyfile write for no benefit).
+            _regenerate = True
+            if os.path.exists(_crt_path):
+                try:
+                    from cryptography import x509
+                    with open(_crt_path, "rb") as _cr:
+                        _existing = x509.load_pem_x509_certificate(_cr.read())
+                    _current_ip_obj = ipaddress.ip_address(_server_ip)
+                    for _san in _existing.extensions.get_extension_for_class(x509.SubjectAlternativeName).value:
+                        if isinstance(_san, x509.IPAddress) and _san.value == _current_ip_obj:
+                            _regenerate = False
+                            break
+                except Exception:
+                    _regenerate = True
+            if _regenerate:
+                _generate_selfsigned_cert(_crt_path, _key_path, _server_ip)
+            # Fix permissions on existing certs that may have been created
+            # with 600 by older install script versions (Caddy runs as UID 1000).
+            for _f in (_crt_path, _key_path):
+                if os.path.exists(_f):
+                    try:
+                        _mode = os.stat(_f).st_mode & 0o777
+                        if _mode < 0o644:
+                            os.chmod(_f, 0o644)
+                    except OSError:
+                        pass
         if os.path.exists(_crt_path) and os.path.exists(_key_path):
             sections.append(
                 f""":443 {{
