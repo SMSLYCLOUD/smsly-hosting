@@ -71,6 +71,7 @@ for arg in "$@"; do
     --no-screen|--skip-screen)
                        NO_SCREEN=true ;;
     --wipe)            NO_SCREEN=true; rm -f "/opt/smsly-hosting/.smsly_install_state" "/opt/smsly-hosting/.smsly_install_state.mode" ;;
+    --fix-domain)      NO_SCREEN=true ;;
     --recover|--refresh|--debug|--verify|--clear|--help|-h)
                        NO_SCREEN=true ;;
   esac
@@ -824,7 +825,19 @@ cfg = PlatformConfig.load()
 old_base = Service.default_public_base_domain()
 original_domain = (cfg.domain or "").strip().lower().rstrip(".")
 
-cfg.domain = normalize_platform_domain(os.environ.get("SMSLY_SYNC_DOMAIN", ""))
+# SEC-FIX: Preserve an existing real domain in the DB when the incoming
+# sync value from .env is empty, localhost, or a raw IP. This prevents
+# --update from clobbering a domain set via the Settings UI with the
+# installer's default IP value.
+incoming_domain = normalize_platform_domain(os.environ.get("SMSLY_SYNC_DOMAIN", ""))
+db_has_real_domain = bool(original_domain) and original_domain not in ("", "localhost")
+incoming_is_ip_or_empty = not incoming_domain
+if db_has_real_domain and incoming_is_ip_or_empty:
+    # Preserve the DB domain — the user configured it via Settings UI
+    print(f"[sync] Preserving existing DB domain '{original_domain}' (incoming was empty/IP)")
+else:
+    cfg.domain = incoming_domain
+
 cfg.use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
 cfg.wildcard_subdomains = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
 cfg.cloudflare_api_token = str(os.environ.get("SMSLY_SYNC_CF_TOKEN", "") or "").strip()
@@ -886,6 +899,23 @@ PY
     echo -e "${GREEN}  ✓ PlatformConfig synced: domain=$(printf '%s' "$sync_json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('domain', ''))" 2>/dev/null)${NC}"
     if [ "${DOMAIN_SYNC_UPDATED_COUNT:-0}" -gt 0 ]; then
         echo -e "${GREEN}  ✓ Rewrote ${DOMAIN_SYNC_UPDATED_COUNT} existing service public domain(s)${NC}"
+    fi
+
+    # SEC-FIX: Sync the effective DB domain back to .env so future --update
+    # runs use the real domain (not the installer's default IP).
+    _effective_domain="$(printf '%s' "$sync_json" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+print(d.get('domain', '') or '')
+" 2>/dev/null || true)"
+    _env_domain="$(env_get_value "$env_file" "DOMAIN")"
+    if [ -n "$_effective_domain" ] && [ "$_effective_domain" != "$_env_domain" ]; then
+        echo -e "${BLUE}  → Syncing effective DB domain '$_effective_domain' back to .env...${NC}"
+        env_set_value "$env_file" "DOMAIN" "$_effective_domain"
+        if [ "$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)" = "true" ]; then
+            env_set_value "$env_file" "USE_SSL" "true"
+        fi
+        echo -e "${GREEN}  ✓ .env updated with DB domain '$_effective_domain'${NC}"
     fi
 }
 
@@ -1568,13 +1598,15 @@ for arg in "$@"; do
         --rust)            RUST_TWIN_MODE="true" ;;
         --mode=agent-lite|--agent-lite) MODE_AGENT_LITE="true" ;;
         --clear)           CLEAR_MODE="true" ;;
+        --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear]"
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
             echo "  --update           Pull latest code and rebuild all services"
             echo "  --clear            Wipes stale addons and frees up docker resources"
+            echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
             exit 0
             ;;
     esac
@@ -1603,6 +1635,8 @@ elif [ "$DEBUG_MODE" = "true" ]; then
     MODE_LABEL="debug"
 elif [ "$WIPE_MODE" = "true" ]; then
     MODE_LABEL="wipe"
+elif [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
+    MODE_LABEL="fix-domain"
 fi
 
 # Log all output to file AND terminal
@@ -1759,6 +1793,138 @@ wipe_existing_install() {
 
 if [ "$WIPE_MODE" = "true" ]; then
     wipe_existing_install
+fi
+
+# =============================================================================
+# FIX-DOMAIN MODE — Fix domain/IP sync between .env, DB PlatformConfig, and Caddy
+# =============================================================================
+fix_domain_sync() {
+    local target_domain="${1:-}"
+    local env_file="$INSTALL_DIR/.env"
+
+    echo -e "${BLUE}  → Fixing domain sync for: $target_domain${NC}"
+
+    # 1. Fix .env
+    if grep -q '^DOMAIN=' "$env_file" 2>/dev/null; then
+        sed -i "s|^DOMAIN=.*|DOMAIN=$target_domain|" "$env_file"
+    else
+        echo "DOMAIN=$target_domain" >> "$env_file"
+    fi
+    if grep -q '^USE_SSL=' "$env_file" 2>/dev/null; then
+        sed -i 's/^USE_SSL=.*/USE_SSL=true/' "$env_file"
+    else
+        echo "USE_SSL=true" >> "$env_file"
+    fi
+
+    # Sync allowlists
+    sync_env_domain_allowlists "$env_file" "$target_domain" "$(detect_public_ip)"
+
+    # 2. Sync DB PlatformConfig
+    if docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/null | grep -q .; then
+        docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+from apps.deployments.models import PlatformConfig
+cfg = PlatformConfig.load()
+cfg.domain = '$target_domain'
+cfg.use_ssl = True
+cfg.save()
+print(f'PlatformConfig domain set to: {cfg.domain}')
+" 2>/dev/null && echo -e "${GREEN}  ✓ PlatformConfig synced${NC}" || echo -e "${YELLOW}  ⚠ DB sync skipped${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Backend not running; DB sync deferred to --update${NC}"
+    fi
+
+    # 3. Regenerate shared Caddyfile
+    if [ -d "caddy-config" ]; then
+        cat > caddy-config/Caddyfile <<CADDYFIX
+# SMSLY Caddyfile — Fixed by --fix-domain
+{
+    on_demand_tls {
+        ask http://nginx:80/api/v1/services/check-domain/
+    }
+}
+
+$target_domain {
+    reverse_proxy nginx:80
+    encode gzip
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+:443 {
+    tls {
+        on_demand
+    }
+    reverse_proxy nginx:80
+}
+
+:80 {
+    @redirectable {
+        not header_regexp host ^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$
+        not host localhost
+        not host 127.0.0.1
+        not host *.local
+        header_regexp host .+
+    }
+    redir @redirectable https://{host}{uri} 308
+    handle {
+        reverse_proxy nginx:80
+    }
+}
+CADDYFIX
+        echo -e "${GREEN}  ✓ Caddyfile regenerated${NC}"
+    fi
+
+    # 4. Reload Caddy
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+        docker compose -f "$COMPOSE_FILE" exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || \
+            docker compose -f "$COMPOSE_FILE" restart caddy 2>/dev/null || true
+        echo -e "${GREEN}  ✓ Caddy reloaded${NC}"
+    fi
+
+    echo -e "${GREEN}  ✓ Domain fix complete for: $target_domain${NC}"
+}
+
+if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${RED}x Please run as root (sudo bash install.sh --fix-domain)${NC}"
+        exit 1
+    fi
+    if [ ! -f "$INSTALL_DIR/.env" ] || [ ! -f "$INSTALL_DIR/$COMPOSE_FILE" ]; then
+        echo -e "${RED}x SMSLY installation not found at $INSTALL_DIR. Run fresh install first.${NC}"
+        exit 1
+    fi
+    cd "$INSTALL_DIR"
+
+    # Git pull latest code first to get all SEC-xxx fixes
+    echo -e "${BLUE}  → Pulling latest installer code...${NC}"
+    git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    git fetch origin main 2>/dev/null || true
+    git checkout -B main origin/main 2>/dev/null || true
+    echo -e "${GREEN}  ✓ Code updated${NC}"
+
+    # Detect current or prompt for domain
+    FIX_DOMAIN="${DOMAIN:-}"
+    if [ -z "$FIX_DOMAIN" ]; then
+        FIX_DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || true)"
+    fi
+    while [ -z "$FIX_DOMAIN" ] || echo "$FIX_DOMAIN" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; do
+        if [ -n "$FIX_DOMAIN" ]; then
+            echo -e "${YELLOW}  ⚠ Current DOMAIN is an IP address ($FIX_DOMAIN). Enter your real domain.${NC}"
+        fi
+        echo -e "${BLUE}  Enter your domain (e.g., app.example.com):${NC}"
+        read -p "  Domain: " FIX_DOMAIN < /dev/tty
+        FIX_DOMAIN="$(echo "$FIX_DOMAIN" | xargs)"
+    done
+
+    fix_domain_sync "$FIX_DOMAIN"
+
+    # Re-exec into --update to rebuild Caddy container with new config
+    echo -e "${BLUE}  → Running --update to apply changes...${NC}"
+    export NO_SCREEN=true
+    export DOMAIN="$FIX_DOMAIN"
+    export USE_SSL="true"
+    exec bash "$SCRIPT_PATH" --update --no-screen "$@"
 fi
 
 ensure_update_networks() {
