@@ -105,6 +105,7 @@ def _node_queue_name(server: ManagedServer) -> str:
 
 
 def _master_gateway_secret() -> str:
+    """Return the master's own GATEWAY_SECRET (used only as last resort fallback)."""
     return str(
         os.environ.get("GATEWAY_SECRET")
         or getattr(settings, "GATEWAY_SECRET", "")
@@ -165,6 +166,16 @@ def build_agent_lite_install_env(
 
     node_id = str(server.id)
     node_queue = _node_queue_name(server)
+    # SEC-ZT-003: Generate a unique per-agent GATEWAY_SECRET instead of
+    # sharing the master's global secret. This limits blast radius:
+    # compromise of one agent does not leak credentials for all agents.
+    agent_gateway_secret = server.gateway_secret or ""
+    if not agent_gateway_secret:
+        agent_gateway_secret = secrets.token_hex(32)
+        server.gateway_secret = agent_gateway_secret
+        server.save(update_fields=["gateway_secret"])
+        logger.info("Generated unique GATEWAY_SECRET for agent %s", server.id)
+
     return (
         {
             "MASTER_IP": resolved_master_ip,
@@ -172,7 +183,7 @@ def build_agent_lite_install_env(
             "MASTER_DB_PASSWORD": master_db_pass,
             "MASTER_MQ_PASSWORD": master_mq_pass,
             "MASTER_REDIS_PASSWORD": master_redis_pass,
-            "MASTER_GATEWAY_SECRET": _master_gateway_secret(),
+            "MASTER_GATEWAY_SECRET": agent_gateway_secret,
             "SMSLY_NODE_HOST": str(server.host or "").strip(),
             "SMSLY_NODE_ID": node_id,
             "SMSLY_NODE_QUEUE": node_queue,
@@ -385,15 +396,20 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
 
-    # Zero-click provisioning default: accept first connection host key.
-    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true to enforce known_hosts pinning.
+    # SEC-ZT-002: Host key verification is ON by default.
+    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=false to disable (not recommended).
     strict_host_key_check = str(
-        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")
+        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")
     ).strip().lower() in ("1", "true", "yes", "on")
     if strict_host_key_check:
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
     else:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        logger.warning(
+            "SEC-ZT-002: SSH host key verification DISABLED for %s. "
+            "Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true in production.",
+            server.host,
+        )
 
     connect_kwargs = {
         "hostname": server.host,

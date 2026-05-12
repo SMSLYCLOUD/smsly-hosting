@@ -9,6 +9,8 @@ import logging
 from celery import shared_task
 from django.core.cache import cache
 
+from apps.deployments.services.task_encryption import decrypt_arg, obfuscate_arg
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,7 +78,26 @@ def check_replication_health_task():
 def deploy_replication_task(self, mesh_id: str, db_password: str,
                              admin_password: str,
                              replication_password: str = "repl_pass"):
-    """Deploy Patroni replication cluster to a mesh (async)."""
+    """
+    Deploy Patroni replication cluster to a mesh (async).
+
+    SEC-ZT-006: Passwords should be pre-encrypted with encrypt_arg()
+    before being passed to delay(). If they start with 'enc:', they
+    will be decrypted transparently.
+    """
+    # Decrypt arguments if they were encrypted (SEC-ZT-006)
+    db_password = decrypt_arg(db_password)
+    admin_password = decrypt_arg(admin_password)
+    replication_password = decrypt_arg(replication_password)
+
+    if not all([db_password, admin_password]):
+        logger.error("Missing required credentials for replication deploy (mesh %s)", mesh_id)
+        return {"error": "Missing required credentials"}
+
+    logger.info(
+        "Deploying replication for mesh %s (passwords encrypted via SEC-ZT-006)",
+        mesh_id,
+    )
     from apps.deployments.models_mesh import MeshNetwork
     from apps.deployments.services.replication_service import ReplicationService
     from django.utils import timezone

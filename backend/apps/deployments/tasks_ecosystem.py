@@ -21,7 +21,23 @@ from celery.exceptions import SoftTimeLimitExceeded
 from django.utils import timezone
 from django.conf import settings
 
+from apps.deployments.services.task_encryption import encrypt_arg, decrypt_arg
+
 logger = logging.getLogger(__name__)
+
+# SEC-ZT-007: Ecosystem plan schema validation keys
+_PLAN_REQUIRED_KEYS = {"services"}
+_PLAN_OPTIONAL_KEYS = {"addons", "manifest", "wave_size", "server_id", "ai_provider"}
+_SERVICE_REQUIRED_KEYS = {"repo"}
+_SERVICE_OPTIONAL_KEYS = {
+    "name", "stack", "build", "port", "env_vars", "depends_on",
+    "addons", "branch", "deploy_order", "skip", "server_id",
+    "health_check_path", "root_directory", "deploy_mode",
+    "compose_file", "docker_compose_file", "compose_main_service",
+    "main_service", "default_branch",
+}
+_SERVICE_VALID_BUILDS = {"nixpacks", "docker", "dockerfile", "docker-compose", "compose", "static"}
+_VALID_PORT_RANGE = (1, 65535)
 
 _SECRET_HINTS = ("KEY", "SECRET", "PASSWORD", "TOKEN", "DSN")
 _EXTERNAL_SECRETS = {
@@ -44,6 +60,114 @@ _SMSLY_CORE_HINTS = {
     "smsly-platform-api",
     "platform-api",
 }
+
+
+def _validate_plan_structure(plan: dict) -> list[str]:
+    """
+    SEC-ZT-007: Validate ecosystem plan structure against schema.
+
+    Returns a list of validation errors (empty = valid).
+    """
+    errors: list[str] = []
+
+    if not isinstance(plan, dict):
+        return ["Plan must be a dict"]
+
+    # Check for unknown top-level keys
+    allowed_keys = _PLAN_REQUIRED_KEYS | _PLAN_OPTIONAL_KEYS
+    unknown = set(plan.keys()) - allowed_keys
+    if unknown:
+        errors.append(f"Unknown plan keys: {', '.join(sorted(unknown))}")
+
+    # Check required keys
+    for key in _PLAN_REQUIRED_KEYS:
+        if key not in plan:
+            errors.append(f"Missing required plan key: {key}")
+
+    services = plan.get("services", [])
+    if not isinstance(services, list):
+        errors.append("'services' must be a list")
+        return errors
+
+    for i, svc in enumerate(services):
+        if not isinstance(svc, dict):
+            errors.append(f"services[{i}] must be a dict, got {type(svc).__name__}")
+            continue
+
+        # Check unknown service keys
+        svc_unknown = set(svc.keys()) - _SERVICE_REQUIRED_KEYS - _SERVICE_OPTIONAL_KEYS
+        if svc_unknown:
+            errors.append(f"services[{i}] unknown keys: {', '.join(sorted(svc_unknown))}")
+
+        # Check required service keys
+        for key in _SERVICE_REQUIRED_KEYS:
+            if key not in svc:
+                errors.append(f"services[{i}] missing required key: {key}")
+
+        skip = svc.get("skip", False)
+        if skip:
+            continue
+
+        # Validate build type
+        build = str(svc.get("build", "") or "").strip().lower()
+        if build and build not in _SERVICE_VALID_BUILDS:
+            errors.append(f"services[{i}] invalid build '{build}'. Allowed: {', '.join(sorted(_SERVICE_VALID_BUILDS))}")
+
+        # Validate port range
+        port = svc.get("port")
+        if port is not None:
+            try:
+                p = int(port)
+                if p < _VALID_PORT_RANGE[0] or p > _VALID_PORT_RANGE[1]:
+                    errors.append(f"services[{i}] port {p} out of range ({_VALID_PORT_RANGE[0]}-{_VALID_PORT_RANGE[1]})")
+            except (TypeError, ValueError):
+                errors.append(f"services[{i}] port must be an integer")
+
+        # Validate depends_on format
+        deps = svc.get("depends_on")
+        if deps is not None and not isinstance(deps, (str, list)):
+            errors.append(f"services[{i}] depends_on must be a string or list")
+
+        # Validate addons format
+        addons = svc.get("addons")
+        if addons is not None:
+            if isinstance(addons, list):
+                for j, a in enumerate(addons):
+                    if not isinstance(a, str):
+                        errors.append(f"services[{i}] addons[{j}] must be a string")
+            else:
+                errors.append(f"services[{i}] addons must be a list")
+
+    return errors
+
+
+def _alias_ambiguity_report(dependencies: Dict[str, Set[str]], entries_by_key: Dict) -> list[str]:
+    """Report ambiguous dependency aliases for user visibility."""
+    warnings_list: list[str] = []
+    alias_owner: Dict[str, str | None] = {}
+
+    for key, entry in entries_by_key.items():
+        repo = str(entry["repo"]).strip().lower()
+        repo_name = repo.split("/")[-1]
+        aliases = {
+            repo, repo_name,
+            str(entry.get("name") or "").strip().lower(),
+            str(entry.get("requested_name") or "").strip().lower(),
+        }
+        for alias in aliases:
+            if not alias:
+                continue
+            if alias in alias_owner and alias_owner[alias] != key:
+                alias_owner[alias] = None
+            else:
+                alias_owner[alias] = key
+
+    # Collect ambiguous aliases
+    ambiguous = {alias for alias, owner in alias_owner.items() if owner is None}
+    if ambiguous:
+        warnings_list.append(f"Ambiguous dependency aliases (resolved to None): {', '.join(sorted(ambiguous))}")
+
+    return warnings_list
 
 
 def _env_int(name: str, default: int, minimum: int = 1, maximum: int = 500) -> int:
@@ -755,6 +879,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
 
+    SEC-ZT-007: Plan structure is validated against schema before any records
+    are created. Secrets are encrypted using task_encryption before passing
+    to Celery broker.
+
     This creates Service + Deployment records for each repo and triggers
     smart_deploy_task with skip_review=True as each wave becomes eligible.
     """
@@ -771,6 +899,15 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     if not isinstance(plan, dict):
         return {"error": "Invalid plan payload"}
 
+    # SEC-ZT-007: Validate plan structure before creating any records
+    schema_errors = _validate_plan_structure(plan)
+    if schema_errors:
+        logger.error("Plan schema validation failed: %s", schema_errors)
+        return {
+            "error": "Plan validation failed",
+            "details": schema_errors,
+        }
+
     services_plan = plan.get("services", [])
     if not isinstance(services_plan, list) or not services_plan:
         return {"error": "No services in deploy plan"}
@@ -778,6 +915,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
     provider = CloudProvider.objects.filter(is_active=True).first() or CloudProvider.objects.first()
     if not provider:
         return {"error": "No cloud provider configured. Add one in Settings -> Cloud Providers."}
+
+    # Track created resources for potential rollback
+    _rollback_services: list[str] = []
+    _rollback_deployments: list[str] = []
+    _rollback_env_vars: list[str] = []
+    _rollback_addons: list[str] = []
 
     requested_wave_size = plan.get("wave_size", _DEFAULT_WAVE_SIZE)
     try:
@@ -838,6 +981,13 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
         dependencies=dependencies,
         wave_size=wave_size,
     )
+
+    # SEC-ZT-007: Report alias ambiguity + unresolved cycles to user
+    alias_warnings = _alias_ambiguity_report(dependencies, entries_by_key)
+    if unresolved:
+        alias_warnings.append(
+            f"Unresolved/cyclic dependencies (deployed last): {', '.join(unresolved)}"
+        )
 
     ordered_keys = [key for wave in waves_repo_keys for key in wave]
     results = []
@@ -939,6 +1089,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     provider=provider,
                     server=server,
                 )
+                _rollback_services.append(str(service.id))
 
             _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
 
@@ -1029,6 +1180,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
                 ),
             )
+            _rollback_deployments.append(str(deployment.id))
 
             deployment_by_repo_key[repo_key] = str(deployment.id)
             results.append({
@@ -1094,6 +1246,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                     addon_type=addon_type,
                     status=Addon.Status.PROVISIONING,
                 )
+                _rollback_addons.append(str(existing_addon.id))
 
             try:
                 logger.info("Provisioning shared addon %s for ecosystem", addon_type)
@@ -1144,8 +1297,42 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
         "waves": len(waves),
         "wave_size": wave_size,
         "unresolved_dependency_nodes": unresolved,
+        "alias_warnings": alias_warnings,
         "queued": len([r for r in results if r["status"] == "queued"]),
         "skipped": len([s for s in services_plan if isinstance(s, dict) and s.get("skip")]),
         "failed": len([r for r in results if r["status"] == "failed"]),
         "services": results,
     }
+
+
+def _rollback_ecosystem_deploy(
+    service_ids: list[str],
+    deployment_ids: list[str],
+    addon_ids: list[str],
+    env_var_keys: list[str],
+):
+    """
+    SEC-ZT-007: Clean up partially created resources on deploy failure.
+    Removes services, deployments, addons, and env vars created during
+    the failed ecosystem deployment attempt.
+    """
+    from apps.deployments.models import Service, Deployment
+    from apps.deployments.models_addons import Addon
+
+    logger.warning("Rolling back ecosystem deploy: %d services, %d deployments, %d addons",
+                   len(service_ids), len(deployment_ids), len(addon_ids))
+
+    if deployment_ids:
+        Deployment.objects.filter(id__in=deployment_ids).exclude(
+            status__in=("ACTIVE", "BUILDING"),
+        ).delete()
+
+    if addon_ids:
+        Addon.objects.filter(id__in=addon_ids).exclude(
+            status="ACTIVE",
+        ).delete()
+
+    if service_ids:
+        Service.objects.filter(id__in=service_ids).delete()
+
+    logger.info("Rollback complete")

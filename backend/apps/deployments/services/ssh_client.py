@@ -5,6 +5,7 @@ import logging
 import io
 import os
 import shlex
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,17 @@ class SSHClient:
             return
 
         self.client = paramiko.SSHClient()
-        # Enforce host key verification by default, but allow AutoAdd for convenience
-        # as many users don't pre-populate known_hosts in a containerized environment.
-        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "true")).lower() in {
+        # SEC-ZT-002: Host key verification is ON by default.
+        # Set ALLOW_SSH_AUTOADD=true to disable (not recommended for production).
+        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in {
             "1", "true", "yes", "on"
         }
         if allow_autoadd:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            logger.warning(
+                "SSH host key verification DISABLED (ALLOW_SSH_AUTOADD=true). "
+                "This creates a MITM vulnerability."
+            )
         else:
             self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
