@@ -582,7 +582,10 @@ def generate_caddyfile(config) -> str:
     _caddy_key = "/etc/caddy/certs/ip.key"
     try:
         os.makedirs(_cert_dir, exist_ok=True)
-        _generate_selfsigned_cert(_crt_path, _key_path, _server_ip)
+        # Only generate cert if we have a valid IP (avoids errors on first boot
+        # before PlatformConfig.server_ip is synced)
+        if _server_ip and ipaddress.ip_address(_server_ip):
+            _generate_selfsigned_cert(_crt_path, _key_path, _server_ip)
         if os.path.exists(_crt_path) and os.path.exists(_key_path):
             sections.append(
                 f""":443 {{
