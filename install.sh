@@ -1460,7 +1460,7 @@ run_backend_migrations() {
         else
             echo -e "${RED}  x Migrations exited with status ${rc}.${NC}"
         fi
-        diagnose_migration_locks
+        [ "$MODE_AGENT_LITE" != "true" ] && diagnose_migration_locks
         return "$rc"
     fi
     return 0
@@ -3138,7 +3138,11 @@ PYEOF
             docker compose -f "$COMPOSE_FILE" build $build_svcs
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d socket-proxy
+            else
+                docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+            fi
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -3240,18 +3244,24 @@ PYEOF
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
             docker compose -f "$COMPOSE_FILE" up -d --no-deps $CORE_SERVICES
 
-            # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
-            #    (recreation drops Docker DNS links — causes 502 gateway errors)
-            echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
-            for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
-                ensure_container_on_network "smsly-proxy" "$ctr"
-            done
-            docker restart smsly-hosting-traefik-1 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" != "true" ]; then
+                # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
+                #    (recreation drops Docker DNS links — causes 502 gateway errors)
+                echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
+                for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
+                    ensure_container_on_network "smsly-proxy" "$ctr"
+                done
+                docker restart smsly-hosting-traefik-1 2>/dev/null || true
+            fi
 
             # 8. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d socket-proxy
+            else
+                docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+            fi
             sleep 10
             # Note: Do NOT run makemigrations — migrations are committed in the repo.
             run_backend_migrations --root || {
