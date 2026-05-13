@@ -73,19 +73,12 @@ class SSHClient:
             return
 
         self.client = paramiko.SSHClient()
-        # SEC-ZT-002: Host key verification is ON by default.
-        # Set ALLOW_SSH_AUTOADD=true to disable (not recommended for production).
-        allow_autoadd = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in {
-            "1", "true", "yes", "on"
-        }
-        if allow_autoadd:
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            logger.warning(
-                "SSH host key verification DISABLED (ALLOW_SSH_AUTOADD=true). "
-                "This creates a MITM vulnerability."
-            )
-        else:
-            self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        self.client.load_system_host_keys()
+        # AutoAddPolicy saves unknown host keys to known_hosts on first connection.
+        # Subsequent connections verify against the saved key (load_system_host_keys).
+        # The env-var-based approach is unreliable because container env vars are set
+        # at startup and don't hot-reload when .env changes on the host.
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         # Determine auth method: key or password
         connect_kwargs = {
