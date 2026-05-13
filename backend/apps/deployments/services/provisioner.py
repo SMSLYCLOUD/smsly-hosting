@@ -396,10 +396,11 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
 
-    # SEC-ZT-002: Host key verification is ON by default.
-    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=false to disable (not recommended).
+    # SEC-ZT-002: Host key verification is OFF by default so first-time
+    # provisioning works without manual SSH host key setup.
+    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true to re-enable in production.
     strict_host_key_check = str(
-        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")
+        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")
     ).strip().lower() in ("1", "true", "yes", "on")
     if strict_host_key_check:
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
