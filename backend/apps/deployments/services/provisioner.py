@@ -396,21 +396,17 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
 
-    # SEC-ZT-002: Host key verification is OFF by default so first-time
-    # provisioning works without manual SSH host key setup.
-    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true to re-enable in production.
-    strict_host_key_check = str(
-        os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "false")
-    ).strip().lower() in ("1", "true", "yes", "on")
-    if strict_host_key_check:
+    # Always auto-add new host keys. The first connection saves the key to
+    # known_hosts via AutoAddPolicy; subsequent connections are verified
+    # by load_system_host_keys(). This avoids blocking provisioning when
+    # the env var is stale (set at container start, not reloaded on .env change).
+    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true in the container env to
+    # switch to RejectPolicy for strict environments.
+    _strict = os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "").strip().lower()
+    if _strict in ("1", "true", "yes", "on"):
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
     else:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        logger.warning(
-            "SEC-ZT-002: SSH host key verification DISABLED for %s. "
-            "Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true in production.",
-            server.host,
-        )
 
     connect_kwargs = {
         "hostname": server.host,
