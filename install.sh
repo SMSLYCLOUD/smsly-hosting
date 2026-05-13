@@ -4967,6 +4967,13 @@ if command -v ufw >/dev/null 2>&1; then
     echo -e "${BLUE}  → Configuring UFW firewall...${NC}"
     ufw default deny incoming >/dev/null 2>&1 || true
     ufw default allow outgoing >/dev/null 2>&1 || true
+    # Allow SSH from master IP specifically (provisioning/updates)
+    _master_ip="${MASTER_IP:-}"
+    if [ -n "$_master_ip" ] && [ "$_master_ip" != "127.0.0.1" ] && ! echo "$_master_ip" | grep -qE '^(0\.0\.0\.0|localhost)$'; then
+        echo -e "${BLUE}  → Allowing master ($_master_ip) SSH access...${NC}"
+        ufw allow from "$_master_ip" to any port 22 >/dev/null 2>&1 || true
+    fi
+    # Fallback: allow SSH from any (in case MASTER_IP is empty)
     ufw allow ssh >/dev/null 2>&1 || true
     ufw allow 80/tcp >/dev/null 2>&1 || true
     ufw allow 443/tcp >/dev/null 2>&1 || true
