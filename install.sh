@@ -100,6 +100,9 @@ if [ "${NO_SCREEN:-false}" != "true" ] && [ "$NON_INTERACTIVE" != "true" ] && [ 
         echo -e "\033[1;33m  ⚠ Warning: 'screen' not found. Session NOT protected against disconnects.\033[0m"
         sleep 1
     fi
+    # Screen handled everything. Exit immediately so the outer script
+    # does NOT fall through and re-run the entire installer.
+    exit 0
 fi
 
 # Ensure we start in a valid directory.
