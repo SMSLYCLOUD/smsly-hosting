@@ -3509,6 +3509,31 @@ def auto_authenticate_nodes_task():
     return count
 
 
+@shared_task(name="apps.deployments.tasks.check_managed_servers_health_task")
+def check_managed_servers_health_task():
+    """
+    Periodic task (every 5 min) to check health of all managed servers.
+    Updates ManagedServer.status to ONLINE or OFFLINE based on /health response.
+    """
+    from apps.deployments.models_servers import ManagedServer
+    from apps.deployments.views_servers import _refresh_managed_server_health
+
+    servers = ManagedServer.objects.exclude(
+        provision_status__in=("pending", "provisioning", "failed")
+    )
+    checked = 0
+    for server in servers:
+        try:
+            _refresh_managed_server_health(server)
+            checked += 1
+        except Exception as exc:
+            logger.warning("Health check failed for %s (%s): %s", server.name, server.host, exc)
+
+    if checked:
+        logger.info("Health check task: refreshed %d/%d servers", checked, servers.count())
+    return checked
+
+
 REMOTE_UPDATE_LOG_LIMIT = 300_000
 
 

@@ -158,6 +158,11 @@ app.conf.beat_schedule = {
         'task': 'apps.deployments.tasks.auto_authenticate_nodes_task',
         'schedule': 300.0,
     },
+    # Check health of all managed servers every 5 minutes
+    'check-managed-servers-health-every-5m': {
+        'task': 'apps.deployments.tasks.check_managed_servers_health_task',
+        'schedule': 300.0,
+    },
 }
 
 
