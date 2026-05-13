@@ -4717,6 +4717,8 @@ fi
 # -----------------------------------------------------------------------------
 # 7. Caddy Reverse Proxy (Public Access — Dockerized)
 # -----------------------------------------------------------------------------
+# Agent-lite mode uses Traefik instead of Caddy — skip this step entirely.
+if [ "$MODE_AGENT_LITE" != "true" ]; then
 if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ "$RECOVER_MODE" = "true" ]; then
     echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
 
@@ -4794,6 +4796,7 @@ EOF
 
     set_checkpoint "caddy_configured"
 fi
+fi # end agent-lite Caddy skip
 
 # -----------------------------------------------------------------------------
 # 8. System Memory Hardening (Prevents OOM kills)
