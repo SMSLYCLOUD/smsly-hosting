@@ -394,16 +394,12 @@ def _append_log(server: ManagedServer, line: str):
 def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     """Create and connect an SSH client to the target server."""
     client = paramiko.SSHClient()
-    client.load_system_host_keys()
-
-    # AutoAddPolicy accepts host keys for unknown hosts, then saves them to
-    # known_hosts. Subsequent connections verify against the saved key.
-    # This is required because:
-    #   1. The env var is baked at container start and doesn't hot-reload
-    #   2. First-time provisioning always hits "not found in known_hosts"
-    #   3. After the first connection, the key is saved and verified
-    # To pre-seed known_hosts for strict environments, add keys via SSH config.
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Do NOT call load_system_host_keys() in Docker containers — stale
+    # entries from prior provisioning runs cause key-mismatch rejections
+    # after server reboots (AutoAddPolicy only handles *missing* keys, not
+    # *changed* ones).  WarningPolicy logs but accepts any host key, which
+    # is appropriate for infrastructure automation inside a trusted network.
+    client.set_missing_host_key_policy(paramiko.WarningPolicy())
 
     connect_kwargs = {
         "hostname": server.host,

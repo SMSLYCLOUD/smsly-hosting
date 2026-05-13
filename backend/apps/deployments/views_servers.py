@@ -69,9 +69,14 @@ def _candidate_api_urls(server) -> list[str]:
     
     # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
     if _server_host_is_ip(host_port):
-        # Try port 8090 (Nginx) and 80 (Traefik) before 8000 (Internal)
-        _append_unique(urls, f"http://{host_port}:8090")
-        _append_unique(urls, f"http://{host_port}")
+        if getattr(server, 'is_lite_agent', False):
+            # Lite agents run Traefik on port 80, no Nginx on 8090
+            _append_unique(urls, f"http://{host_port}")
+            _append_unique(urls, f"http://{host_port}:8090")
+        else:
+            # Full installs: Nginx on 8090, then Traefik on 80
+            _append_unique(urls, f"http://{host_port}:8090")
+            _append_unique(urls, f"http://{host_port}")
         _append_unique(urls, f"https://{host_port}")
         
         # Only try 8000 if it's localhost or we are desperate
@@ -104,23 +109,27 @@ def _extract_health_version(response) -> str:
 
 def _detect_reachable_api_url(server) -> tuple[str | None, Any | None]:
     """Probe candidate base URLs and return the first one that responds."""
+    # Try multiple health paths: /health is the standard endpoint,
+    # /health/live is the liveness-only probe used by some lite agent configs.
+    health_paths = ("/health", "/health/live")
     for base_url in _candidate_api_urls(server):
-        try:
-            # We use verify=False because many remote nodes use self-signed certs
-            # or haven't finished provisioning SSL via Caddy yet.
-            response = requests.get(
-                f"{base_url}/health",
-                timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
-                verify=False,
-            )
-        except requests.RequestException:
-            continue
+        for health_path in health_paths:
+            try:
+                # We use verify=False because many remote nodes use self-signed certs
+                # or haven't finished provisioning SSL via Caddy yet.
+                response = requests.get(
+                    f"{base_url}{health_path}",
+                    timeout=MANAGED_SERVER_HEALTH_TIMEOUT,
+                    verify=False,
+                )
+            except requests.RequestException:
+                continue
 
-        # If it's 5xx, it's a server error but the server IS reachable.
-        # However, we only mark as 'ONLINE' if it returns a non-5xx code
-        # to ensure the management layer is actually healthy.
-        if response.status_code < 500:
-            return base_url, response
+            # If it's 5xx, it's a server error but the server IS reachable.
+            # However, we only mark as 'ONLINE' if it returns a non-5xx code
+            # to ensure the management layer is actually healthy.
+            if response.status_code < 500:
+                return base_url, response
 
     return None, None
 

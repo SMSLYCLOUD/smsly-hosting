@@ -381,7 +381,7 @@ class AddonProvisioner:
                 if addon_type == 'RABBITMQ':
                     self._wait_for_health(
                         container_name,
-                        port,
+                        15672,
                         path="/api/health/checks/alarms",
                         use_http=True,
                     )
@@ -583,7 +583,7 @@ class AddonProvisioner:
         hostname = alias_name or container_name
         connection_url = f"amqp://{user}:{password}@{hostname}:{port}//"
 
-        self._wait_for_health(container_name, port, path="/api/health/checks/alarms", use_http=True)
+        self._wait_for_health(container_name, 15672, path="/api/health/checks/alarms", use_http=True)
         return container_id, connection_url
 
     def _provision_minio(self, container_name: str,
