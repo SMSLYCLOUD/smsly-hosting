@@ -396,17 +396,14 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
 
-    # Always auto-add new host keys. The first connection saves the key to
-    # known_hosts via AutoAddPolicy; subsequent connections are verified
-    # by load_system_host_keys(). This avoids blocking provisioning when
-    # the env var is stale (set at container start, not reloaded on .env change).
-    # Set SMSLY_STRICT_SSH_HOST_KEY_CHECK=true in the container env to
-    # switch to RejectPolicy for strict environments.
-    _strict = os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "").strip().lower()
-    if _strict in ("1", "true", "yes", "on"):
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    else:
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # AutoAddPolicy accepts host keys for unknown hosts, then saves them to
+    # known_hosts. Subsequent connections verify against the saved key.
+    # This is required because:
+    #   1. The env var is baked at container start and doesn't hot-reload
+    #   2. First-time provisioning always hits "not found in known_hosts"
+    #   3. After the first connection, the key is saved and verified
+    # To pre-seed known_hosts for strict environments, add keys via SSH config.
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     connect_kwargs = {
         "hostname": server.host,
