@@ -3089,6 +3089,34 @@ print("\033[0;32m  ✓ SSH provisioner patched\033[0m")
 PYEOF
     fi
 
+    # ─── Fix SSH client: always auto-add host keys ─────────────────────────
+    # The update-server flow uses SSHClient from ssh_client.py (not provisioner).
+    # Same fix: replace the allow_autoadd env check with direct AutoAddPolicy.
+    _SSH_CLIENT="$INSTALL_DIR/backend/apps/deployments/services/ssh_client.py"
+    if [ -f "$_SSH_CLIENT" ]; then
+        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch ssh_client.py${NC}"
+import re
+with open("$_SSH_CLIENT", "r") as f:
+    code = f.read()
+# Replace the allow_autoadd env check block with direct AutoAddPolicy
+code = re.sub(
+    r"allow_autoadd\s*=.*?RejectPolicy\(\)",
+    'self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
+    code,
+    flags=re.DOTALL,
+)
+# Remove any duplicate or the old logger.warning block that followed
+code = re.sub(
+    r"client\.load_system_host_keys\(\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
+    'client.load_system_host_keys()\n        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())',
+    code,
+)
+with open("$_SSH_CLIENT", "w") as f:
+    f.write(code)
+print("\033[0;32m  ✓ SSH client patched\033[0m")
+PYEOF
+    fi
+
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
 
