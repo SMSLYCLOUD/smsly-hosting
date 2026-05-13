@@ -56,22 +56,33 @@ else:
         print(f'✅ Superuser {username} already exists')
 EOF
 
-# ─── 3. Ensure API Tokens & Print Node Health ────────────────────────────────
-echo -e "${BLUE}  → Validating Inter-Node Connectivity...${NC}"
-DIAG_OUTPUT=$(docker exec "$BACKEND_CONTAINER" python manage.py diagnose_nodes --fix 2>&1)
-
-# Extract token if it was just created (printed by diagnose_nodes)
-if echo "$DIAG_OUTPUT" | grep -q "TOKEN:"; then
-    echo -e "${GREEN}  ✅ Inter-Node API Token generated/verified!${NC}"
-    echo "$DIAG_OUTPUT" | grep -A 1 "TOKEN:" | sed 's/^/    /'
+# ─── 3. Ensure Inter-Node API Token ────────────────────────────────────────────
+# The APIToken model (smsly_ prefix) is separate from DRF Token.
+# A DRF token may exist from initial admin setup but won't work for inter-node.
+echo -e "${BLUE}  → Ensuring Inter-Node API Token...${NC}"
+HAS_API_TOKEN=$(docker exec "$BACKEND_CONTAINER" python manage.py shell -c "
+from apps.deployments.api_token_auth import APIToken; print('yes' if APIToken.objects.filter(is_active=True).exists() else 'no')
+" 2>/dev/null | tr -d '\r' | tail -1)
+if [ "$HAS_API_TOKEN" = "yes" ]; then
+    echo -e "${GREEN}  ✅ Inter-Node API Token exists.${NC}"
 else
-    # Check if token exists but wasn't printed (idempotent case)
-    TOKEN_EXISTS=$(docker exec "$BACKEND_CONTAINER" python manage.py shell -c "from apps.deployments.api_token_auth import APIToken; print(APIToken.objects.exists())" | tr -d '\r')
-    if [ "$TOKEN_EXISTS" == "True" ]; then
-        echo -e "${GREEN}  ✅ Inter-Node API Token exists and is active.${NC}"
+    echo -e "${YELLOW}  → Creating Inter-Node API Token...${NC}"
+    TOKEN_OUTPUT=$(docker exec "$BACKEND_CONTAINER" python manage.py shell -c "
+from django.contrib.auth import get_user_model
+from apps.deployments.api_token_auth import APIToken
+admin = get_user_model().objects.filter(is_superuser=True).first()
+if admin:
+    token, raw = APIToken.create_token(admin, name='Inter-Node Access')
+    print(f'TOKEN: {raw}')
+else:
+    print('ERROR: No superuser found')
+" 2>/dev/null)
+    if echo "$TOKEN_OUTPUT" | grep -q "TOKEN:"; then
+        echo -e "${GREEN}  ✅ Inter-Node API Token created!${NC}"
+        echo "$TOKEN_OUTPUT" | grep "TOKEN:" | sed 's/^/    /'
     else
-        echo -e "${RED}  ❌ FAILED to generate API token. Manual intervention required.${NC}"
-        echo "$DIAG_OUTPUT"
+        echo -e "${RED}  ❌ Failed to create API token:${NC}"
+        echo "$TOKEN_OUTPUT"
     fi
 fi
 
