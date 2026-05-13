@@ -3107,15 +3107,22 @@ fi
             docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
             ;;
         half)
-            echo -e "${BLUE}  → [HALF UPDATE] Restarting backend only — no Docker image rebuild${NC}"
-            echo -e "${YELLOW}    (Frontend changes will not apply until a full --update is run)${NC}"
+            echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
 
-            # 1. Restart backend (picks up Python code changes from mounted volume)
+            # 1. Rebuild frontend from cached layers (no --pull, no new base images)
+            echo -e "${BLUE}  → Rebuilding frontend (cached)...${NC}"
+            docker compose -f "$COMPOSE_FILE" build frontend 2>/dev/null || {
+                echo -e "${YELLOW}  ⚠ Frontend build failed (cached layers missing). Skipping frontend.${NC}"
+                echo -e "${YELLOW}    Run --update when Docker Hub is reachable for a full rebuild.${NC}"
+            }
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend 2>/dev/null || true
+
+            # 2. Restart backend (picks up Python code changes from mounted volume)
             echo -e "${BLUE}  → Restarting backend...${NC}"
             docker compose -f "$COMPOSE_FILE" restart backend
             sleep 5
 
-            # 2. Run migrations
+            # 3. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
             run_backend_migrations --root || {
                 echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
@@ -3125,7 +3132,7 @@ fi
 
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
 
-            # 3. Clean celerybeat-schedule and restart celery workers
+            # 4. Clean celerybeat-schedule and restart celery workers
             echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
             docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
 
