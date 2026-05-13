@@ -137,19 +137,18 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
         _new_origin = f'{_new_scheme}://{_new_domain}' if _new_domain else ''
 
         # Env vars to sync (value providers mapped to (line_prefix, value_or_none))
+        # When value is None, the existing line is preserved as-is (not synced).
+        # ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, and CORS_ALLOWED_ORIGINS are
+        # handled at runtime by patch_runtime_settings and should NOT be
+        # overwritten — preserving avoids stripping IP addresses from .env.
         _env_sync_map = {
             'DOMAIN=': _new_domain,
             'USE_SSL=': 'true' if _new_ssl else 'false',
             'SITE_URL=': _new_origin or None,
-            'ALLOWED_HOSTS=': None,  # handled by patch_runtime_settings; don't clobber
+            'ALLOWED_HOSTS=': None,
+            'CSRF_TRUSTED_ORIGINS=': None,
+            'CORS_ALLOWED_ORIGINS=': None,
         }
-
-        _env_sync_map['CSRF_TRUSTED_ORIGINS='] = (
-            _new_origin if _new_origin else None
-        )
-        _env_sync_map['CORS_ALLOWED_ORIGINS='] = (
-            _new_origin if _new_origin else None
-        )
 
         for _env_path in ("/app/.env", "/caddy-config/.env"):
             if not (_new_domain and os.path.isfile(_env_path)):
@@ -165,6 +164,9 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
                                 if _val is not None:
                                     _lines.append(f"{_key}{_val}\n")
                                     _updated = True
+                                else:
+                                    # Preserve original line for None-valued keys
+                                    _lines.append(_line)
                                 _matched = True
                                 break
                         if not _matched:
