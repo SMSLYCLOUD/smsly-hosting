@@ -3059,6 +3059,36 @@ fi
     find "$INSTALL_DIR" -name "*.sh" -exec chmod +x {} \;
     echo -e "${GREEN}  ✓ Script permissions fixed${NC}"
 
+    # ─── Fix SSH provisioner: always auto-add host keys ─────────────────────
+    # The env-var-based approach fails because container env vars are set at
+    # startup and don't hot-reload when .env changes. AutoAddPolicy accepts
+    # unknown hosts once, saves to known_hosts, then verifies subsequently.
+    _PROVISIONER="$INSTALL_DIR/backend/apps/deployments/services/provisioner.py"
+    if [ -f "$_PROVISIONER" ]; then
+        # Replace the strict_host_key_check block with a single AutoAddPolicy line
+        python3 << PYEOF 2>/dev/null || echo -e "${YELLOW}  ⚠ Could not patch provisioner.py${NC}"
+import re
+with open("$_PROVISIONER", "r") as f:
+    code = f.read()
+# Replace both old and new env-var based check patterns
+code = re.sub(
+    r"(strict_host_key_check|_strict)\s*=.*?RejectPolicy\(\)\s*else:\s*.*?AutoAddPolicy\(\)",
+    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
+    code,
+    flags=re.DOTALL,
+)
+# Remove any second occurrence if the first replacement left duplicates
+code = re.sub(
+    r"client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)\s*\n\s*client\.set_missing_host_key_policy\(paramiko\.AutoAddPolicy\(\)\)",
+    "client.set_missing_host_key_policy(paramiko.AutoAddPolicy())",
+    code,
+)
+with open("$_PROVISIONER", "w") as f:
+    f.write(code)
+print("\033[0;32m  ✓ SSH provisioner patched\033[0m")
+PYEOF
+    fi
+
     # Ensure shared networks exist (prod stack uses external networks)
     ensure_update_networks
 
