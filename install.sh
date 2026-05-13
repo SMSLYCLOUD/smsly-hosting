@@ -1008,6 +1008,9 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
+    # SSH host key check: false by default so provisioning works without manual SSH setup.
+    # The first connection auto-accepts and saves the host key; set to true for strict mode.
+    env_set_value "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
