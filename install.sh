@@ -1662,6 +1662,7 @@ RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 for arg in "$@"; do
     case "$arg" in
         --update)          UPDATE_MODE="full" ;;
+        --update-half)     UPDATE_MODE="half" ;;
         --update-frontend) UPDATE_MODE="frontend" ;;
         --update-backend)  UPDATE_MODE="backend" ;;
         --wipe)            WIPE_MODE="true" ;;
@@ -1675,11 +1676,12 @@ for arg in "$@"; do
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
         --help|-h)
-            echo "Usage: sudo bash install.sh [--rust] [--update|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
+            echo "Usage: sudo bash install.sh [--rust] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
             echo "  (no args)          Fresh install (Legacy Python)"
             echo "  --rust             Deploy the Next-Gen Rust Twin instead of Python"
-            echo "  --update           Pull latest code and rebuild all services"
+            echo "  --update           Pull latest code and rebuild all services (full rebuild)"
+            echo "  --update-half      Pull latest code, restart backend only — no Docker image rebuild"
             echo "  --clear            Wipes stale addons and frees up docker resources"
             echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
             echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
@@ -3103,6 +3105,36 @@ fi
                 celery_svcs="celery-worker"
             fi
             docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
+            ;;
+        half)
+            echo -e "${BLUE}  → [HALF UPDATE] Restarting backend only — no Docker image rebuild${NC}"
+            echo -e "${YELLOW}    (Frontend changes will not apply until a full --update is run)${NC}"
+
+            # 1. Restart backend (picks up Python code changes from mounted volume)
+            echo -e "${BLUE}  → Restarting backend...${NC}"
+            docker compose -f "$COMPOSE_FILE" restart backend
+            sleep 5
+
+            # 2. Run migrations
+            echo -e "${BLUE}  → Running migrations...${NC}"
+            run_backend_migrations --root || {
+                echo -e "${YELLOW}  ⚠ Migration failed — backend may still be starting. Retrying in 15s...${NC}"
+                sleep 15
+                run_backend_migrations --root
+            }
+
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend python manage.py collectstatic --noinput 2>/dev/null || true
+
+            # 3. Clean celerybeat-schedule and restart celery workers
+            echo -e "${BLUE}  → Cleaning celerybeat-schedule...${NC}"
+            docker compose -f "$COMPOSE_FILE" exec -T --user root backend rm -f /app/celerybeat-schedule 2>/dev/null || true
+
+            restart_svcs="celery celery-deploy celery-fast celery-beat"
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                restart_svcs="celery-worker"
+            fi
+            docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            set_checkpoint "update_db_migrated"
             ;;
         full)
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
