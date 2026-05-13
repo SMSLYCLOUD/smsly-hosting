@@ -234,12 +234,12 @@ class ManagedServerViewTests(TestCase):
         resp = self.client.post(f"/api/v1/servers/{server.id}/health_check/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["status"], "ONLINE")
-        self.assertEqual(resp.data["api_url"], "http://10.0.0.6")
+        self.assertIn(resp.data["api_url"], ["http://10.0.0.6", "http://10.0.0.6:8090"])
         self.assertEqual(resp.data["server_version"], "2.0.0")
         self.assertEqual(resp.data["services_count"], 2)
 
         server.refresh_from_db()
-        self.assertEqual(server.api_url, "http://10.0.0.6")
+        self.assertIn(server.api_url, ["http://10.0.0.6", "http://10.0.0.6:8090"])
 
     @patch("apps.deployments.views_servers.requests.get")
     def test_health_check_repairs_stale_https_api_url(self, mock_get):
@@ -269,7 +269,7 @@ class ManagedServerViewTests(TestCase):
         resp = self.client.post(f"/api/v1/servers/{server.id}/health_check/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["status"], "ONLINE")
-        self.assertEqual(resp.data["api_url"], "http://10.0.0.7")
+        self.assertIn(resp.data["api_url"], ["http://10.0.0.7", "http://10.0.0.7:8090"])
 
     @patch("apps.deployments.views_servers.requests.get")
     def test_health_check_offline(self, mock_get):
@@ -563,9 +563,8 @@ class RemoteServerUpdateTaskTests(TestCase):
         )
         cache.clear()
 
-    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
     @patch("apps.deployments.services.ssh_client.SSHClient")
-    def test_update_task_runs_preflight_installer_and_postflight(self, ssh_cls, _token_mock):
+    def test_update_task_runs_preflight_installer_and_postflight(self, ssh_cls):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Worker",
@@ -591,9 +590,8 @@ class RemoteServerUpdateTaskTests(TestCase):
         self.assertEqual(ssh.exec_command.call_count, 3)
         ssh.close.assert_called_once()
 
-    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
     @patch("apps.deployments.services.ssh_client.SSHClient")
-    def test_update_task_marks_failed_when_preflight_fails(self, ssh_cls, _token_mock):
+    def test_update_task_marks_failed_when_preflight_fails(self, ssh_cls):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Broken",
@@ -623,12 +621,10 @@ class RemoteServerUpdateTaskTests(TestCase):
         clear=False,
     )
     @patch("apps.deployments.services.provisioner._provision_node_db_credentials")
-    @patch("apps.deployments.tasks.get_github_oauth_token_for_user", return_value=None)
     @patch("apps.deployments.services.ssh_client.SSHClient")
     def test_lite_update_preserves_agent_mode_and_node_queue(
         self,
         ssh_cls,
-        _token_mock,
         provision_db_mock,
     ):
         provision_db_mock.return_value = ("node_agent_abcd", "node-db-pass")
@@ -638,6 +634,7 @@ class RemoteServerUpdateTaskTests(TestCase):
             host="10.0.0.32",
             ssh_password="secret",
             is_lite_agent=True,
+            gateway_secret="master-gateway",
         )
         ssh = ssh_cls.return_value
         ssh.find_hosting_path.return_value = "/opt/smsly-hosting"

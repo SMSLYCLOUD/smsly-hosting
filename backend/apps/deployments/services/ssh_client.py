@@ -73,12 +73,12 @@ class SSHClient:
             return
 
         self.client = paramiko.SSHClient()
-        self.client.load_system_host_keys()
-        # AutoAddPolicy saves unknown host keys to known_hosts on first connection.
-        # Subsequent connections verify against the saved key (load_system_host_keys).
-        # The env-var-based approach is unreliable because container env vars are set
-        # at startup and don't hot-reload when .env changes on the host.
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # Do NOT call load_system_host_keys() in Docker containers — stale
+        # entries from prior provisioning runs cause key-mismatch rejections
+        # after server reboots (AutoAddPolicy only handles *missing* keys, not
+        # *changed* ones).  WarningPolicy logs but accepts any host key, which
+        # is appropriate for infrastructure automation inside a trusted network.
+        self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
 
         # Determine auth method: key or password
         connect_kwargs = {

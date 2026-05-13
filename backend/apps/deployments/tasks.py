@@ -682,10 +682,12 @@ def _build_runtime_env(service: Service) -> dict:
     hosts_csv = ','.join(all_hosts)
 
     # Set all ALLOWED_HOSTS variants the app might use (only if not already set)
-    if 'ALLOWED_HOSTS' not in env_vars:
+    if not env_vars.get('ALLOWED_HOSTS'):
         env_vars['ALLOWED_HOSTS'] = hosts_csv
-    env_vars.setdefault('DJANGO_ALLOWED_HOSTS', hosts_csv)
-    env_vars.setdefault('MARKETER_ALLOWED_HOSTS', hosts_csv)
+    if not env_vars.get('DJANGO_ALLOWED_HOSTS'):
+        env_vars['DJANGO_ALLOWED_HOSTS'] = hosts_csv
+    if not env_vars.get('MARKETER_ALLOWED_HOSTS'):
+        env_vars['MARKETER_ALLOWED_HOSTS'] = hosts_csv
 
     if service.public_domain:
 
@@ -2006,6 +2008,26 @@ def _deploy_container(deployment, provider, image_name):
                     env_vars.setdefault('QDRANT_HOST', parsed.hostname or 'localhost')
                     env_vars.setdefault('QDRANT_PORT', str(parsed.port or 6333))
 
+        # Persist resolved env vars to DB — only fills vars that are empty in DB
+        persist_keys = {
+            'ALLOWED_HOSTS', 'DJANGO_ALLOWED_HOSTS', 'MARKETER_ALLOWED_HOSTS',
+            'CELERY_BROKER_URL', 'AMQP_URL', 'PUBLIC_DOMAIN', 'API_INTERNAL_URL',
+            'SMSLY_BACKEND_URL', 'CUSTOM_DOMAINS',
+            'DJANGO_SECRET_KEY', 'FERNET_KEY', 'ADMIN_EMAIL',
+        }
+        for key in persist_keys:
+            val = env_vars.get(key)
+            if val:
+                _, created = EnvironmentVariable.objects.get_or_create(
+                    service=service, key=key,
+                    defaults={'value': val, 'is_secret': key.endswith('_KEY') or key.endswith('_SECRET')},
+                )
+                if not created:
+                    existing = EnvironmentVariable.objects.filter(service=service, key=key).first()
+                    if existing and not existing.value:
+                        existing.value = val
+                        existing.save(update_fields=['value'])
+
         volumes = [{'name': v.name, 'mount_path': v.mount_path}
                    for v in Volume.objects.filter(service=service)]
 
@@ -2954,6 +2976,15 @@ def provision_addon_task(self, addon_id: str):
                     'source': 'ADDON',
                 }
             )
+
+        # RabbitMQ: also inject common broker aliases for Celery/worker stacks
+        if addon.addon_type == 'RABBITMQ':
+            for extra_key in ("CELERY_BROKER_URL", "AMQP_URL"):
+                EnvironmentVariable.objects.update_or_create(
+                    service=addon.service,
+                    key=extra_key,
+                    defaults={'value': url, 'is_secret': True, 'source': 'ADDON'},
+                )
     except Exception as e:
         logger.error("Addon provisioning failed for %s: %s", addon_id, e)
         try:
