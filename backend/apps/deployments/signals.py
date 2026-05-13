@@ -189,9 +189,8 @@ def sync_infrastructure_on_config_change(sender, instance, **kwargs):
             except PermissionError:
                 logger.warning(
                     "Cannot write to %s (Permission denied). "
-                    "Run on the VPS host: sudo chown 1000:1000 /opt/smsly-hosting/.env "
-                    "&& sudo chmod 664 /opt/smsly-hosting/.env",
-                    _env_path,
+                    "Fix with: sudo chown 1000:1000 %s && sudo chmod 664 %s",
+                    _env_path, _env_path, _env_path,
                 )
             except OSError as _exc:
                 logger.error("Failed to sync %s: %s", _env_path, _exc)
