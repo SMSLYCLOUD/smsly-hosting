@@ -597,13 +597,38 @@ env_ensure_var() {
 
 apply_agent_lite_env_overrides() {
     local env_file="$1"
+    local seed_file="/opt/smsly-hosting/.agent_lite_seed"
 
     [ "$MODE_AGENT_LITE" = "true" ] || return 0
 
-    MASTER_IP="${MASTER_IP:?MASTER_IP is required for agent-lite mode}"
+    # --- Self-Healing: Recovery from existing .env if env vars are missing ---
+    if [ -z "${MASTER_IP:-}" ] && [ -f "$env_file" ]; then
+        MASTER_IP="$(env_get_value "$env_file" "MASTER_IP")"
+    fi
+    if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
+        # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
+        local db_url
+        db_url="$(env_get_value "$env_file" "DATABASE_URL")"
+        if [[ "$db_url" =~ :([^@]+)@ ]]; then
+            MASTER_DB_PASSWORD="${BASH_REMATCH[1]}"
+        fi
+    fi
+
+    # --- Validation ---
+    if [ -z "${MASTER_IP:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_IP is missing. Lite Agent cannot function without a Master node.${NC}"
+        echo -e "${YELLOW}    To fix: Run the update from the Master Dashboard or pass MASTER_IP=... to the script.${NC}"
+        exit 1
+    fi
+
     MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
-    MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:?MASTER_DB_PASSWORD is required for agent-lite mode}"
-    MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:?MASTER_MQ_PASSWORD is required for agent-lite mode}"
+    # If password is still missing after recovery attempt, we must stop.
+    if [ -z "${MASTER_DB_PASSWORD:-}" ]; then
+        echo -e "${RED}  ✗ ERROR: MASTER_DB_PASSWORD is missing and could not be recovered.${NC}"
+        exit 1
+    fi
+
+    MASTER_MQ_PASSWORD="${MASTER_MQ_PASSWORD:-$MASTER_DB_PASSWORD}"
     SMSLY_NODE_HOST="${SMSLY_NODE_HOST:-$(detect_public_ip 2>/dev/null || true)}"
     [ -n "$SMSLY_NODE_HOST" ] || SMSLY_NODE_HOST="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo agent)"
     SMSLY_NODE_ID="${SMSLY_NODE_ID:-$SMSLY_NODE_HOST}"
@@ -615,6 +640,21 @@ apply_agent_lite_env_overrides() {
     if [ -n "${MASTER_REDIS_PASSWORD:-}" ]; then
         redis_url="redis://:${MASTER_REDIS_PASSWORD}@${MASTER_IP}:6379/1"
     fi
+
+    # --- Persistence: Save a recovery seed for future manual updates ---
+    cat > "$seed_file" <<EOF
+# SMSLY Lite Agent Recovery Seed
+# Generated on $(date)
+MASTER_IP="$MASTER_IP"
+MASTER_DB_USER="$MASTER_DB_USER"
+MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
+MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
+MASTER_REDIS_PASSWORD="${MASTER_REDIS_PASSWORD:-}"
+MASTER_GATEWAY_SECRET="${MASTER_GATEWAY_SECRET:-}"
+SMSLY_NODE_ID="$SMSLY_NODE_ID"
+SMSLY_NODE_QUEUE="$SMSLY_NODE_QUEUE"
+EOF
+    chmod 600 "$seed_file"
 
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
@@ -631,6 +671,31 @@ apply_agent_lite_env_overrides() {
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "true"
     env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
+}
+
+verify_agent_lite_connectivity() {
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+    echo -e "${BLUE}  → Verifying connectivity to Master node (${MASTER_IP})...${NC}"
+    
+    # 1. Ping Master
+    if ! ping -c 1 -W 2 "$MASTER_IP" >/dev/null 2>&1; then
+        echo -e "${YELLOW}  ⚠ Warning: Master node ${MASTER_IP} is not responding to ICMP. Proceeding anyway...${NC}"
+    fi
+
+    # 2. Check Database port
+    if ! timeout 2 bash -c "</dev/tcp/${MASTER_IP}/5432" 2>/dev/null; then
+        echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${MASTER_IP}.${NC}"
+        echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP.${NC}"
+        return 1
+    fi
+
+    # 3. Check Redis port
+    if ! timeout 2 bash -c "</dev/tcp/${MASTER_IP}/6379" 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ Warning: Master Redis (port 6379) is unreachable. Background tasks may fail.${NC}"
+    fi
+
+    echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
+    return 0
 }
 
 dump_diagnostic_logs() {
@@ -3139,6 +3204,7 @@ PYEOF
 
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
+                verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d socket-proxy
             else
                 docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
@@ -3258,6 +3324,7 @@ PYEOF
             echo -e "${BLUE}  → Running migrations...${NC}"
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
+                verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d socket-proxy
             else
                 docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
