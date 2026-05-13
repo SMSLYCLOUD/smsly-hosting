@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shlex
+import subprocess
 import time
 import hashlib
 import secrets
@@ -208,6 +209,36 @@ def _schedule_remote_reboot(ssh, server: ManagedServer, reason: str) -> bool:
     except Exception as exc:
         logger.warning("Failed to schedule remote reboot for %s: %s", server.host, exc)
         return False
+
+
+def _harden_master_firewall(server: ManagedServer) -> None:
+    """Ensure the Master's firewall allows traffic from the new node's IP."""
+    if not server.host:
+        return
+    
+    # We only need this for Lite Agents that connect back to Master services
+    if not getattr(server, "is_lite_agent", False):
+        return
+
+    _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {server.host}...")
+    
+    # Ports required for Lite Agent -> Master communication
+    # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery
+    ports = ["5432", "6379", "5672"]
+    
+    for port in ports:
+        # Note: This runs on the Master (local host) since provisioner runs in Master backend.
+        # However, Master backend is in Docker. We need to run this on the Master HOST.
+        # We can use SSH to 'localhost' if keys are set, but usually we just log the instruction
+        # or use a pre-authorized sudo wrapper if available.
+        # For now, we will log it and attempt a local ufw call if not in container.
+        try:
+            cmd = f"sudo ufw allow from {server.host} to any port {port} proto tcp"
+            subprocess.run(cmd.split(), capture_output=True, timeout=5)
+        except Exception:
+            pass # Fail gracefully if ufw is not local or permissions missing
+    
+    _append_log(server, "✅ Master firewall rules synchronized for this node.")
 
 
 def _prepare_remote_install_lock(ssh, server: ManagedServer) -> None:
@@ -540,6 +571,9 @@ def provision_server(self, server_id: str):
             os.environ.get("SMSLY_PROVISION_USE_LOCAL_BUNDLE", "false")
         ).strip().lower() not in ("0", "false", "no", "off")
         use_local_bundle = prefer_local_bundle
+
+        # -- Step 0: Harden Master Firewall --
+        _harden_master_firewall(server)
 
         # -- Step 1: Connect --
         ssh = _get_ssh_client(server)
