@@ -20,17 +20,27 @@ def select_eligible_node(user) -> ManagedServer:
     allow_control_plane = getattr(settings, 'CLOUDNEURON_ALLOW_CONTROL_PLANE_WORKLOADS', False)
 
     eligible = []
+    remote_nodes = []
+    master_node = None
+
     for s in servers:
         if s.status != "ONLINE":
             continue
 
         if getattr(s, 'is_primary', False):
             if getattr(s, 'allow_user_workloads', False) or allow_control_plane:
-                eligible.append(s)
+                master_node = s
         else:
-            eligible.append(s)
+            remote_nodes.append(s)
 
-    if not eligible:
-        logger.warning("No eligible ManagedServer found for user %s", getattr(user, 'id', user))
-        return None
-    return eligible[0]
+    # Prioritize remote nodes (Lite Agents) to keep the Master lean
+    if remote_nodes:
+        # Sort by services_count to load balance (simplistic for now)
+        remote_nodes.sort(key=lambda x: getattr(x, 'services_count', 0))
+        return remote_nodes[0]
+
+    if master_node:
+        return master_node
+
+    logger.warning("No eligible ManagedServer found for user %s", getattr(user, 'id', user))
+    return None

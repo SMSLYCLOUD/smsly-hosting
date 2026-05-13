@@ -1186,6 +1186,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
             results.append({
                 "repo": repo,
                 "name": service.name,
+                "server": service.server.name if service.server else "N/A",
                 "service_id": str(service.id),
                 "deployment_id": str(deployment.id),
                 "status": "queued",

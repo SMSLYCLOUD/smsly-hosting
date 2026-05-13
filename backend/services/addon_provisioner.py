@@ -552,6 +552,43 @@ class AddonProvisioner:
         # Final bridge connection for new/missing containers
         self._connect_to_proxy_network(container_name)
         
+        # ── LITE AGENT ROUTING ──
+        # If we are provisioning on the Master but the service is on a Remote Node (Lite Agent),
+        # we must expose the port and translate 'localhost' to the Master's Public IP.
+        service_server = getattr(addon.service, 'server', None)
+        if service_server and not service_server.is_primary:
+            master_ip = os.environ.get("PUBLIC_IP") or "127.0.0.1"
+            
+            # Find a free port on the host to map to this container
+            host_port = self._get_free_host_port(port)
+            
+            # Re-provision with port exposure if not already done
+            # (In a real scenario, we'd modify the docker run command to include -p)
+            # For this fix, we'll force a re-provision with the host port.
+            try:
+                logger.info(f"Exposing {addon_type} on Master host port {host_port} for Lite Agent")
+                subprocess.run(['docker', 'rm', '-f', container_name], capture_output=True)
+                
+                # We need to call the internal provisioner again with the port mapping.
+                # Since we don't want to refactor everything yet, we'll do a quick manual run.
+                # This is a bit hacky but effective for this specific architectural bridge.
+                if addon_type == 'POSTGRES':
+                    container_id, _ = self._provision_postgres(container_name, password, port, alias_name, host_port=host_port)
+                elif addon_type == 'REDIS':
+                    container_id, _ = self._provision_redis(container_name, password, port, alias_name, host_port=host_port)
+                else:
+                    # Fallback for others
+                    container_id, _ = self._provision_generic(addon_type, container_name, password, port, alias_name, generic_config, host_port=host_port)
+                
+                # Update URL to use Master IP and Host Port
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(connection_url)
+                new_netloc = f"{parsed.username}:{parsed.password}@{master_ip}:{host_port}" if parsed.password else f"{parsed.username}@{master_ip}:{host_port}"
+                connection_url = urlunparse(parsed._replace(netloc=new_netloc))
+                
+            except Exception as e:
+                logger.warning(f"Failed to auto-expose port for Lite Agent: {e}")
+
         return container_id, connection_url
 
     def _provision_rabbitmq(self, container_name: str,
@@ -647,7 +684,7 @@ class AddonProvisioner:
 
     def _provision_generic(self, addon_type: str, container_name: str,
                            password: str, port: int, alias_name: str, config: dict,
-                           username: str = '', db_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                           username: str = '', db_name: str = '', public_domain: str = None, host_port: int = None) -> Tuple[str, str]:
         """Provision a generic addon from GENERIC_ADDONS_CONFIG."""
         cmd = [
             'docker', 'run', '-d',
@@ -656,6 +693,9 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             '-v', f'{container_name}-data:/data'
         ]
+
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
 
         if public_domain:
             # Use dashboard port if explicitly defined for this addon, otherwise default API port
@@ -753,6 +793,7 @@ class AddonProvisioner:
         db_user: Optional[str] = None,
         db_name: Optional[str] = None,
         public_domain: str = None,
+        host_port: int = None,
     ) -> Tuple[str, str]:
         """Provision a PostgreSQL container."""
         # Derive service-specific user/db from alias (e.g. "postgres-myapp")
@@ -782,6 +823,9 @@ class AddonProvisioner:
             '-e', f'POSTGRES_DB={db_name}',
             '-v', f'{container_name}-data:/var/lib/postgresql/data',
         ]
+
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
 
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
@@ -823,7 +867,8 @@ class AddonProvisioner:
 
     def _provision_redis(self, container_name: str,
                          password: str, port: int,
-                         alias_name: str = '', public_domain: str = None) -> Tuple[str, str]:
+                         alias_name: str = '', public_domain: str = None,
+                         host_port: int = None) -> Tuple[str, str]:
         """Provision a Redis container with authentication."""
         cmd = [
             'docker', 'run', '-d',
@@ -832,6 +877,8 @@ class AddonProvisioner:
             '--restart', 'unless-stopped',
             '-v', f'{container_name}-data:/data',
         ]
+        if host_port:
+            cmd.extend(['-p', f'{host_port}:{port}'])
         if public_domain:
             self._append_traefik_labels(cmd, container_name.replace(".", "-").replace("_", "-"), public_domain, port)
 
