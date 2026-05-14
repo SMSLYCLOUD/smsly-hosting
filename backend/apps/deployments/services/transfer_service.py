@@ -634,10 +634,10 @@ if svc:
         """Wait until target platform health confirms backend dependencies."""
         command = (
             "for i in $(seq 1 60); do "
-            "curl -fsS -m 5 http://127.0.0.1/health/live 2>/dev/null "
+            "curl -fsS -m 5 http://127.0.0.1:8000/health/live 2>/dev/null "
             "| grep -q '\"status\": \"alive\"' "
             "&& echo READY && exit 0; "
-            "curl -fsS -m 5 http://127.0.0.1:8090/health 2>/dev/null "
+            "curl -fsS -m 5 http://127.0.0.1:8000/health 2>/dev/null "
             "| grep -q '\"status\": \"healthy\"' "
             "&& echo READY && exit 0; "
             "sleep 5; "
@@ -968,7 +968,7 @@ if os.path.exists(services_dir):
         self._verify_between_servers()
 
         if self.transfer.transfer_type == 'FULL':
-            url = f"http://{self.transfer.target_server_ip}:8090/health"
+            url = f"http://{self.transfer.target_server_ip}:8000/health"
             try:
                 resp = requests.get(url, timeout=10)
                 if resp.status_code >= 500:
