@@ -339,7 +339,12 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             return []
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.filter(server__isnull=True).only("id", "public_domain", "custom_domains", "public_domain_hidden"):
+        for service in Service.objects.select_related("server").only("id", "public_domain", "custom_domains", "public_domain_hidden", "server__is_primary").all():
+            # Skip services assigned to remote nodes — they are served via
+            # _get_wildcard_remote_host_map and its @remote_hosts blocks.
+            svr = getattr(service, "server", None)
+            if svr and not svr.is_primary:
+                continue
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
                 public_domain = ""
