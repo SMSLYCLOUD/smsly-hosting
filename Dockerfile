@@ -75,8 +75,8 @@ COPY --from=frontend_builder /frontend/public /frontend/public
 COPY --from=frontend_builder /usr/local/bin/node /usr/local/bin/node
 
 # Platform runtime wiring
-COPY nginx.platform.conf.template /etc/nginx/nginx.conf.template
-COPY entrypoint.platform.sh /entrypoint.platform.sh
+COPY infrastructure/nginx/nginx.platform.conf.template /etc/nginx/nginx.conf.template
+COPY scripts/entrypoint.platform.sh /entrypoint.platform.sh
 RUN chmod +x /app/entrypoint.sh /entrypoint.platform.sh
 
 # Create non-root app user (processes run as this user via supervisor)

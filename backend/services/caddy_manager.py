@@ -716,13 +716,17 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
 
     try:
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
+        # Ensure the caddy-config directory is readable by the Caddy container
+        # which runs as uid 1000 (nextjs user).
+        os.chmod(CADDY_CONFIG_DIR, 0o775)
 
         with open(CADDY_FILE_PATH, "w", encoding="utf-8") as handle:
             handle.write(content)
+        os.chmod(CADDY_FILE_PATH, 0o664)
 
         if cloudflare_token:
-            # SEC-003: Restrict shared volume directory to owner-only read
-            os.chmod(CADDY_CONFIG_DIR, 0o700)
+            # Caddy runs as uid 1000 — keep dir readable by group
+            os.chmod(CADDY_CONFIG_DIR, 0o775)
             # Write Cloudflare token to shared volume for the host watcher
             # to sync into Caddy's systemd environment override.
             with os.fdopen(os.open(CADDY_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:

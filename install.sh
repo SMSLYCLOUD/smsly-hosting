@@ -4861,8 +4861,11 @@ if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ 
     echo -e "\n${YELLOW}[7/9] Setting up Dockerized Caddy Proxy...${NC}"
 
     # Ensure caddy-config directory exists and has correct permissions
+    # Caddy container runs as uid 1000 (nextjs user); group-read access is
+    # required so the container can write runtime state (tls certs, reload flag).
     mkdir -p /opt/smsly-hosting/caddy-config
-    chown -R 1000:1000 /opt/smsly-hosting/caddy-config
+    chown 1000:1000 /opt/smsly-hosting/caddy-config
+    chmod 775 /opt/smsly-hosting/caddy-config
 
     # SEED: Create a temporary safety Caddyfile so the container doesn't crash on first start.
     # The backend will overwrite this within seconds of starting up.
@@ -4874,6 +4877,7 @@ if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ 
 }
 EOF
         chown 1000:1000 /opt/smsly-hosting/caddy-config/Caddyfile
+        chmod 664 /opt/smsly-hosting/caddy-config/Caddyfile
     fi
 
     # Build and start Caddy container

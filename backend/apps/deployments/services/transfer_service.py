@@ -177,17 +177,37 @@ class ServerTransferService:
                 self.ssh.close()
 
     def _init_ssh(self):
-        has_key = bool(self.transfer.target_ssh_key)
-        has_password = bool(self.transfer.target_ssh_password)
+        key = (self.transfer.target_ssh_key or '').strip()
+        password = (self.transfer.target_ssh_password or '').strip()
+
+        # Prefer password over key when both are present (avoids invalid key errors)
+        has_key = bool(key) and key.startswith("-----BEGIN ")
+        has_password = bool(password)
+
+        if not has_key and not has_password:
+            # Try falling back to ManagedServer credentials
+            from ..models_core import ManagedServer
+            server = ManagedServer.objects.filter(
+                host=self.transfer.target_server_ip
+            ).first()
+            if server:
+                pw = (server.ssh_password or '').strip()
+                k = (server.ssh_key or '').strip()
+                has_password = bool(pw)
+                has_key = bool(k) and k.startswith("-----BEGIN ")
+                if has_password:
+                    password = pw
+                elif has_key:
+                    key = k
 
         if not has_key and not has_password:
             raise ValueError("Target SSH key or password is missing.")
 
         ssh_kwargs = {'ip': self.transfer.target_server_ip}
-        if has_key:
-            ssh_kwargs['key_content'] = self.transfer.target_ssh_key
         if has_password:
-            ssh_kwargs['password'] = self.transfer.target_ssh_password
+            ssh_kwargs['password'] = password
+        elif has_key:
+            ssh_kwargs['key_content'] = key
 
         self.ssh = SSHClient(**ssh_kwargs)
         try:
@@ -614,6 +634,9 @@ if svc:
         """Wait until target platform health confirms backend dependencies."""
         command = (
             "for i in $(seq 1 60); do "
+            "curl -fsS -m 5 http://127.0.0.1/health/live 2>/dev/null "
+            "| grep -q '\"status\": \"alive\"' "
+            "&& echo READY && exit 0; "
             "curl -fsS -m 5 http://127.0.0.1:8090/health 2>/dev/null "
             "| grep -q '\"status\": \"healthy\"' "
             "&& echo READY && exit 0; "
@@ -648,6 +671,11 @@ for candidate in (os.getcwd(), '/app', '/app/backend'):
         sys.path.insert(0, candidate)
 
 def configure_direct_database_url():
+    current_url = os.environ.get('DATABASE_URL', '')
+    # Skip override on agent/lite nodes — their DATABASE_URL already
+    # points directly to the controller (no pgcat pooler to bypass).
+    if current_url and 'pgcat' not in current_url:
+        return
     user = os.environ.get('POSTGRES_USER')
     password = os.environ.get('POSTGRES_PASSWORD')
     db_name = os.environ.get('POSTGRES_DB')
