@@ -4,17 +4,29 @@ Allows dynamic domain whitelisting and SITE_URL updates from PlatformConfig.
 """
 import re
 import logging
+import threading
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+_patching_lock = threading.Lock()
+_patching_in_progress = False
 
 def patch_runtime_settings():
     """
     Sync PlatformConfig values (domain, use_ssl) to Django settings.
     Updates ALLOWED_HOSTS, CSRF_TRUSTED_ORIGINS, and SITE_URL.
+    Uses a re-entrancy guard to prevent infinite recursion when the
+    post_save signal on PlatformConfig fires during initial load.
     """
-    logger.info("[patch] Attempting to sync settings from PlatformConfig...")
+    global _patching_in_progress
+    if _patching_in_progress:
+        logger.debug("[patch] Re-entrancy guard active, skipping.")
+        return
+
+    _patching_in_progress = True
     try:
+        logger.info("[patch] Attempting to sync settings from PlatformConfig...")
         from apps.deployments.models import PlatformConfig
         from django.contrib.sites.models import Site
         
@@ -59,9 +71,10 @@ def patch_runtime_settings():
                 name=f'CloudNeuron ({effective_domain})'
             )
         logger.info("[patch] Runtime settings synchronized successfully.")
-            
     except Exception as exc:
         logger.warning("[patch] Runtime patching skipped or failed: %s", exc)
+    finally:
+        _patching_in_progress = False
 
 def is_valid_host(host_str: str) -> bool:
     """
