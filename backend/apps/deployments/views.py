@@ -433,11 +433,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         
-        # Seamless: If no server is assigned, pick the primary node automatically
+        # Seamless: If no server is assigned, pick a node automatically.
+        # Prefer non-primary online nodes so user workloads spread
+        # across the fleet instead of all landing on the primary.
         if not server:
-            server = ManagedServer.get_primary()
+            non_primary = ManagedServer.objects.filter(
+                is_primary=False, status='ONLINE'
+            ).order_by('?').first()
+            server = non_primary or ManagedServer.get_primary()
             if server:
-                logger.info("Auto-assigning primary server %s to service %s", server.name, serializer.validated_data.get('name'))
+                logger.info("Auto-assigning server %s to service %s", server.name, serializer.validated_data.get('name'))
         
         ServerGuard.assert_user_workload_allowed(server)
 
@@ -462,11 +467,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         
-        # Seamless: If no server is assigned during update, pick the primary node automatically
+        # Seamless: If no server is assigned during update, pick a node automatically
         if not server:
-            server = ManagedServer.get_primary()
+            non_primary = ManagedServer.objects.filter(
+                is_primary=False, status='ONLINE'
+            ).order_by('?').first()
+            server = non_primary or ManagedServer.get_primary()
             if server:
-                logger.info("Auto-assigning primary server %s to service %s during update", server.name, serializer.instance.name)
+                logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
         
         ServerGuard.assert_user_workload_allowed(server)
 
