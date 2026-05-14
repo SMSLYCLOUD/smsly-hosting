@@ -175,15 +175,16 @@ export function ServicesGrid({ services }: ServicesGridProps) {
           {/* Info Row */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                service.isAddon ? 'bg-blue-500/15 text-blue-400' :
-                service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' :
-                service.latest_deployment?.status === 'FAILED' ? 'bg-red-500/15 text-red-400' :
-                service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500/15 text-blue-400' :
-                'bg-yellow-500/15 text-yellow-400'
-              }`}>
-                {service.isAddon ? 'ADDON' : (service.latest_deployment?.status || 'PENDING')}
-              </span>
+<span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                 service.isAddon ? 'bg-blue-500/15 text-blue-400' :
+                 service.latest_deployment?.status === 'ACTIVE' ? 'bg-emerald-500/15 text-emerald-400' :
+                 service.latest_deployment?.status === 'FAILED' ? 'bg-red-500/15 text-red-400' :
+                 service.latest_deployment?.status === 'BUILDING' || service.latest_deployment?.status === 'DEPLOYING' ? 'bg-blue-500/15 text-blue-400' :
+                 service.latest_deployment?.status === null ? 'bg-blue-500/15 text-blue-500' :
+                 'bg-yellow-500/15 text-yellow-400'
+               }`}>
+                 {service.isAddon ? 'ADDON' : (service.latest_deployment?.status || 'Ready to Deploy')}
+               </span>
               {service.deploy_mode === 'COMPOSE' && (
                 <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-violet-500/15 text-violet-400">Compose</span>
               )}

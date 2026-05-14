@@ -57,9 +57,11 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                                     service.latest_deployment?.status === 'ACTIVE'
                                         ? 'bg-emerald-500/10 text-emerald-500'
-                                        : 'bg-yellow-500/10 text-yellow-500'
+                                        : service.latest_deployment?.status === null
+                                            ? 'bg-blue-500/10 text-blue-500'
+                                            : 'bg-yellow-500/10 text-yellow-500'
                                 }`}>
-                                    {service.latest_deployment?.status || 'PENDING'}
+                                    {service.latest_deployment?.status || 'Ready to Deploy'}
                                 </span>
                             </div>
                             <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
