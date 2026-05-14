@@ -1087,32 +1087,64 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         is_delegated = deployment.source_node is not None
         if is_delegated:
             from apps.deployments.models_core import ManagedServer
-            # The source_node holds the IP of the node that sent the deploy
-            # request.  Deploy back to that node via the orchestrator.
-            target = ManagedServer.objects.filter(host=deployment.source_node).first()
-            if target:
-                _handle_remote_deployment(deployment, target, skip_review=skip_review)
-                return
+
+            # Build-agent optimization: if the master sent a pre-built
+            # image (docker_image is populated), don't delegate back —
+            # handle it locally with the pre-built image (pull + run).
+            prebuilt = str(service.docker_image or "").strip()
+            if prebuilt:
+                is_delegated = False
+            else:
+                # The source_node holds the IP of the node that sent the
+                # deploy request.  Deploy back to that node.
+                target = ManagedServer.objects.filter(host=deployment.source_node).first()
+                if target:
+                    _handle_remote_deployment(deployment, target, skip_review=skip_review)
+                    return
 
         is_local = (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
 
         if not is_local:
             if deployment.remote_deployment_id:
                 _resume_remote_deployment(deployment, service.server)
-            else:
-                _handle_remote_deployment(deployment, service.server, skip_review=skip_review)
+                return
+
+            # Build-agent optimization: for GIT services on remote
+            # nodes, build and push the image on the master first,
+            # then delegate with the pre-built image name so the
+            # remote node skips the build and just pulls + runs.
+            if service.deploy_type == 'GIT' and not str(service.docker_image or "").strip():
+                with fleet_build_lock(deployment):
+                    pipeline = PipelineManager(deployment)
+                    if skip_review:
+                        built_image = pipeline.run()
+                    else:
+                        pipeline.run_analysis_only()
+                        broadcast_status(deployment)
+                        return
+                _handle_remote_deployment(
+                    deployment, service.server,
+                    skip_review=skip_review, image_name=built_image,
+                )
+                return
+
+            _handle_remote_deployment(deployment, service.server, skip_review=skip_review)
             return
 
         # 1. Build Phase (Pipeline)
         if service.deploy_type == 'GIT':
-            manager = PipelineManager(deployment)
-
-            # Skip review for: rollbacks, restarts, webhooks
-            if deployment.is_rollback or skip_review:
+            # A pre-built image was sent by the master (build agent
+            # optimization) — skip the build phase entirely.
+            prebuilt = str(service.docker_image or "").strip()
+            if prebuilt and deployment.source_node:
+                image_name = prebuilt
+            elif deployment.is_rollback or skip_review:
                 with fleet_build_lock(deployment):
+                    manager = PipelineManager(deployment)
                     image_name = manager.run()
             else:
                 # Fresh manual deploy → analysis only, pause for review
+                manager = PipelineManager(deployment)
                 manager.run_analysis_only()
                 broadcast_status(deployment)
                 return  # Paused at REVIEW → user must approve
@@ -1172,14 +1204,31 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         if not is_local:
             if deployment.remote_deployment_id:
                 _resume_remote_deployment(deployment, service.server)
+                return
+
+            # Build-agent optimization: build locally, then delegate
+            # with the pre-built image name.
+            prebuilt = str(service.docker_image or "").strip()
+            if prebuilt and deployment.source_node:
+                built_image = prebuilt
             else:
-                _handle_remote_deployment(deployment, service.server)
+                with fleet_build_lock(deployment):
+                    manager = PipelineManager(deployment)
+                    built_image = manager.run_build_only()
+
+            _handle_remote_deployment(
+                deployment, service.server, image_name=built_image,
+            )
             return
 
-        # Build phase
-        with fleet_build_lock(deployment):
-            manager = PipelineManager(deployment)
-            image_name = manager.run_build_only()
+        # Build phase — skip if master already pushed a pre-built image
+        prebuilt = str(service.docker_image or "").strip()
+        if prebuilt and deployment.source_node:
+            image_name = prebuilt
+        else:
+            with fleet_build_lock(deployment):
+                manager = PipelineManager(deployment)
+                image_name = manager.run_build_only()
 
         # Deploy phase
         _deploy_container(deployment, provider, image_name)
@@ -1301,8 +1350,13 @@ def _stop_local_service_container(service_name: str):
         logger.warning(f"Docker client unavailable on Master: {e}")
 
 
-def _handle_remote_deployment(deployment, server, skip_review=False):
-    """Delegate deployment to a remote server and poll for status."""
+def _handle_remote_deployment(deployment, server, skip_review=False, image_name=None):
+    """Delegate deployment to a remote server and poll for status.
+
+    When ``image_name`` is provided (master pre-built and pushed the image),
+    it is forwarded to the remote so that node can skip its own build phase
+    and go straight to pull + run (build-agent optimization).
+    """
     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
     from apps.deployments.services.server_guard import ServerGuard
 
@@ -1340,7 +1394,9 @@ def _handle_remote_deployment(deployment, server, skip_review=False):
     update_stage(deployment, 'Remote Sync', 'success')
     update_stage(deployment, 'Remote Deploy', 'running')
 
-    remote_dep_id = orchestrator.trigger_deploy(deployment, remote_svc_id, skip_review=skip_review)
+    remote_dep_id = orchestrator.trigger_deploy(
+        deployment, remote_svc_id, skip_review=skip_review, image_name=image_name,
+    )
     if not remote_dep_id:
         _handle_failure(
             None,
@@ -2011,8 +2067,50 @@ def _deploy_container(deployment, provider, image_name):
         # Explicitly pull image before deployment to avoid 404/Not Found
         append_log(deployment, f"Pulling image {image_name}...\n")
         if not compute.pull_image(image_name):
-            append_log(deployment, f"⚠️ Warning: Registry pull failed for {image_name}. "
+            append_log(deployment, f"Warning: Registry pull failed for {image_name}. "
                                    "Attempting deployment using local cache...\n")
+            # When pull_image fails for a registry-prefixed image (e.g.
+            # registry:5000/smsly/myapp:abc123), Docker may not find it
+            # locally even though the build phase tagged it.  Try to
+            # retag the original local image as a fallback.
+            try:
+                _client = docker.from_env()
+                try:
+                    _client.images.get(image_name)
+                except docker.errors.ImageNotFound:
+                    registry_prefix = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+                    if registry_prefix and image_name.startswith(registry_prefix):
+                        local_tag = image_name[len(registry_prefix) + 1:]
+                        try:
+                            local_img = _client.images.get(local_tag)
+                            local_img.tag(image_name)
+                            append_log(
+                                deployment,
+                                f"Retagged local {local_tag} -> {image_name}\n",
+                            )
+                        except docker.errors.ImageNotFound:
+                            # Try the original name parts without registry
+                            fallback = "/".join(local_tag.split("/")[1:]) if "/" in local_tag else ""
+                            if fallback:
+                                try:
+                                    local_img = _client.images.get(fallback)
+                                    local_img.tag(image_name)
+                                    append_log(
+                                        deployment,
+                                        f"Retagged local {fallback} -> {image_name}\n",
+                                    )
+                                except docker.errors.ImageNotFound:
+                                    append_log(
+                                        deployment,
+                                        "Local cache unavailable; continuing anyway.\n",
+                                    )
+                            else:
+                                append_log(
+                                    deployment,
+                                    "Local cache unavailable; continuing anyway.\n",
+                                )
+            except Exception as _retag_err:
+                logger.warning("Image retag fallback failed: %s", _retag_err)
 
         env_vars = _build_runtime_env(service)
 

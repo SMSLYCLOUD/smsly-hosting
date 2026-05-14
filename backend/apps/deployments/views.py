@@ -767,12 +767,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         Manually trigger deployment for a service.
         POST /api/v1/services/{id}/deploy/
-        Body: { "ref": "commit_hash" } (Optional)
+        Body: { "ref": "commit_hash", "image_name": "registry:5000/..." } (Optional)
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
         skip_review = _parse_bool(request.data.get('skip_review', False))
         source_node = request.data.get('source_node')
+        image_name = request.data.get('image_name', '').strip()
 
         server = getattr(service, 'server', None)
         guard = ServerGuard.check_user_workload_allowed(server)
@@ -794,15 +795,23 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'No active cloud provider configured'},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        # For DOCKER type services triggered from a remote master, don't set
-        # source_node — there's no build step to delegate.  The image already
-        # exists in the registry, so the worker just pulls it and runs locally.
+        # For DOCKER type services triggered from a remote master, clear
+        # source_node to prevent the task from re-delegating back.
+        # For GIT with a pre-built image (build-agent optimization), keep
+        # source_node so the task can distinguish master-triggered deploys
+        # from user-triggered (and skip the build phase).
         is_docker_delegated = source_node and service.deploy_type == 'DOCKER'
+        has_prebuilt = bool(source_node and image_name)
+
+        if has_prebuilt and not service.docker_image:
+            service.docker_image = image_name
+            service.save(update_fields=["docker_image"])
+
         deployment = Deployment.objects.create(
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
-            commit_message=f"Manual Trigger: {ref}" if not source_node else f"Remote Deploy: {ref}",
+            commit_message=f"Remote Deploy: {ref}" if source_node else f"Manual Trigger: {ref}",
             source_node=None if is_docker_delegated else source_node
         )
 

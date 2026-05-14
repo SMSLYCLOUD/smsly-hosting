@@ -90,6 +90,11 @@ class SecurityMiddleware:
         if getattr(request, '_force_auth_token', None) is not None:
             return False
 
+        # Inter-server sync requests carry their own auth (X-SMSLY-Remote-Sync).
+        # Skip HMAC verification — DRF token auth will validate them in the view.
+        if request.headers.get("X-SMSLY-Remote-Sync") == "1":
+            return False
+
         # Skip only when an API token is present and valid.
         if self._has_valid_token_auth_header(request):
             return False
