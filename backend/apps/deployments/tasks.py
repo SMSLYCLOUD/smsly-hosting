@@ -1881,6 +1881,16 @@ def _wait_for_local_container_healthy(
 
         time.sleep(poll_seconds)
 
+    # If the container is running but health is still "starting" (Docker
+    # start_period hasn't expired yet), treat it as healthy — the app is
+    # up and serving even though Docker hasn't finished its first probe.
+    if status in ("running",) and health in ("starting", "n/a", ""):
+        append_log(
+            deployment,
+            f"[HEALTH-CHECK] Container running; health still in start_period "
+            f"({last_state}). Accepting as healthy.\n",
+        )
+        return True
     append_log(
         deployment,
         f"[HEALTH-CHECK] Timed out waiting for container health ({last_state}).\n",

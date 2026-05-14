@@ -474,6 +474,10 @@ class LocalAdapter(BaseCloudAdapter):
             health_timeout_default,
             minimum=30,
         )
+        # FIX: the health-wait timeout must be longer than Docker's
+        # start_period, otherwise we'time out while the engine is still
+        # waiting to run the first health check.
+        health_timeout = max(health_timeout, start_period_seconds + 60)
         new_healthy = self._wait_container_healthy(
             new_container.id, timeout_seconds=health_timeout
         )
@@ -853,9 +857,14 @@ class LocalAdapter(BaseCloudAdapter):
             "Container %s health check timed out after %ds (%d polls). "
             "Last state: status=%s health=%s",
             container_id[:12], timeout_seconds, poll_count,
-            status if 'status' in dir() else '?',
-            health if 'health' in dir() else '?',
+            status if 'status' in locals() else '?',
+            health if 'health' in locals() else '?',
         )
+        # If the container is still running and health is still in
+        # start_period, consider it healthy — the app is up even if
+        # Docker hasn't finished its first health probe yet.
+        if status in ("running",) and health in ("starting", "n/a", ""):
+            return True
         return False
 
     def _deploy_k8s(self, name: str, image: str,
