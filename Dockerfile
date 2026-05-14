@@ -80,7 +80,7 @@ COPY scripts/entrypoint.platform.sh /entrypoint.platform.sh
 RUN chmod +x /app/entrypoint.sh /entrypoint.platform.sh
 
 # Create non-root app user (processes run as this user via supervisor)
-RUN mkdir -p /app/backups && \
+RUN mkdir -p /app/backups /app/builds && \
     useradd -m -u 1000 smsly \
     && chown -R smsly:smsly /app /frontend
 

@@ -70,7 +70,16 @@ def _resolve_builds_root():
     os.makedirs(fallback, exist_ok=True)
     return fallback
 
-_BUILDS_ROOT = _resolve_builds_root()
+def _get_builds_root():
+    """Lazy accessor for BUILDS_ROOT — evaluated at call time so env var
+    changes (SMSLY_BUILDS_DIR) are picked up without a process restart."""
+    root = getattr(_get_builds_root, '_cached', None)
+    if root is None:
+        root = _resolve_builds_root()
+        _get_builds_root._cached = root
+    return root
+
+_BUILDS_ROOT = _get_builds_root()
 
 
 # pylint: disable=too-few-public-methods
