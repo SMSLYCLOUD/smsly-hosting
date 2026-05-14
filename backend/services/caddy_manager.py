@@ -138,7 +138,7 @@ def _remote_upstream_url_for_service(service) -> str:
     mesh_ip = _remote_server_mesh_ip(getattr(service, "server", None))
     if not mesh_ip:
         return ""
-    return f"https://{mesh_ip}"
+    return f"http://{mesh_ip}"
 
 
 def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
@@ -532,10 +532,6 @@ def generate_caddyfile(config) -> str:
                         f"    handle {matcher} {{",
                         f"        reverse_proxy {upstream_url} {{",
                         "            header_up Host {host}",
-                        "            transport http {",
-                        "                tls",
-                        "                tls_server_name {host}",
-                        "            }",
                         "        }",
                         "    }",
                     ]
