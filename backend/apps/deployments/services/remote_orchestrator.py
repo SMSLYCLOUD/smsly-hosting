@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import uuid
 import hashlib
 import hmac as hmac_mod
 import json
@@ -54,9 +55,24 @@ class RemoteOrchestrator:
     """
 
     def __init__(self, server: ManagedServer):
-        self.server = server
-        self.base_url = (server.api_url or f"http://{server.host}").rstrip('/')
+        # Always re-fetch the server from DB to ensure we get the freshest
+        # api_token — EncryptedCharField can return empty in certain Celery
+        # task contexts if the passed-in instance was stale or pickled.
+        try:
+            fresh = ManagedServer.objects.only(
+                "api_token", "gateway_secret", "api_url", "host",
+                "ssh_key", "ssh_password", "ssh_user", "ssh_port",
+            ).get(id=server.id if isinstance(server.id, uuid.UUID) else server.pk)
+            self.server = fresh
+        except Exception:
+            self.server = server
+        self.base_url = (self.server.api_url or f"http://{self.server.host}").rstrip('/')
         self.last_error = ""
+        token_preview = (str(self.server.api_token or "")[:12] + "...") if self.server.api_token else "(empty)"
+        logger.info(
+            "RemoteOrchestrator initialized for %s (%s) api_token=%s",
+            self.server.name, self.server.host, token_preview,
+        )
 
     def _set_last_error(self, message: str, response: requests.Response | None = None):
         detail = _safe_error_snippet(message)
@@ -574,8 +590,14 @@ class RemoteOrchestrator:
                     exc,
                 )
 
-    def trigger_deploy(self, deployment, remote_service_id, skip_review=False):
-        """Trigger a deployment task on the remote server."""
+    def trigger_deploy(self, deployment, remote_service_id, skip_review=False, image_name=None):
+        """Trigger a deployment task on the remote server.
+
+        When ``image_name`` is provided (pre-built image pushed by the master),
+        the remote will skip the build phase and directly pull and run.
+        This enables the build-agent optimization where the master handles
+        all builds and the remote node only runs containers.
+        """
         from apps.deployments.models import PlatformConfig
         path = f"/api/v1/services/{remote_service_id}/deploy/"
         config = PlatformConfig.load()
@@ -584,8 +606,10 @@ class RemoteOrchestrator:
         payload = {
             "ref": ref,
             "source_node": config.server_ip or "controller",
-            "skip_review": skip_review
+            "skip_review": skip_review,
         }
+        if image_name:
+            payload["image_name"] = image_name
         
         try:
             resp = self._request("POST", path, payload=payload, timeout=15)
