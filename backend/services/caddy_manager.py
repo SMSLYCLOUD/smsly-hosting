@@ -465,7 +465,10 @@ def generate_caddyfile(config) -> str:
 }""")
 
     # Reject placeholder/dummy tokens
-    _FAKE_TOKENS = {"fake", "changeme", "your_cloudflare_api_token", "test", ""}
+    _FAKE_TOKENS = {
+        "fake", "changeme", "your_cloudflare_api_token", "test", "",
+        "dummy_token_for_testing",
+    }
     if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
         cloudflare_token = ""
 

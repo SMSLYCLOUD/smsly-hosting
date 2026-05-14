@@ -753,6 +753,11 @@ class PlatformConfig(models.Model):
         env_cf_token = os.environ.get('CLOUDFLARE_API_TOKEN', '').strip()
         env_ip = os.environ.get('PUBLIC_IP', '').strip()
 
+        # Never sync a known-fake token from the environment into the DB
+        _fake_tokens = {"", "fake", "changeme", "test", "dummy_token_for_testing", "your_cloudflare_api_token"}
+        if not env_cf_token or env_cf_token.lower() in _fake_tokens or env_cf_token.startswith("your_"):
+            env_cf_token = ""
+
         changed = False
         if env_domain and not obj.domain:
             obj.domain = env_domain
@@ -768,6 +773,10 @@ class PlatformConfig(models.Model):
             changed = True
         if env_cf_token and not obj.cloudflare_api_token:
             obj.cloudflare_api_token = env_cf_token
+            changed = True
+        # Clear any known-fake token that got persisted
+        if (obj.cloudflare_api_token or "").strip().lower() in _fake_tokens:
+            obj.cloudflare_api_token = ""
             changed = True
         if env_ip and not obj.server_ip:
             obj.server_ip = env_ip
