@@ -134,12 +134,22 @@ class NixpacksBuilder:
 
             logger.info(f"Pushing image to {full_tag}...")
             push_result = client.images.push(full_tag)
-            # push() returns a generator/stream — consume it to detect errors
+            # push() returns a generator (stream=True, default) that yields
+            # status lines, or a single string (stream=False).  Consume
+            # all output looking for JSON errors.
+            push_failed = False
             if push_result is not None:
-                for line in push_result if hasattr(push_result, '__iter__') else [push_result]:
+                if isinstance(push_result, str):
+                    source = push_result.split("\n")
+                else:
+                    source = push_result
+                for line in source:
                     if '"error"' in str(line):
+                        push_failed = True
                         logger.error(f"Registry push failed: {line}")
-                        return image_name  # fallback to local
+                        break
+            if push_failed:
+                return image_name  # fallback to local
 
             return full_tag
         except Exception as e:
