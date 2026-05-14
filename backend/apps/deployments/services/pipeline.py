@@ -40,7 +40,7 @@ from apps.deployments.utils import (
     estimate_resources_from_deps,
 )
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
-from services.builders import is_buildkit_cache_error, prune_buildkit_cache
+from services.builders import is_buildkit_cache_error, prune_buildkit_cache, cleanup_stuck_buildkit as _cleanup_stuck_buildkit
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +109,12 @@ class PipelineManager:
         """
         try:
             self._setup()
-            self._clone_repo()
-            self._run_ai_analysis()
-            self._inject_env_vars()
-            self._auto_provision_addons()
+            is_docker_type = self.service.deploy_type == 'DOCKER' and self.service.docker_image
+            if not is_docker_type:
+                self._clone_repo()
+                self._run_ai_analysis()
+                self._inject_env_vars()
+                self._auto_provision_addons()
             self._build_image()
             self._push_image()
             return self.image_name
@@ -675,6 +677,14 @@ class PipelineManager:
                 deferred += 1
                 continue
 
+            # Skip config vars that look like secrets but aren't (e.g. AI_MAX_TOKENS, SD_x_TTL_DAYS)
+            _SKIP_CONFIG = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
+                            "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN",
+                            "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
+            if any(p in key for p in _SKIP_CONFIG):
+                injected += 1
+                continue
+
             # For secret keys: ALWAYS generate a real random value
             if SECRET_PATTERNS.search(key):
                 real_secret = _secrets.token_urlsafe(50)
@@ -1205,6 +1215,19 @@ class PipelineManager:
         self._check_cancellation('Build')
 
         try:
+            # For DOCKER type services with a pre-built image, use it directly
+            if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
+                self.image_name = self.service.docker_image
+                append_log(
+                    self.deployment,
+                    f"✓ Using pre-built image: {self.image_name}\n"
+                )
+                update_stage(
+                    self.deployment, 'Build', 'success',
+                    (timezone.now() - start_time).total_seconds()
+                )
+                return
+
             tag_hash = self.deployment.commit_hash[:7]
             self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
 
@@ -1224,8 +1247,16 @@ class PipelineManager:
                         f"✓ Build skipped — cached image found: {self.image_name}\n"
                     )
                     return
-                except Exception:
-                    pass  # Image not found — proceed with build
+                except docker_lib.errors.ImageNotFound:
+                    append_log(
+                        self.deployment,
+                        f"  Cache miss — image {self.image_name} not found locally, building...\n"
+                    )
+                except Exception as cache_err:
+                    append_log(
+                        self.deployment,
+                        f"  Cache check error ({type(cache_err).__name__}), proceeding with build: {cache_err}\n"
+                    )
 
             # Compose mode: build + start all compose services
             if self.service.deploy_mode == 'COMPOSE':
@@ -1652,17 +1683,47 @@ class PipelineManager:
                 if k.startswith(("NEXT_PUBLIC_", "VITE_", "PUBLIC_")):
                     build_args.extend(["--build-arg", f"{k}={v}"])
 
+        # Pre-flight: remove any orphaned buildkit containers that can
+        # block the Docker build (common after a previous build crash/timeout).
+        _cleanup_stuck_buildkit()
+
+        # Ensure the default builder uses the docker driver, not
+        # docker-container.  The docker driver loads the image directly
+        # without needing --load, which avoids buildkit-container issues.
+        self._ensure_docker_driver()
+
         cmd = [
             "docker", "build",
             "-t", self.image_name,
             "-f", dockerfile_path,
-            "--load",  # Ensure image is loaded into Docker (required for docker-container buildx driver)
+            "--load",
             "--cache-from", self.image_name,
             *build_args,
             context_dir
         ]
 
         self._run_subprocess(cmd, context_dir)
+
+    def _ensure_docker_driver(self):
+        """Ensure the default buildx builder uses the docker driver."""
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["docker", "buildx", "inspect"],
+                capture_output=True, text=True, timeout=15
+            )
+            if "Driver: docker" not in r.stdout and "Driver: docker" not in r.stderr:
+                # Builder is using docker-container — recreate with docker driver
+                subprocess.run(
+                    ["docker", "buildx", "rm", "default"],
+                    capture_output=True, timeout=15
+                )
+                subprocess.run(
+                    ["docker", "buildx", "create", "--name=default", "--driver=docker", "--use"],
+                    capture_output=True, timeout=15
+                )
+        except Exception:
+            pass
 
     def _patch_dockerfile_for_runtime(self, dockerfile_path: str):
         """
@@ -1838,6 +1899,17 @@ class PipelineManager:
                 append_log(self.deployment, output)
                 return
 
+            except subprocess.TimeoutExpired:
+                # Kill stuck buildkit containers before retry
+                append_log(
+                    self.deployment,
+                    "Build timed out. Cleaning up stuck BuildKit containers and retrying...\n"
+                )
+                _cleanup_stuck_buildkit()
+                if attempt >= max_attempts:
+                    raise BuildError("Build timed out after maximum retries.")
+                continue
+
             except subprocess.CalledProcessError as e:
                 full_err = redact_values(e.stdout + e.stderr, self.secret_values)
 
@@ -1858,6 +1930,10 @@ class PipelineManager:
 
     def _push_image(self):
         """Step 3: Push to Registry."""
+        # Skip push for DOCKER type: image is already in the registry
+        if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
+            return
+
         registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
         if not registry_url:
             return

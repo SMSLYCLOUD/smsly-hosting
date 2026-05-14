@@ -263,6 +263,61 @@ class AddonProvisioner:
         except Exception as e:
             logger.warning(f"Could not create/verify network: {e}")
 
+    def _get_occupied_host_ports(self) -> set[int]:
+        """Return a set of all host ports currently occupied by Docker container mappings."""
+        try:
+            # Use docker inspect on all containers to find host port bindings
+            result = subprocess.run(
+                ['docker', 'ps', '-q'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            container_ids = result.stdout.strip().split()
+            if not container_ids:
+                return set()
+
+            inspect_result = subprocess.run(
+                ['docker', 'inspect', '--format', '{{range $p, $conf := .HostConfig.PortBindings}}{{range $conf}}{{.HostPort}} {{end}}{{end}}'] + container_ids,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            occupied = set()
+            for line in inspect_result.stdout.strip().splitlines():
+                for port in line.split():
+                    if port.isdigit():
+                        occupied.add(int(port))
+            return occupied
+        except Exception as e:
+            logger.warning(f"Failed to detect occupied host ports: {e}")
+            return set()
+
+    def _get_free_host_port(self, base_port: int) -> int:
+        """Find a free port on the host for Lite Agent connectivity."""
+        occupied = self._get_occupied_host_ports()
+        
+        # Add common system ports to occupied set
+        occupied.update({22, 80, 443, 8000, 8090, 2375, 5000, 5001, 7000, 5672, 5432, 6379})
+        
+        # Start searching from a high range (50000+)
+        # Use base_port to stay somewhat consistent (e.g. 5432 -> 55432)
+        start_port = 50000 + (base_port % 10000)
+        if start_port > 64000:
+            start_port = 50000
+            
+        for port in range(start_port, 65000):
+            if port not in occupied:
+                import socket
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    try:
+                        s.bind(('0.0.0.0', port))
+                        return port
+                    except OSError:
+                        continue
+        raise RuntimeError(f"No free host ports available in range {start_port}-65000")
+
     def provision(self, addon) -> Tuple[str, str]:
         """
         Provision a database addon container.

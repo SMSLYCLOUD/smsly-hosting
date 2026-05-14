@@ -122,7 +122,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 600s
+      start_period: 30s
     networks:
     - smsly-net
     labels:

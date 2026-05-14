@@ -834,6 +834,15 @@ class LocalAdapter(BaseCloudAdapter):
                     container_id[:12], poll_count,
                 )
                 return False
+            # Still within start_period — keep waiting
+            if health == "starting":
+                logger.debug(
+                    "Container %s health still starting (poll %d), continuing...",
+                    container_id[:12], poll_count,
+                )
+                _time.sleep(poll_seconds)
+                poll_count += 1
+                continue
             # No healthcheck configured - running means ready
             if status == "running" and not health:
                 return True

@@ -144,14 +144,17 @@ class RemoteOrchestrator:
             output = ssh.run_diagnose_nodes_fix(hosting_path)
             # Match both smsly_ tokens and standard DRF tokens
             token_match = re.search(r"TOKEN:\s+([a-zA-Z0-9_]+)", output)
+            new_token = token_match.group(1) if token_match else None
+            
+            if not new_token:
+                logger.info("diagnose_nodes --fix did not produce a token; trying drf_create_token fallback for %s", self.server.host)
+                new_token = ssh.create_api_token(hosting_path)
             
             updated = False
-            if token_match:
-                new_token = token_match.group(1)
-                if self.server.api_token != new_token:
-                    self.server.api_token = new_token
-                    updated = True
-                    logger.info("Successfully retrieved API token via SSH for %s", self.server.host)
+            if new_token and self.server.api_token != new_token:
+                self.server.api_token = new_token
+                updated = True
+                logger.info("Successfully retrieved API token via SSH for %s", self.server.host)
             
             # 2. Get Gateway Secret
             new_secret = ssh.get_gateway_secret(hosting_path)
@@ -199,7 +202,8 @@ class RemoteOrchestrator:
         if auth_mode in (None, "hmac") and gateway_secret:
             timestamp = str(int(time.time()))
             body_hash = hashlib.sha256(body).hexdigest()
-            payload = f"{method}|{path}|{timestamp}|{body_hash}"
+            sign_path = path.split("?")[0] if "?" in path else path
+            payload = f"{method}|{sign_path}|{timestamp}|{body_hash}"
             signature = hmac_mod.new(
                 gateway_secret.encode(),
                 payload.encode(),
@@ -640,7 +644,7 @@ class RemoteOrchestrator:
 
     def delete_service(self, remote_service_id: str) -> bool:
         """Tell the remote server to delete the given service."""
-        path = f"/api/v1/services/{remote_service_id}/"
+        path = f"/api/v1/services/{remote_service_id}"
         
         try:
             resp = self._request("DELETE", path, timeout=20)

@@ -39,34 +39,31 @@ class SSHClient:
         if self._key:
             return self._key
 
+        # Validate the content looks like a key before trying to parse it
+        trimmed = self.key_content.strip()
+        if not trimmed.startswith("-----BEGIN "):
+            raise ValueError(
+                "Key content does not look like a valid private key "
+                "(must start with '-----BEGIN ...')"
+            )
+
         # Try various key formats
         errors = []
-        try:
-            self._key = paramiko.RSAKey.from_private_key(io.StringIO(self.key_content))
-            return self._key
-        except Exception as e:
-            errors.append(f"RSA: {e}")
+        for key_cls in (
+            paramiko.RSAKey,
+            paramiko.Ed25519Key,
+            paramiko.ECDSAKey,
+        ):
+            try:
+                self._key = key_cls.from_private_key(io.StringIO(trimmed))
+                return self._key
+            except Exception as e:
+                errors.append(f"{key_cls.__name__}: {e}")
 
-        try:
-            self._key = paramiko.Ed25519Key.from_private_key(io.StringIO(self.key_content))
-            return self._key
-        except Exception as e:
-            errors.append(f"Ed25519: {e}")
-
-        try:
-            self._key = paramiko.ECDSAKey.from_private_key(io.StringIO(self.key_content))
-            return self._key
-        except Exception as e:
-            errors.append(f"ECDSA: {e}")
-
-        # Finally try generic PKey (might handle others)
-        try:
-            self._key = paramiko.PKey.from_private_key(io.StringIO(self.key_content))
-            return self._key
-        except Exception as e:
-            errors.append(f"Generic: {e}")
-
-        raise ValueError(f"Could not load private key. Errors: {'; '.join(errors)}")
+        raise ValueError(
+            f"Could not load private key (tried {len(errors)} formats). "
+            f"Errors: {'; '.join(errors)}"
+        )
 
     def connect(self):
         if self.client:
@@ -93,9 +90,23 @@ class SSHClient:
             'compress': True,
         }
 
-        if self.key_content:
-            key = self._load_key()
-            connect_kwargs['pkey'] = key
+        if self.key_content and self.key_content.strip():
+            try:
+                key = self._load_key()
+                connect_kwargs['pkey'] = key
+            except (ValueError, TypeError) as e:
+                logger.warning(
+                    "SSH key content is present but invalid (%s); "
+                    "falling back to password auth if available.",
+                    e,
+                )
+                if self.password:
+                    connect_kwargs.pop('pkey', None)
+                    connect_kwargs['password'] = self.password
+                else:
+                    raise ValueError(
+                        "SSH key is invalid and no password fallback available."
+                    ) from e
         elif self.password:
             connect_kwargs['password'] = self.password
         else:
@@ -259,6 +270,31 @@ class SSHClient:
         cmd = f"cd {quoted_path} && (docker compose exec -T backend python manage.py diagnose_nodes --fix || docker-compose exec -T backend python manage.py diagnose_nodes --fix)"
         out, err, code = self.exec_command(cmd)
         return out + err
+
+    def create_api_token(self, hosting_path):
+        """Create an API token via drf_create_token and return it."""
+        quoted_path = shlex.quote(hosting_path)
+        cmd = (
+            f"cd {quoted_path} && "
+            f"(docker compose exec -T backend python manage.py drf_create_token admin "
+            f"|| docker-compose exec -T backend python manage.py drf_create_token admin) 2>/dev/null"
+        )
+        try:
+            out, err, code = self.exec_command(cmd, raise_on_error=False)
+            raw = (out or "") + (err or "")
+            # drf_create_token output lines contain "Key: <token>"
+            for line in raw.splitlines():
+                line = line.strip()
+                if "Key:" in line:
+                    token = line.split("Key:")[-1].strip()
+                    if token:
+                        return token
+                # Also match bare 40-char alphanumeric token lines
+                if len(line) == 40 and line.isalnum():
+                    return line
+        except Exception:
+            pass
+        return None
 
     def get_gateway_secret(self, hosting_path):
         """Extract the GATEWAY_SECRET from the remote .env file."""

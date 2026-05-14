@@ -76,9 +76,20 @@ class EnvironmentIntelligenceService:
                             suggestions[k] = v
 
             # Post-process suggestions
+            # Config/integer vars that should NEVER get token_hex even if they
+            # match secret keyword patterns (e.g. AI_MAX_TOKENS, SD_x_TTL_DAYS).
+            _CONFIG_PATTERNS = {
+                "TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
+                "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN",
+                "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
+            }
             final_env = {}
             for var, val in suggestions.items():
                 var_upper = var.upper()
+                # Skip config vars — they should keep AI values or sensible defaults
+                if any(p in var_upper for p in _CONFIG_PATTERNS):
+                    final_env[var] = str(val)
+                    continue
                 # Expanded secret detection list: includes SALT, HEADER_VALUE, and specific POLICY tokens
                 is_secret = val == "GENERATE" or any(k in var_upper for k in [
                     "SECRET", "KEY", "TOKEN", "PASSWORD", "HASH", "SALT", 
@@ -106,11 +117,18 @@ class EnvironmentIntelligenceService:
 
         except Exception as e:
             logger.error("AI Senate failed to resolve environment for %s: %s", service_name, e)
+            _CONFIG_PATTERNS_FB = {
+                "TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES",
+                "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN",
+                "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES", "SIZE",
+            }
             fallback = {}
             import base64
             for var in env_context:
                 var_upper = var.upper()
-                if any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
+                if any(p in var_upper for p in _CONFIG_PATTERNS_FB):
+                    fallback[var] = "8000"
+                elif any(k in var_upper for k in ["SECRET", "KEY", "TOKEN", "PASSWORD", "SALT"]):
                     if "ENCRYPTION_KEY" in var_upper:
                         fallback[var] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8')
                     else:
@@ -164,9 +182,12 @@ class EnvironmentIntelligenceService:
                 name = svc.get('name')
                 if name in all_suggestions:
                     suggestions = all_suggestions[name]
+                    _CONFIG_ECO = {"TTL", "TIMEOUT", "SECONDS", "DAYS", "HOURS", "MINUTES", "MAX_", "MIN_", "LIMIT", "PORT", "COUNT", "COOLDOWN", "CACHE_TTL", "ROTATION_", "INTERVAL", "RETRIES"}
                     final_env = {}
                     for var, val in suggestions.items():
-                        if val == "GENERATE" or any(k in var.upper() for k in ["SECRET", "KEY", "TOKEN"]):
+                        if any(p in var.upper() for p in _CONFIG_ECO):
+                            final_env[var] = str(val)
+                        elif val == "GENERATE" or any(k in var.upper() for k in ["SECRET", "KEY", "TOKEN"]):
                             final_env[var] = secrets.token_hex(32)
                         else:
                             final_env[var] = str(val)

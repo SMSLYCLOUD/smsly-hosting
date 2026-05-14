@@ -1081,9 +1081,20 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         from apps.deployments.models import PlatformConfig
         config = PlatformConfig.load()
         
-        # Loop Prevention: If this is already a delegated deployment, handle it locally.
+        # Remote delegation: if this deployment was triggered by a remote
+        # master (source_node is set), the current node should build the
+        # image and then deploy to the remote via the orchestrator.
         is_delegated = deployment.source_node is not None
-        is_local = is_delegated or (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
+        if is_delegated:
+            from apps.deployments.models_core import ManagedServer
+            # The source_node holds the IP of the node that sent the deploy
+            # request.  Deploy back to that node via the orchestrator.
+            target = ManagedServer.objects.filter(host=deployment.source_node).first()
+            if target:
+                _handle_remote_deployment(deployment, target, skip_review=skip_review)
+                return
+
+        is_local = (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
 
         if not is_local:
             if deployment.remote_deployment_id:
@@ -1794,6 +1805,15 @@ def _wait_for_local_container_healthy(
                 f"[HEALTH-CHECK] Container unhealthy ({last_state}).\n",
             )
             return False
+
+        # Still within Docker health check start_period — keep polling
+        if health == "starting":
+            append_log(
+                deployment,
+                f"[HEALTH-CHECK] Health check still in start_period ({last_state}).\n",
+            )
+            time.sleep(poll_seconds)
+            continue
 
         # No Docker healthcheck configured; consider running container ready.
         if status == "running" and not health:

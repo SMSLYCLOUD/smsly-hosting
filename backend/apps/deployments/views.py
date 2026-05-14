@@ -794,12 +794,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'No active cloud provider configured'},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # For DOCKER type services triggered from a remote master, don't set
+        # source_node — there's no build step to delegate.  The image already
+        # exists in the registry, so the worker just pulls it and runs locally.
+        is_docker_delegated = source_node and service.deploy_type == 'DOCKER'
         deployment = Deployment.objects.create(
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
             commit_message=f"Manual Trigger: {ref}" if not source_node else f"Remote Deploy: {ref}",
-            source_node=source_node
+            source_node=None if is_docker_delegated else source_node
         )
 
         try:

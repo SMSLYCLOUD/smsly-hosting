@@ -46,6 +46,28 @@ def prune_buildkit_cache():
         logger.error("Failed to prune BuildKit cache: %s", e)
 
 
+def cleanup_stuck_buildkit():
+    """Remove stuck buildx BuildKit containers that block all Docker builds."""
+    logger.warning("Checking for stuck BuildKit containers...")
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", "name=buildx_buildkit",
+             "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=30
+        )
+        for name in result.stdout.strip().splitlines():
+            name = name.strip()
+            if not name:
+                continue
+            logger.warning("Removing stuck BuildKit container: %s", name)
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True, text=True, timeout=30
+            )
+    except Exception as e:
+        logger.error("Failed to cleanup stuck BuildKit containers: %s", e)
+
+
 def _before_retry(retry_state):
     """Called before each retry — prune cache if it was a BuildKit error."""
     exc = retry_state.outcome.exception()
