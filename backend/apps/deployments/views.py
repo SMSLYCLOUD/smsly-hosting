@@ -1189,14 +1189,21 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     results['remotes'].append(remote_result)
                     continue
 
-                # F2: enforce HTTPS for secret transit
-                if not server.api_url.startswith('https://'):
+                # F2: enforce HTTPS for secret transit unless it's a private IP
+                # (private VPS/VPN, no public CA available).
+                parsed_url = urlparse(server.api_url)
+                api_hostname = parsed_url.hostname or ''
+                try:
+                    is_private_ip = ipaddress.ip_address(api_hostname).is_private
+                except ValueError:
+                    is_private_ip = False
+                if not server.api_url.startswith('https://') and not is_private_ip:
                     remote_result['status'] = 'error'
                     remote_result['reason'] = 'Remote server API URL must use HTTPS'
                     results['remotes'].append(remote_result)
                     continue
 
-                # F1: SSRF protection — block private/reserved IPs
+                # Loopback check — block requests back to ourselves
                 parsed_url = urlparse(server.api_url)
                 hostname = parsed_url.hostname or ''
                 if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
@@ -1204,15 +1211,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     remote_result['reason'] = 'Loopback addresses are not allowed'
                     results['remotes'].append(remote_result)
                     continue
-                try:
-                    ip = ipaddress.ip_address(hostname)
-                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                        remote_result['status'] = 'error'
-                        remote_result['reason'] = 'Private/reserved IP addresses are not allowed'
-                        results['remotes'].append(remote_result)
-                        continue
-                except ValueError:
-                    pass  # Hostname (not raw IP) — allow
 
                 base_url = server.api_url.rstrip('/')
                 token = str(server.api_token or '').strip()
