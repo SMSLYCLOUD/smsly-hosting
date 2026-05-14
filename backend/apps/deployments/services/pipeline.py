@@ -1947,11 +1947,20 @@ class PipelineManager:
             remote_tag = NixpacksBuilder.push_image(self.image_name, registry_url)
             self.image_name = remote_tag
 
-            update_stage(
-                self.deployment, 'Push', 'success',
-                (timezone.now() - start_time).total_seconds()
-            )
-            append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
+            # If push_image returned the original name (registry unreachable),
+            # log a warning but don't fail — the deploy will use the local image.
+            registry_prefix = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+            pushed_to_registry = bool(registry_prefix and remote_tag.startswith(registry_prefix))
+
+            if pushed_to_registry:
+                update_stage(self.deployment, 'Push', 'success')
+                append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
+            else:
+                update_stage(self.deployment, 'Push', 'success')
+                append_log(
+                    self.deployment,
+                    f"⚠ Registry unreachable; using local image: {remote_tag}\n",
+                )
 
         except Exception as e:
             update_stage(self.deployment, 'Push', 'failed')
