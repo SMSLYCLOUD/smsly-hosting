@@ -1083,8 +1083,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
         results = {'local': None, 'remotes': []}
 
         # ── 1. Local deploy ─────────────────────────────────────
-        if include_local and ServerGuard.is_control_plane(getattr(service, 'server', None)):
-            local_guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
+        # If the service is assigned to a remote server, the "local" deploy
+        # would just get re-delegated back to that server (or conflict with
+        # the remote deploy below).  Skip it and let the remote-only flow
+        # handle the deployment.
+        svc_server = getattr(service, 'server', None)
+        svc_on_remote = svc_server and not svc_server.is_primary and svc_server.host != getattr(p_config, 'server_ip', '')
+
+        if include_local and svc_on_remote:
+            results['local'] = {
+                'status': 'skipped',
+                'reason': f'Service is assigned to {svc_server.name}; deploying via remote only',
+            }
+        elif include_local and ServerGuard.is_control_plane(svc_server):
+            local_guard = ServerGuard.check_user_workload_allowed(svc_server)
             results['local'] = {
                 'status': 'error',
                 'reason': local_guard['error']['message'],
