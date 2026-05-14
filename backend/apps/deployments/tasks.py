@@ -1779,26 +1779,26 @@ def _local_route_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
             "LOCAL_ROUTE_READY_TIMEOUT_LOW_RESOURCE_SECONDS",
-            45,
+            120,
             minimum=10,
         )
-    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 30, minimum=10)
+    return _env_int("LOCAL_ROUTE_READY_TIMEOUT_SECONDS", 60, minimum=10)
 
 
 def _local_container_timeout_seconds(service: Service) -> int:
     if _is_low_resource_service(service):
         return _env_int(
             "LOCAL_CONTAINER_HEALTH_TIMEOUT_LOW_RESOURCE_SECONDS",
-            420,
-            minimum=30,
+            600,
+            minimum=60,
         )
-    return _env_int("LOCAL_CONTAINER_HEALTH_TIMEOUT_SECONDS", 240, minimum=30)
+    return _env_int("LOCAL_CONTAINER_HEALTH_TIMEOUT_SECONDS", 480, minimum=60)
 
 
 def _wait_for_local_container_healthy(
     deployment,
     container_id: str,
-    timeout_seconds: int = 180,
+    timeout_seconds: int = 480,
     poll_seconds: int = 5,
 ) -> bool:
     """
