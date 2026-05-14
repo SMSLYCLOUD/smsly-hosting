@@ -339,7 +339,7 @@ def _get_wildcard_known_hosts(wildcard_domain: str) -> list[str]:
             return []
 
         suffix = f".{wildcard_domain}"
-        for service in Service.objects.all().only("id", "public_domain", "custom_domains", "public_domain_hidden"):
+        for service in Service.objects.filter(server__isnull=True).only("id", "public_domain", "custom_domains", "public_domain_hidden"):
             public_domain = ""
             if getattr(service, "public_domain_hidden", False):
                 public_domain = ""
