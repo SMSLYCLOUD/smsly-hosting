@@ -1672,10 +1672,12 @@ sync_active_caddyfile_to_shared() {
     mkdir -p "$shared_dir" 2>/dev/null || true
     install -m 0664 "$source" "$shared_file" 2>/dev/null || cp "$source" "$shared_file" 2>/dev/null || true
     if id smsly >/dev/null 2>&1; then
-        chown smsly:smsly "$shared_file" 2>/dev/null || true
+        chown -R smsly:smsly "$shared_dir" 2>/dev/null || true
     else
-        chown 1000:1000 "$shared_file" 2>/dev/null || true
+        chown -R 1000:1000 "$shared_dir" 2>/dev/null || true
     fi
+    chmod -R u+rwX,g+rwX,o+rX "$shared_dir" 2>/dev/null || true
+    find "$shared_dir" -type d -exec chmod 2775 {} + 2>/dev/null || true
 
     # Signal the container watcher to reload, and also reload directly.
     touch "$shared_dir/.reload" 2>/dev/null || true
@@ -4865,7 +4867,7 @@ if ! is_checkpoint_done "caddy_configured" || [ "$REFRESH_MODE" = "true" ] || [ 
     # required so the container can write runtime state (tls certs, reload flag).
     mkdir -p /opt/smsly-hosting/caddy-config
     chown 1000:1000 /opt/smsly-hosting/caddy-config
-    chmod 775 /opt/smsly-hosting/caddy-config
+    chmod 2775 /opt/smsly-hosting/caddy-config
 
     # SEED: Create a temporary safety Caddyfile so the container doesn't crash on first start.
     # The backend will overwrite this within seconds of starting up.
