@@ -117,6 +117,10 @@ class NixpacksBuilder:
     def push_image(image_name: str, registry_url: str) -> str:
         """
         Tags and pushes the image to the internal or external registry.
+
+        If the registry is unreachable (e.g. the node has no registry service),
+        logs a warning and returns the original local image name so the
+        deploy phase can fall back to the local image.
         """
         from apps.cloud.docker_client import get_docker_client
         client = get_docker_client()
@@ -129,12 +133,18 @@ class NixpacksBuilder:
             image.tag(full_tag)
 
             logger.info(f"Pushing image to {full_tag}...")
-            client.images.push(full_tag)
+            push_result = client.images.push(full_tag)
+            # push() returns a generator/stream — consume it to detect errors
+            if push_result is not None:
+                for line in push_result if hasattr(push_result, '__iter__') else [push_result]:
+                    if '"error"' in str(line):
+                        logger.error(f"Registry push failed: {line}")
+                        return image_name  # fallback to local
 
             return full_tag
         except Exception as e:
-            logger.error(f"Failed to push image: {e}")
-            raise
+            logger.warning(f"Registry push failed ({e}); keeping local image name.")
+            return image_name  # fallback to local
 
     @staticmethod
     def scan_image(image_name: str) -> Dict[str, Any]:
