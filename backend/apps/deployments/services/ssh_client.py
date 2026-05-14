@@ -4,6 +4,7 @@ import socket
 import logging
 import io
 import os
+import re
 import shlex
 import warnings
 
@@ -274,26 +275,45 @@ class SSHClient:
     def create_api_token(self, hosting_path):
         """Create an API token via drf_create_token and return it."""
         quoted_path = shlex.quote(hosting_path)
-        cmd = (
-            f"cd {quoted_path} && "
-            f"(docker compose exec -T backend python manage.py drf_create_token admin "
-            f"|| docker-compose exec -T backend python manage.py drf_create_token admin) 2>/dev/null"
-        )
+
+        # Strategy 1: use DRF's drf_create_token command
+        cmds = [
+            f"cd {quoted_path}",
+            f"docker compose exec -T backend python manage.py drf_create_token admin 2>&1",
+        ]
+        cmd = " && ".join(cmds)
         try:
             out, err, code = self.exec_command(cmd, raise_on_error=False)
             raw = (out or "") + (err or "")
-            # drf_create_token output lines contain "Key: <token>"
             for line in raw.splitlines():
                 line = line.strip()
                 if "Key:" in line:
                     token = line.split("Key:")[-1].strip()
                     if token:
                         return token
-                # Also match bare 40-char alphanumeric token lines
                 if len(line) == 40 and line.isalnum():
                     return line
-        except Exception:
-            pass
+
+            # Strategy 2: create token directly via Django ORM shell
+            logger.info("drf_create_token failed, trying Django ORM fallback")
+            shell_cmd = (
+                f"cd {quoted_path} && "
+                f"docker compose exec -T backend python manage.py shell -c "
+                f"'from rest_framework.authtoken.models import Token; "
+                f"from django.contrib.auth import get_user_model; "
+                f"User = get_user_model(); "
+                f"u = User.objects.filter(is_superuser=True).first(); "
+                f"if not u: u = User.objects.create_superuser(username=\"admin\", email=\"admin@example.com\", password=None); "
+                f"tok, _ = Token.objects.get_or_create(user=u); "
+                f"print(\"TOKEN: \" + tok.key)' 2>&1"
+            )
+            out2, err2, code2 = self.exec_command(shell_cmd, raise_on_error=False)
+            raw2 = (out2 or "") + (err2 or "")
+            m = re.search(r"TOKEN:\s+(\w+)", raw2)
+            if m:
+                return m.group(1)
+        except Exception as exc:
+            logger.warning("create_api_token failed: %s", exc)
         return None
 
     def get_gateway_secret(self, hosting_path):

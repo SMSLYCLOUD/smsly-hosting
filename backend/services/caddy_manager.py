@@ -513,10 +513,14 @@ def generate_caddyfile(config) -> str:
             wildcard_remote_hosts = _get_wildcard_remote_host_map(domain)
             wildcard_lines = [
                 f"*.{domain} {{",
-                "    tls {",
-                f"        dns cloudflare {cloudflare_token}",
-                "    }",
             ]
+            # Require a valid Cloudflare token for DNS-01 (wildcard certs
+            # can't use HTTP-01).  Without a token, skip the tls block so
+            # Caddy doesn't error with "missing API token".
+            if cloudflare_token:
+                wildcard_lines.append("    tls {")
+                wildcard_lines.append(f"        dns cloudflare {cloudflare_token}")
+                wildcard_lines.append("    }")
 
             for index, (upstream_url, hosts) in enumerate(sorted(wildcard_remote_hosts.items())):
                 if not hosts:
@@ -542,7 +546,7 @@ def generate_caddyfile(config) -> str:
                     [
                         f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
                         "    handle @known_hosts {",
-                        "        reverse_proxy nginx:80",
+                        "        reverse_proxy traefik:80",
                         "    }",
                     ]
                 )
