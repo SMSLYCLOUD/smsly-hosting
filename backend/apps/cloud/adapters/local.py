@@ -468,16 +468,13 @@ class LocalAdapter(BaseCloudAdapter):
             stage_before_cutover,
         )
 
-        health_timeout_default = 360 if low_resource_profile else 240
+        health_timeout_default = 600 if low_resource_profile else 480
         health_timeout = _env_int(
             'BLUE_GREEN_HEALTH_TIMEOUT',
             health_timeout_default,
             minimum=30,
         )
-        # FIX: the health-wait timeout must be longer than Docker's
-        # start_period, otherwise we'time out while the engine is still
-        # waiting to run the first health check.
-        health_timeout = max(health_timeout, start_period_seconds + 60)
+        health_timeout = max(health_timeout, start_period_seconds + 120)
         new_healthy = self._wait_container_healthy(
             new_container.id, timeout_seconds=health_timeout
         )
@@ -678,9 +675,15 @@ class LocalAdapter(BaseCloudAdapter):
         promoted = None
         promote_health_timeout = _env_int(
             "BLUE_GREEN_PROMOTE_HEALTH_TIMEOUT_SECONDS",
-            90,
-            minimum=20,
+            300,
+            minimum=30,
         )
+        green_start_period = _env_int(
+            "DOCKER_HEALTHCHECK_START_PERIOD_SECONDS",
+            120,
+            minimum=1,
+        )
+        promote_health_timeout = max(promote_health_timeout, green_start_period + 120)
         try:
             networking_config = self.docker_client.api.create_networking_config({
                 network_name: self.docker_client.api.create_endpoint_config(
