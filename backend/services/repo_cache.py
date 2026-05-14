@@ -136,8 +136,11 @@ def _detect_bare_default_branch(bare_dir: Path) -> str:
 
 def _clone_worktree(bare_dir: Path, branch: str, worktree_dir: Path):
     """Clone a shallow worktree from bare cache."""
+    # Use --no-hardlinks instead of --local to avoid "invalid cross-device
+    # link" errors when the bare cache and worktree are on different Docker
+    # mount points (tmpfs, volumes, bind mounts etc.).
     subprocess.run(
-        ['git', 'clone', '--local', '--branch', branch,
+        ['git', 'clone', '--no-hardlinks', '--branch', branch,
          '--single-branch', '--depth', '1',
          str(bare_dir), str(worktree_dir)],
         check=True,
