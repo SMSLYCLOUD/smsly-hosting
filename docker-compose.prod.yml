@@ -99,7 +99,7 @@ services:
       CONTAINER_REGISTRY_URL: registry:5000
       DOCKER_HOST: tcp://socket-proxy:2375
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: "True"
-      SMSLY_BUILDS_DIR: /app/builds
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
     depends_on:
       pgcat:
         condition: service_healthy
@@ -117,6 +117,7 @@ services:
     - ./.env:/app/.env:rw
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
@@ -145,6 +146,7 @@ services:
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
     depends_on:
       pgcat:
         condition: service_healthy
@@ -162,6 +164,7 @@ services:
     - ./install.sh:/app/install.sh:ro
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
     healthcheck:
       test:
@@ -245,6 +248,7 @@ services:
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
     depends_on:
       pgcat:
         condition: service_healthy
@@ -262,6 +266,7 @@ services:
     - ./install.sh:/app/install.sh:ro
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
     healthcheck:
       test:
@@ -286,7 +291,7 @@ services:
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
-      SMSLY_BUILDS_DIR: /app/builds
+      SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
     depends_on:
       pgcat:
         condition: service_healthy
@@ -304,6 +309,7 @@ services:
     - ./install.sh:/app/install.sh:ro
     - ./:/platform-src:ro
     - /opt/smsly-cache:/opt/smsly-cache
+    - /opt/smsly-hosting/builds:/opt/smsly-hosting/builds
     - backups_data:/app/backups
     healthcheck:
       test:
