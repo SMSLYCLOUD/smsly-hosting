@@ -624,26 +624,16 @@ def generate_caddyfile(config) -> str:
                             os.chmod(_f, 0o644)
                     except OSError:
                         pass
-        if os.path.exists(_crt_path) and os.path.exists(_key_path):
-            # Only add :443 catch-all when NOT using domain+SSL.
-            # When domain+SSL is active, the domain block handles HTTPS via
-            # Let's Encrypt. Adding a :443 block with explicit tls cert
-            # would intercept ALL port 443 traffic and serve the self-signed
-            # cert instead of the domain's LE cert.
-            _skip = use_ssl and domain and not _is_ip(domain)
-            if not _skip:
-                sections.append(
-                    f""":443 {{
+        if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
+            # Use IP-specific HTTPS block so it doesn't intercept domain HTTPS.
+            # Caddy routes by SNI: domain requests go to domain blocks (LE certs),
+            # IP requests go to this block (self-signed cert + redirect to HTTP).
+            sections.append(
+                f"""https://{_server_ip} {{
     tls {_caddy_crt} {_caddy_key}
-    @ip header_regexp Host ^([0-9]{{1,3}}[.]){{3}}[0-9]{{1,3}}$
-    handle @ip {{
-        redir http://{{host}}{{uri}} 308
-    }}
-    handle {{
-        redir https://{{host}}{{uri}} 308
-    }}
+    redir http://{_server_ip}{{uri}} 308
 }}"""
-                )
+            )
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 
