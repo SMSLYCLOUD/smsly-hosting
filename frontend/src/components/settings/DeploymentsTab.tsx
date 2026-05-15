@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { servicesApi, Deployment } from '@/lib/api';
+import { servicesApi, serversApi, Deployment, ManagedServer } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle } from 'lucide-react';
+import { GitCommit, RotateCcw, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, Rocket, Brain, Timer, Ban, Eye, CheckCheck, Trash2, ArrowUpCircle, Server } from 'lucide-react';
 import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
@@ -22,6 +22,8 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [bulkCancelling, setBulkCancelling] = useState(false);
     const [promotingId, setPromotingId] = useState<string | null>(null);
+    const [servers, setServers] = useState<ManagedServer[]>([]);
+    const [targetServerId, setTargetServerId] = useState<string | null>(null);
 
     const loadDeployments = useCallback(async () => {
         try {
@@ -40,10 +42,24 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
         return () => clearInterval(interval);
     }, [loadDeployments]);
 
+    useEffect(() => {
+        const fetchServers = async () => {
+            try {
+                const data = await serversApi.list();
+                setServers(data);
+                if (data.length > 0) {
+                    const primary = data.find((s: ManagedServer) => s.is_primary);
+                    setTargetServerId(primary?.id || data[0].id);
+                }
+            } catch (err) { console.error(err); }
+        };
+        fetchServers();
+    }, []);
+
     const handleRedeploy = async () => {
         try {
             setRedeploying(true);
-            const deployResult = await servicesApi.deploy(serviceId);
+            const deployResult = await servicesApi.deploy(serviceId, 'HEAD', targetServerId);
             if (deployResult?.existing_deployment) {
                 const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
                 toast({
@@ -244,15 +260,28 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                         <Button variant="outline" size="sm" onClick={loadDeployments}>
                             Refresh
                         </Button>
-                        <Button
-                            size="sm"
-                            onClick={handleRedeploy}
-                            disabled={redeploying}
-                            className="gap-2"
-                        >
-                            {redeploying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-                            {redeploying ? 'Deploying...' : 'Redeploy'}
-                        </Button>
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={targetServerId || ''}
+                                onChange={(e) => setTargetServerId(e.target.value || null)}
+                                className="bg-card border border-border rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                            >
+                                {servers.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                        {s.name}{s.is_primary ? ' (Master)' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <Button
+                                size="sm"
+                                onClick={handleRedeploy}
+                                disabled={redeploying}
+                                className="gap-2"
+                            >
+                                {redeploying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                                {redeploying ? 'Deploying...' : 'Redeploy'}
+                            </Button>
+                        </div>
                     </div>
                 </div>
 

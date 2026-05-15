@@ -775,15 +775,33 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         Manually trigger deployment for a service.
         POST /api/v1/services/{id}/deploy/
-        Body: { "ref": "commit_hash", "image_name": "registry:5000/..." } (Optional)
+        Body: {
+            "ref": "commit_hash",
+            "image_name": "registry:5000/...",
+            "target_server_id": "uuid-or-null"
+        }
+        When target_server_id is null/omitted, deploy to the master/local node.
+        When target_server_id is a server UUID, deploy to that specific node.
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
         skip_review = _parse_bool(request.data.get('skip_review', False))
         source_node = request.data.get('source_node')
         image_name = request.data.get('image_name', '').strip()
+        target_server_id = request.data.get('target_server_id')
 
-        server = getattr(service, 'server', None)
+        # Resolve target server if explicitly specified
+        target_server = None
+        if target_server_id is not None:
+            from apps.deployments.models_core import ManagedServer
+            target_server = ManagedServer.objects.filter(id=target_server_id).first()
+            if not target_server:
+                return Response(
+                    {'error': f'Server {target_server_id} not found'},
+                    status=status.HTTP_400_BAD_REQUEST)
+
+        # Use explicit target server, or fall back to service's assigned server
+        server = target_server or getattr(service, 'server', None)
         guard = ServerGuard.check_user_workload_allowed(server)
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
@@ -815,6 +833,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             service.docker_image = image_name
             service.save(update_fields=["docker_image"])
 
+        # Temporarily override service.server if user selected a different target
+        original_server = service.server
+        if target_server_id is not None and service.server_id != target_server_id:
+            service.server = target_server
+            service.save(update_fields=["server"])
+
         deployment = Deployment.objects.create(
             service=service,
             status=Deployment.Status.QUEUED,
@@ -844,6 +868,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
             deployment.save(
                 update_fields=['status', 'finished_at', 'build_logs', 'updated_at']
             )
+            # Restore original server if we changed it
+            if target_server_id is not None and original_server:
+                service.server = original_server
+                service.save(update_fields=["server"])
             return Response(
                 {
                     'error': 'Failed to queue deployment task. Check Celery/Redis health.',
