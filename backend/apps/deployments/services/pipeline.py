@@ -364,16 +364,27 @@ class PipelineManager:
                 parsed = parse_url(self.service.repository_url or "")
                 if (parsed.scheme in ("http", "https") and
                         (parsed.hostname or "").lower().endswith("github.com")):
-                    repo_token = get_github_oauth_token_for_user(
-                        getattr(self.service, "owner", None)
-                    )
+                    service_owner = getattr(self.service, "owner", None)
+                    repo_token = get_github_oauth_token_for_user(service_owner)
                     if repo_token:
                         append_log(
                             self.deployment,
                             "Using linked GitHub account for private repo access...\n"
                         )
-            except Exception: # pylint: disable=broad-exception-caught
-                pass
+                    else:
+                        logger.warning(
+                            "No GitHub OAuth token found for service owner %s (service: %s). "
+                            "User may need to reconnect GitHub account.",
+                            service_owner.id if service_owner else "None",
+                            self.service.id
+                        )
+                        append_log(
+                            self.deployment,
+                            "⚠ No GitHub token available. If this is a private repo, "
+                            "please reconnect your GitHub account in Settings.\n"
+                        )
+            except Exception as exc:
+                logger.warning("Error retrieving GitHub token: %s", exc)
 
             self._clone_with_github_token(
                 self.service.repository_url,

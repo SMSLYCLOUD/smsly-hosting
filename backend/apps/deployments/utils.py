@@ -209,6 +209,7 @@ def redact_values(text: str, values: list[str]) -> str:
 def get_github_oauth_token_for_user(user):
     """
     Return the linked GitHub OAuth token for the given user (if connected).
+    Automatically refreshes expired tokens using the stored refresh token.
     """
     if not user:
         return None
@@ -231,7 +232,59 @@ def get_github_oauth_token_for_user(user):
         .order_by("-id")
         .first()
     )
-    return getattr(token, "token", None) or None
+    if not token:
+        return None
+
+    access_token = getattr(token, "token", None)
+    if not access_token:
+        return None
+
+    # Check if token is expired and attempt refresh
+    try:
+        from django.utils import timezone
+        expires_at = getattr(token, "expires_at", None)
+        if expires_at and expires_at <= timezone.now():
+            # Token expired - try to refresh
+            refresh_token = getattr(token, "token_secret", None)
+            if refresh_token:
+                try:
+                    from allauth.socialaccount.models import SocialApp
+                    import requests as http_requests
+                    from datetime import timedelta
+
+                    app = SocialApp.objects.filter(provider="github").first()
+                    if app:
+                        resp = http_requests.post(
+                            "https://github.com/login/oauth/access_token",
+                            headers={"Accept": "application/json"},
+                            data={
+                                "client_id": app.client_id,
+                                "client_secret": app.secret,
+                                "grant_type": "refresh_token",
+                                "refresh_token": refresh_token,
+                            },
+                            timeout=10,
+                        )
+                        data = resp.json()
+                        if "access_token" in data:
+                            token.token = data["access_token"]
+                            if data.get("refresh_token"):
+                                token.token_secret = data["refresh_token"]
+                            expires_in = data.get("expires_in", 28800)
+                            token.expires_at = timezone.now() + timedelta(seconds=int(expires_in))
+                            token.save()
+                            access_token = token.token
+                            logger.info("GitHub OAuth token refreshed for user %s", user)
+                        else:
+                            logger.warning("GitHub token refresh failed: %s", data.get("error_description", data))
+                except Exception as exc:
+                    logger.warning("GitHub token refresh error: %s", exc)
+            else:
+                logger.warning("No refresh token available for user %s - reconnect required", user)
+    except Exception as exc:
+        logger.warning("Token expiry check failed: %s", exc)
+
+    return access_token or None
 
 
 def broadcast_log(deployment, log_line):
