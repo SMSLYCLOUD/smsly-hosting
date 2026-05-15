@@ -108,6 +108,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     command: postgres -c max_connections=200
+    ports:
+      - "5432:5432" # Required for Lite Agents
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smsly_hosting}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
