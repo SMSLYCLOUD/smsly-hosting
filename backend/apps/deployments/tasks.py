@@ -1778,6 +1778,43 @@ def _is_traefik_not_ready(response: requests.Response) -> bool:
     return content_type.startswith("text/plain") and nosniff == "nosniff"
 
 
+def _route_misroute_reason(response: requests.Response) -> str:
+    """
+    Detect responses that prove a service hostname hit platform fallback.
+
+    A deployed service route is not ready if it returns the control-plane
+    frontend or the route-fallback page, even if the HTTP status is otherwise
+    successful.
+    """
+    control_plane = str(response.headers.get("X-SMSLY-Control-Plane", "")).strip().lower()
+    if control_plane in {"1", "true", "yes"}:
+        return "service hostname reached the control-plane proxy"
+
+    route_fallback = str(response.headers.get("X-SMSLY-Route-Fallback", "")).strip().lower()
+    if route_fallback in {"1", "true", "yes"}:
+        return "service hostname reached the route fallback page"
+
+    body = (response.text or "")[:12000].lower()
+    fallback_markers = (
+        "cloudneuron routing",
+        "service is waking up",
+        "automatically reconnect traffic",
+    )
+    if any(marker in body for marker in fallback_markers):
+        return "service hostname rendered the route fallback page"
+
+    platform_markers = (
+        "the sovereign paas",
+        "deployment previews",
+        "global edge routing",
+        "connect your own vps",
+    )
+    if sum(1 for marker in platform_markers if marker in body) >= 2:
+        return "service hostname rendered the platform homepage"
+
+    return ""
+
+
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
     try:
         value = int(os.environ.get(name, default))
@@ -1947,10 +1984,12 @@ def _wait_for_local_route_ready(
     if not host:
         return True
 
-    # Probe through both internal ingress and the actual public hostname.
+    # Probe through the public edge first, then the raw Traefik ingress. The
+    # direct Traefik probe is useful during DNS propagation, but it must not
+    # mask a Caddy/nginx misroute that serves the platform homepage.
     probe_candidates = []
 
-    def _add_probe(base_url: str, headers=None, verify=True):
+    def _add_probe(base_url: str, headers=None, verify=True, kind="direct"):
         normalized = (base_url or "").rstrip("/")
         if not normalized:
             return
@@ -1959,17 +1998,19 @@ def _wait_for_local_route_ready(
                 "base_url": normalized,
                 "headers": headers or {},
                 "verify": verify,
+                "kind": kind,
             }
         )
 
+    _add_probe(f"https://{host}", verify=True, kind="edge")
+    _add_probe(f"http://{host}", verify=True, kind="edge")
+    _add_probe("http://caddy:80", headers={"Host": host}, verify=False, kind="edge")
     configured = os.environ.get("TRAEFIK_INTERNAL_URL", "").strip()
     if configured:
         _add_probe(configured, headers={"Host": host}, verify=False)
     _add_probe("http://traefik:80", headers={"Host": host}, verify=False)
     _add_probe("http://127.0.0.1:8081", headers={"Host": host}, verify=False)
     _add_probe("http://localhost:8081", headers={"Host": host}, verify=False)
-    _add_probe(f"https://{host}", verify=True)
-    _add_probe(f"http://{host}", verify=True)
 
     # Preserve order and remove duplicates.
     probes = []
@@ -2003,6 +2044,7 @@ def _wait_for_local_route_ready(
 
     deadline = time.monotonic() + timeout_seconds if use_deadline else 0
     last_error = ""
+    edge_misroute_seen = False
     attempt = 0
     while True:
         if use_deadline and time.monotonic() > deadline:
@@ -2016,12 +2058,28 @@ def _wait_for_local_route_ready(
                     response = requests.get(
                         url,
                         headers=probe["headers"],
-                        timeout=8,
+                        timeout=(
+                            _env_int("LOCAL_ROUTE_EDGE_PROBE_TIMEOUT_SECONDS", 4, minimum=1)
+                            if probe.get("kind") == "edge"
+                            else 8
+                        ),
                         verify=probe["verify"],
                         allow_redirects=False,
                     )
                 except requests.RequestException as exc:
                     last_error = f"{url}: {exc}"
+                    continue
+
+                misroute_reason = _route_misroute_reason(response)
+                if misroute_reason:
+                    last_error = f"{url}: {misroute_reason}"
+                    if probe.get("kind") == "edge":
+                        edge_misroute_seen = True
+                    continue
+
+                if probe.get("kind") == "edge" and 300 <= response.status_code < 400:
+                    location = response.headers.get("Location", "")
+                    last_error = f"{url}: edge redirect {response.status_code} to {location or 'unknown'}"
                     continue
 
                 if response.status_code >= 500:
@@ -2031,6 +2089,13 @@ def _wait_for_local_route_ready(
                 # Traefik can briefly return default 404 while labels propagate.
                 if _is_traefik_not_ready(response):
                     last_error = f"{url}: Traefik route not ready yet"
+                    continue
+
+                if probe.get("kind") == "direct" and edge_misroute_seen:
+                    last_error = (
+                        f"{url}: direct Traefik route is active, but edge route "
+                        "is still hitting the platform fallback"
+                    )
                     continue
 
                 append_log(

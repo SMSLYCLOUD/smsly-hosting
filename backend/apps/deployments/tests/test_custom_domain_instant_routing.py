@@ -15,7 +15,11 @@ from apps.billing.models import PricingPlan, UserSubscription
 from apps.cloud.models import CloudProvider
 from apps.deployments.models import Deployment, ManagedServer, Service
 from apps.licensing.models import PlatformLicense, PlatformTier
-from services.caddy_manager import generate_caddyfile
+from services.caddy_manager import (
+    apply_caddyfile,
+    generate_caddyfile,
+    validate_service_routes_do_not_hit_control_plane,
+)
 
 
 class CaddyCustomDomainRoutingTests(TestCase):
@@ -60,9 +64,38 @@ class CaddyCustomDomainRoutingTests(TestCase):
         self.assertIn('intelliphoton.com {', caddyfile)
         self.assertIn('tls {\n        on_demand\n    }', caddyfile)
         self.assertNotIn('dns cloudflare', caddyfile)
-        self.assertIn('reverse_proxy localhost:8081 {', caddyfile)
+        self.assertIn('reverse_proxy traefik:80 {', caddyfile)
         self.assertIn(
             'header_up Host buyforfront-0398be.cloud.smsly.cloud',
+            caddyfile,
+        )
+        self.assertNotIn(
+            'intelliphoton.com {\n    tls {\n        on_demand\n    }\n    reverse_proxy nginx:80',
+            caddyfile,
+        )
+
+    def test_public_service_domain_routes_to_traefik_not_platform_nginx(self):
+        Service.objects.create(
+            name='service-domain-caddy',
+            owner=self.user,
+            provider=self.provider,
+            public_domain='service-domain.cloud.smsly.cloud',
+        )
+        config = SimpleNamespace(
+            domain='cloud.smsly.cloud',
+            use_ssl=True,
+            wildcard_subdomains=False,
+            cloudflare_api_token='',
+        )
+
+        caddyfile = generate_caddyfile(config)
+
+        self.assertIn(
+            'service-domain.cloud.smsly.cloud {\n    reverse_proxy traefik:80',
+            caddyfile,
+        )
+        self.assertNotIn(
+            'service-domain.cloud.smsly.cloud {\n    reverse_proxy nginx:80',
             caddyfile,
         )
 
@@ -76,14 +109,13 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy localhost:8090', caddyfile)
+        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy nginx:80', caddyfile)
         self.assertIn('*.cloud.smsly.cloud {', caddyfile)
-        self.assertIn(':443 {\n    tls {\n        on_demand', caddyfile)
         self.assertEqual(
-            caddyfile.count('dns cloudflare {env.CLOUDFLARE_API_TOKEN}'),
+            caddyfile.count('dns cloudflare token-123'),
             1,
         )
-        self.assertIn('reverse_proxy localhost:8090', caddyfile)
+        self.assertIn('reverse_proxy nginx:80', caddyfile)
 
     def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):
         config = SimpleNamespace(
@@ -95,8 +127,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('reverse_proxy localhost:8090', caddyfile)
-        self.assertIn(':443 {\n    tls {\n        on_demand', caddyfile)
+        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy nginx:80', caddyfile)
+        self.assertIn('handle {\n        reverse_proxy nginx:80\n    }', caddyfile)
 
     def test_ip_mode_keeps_http_catch_all_proxy(self):
         config = SimpleNamespace(
@@ -108,7 +140,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn(':80 {\n    reverse_proxy localhost:8090\n}', caddyfile)
+        self.assertIn('http://163.245.214.62 {\n    reverse_proxy nginx:80', caddyfile)
 
     def test_wildcard_routes_known_hosts_and_sends_unknown_to_notice(self):
         Service.objects.create(
@@ -127,8 +159,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('@known_hosts host known.cloud.smsly.cloud', caddyfile)
-        self.assertIn('handle @known_hosts {\n        reverse_proxy localhost:8081', caddyfile)
-        self.assertIn('reverse_proxy localhost:8090', caddyfile)
+        self.assertIn('handle @known_hosts {\n        reverse_proxy traefik:80', caddyfile)
+        self.assertIn('respond "Service Not Found" 404', caddyfile)
 
     def test_remote_service_routes_through_wireguard_mesh(self):
         server = ManagedServer.objects.create(
@@ -154,9 +186,27 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('@remote_hosts_0 host remote-api.cloud.smsly.cloud', caddyfile)
-        self.assertIn('reverse_proxy https://10.150.0.2 {', caddyfile)
+        self.assertIn('reverse_proxy http://10.150.0.2 {', caddyfile)
         self.assertIn('header_up Host {host}', caddyfile)
-        self.assertIn('tls_server_name {host}', caddyfile)
+
+    def test_apply_caddyfile_rejects_service_domain_to_control_plane(self):
+        Service.objects.create(
+            name='guarded-service',
+            owner=self.user,
+            provider=self.provider,
+            public_domain='guarded.cloud.smsly.cloud',
+        )
+        unsafe = """guarded.cloud.smsly.cloud {
+    reverse_proxy nginx:80
+}
+"""
+
+        errors = validate_service_routes_do_not_hit_control_plane(unsafe)
+        result = apply_caddyfile(unsafe)
+
+        self.assertTrue(errors)
+        self.assertFalse(result['ok'])
+        self.assertIn('Refusing to apply Caddyfile', result['message'])
 
 
 class InstantCustomDomainApiTests(APITestCase):

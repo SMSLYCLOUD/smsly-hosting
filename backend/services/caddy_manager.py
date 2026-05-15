@@ -9,6 +9,7 @@ import datetime
 import ipaddress
 import logging
 import os
+import re
 import secrets
 
 from apps.deployments.domain_utils import normalize_domain
@@ -24,6 +25,15 @@ CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear
 # Cache the last known-good token so accidental empty writes (e.g. background
 # tasks that don't load the token) do not wipe DNS-challenge capability.
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
+SERVICE_PROXY_UPSTREAM = os.environ.get("SMSLY_SERVICE_PROXY_UPSTREAM", "traefik:80")
+CONTROL_PLANE_UPSTREAMS = {
+    "nginx:80",
+    "http://nginx:80",
+    "localhost:8090",
+    "http://localhost:8090",
+    "127.0.0.1:8090",
+    "http://127.0.0.1:8090",
+}
 
 
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
@@ -141,9 +151,14 @@ def _remote_upstream_url_for_service(service) -> str:
     return f"http://{mesh_ip}"
 
 
+def _service_proxy_upstream() -> str:
+    """Return the internal edge upstream used for deployed app domains."""
+    return SERVICE_PROXY_UPSTREAM or "traefik:80"
+
+
 def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
     """Append a Caddy reverse_proxy stanza, including remote TLS transport if needed."""
-    upstream_url = upstream_url or "localhost:8081"
+    upstream_url = upstream_url or _service_proxy_upstream()
     if upstream_host:
         lines.append(f"    reverse_proxy {upstream_url} {{")
         lines.append(f"        header_up Host {upstream_host}")
@@ -170,9 +185,9 @@ def _build_service_domain_block(domain: str, upstream_host: str, upstream_url: s
     if upstream_url:
         _append_reverse_proxy(lines, upstream_url, upstream_host or domain)
     elif upstream_host and upstream_host != domain:
-        _append_reverse_proxy(lines, "nginx:80", upstream_host)
+        _append_reverse_proxy(lines, _service_proxy_upstream(), upstream_host)
     else:
-        _append_reverse_proxy(lines, "nginx:80")
+        _append_reverse_proxy(lines, _service_proxy_upstream())
 
     lines.extend(
         [
@@ -270,7 +285,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 if wildcard_domain and value.endswith(f".{wildcard_domain}"):
                     continue
                 seen.add(value)
-                target_host = public_domain or value
+                target_host = public_domain if (public_domain and not isHidden) else value
                 
                 # Custom domains use direct on-demand TLS. Do not attach the
                 # platform Cloudflare DNS challenge; customers may use any DNS
@@ -284,9 +299,9 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 if upstream_url:
                     _append_reverse_proxy(lines, upstream_url, target_host or value)
                 elif target_host and target_host != value:
-                    _append_reverse_proxy(lines, "nginx:80", target_host)
+                    _append_reverse_proxy(lines, _service_proxy_upstream(), target_host)
                 else:
-                    _append_reverse_proxy(lines, "nginx:80")
+                    _append_reverse_proxy(lines, _service_proxy_upstream())
                 lines.append("    encode gzip")
                 lines.append("}")
                 blocks.append("\n".join(lines))
@@ -309,7 +324,7 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 else:
                     blocks.append(
                         f"""{public_domain} {{
-    reverse_proxy nginx:80
+    reverse_proxy {_service_proxy_upstream()}
 }}"""
                     )
                     seen.add(public_domain)
@@ -451,6 +466,141 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
         return {}
 
     return {upstream: sorted(hosts) for upstream, hosts in remote_hosts.items()}
+
+
+def _normalize_caddy_site_label(label: str) -> str:
+    """Normalize a Caddy site label for comparison with service domains."""
+    value = str(label or "").strip().strip(",")
+    value = re.sub(r"^https?://", "", value, flags=re.IGNORECASE)
+    if value.startswith("[") and "]" in value:
+        return value
+    if ":" in value and not value.startswith(":"):
+        value = value.split(":", 1)[0]
+    return value.strip().lower().rstrip(".")
+
+
+def _known_service_route_domains() -> set[str]:
+    """Return service/addon domains that must never route to the control plane."""
+    domains: set[str] = set()
+    try:
+        from apps.deployments.models import Service
+        from apps.deployments.models_addons import Addon
+
+        if not _table_exists(Service._meta.db_table):
+            return domains
+
+        for service in Service.objects.all().only("public_domain", "custom_domains", "public_domain_hidden"):
+            if not getattr(service, "public_domain_hidden", False):
+                raw_public = str(service.public_domain or "").strip()
+                if raw_public:
+                    try:
+                        domains.add(normalize_domain(raw_public, allow_ip=True))
+                    except ValueError:
+                        logger.warning("Skipping invalid service public domain in guard: %r", raw_public)
+
+            for item in service.custom_domains or []:
+                raw_custom = item.strip() if isinstance(item, str) else ""
+                if not raw_custom:
+                    continue
+                try:
+                    domains.add(normalize_domain(raw_custom, allow_ip=True))
+                except ValueError:
+                    logger.warning("Skipping invalid service custom domain in guard: %r", raw_custom)
+
+        for addon in Addon.objects.exclude(public_domain__isnull=True).exclude(public_domain=""):
+            raw_domain = str(addon.public_domain or "").strip()
+            if not raw_domain:
+                continue
+            try:
+                domains.add(normalize_domain(raw_domain, allow_ip=True))
+            except ValueError:
+                logger.warning("Skipping invalid addon public domain in guard: %r", raw_domain)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Could not load service route domains for Caddy guard: %s", exc)
+    return domains
+
+
+def _block_reverse_proxies_to_control_plane(block: str) -> list[str]:
+    """Return control-plane reverse_proxy lines from a Caddy block."""
+    matches = []
+    for raw_line in str(block or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("reverse_proxy "):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        upstream = parts[1].strip("{").strip()
+        if upstream in CONTROL_PLANE_UPSTREAMS:
+            matches.append(line)
+    return matches
+
+
+def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
+    """
+    Fail-closed guard for Caddyfile writes.
+
+    Platform domains may proxy to nginx, but service and addon domains must
+    never do that. If they do, the deployed URL serves the PaaS homepage.
+    """
+    service_domains = _known_service_route_domains()
+    if not service_domains:
+        return []
+
+    errors = []
+    lines = str(content or "").splitlines()
+    for index, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped.endswith("{"):
+            continue
+
+        labels = [
+            _normalize_caddy_site_label(label)
+            for label in stripped[:-1].strip().split()
+            if label.strip()
+        ]
+        is_service_site = any(label in service_domains for label in labels)
+
+        block_lines = [raw_line]
+        for next_line in lines[index + 1:]:
+            next_stripped = next_line.strip()
+            if (
+                next_line == next_line.lstrip()
+                and next_stripped.endswith("{")
+                and next_stripped != "{"
+            ):
+                break
+            block_lines.append(next_line)
+        block = "\n".join(block_lines)
+
+        wildcard_service_hosts = False
+        if not is_service_site and any(label.startswith("*.") for label in labels):
+            for block_line in block_lines:
+                block_stripped = block_line.strip()
+                if not block_stripped.startswith("@") or " host " not in block_stripped:
+                    continue
+                _, _, host_list = block_stripped.partition(" host ")
+                wildcard_hosts = {
+                    _normalize_caddy_site_label(host)
+                    for host in host_list.split()
+                }
+                if wildcard_hosts & service_domains:
+                    wildcard_service_hosts = True
+                    break
+
+        if not is_service_site and not wildcard_service_hosts:
+            continue
+
+        bad_lines = _block_reverse_proxies_to_control_plane(block)
+        if not bad_lines:
+            continue
+
+        route_name = ", ".join(label for label in labels if label) or f"block:{index + 1}"
+        errors.append(
+            f"{route_name} routes a service domain to the control plane: {bad_lines[0]}"
+        )
+
+    return errors
 
 
 def generate_caddyfile(config) -> str:
@@ -718,6 +868,15 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
         cloudflare_token = _load_cached_token()
 
     try:
+        route_errors = validate_service_routes_do_not_hit_control_plane(content)
+        if route_errors:
+            result["message"] = (
+                "Refusing to apply Caddyfile because service routes would hit "
+                f"the control plane: {'; '.join(route_errors[:5])}"
+            )
+            logger.error(result["message"])
+            return result
+
         os.makedirs(CADDY_CONFIG_DIR, exist_ok=True)
         # Ensure the caddy-config directory is readable by the Caddy container
         # which runs as uid 1000 (nextjs user).
