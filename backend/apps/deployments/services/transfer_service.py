@@ -893,6 +893,19 @@ if os.path.exists(services_dir):
             config.server_ip = target_ip
             config.save()
 
+        # Regenerate Caddyfile to reflect new routing after DNS cutover
+        try:
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            content = generate_caddyfile(config)
+            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+            result = apply_caddyfile(content, cloudflare_token=cf_token)
+            if result.get('ok'):
+                self._log("Caddyfile regenerated after DNS cutover.")
+            else:
+                self._log(f"Warning: Caddyfile update after DNS cutover failed: {result.get('message')}")
+        except Exception as exc:
+            self._log(f"Warning: Could not regenerate Caddyfile after DNS cutover: {exc}")
+
     def _interconnect_servers(self):
         """
         Automatically interconnect the source and target servers using the WireGuard Mesh.
@@ -1034,6 +1047,27 @@ if os.path.exists(services_dir):
             raise RuntimeError(message)
         logger.warning(message)
 
+    def _regenerate_master_caddyfile(self):
+        """Regenerate and reload the Caddyfile on the master node.
+
+        After a service is transferred to a remote node, the master's
+        Caddyfile must be updated to route traffic for that service's
+        domain to the remote node via WireGuard mesh instead of the
+        local Traefik instance.
+        """
+        try:
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+            config = PlatformConfig.load()
+            content = generate_caddyfile(config)
+            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+            result = apply_caddyfile(content, cloudflare_token=cf_token)
+            if result.get('ok'):
+                self._log("Caddyfile regenerated on master node for remote service routing.")
+            else:
+                self._log(f"Warning: Caddyfile regeneration failed: {result.get('message')}")
+        except Exception as exc:
+            self._log(f"Warning: Could not regenerate Caddyfile: {exc}")
+
     def _complete(self):
         self.transfer.status = 'COMPLETED'
         self.transfer.completed_at = timezone.now()
@@ -1041,7 +1075,6 @@ if os.path.exists(services_dir):
         self.transfer.target_ssh_key = ''
         self.transfer.target_ssh_password = ''
 
-        # Update Service record to point to the new server for grouping in Transfers page
         if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
             from ..models_core import ManagedServer
             target_server = ManagedServer.objects.filter(
@@ -1051,6 +1084,13 @@ if os.path.exists(services_dir):
             if target_server:
                 self.transfer.service.server = target_server
                 self.transfer.service.save(update_fields=['server'])
+
+                # Regenerate Caddyfile on the master node so it knows to
+                # route traffic for this service to the remote node via
+                # WireGuard mesh.  Without this, Caddy proxies to the local
+                # Traefik (nginx:80) where the service doesn't exist,
+                # causing HTTP 502 errors.
+                self._regenerate_master_caddyfile()
 
         self.transfer.save()
         self._update(100, 'Transfer complete!')
@@ -1077,6 +1117,9 @@ if os.path.exists(services_dir):
             source_server = ManagedServer.objects.filter(host=self.transfer.source_server_ip).first()
             self.transfer.service.server = source_server
             self.transfer.service.save(update_fields=['server'])
+
+            # Regenerate Caddyfile so routing points back to the source
+            self._regenerate_master_caddyfile()
 
         self.transfer.status = 'ROLLED_BACK'
         self.transfer.can_rollback = False

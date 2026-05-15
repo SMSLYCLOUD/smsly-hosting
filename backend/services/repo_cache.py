@@ -136,16 +136,15 @@ def _detect_bare_default_branch(bare_dir: Path) -> str:
 
 def _clone_worktree(bare_dir: Path, branch: str, worktree_dir: Path):
     """Clone a shallow worktree from bare cache."""
-    # Use file:// prefix + --no-hardlinks to force git to never create hard
-    # links, even for pack files. This avoids "invalid cross-device link"
-    # errors when the bare cache and worktree are on different Docker mount
-    # points (tmpfs, volumes, bind mounts etc.) where the hard link based
-    # local clone optimization cannot work across filesystem boundaries.
+    # Use --no-local to bypass git's "local clone" optimization which tries
+    # to hard-link pack files even when --no-hardlinks is set. This avoids
+    # "invalid cross-device link" errors when the bare cache and worktree
+    # are on different mount points (tmpfs, volumes, bind mounts, etc.).
     bare_path = str(bare_dir.resolve())
     subprocess.run(
-        ['git', 'clone', '--no-hardlinks', '--branch', branch,
+        ['git', 'clone', '--no-local', '--no-hardlinks', '--branch', branch,
          '--single-branch', '--depth', '1',
-         f'file://{bare_path}', str(worktree_dir)],
+         bare_path, str(worktree_dir)],
         check=True,
         capture_output=True,
         timeout=60,

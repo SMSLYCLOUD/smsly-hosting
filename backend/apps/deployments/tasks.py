@@ -1102,6 +1102,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                     _handle_remote_deployment(deployment, target, skip_review=skip_review)
                     return
 
+        # Determine deployment locality. A service is considered local if:
+        #  - It has no server assigned, OR
+        #  - Its server is the primary (master) node, OR
+        #  - Its server host matches this controller's IP.
+        # This prevents accidental remote delegation when the user explicitly
+        # wants to deploy to the master node.
         is_local = (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
 
         if not is_local:
@@ -1597,10 +1603,31 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
 
     # If we exit the loop without a terminal state
     logger.info("Polling finished for remote deployment %s after %d attempts", remote_dep_id, max_retries)
-    if deployment.status in (Deployment.Status.QUEUED, Deployment.Status.BUILDING):
-        append_log(deployment, "\n[Remote] Polling timed out after 15 minutes. The deployment might still be running on the remote node, but the controller is no longer tracking it actively.\n")
-        # We don't mark as FAILED here because it might still succeed on the remote.
-        # But we notify the user.
+    intermediate_statuses = (
+        Deployment.Status.QUEUED,
+        Deployment.Status.BUILDING,
+        Deployment.Status.HEALTH_CHECK,
+        Deployment.Status.DEPLOYING,
+        Deployment.Status.STAGED,
+        Deployment.Status.MONITORING,
+        Deployment.Status.TRAFFIC_SHIFTING,
+        Deployment.Status.MIGRATION_RUNNING,
+        Deployment.Status.MIGRATION_PLANNING,
+        Deployment.Status.BACKUP_RUNNING,
+        Deployment.Status.REVIEW,
+    )
+    if deployment.status in intermediate_statuses:
+        append_log(
+            deployment,
+            f"\n[Remote] Polling timed out after 15 minutes while in {deployment.status} state. "
+            "The deployment may still be running on the remote node.\n"
+        )
+        deployment.status = Deployment.Status.FAILED
+        deployment.error = "Remote deployment poller timed out. Check the remote node directly for actual status."
+        deployment.finished_at = timezone.now()
+        deployment.save(update_fields=['status', 'error', 'finished_at', 'updated_at'])
+        update_stage(deployment, 'Remote Deploy', 'failed')
+        broadcast_status(deployment)
 
 
 def _build_function(deployment, service) -> str:

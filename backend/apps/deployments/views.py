@@ -1083,67 +1083,58 @@ class ServiceViewSet(viewsets.ModelViewSet):
         results = {'local': None, 'remotes': []}
 
         # ── 1. Local deploy ─────────────────────────────────────
-        # If the service is assigned to a remote server, the "local" deploy
-        # would just get re-delegated back to that server (or conflict with
-        # the remote deploy below).  Skip it and let the remote-only flow
-        # handle the deployment.
-        svc_server = getattr(service, 'server', None)
-        svc_on_remote = svc_server and not svc_server.is_primary and svc_server.host != getattr(p_config, 'server_ip', '')
-
-        if include_local and svc_on_remote:
-            results['local'] = {
-                'status': 'skipped',
-                'reason': f'Service is assigned to {svc_server.name}; deploying via remote only',
-            }
-        elif include_local and ServerGuard.is_control_plane(svc_server):
-            local_guard = ServerGuard.check_user_workload_allowed(svc_server)
-            results['local'] = {
-                'status': 'error',
-                'reason': local_guard['error']['message'],
-                'error': local_guard['error'],
-            }
-        elif include_local:
-            existing = _has_active_deployment(service)
-            if existing:
+        # Allow local deploy even if service is assigned to a remote
+        # server — the user explicitly requested it via include_local=True.
+        # The deployment will run on the master node regardless of the
+        # service's current server assignment.
+        if include_local:
+            if ServerGuard.is_control_plane(getattr(service, 'server', None)):
+                local_guard = ServerGuard.check_user_workload_allowed(getattr(service, 'server', None))
                 results['local'] = {
-                    'status': 'skipped',
-                    'reason': f'Deployment already in progress ({existing.status})',
-                    'deployment': DeploymentSerializer(existing).data,
+                    'status': 'error',
+                    'reason': local_guard['error']['message'],
+                    'error': local_guard['error'],
                 }
             else:
-                # Resolve provider for local deploy with preference for LOCAL adapter
-                provider = _resolve_provider_for_service(service, prefer_local=True)
-                if not provider:
+                existing = _has_active_deployment(service)
+                if existing:
                     results['local'] = {
-                        'status': 'error',
-                        'reason': 'No active cloud provider configured',
+                        'status': 'skipped',
+                        'reason': f'Deployment already in progress ({existing.status})',
+                        'deployment': DeploymentSerializer(existing).data,
                     }
                 else:
-                    deployment = Deployment.objects.create(
-                        service=service,
-                        status=Deployment.Status.QUEUED,
-                        commit_hash=ref if ref != 'HEAD' else 'latest',
-                        commit_message=f"Multi-deploy: {ref}",
-                    )
-                    try:
-                        smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
-                        results['local'] = {
-                            'status': 'queued',
-                            'deployment': DeploymentSerializer(deployment).data,
-                        }
-                    except Exception as exc:
-                        logger.exception('multi_deploy: local deploy task failed')
-                        deployment.status = Deployment.Status.FAILED
-                        deployment.finished_at = timezone.now()
-                        deployment.build_logs = f"\n[ERROR] {exc}\n"
-                        deployment.save(
-                            update_fields=['status', 'finished_at', 'build_logs', 'updated_at'])
-                        # F4: sanitize — don't leak raw exception to client
+                    provider = _resolve_provider_for_service(service, prefer_local=True)
+                    if not provider:
                         results['local'] = {
                             'status': 'error',
-                            'reason': 'Failed to queue local deployment. Check server logs.',
-                            'deployment': DeploymentSerializer(deployment).data,
+                            'reason': 'No active cloud provider configured',
                         }
+                    else:
+                        deployment = Deployment.objects.create(
+                            service=service,
+                            status=Deployment.Status.QUEUED,
+                            commit_hash=ref if ref != 'HEAD' else 'latest',
+                            commit_message=f"Multi-deploy: {ref}",
+                        )
+                        try:
+                            smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
+                            results['local'] = {
+                                'status': 'queued',
+                                'deployment': DeploymentSerializer(deployment).data,
+                            }
+                        except Exception as exc:
+                            logger.exception('multi_deploy: local deploy task failed')
+                            deployment.status = Deployment.Status.FAILED
+                            deployment.finished_at = timezone.now()
+                            deployment.build_logs = f"\n[ERROR] {exc}\n"
+                            deployment.save(
+                                update_fields=['status', 'finished_at', 'build_logs', 'updated_at'])
+                            results['local'] = {
+                                'status': 'error',
+                                'reason': 'Failed to queue local deployment. Check server logs.',
+                                'deployment': DeploymentSerializer(deployment).data,
+                            }
         else:
             results['local'] = {
                 'status': 'skipped',
