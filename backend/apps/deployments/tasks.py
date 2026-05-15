@@ -232,6 +232,11 @@ def fleet_build_lock(deployment):
     Prevent resource exhaustion by limiting concurrent builds across the entire fleet.
     Uses Redis-backed cache to manage a global semaphore.
     """
+    if not _env_bool("SMSLY_ENABLE_FLEET_BUILD_LOCK", False):
+        append_log(deployment, "🚀 Build starting...\n")
+        yield
+        return
+
     try:
         config = PlatformConfig.load()
     except Exception:

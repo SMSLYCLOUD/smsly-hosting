@@ -56,3 +56,13 @@ class PipelineCloneTests(SimpleTestCase):
         self.assertIn("git clone exited with code 128", message)
         self.assertIn("fatal: Authentication failed for ***", message)
         self.assertNotIn("secret-token", message)
+
+    def test_empty_resume_directory_is_not_available_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_dir = Path(tmp) / "repo"
+            source_dir.mkdir()
+
+            self.assertFalse(PipelineManager._source_tree_available(str(source_dir)))
+
+            (source_dir / ".git").mkdir()
+            self.assertTrue(PipelineManager._source_tree_available(str(source_dir)))

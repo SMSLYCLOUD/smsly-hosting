@@ -729,6 +729,7 @@ class LiteAgentQueueTests(TestCase):
             skip_review=True,
         )
 
+    @patch.dict(os.environ, {"SMSLY_ENABLE_FLEET_BUILD_LOCK": "true"}, clear=False)
     def test_fleet_build_lock_recovers_cancelled_owner(self):
         user = User.objects.create_user(username="lock-user", password="password123")
         provider = CloudProvider.objects.create(
