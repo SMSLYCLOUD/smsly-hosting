@@ -2068,7 +2068,7 @@ $target_domain {
 }
 
 ${fix_ip} {
-    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    tls internal
     redir http://${fix_ip}{uri} 308
 }
 
@@ -2300,7 +2300,7 @@ ${domain_block_label} {
 }
 
 ${safe_ip} {
-    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    tls internal
     redir http://${safe_ip}{uri} 308
 }
 
@@ -3645,7 +3645,7 @@ ${cf_known_stanza}
 }
 
 ${cf_server_ip} {
-    tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
+    tls internal
     redir http://${cf_server_ip}{uri} 308
 }
 
