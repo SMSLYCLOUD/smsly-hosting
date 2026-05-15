@@ -2,6 +2,7 @@ import uuid
 import base64
 import shlex
 from unittest.mock import patch, MagicMock
+from django.contrib.auth import get_user_model
 from django.test import TestCase
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
 from apps.deployments.services.wireguard_service import WireGuardService
@@ -69,7 +70,6 @@ class MeshNetworkTest(TestCase):
 
     @patch('apps.deployments.services.wireguard_service.WireGuardService._ssh_run')
     def test_deploy_remote_rejects_incomplete_config(self, mock_ssh):
-        from django.contrib.auth import get_user_model
         User = get_user_model()
         user = User.objects.create_user(username="test2", password="test")
         server = ManagedServer.objects.create(name="test-server-2", host="1.1.1.2", owner=user)
@@ -78,3 +78,48 @@ class MeshNetworkTest(TestCase):
             WireGuardService._deploy_remote(server, "[Interface]\nPrivateKey = test\n", "wg0")
 
         mock_ssh.assert_not_called()
+
+    @patch('apps.deployments.services.wireguard_service.WireGuardService._detect_local_endpoint',
+           return_value='198.51.100.1:51820')
+    @patch('apps.deployments.tasks_mesh.deploy_mesh_task.delay')
+    def test_ensure_server_in_default_mesh_adds_local_and_remote_peers(
+        self, mock_deploy_mesh, _detect_endpoint
+    ):
+        User = get_user_model()
+        user = User.objects.create_user(username="mesh-owner", password="test")
+        primary = ManagedServer.objects.create(
+            name="primary",
+            host="198.51.100.1",
+            owner=user,
+            is_primary=True,
+            status=ManagedServer.Status.ONLINE,
+        )
+        server = ManagedServer.objects.create(
+            name="worker",
+            host="203.0.113.50",
+            owner=user,
+            status=ManagedServer.Status.ONLINE,
+            ssh_password="secret",
+        )
+
+        result = WireGuardService.ensure_server_in_default_mesh(server)
+
+        mesh = MeshNetwork.objects.get(name="default")
+        local_peer = WireGuardPeer.objects.get(mesh=mesh, is_local=True)
+        remote_peer = WireGuardPeer.objects.get(mesh=mesh, server=server)
+        self.assertEqual(WireGuardPeer.objects.filter(mesh=mesh, is_active=True).count(), 2)
+        self.assertEqual(local_peer.endpoint, "198.51.100.1:51820")
+        self.assertEqual(remote_peer.endpoint, "203.0.113.50:51820")
+        self.assertEqual(result["wg_address"], remote_peer.wg_address)
+        self.assertTrue(result["queued"])
+        mock_deploy_mesh.assert_called_once_with(str(mesh.id))
+
+        server.refresh_from_db()
+        primary.refresh_from_db()
+        self.assertEqual(server.wg_address, remote_peer.wg_address)
+        self.assertEqual(primary.wg_address, local_peer.wg_address)
+
+        second = WireGuardService.ensure_server_in_default_mesh(server)
+
+        self.assertFalse(second["queued"])
+        self.assertEqual(WireGuardPeer.objects.filter(mesh=mesh).count(), 2)

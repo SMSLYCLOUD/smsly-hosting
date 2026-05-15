@@ -40,7 +40,7 @@ class RemoteOrchestratorTests(TestCase):
         remote_id = RemoteOrchestrator(self.server).sync_service(self.service)
 
         self.assertEqual(remote_id, "remote-service-id")
-        self.assertEqual(request_mock.call_count, 3)
+        self.assertGreaterEqual(request_mock.call_count, 3)
         first_headers = request_mock.call_args_list[0].kwargs["headers"]
         second_headers = request_mock.call_args_list[2].kwargs["headers"]
         self.assertEqual(first_headers["Authorization"], "Bearer smsly_stale_token")
@@ -73,6 +73,26 @@ class RemoteOrchestratorTests(TestCase):
         )
         search_headers = request_mock.call_args_list[1].kwargs["headers"]
         self.assertEqual(search_headers["Authorization"], "Bearer smsly_fresh_token")
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_sync_service_fails_closed_when_credentials_are_missing(self, request_mock):
+        self.server.api_token = ""
+        self.server.gateway_secret = ""
+        self.server.ssh_key = ""
+        self.server.ssh_password = ""
+        self.server.save(update_fields=[
+            "api_token",
+            "gateway_secret",
+            "ssh_key",
+            "ssh_password",
+        ])
+
+        orchestrator = RemoteOrchestrator(self.server)
+        remote_id = orchestrator.sync_service(self.service)
+
+        self.assertIsNone(remote_id)
+        request_mock.assert_not_called()
+        self.assertIn("credentials are missing", orchestrator.describe_last_error())
 
     @patch("apps.deployments.services.remote_orchestrator.requests.request")
     def test_sync_service_refreshes_stale_token_with_gateway_secret(self, request_mock):

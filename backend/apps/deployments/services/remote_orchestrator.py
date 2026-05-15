@@ -418,6 +418,17 @@ class RemoteOrchestrator:
             # If no auth modes, try auto-auth first
             if self.auto_authenticate():
                 modes = self._auth_modes()
+            if not modes or modes == ["none"]:
+                self._set_last_error(
+                    (
+                        "Remote API credentials are missing for this managed server. "
+                        "The controller has no api_token or gateway_secret and could not "
+                        "repair them over SSH. Reconnect or retry provisioning the node so "
+                        "a node token and gateway secret are stored before deploying."
+                    )
+                )
+                logger.error(self.last_error)
+                return None
 
         if retry_auth and "token" not in modes and "hmac" in modes:
             if self._try_gateway_token_exchange(base_urls):
@@ -617,7 +628,10 @@ class RemoteOrchestrator:
                     service.name,
                     self.server.host,
                 )
-                return remote_svc.get("id")
+                remote_id = remote_svc.get("id")
+                if remote_id:
+                    self.sync_env_vars(service, remote_id)
+                return remote_id
 
         return ""
 
@@ -684,16 +698,47 @@ class RemoteOrchestrator:
         """Sync environment variables to the remote service."""
         path = f"/api/v1/services/{remote_service_id}/env_vars/"
         env_vars = EnvironmentVariable.objects.filter(service=service)
-        
+
+        payload = {
+            "vars": [
+                {
+                    "key": var.key,
+                    "value": var.value,
+                    "is_secret": var.is_secret,
+                    "source": var.source,
+                }
+                for var in env_vars
+            ]
+        }
+        if not payload["vars"]:
+            return
+
+        try:
+            resp = self._request("POST", path, payload=payload, timeout=20)
+            if resp is not None and resp.status_code < 400:
+                return
+            if resp is not None:
+                logger.warning(
+                    "Bulk env sync failed for remote service %s: %s",
+                    remote_service_id,
+                    self._response_error("bulk env sync failed", resp),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Bulk env sync failed for remote service %s: %s",
+                remote_service_id,
+                exc,
+            )
+
         for var in env_vars:
-            payload = {
+            row = {
                 "key": var.key,
                 "value": var.value,
                 "is_secret": var.is_secret,
                 "source": var.source,
             }
             try:
-                resp = self._request("POST", path, payload=payload, timeout=10)
+                resp = self._request("POST", path, payload=row, timeout=10)
                 if resp is not None and resp.status_code >= 400:
                     logger.warning(
                         "Failed to sync env var %s to remote service %s: %s",

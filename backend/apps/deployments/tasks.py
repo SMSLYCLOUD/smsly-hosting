@@ -134,9 +134,6 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     Kept in tasks.py so installer/runtime repair code can use the same logic
     outside request/serializer paths.
     """
-    if service.provider_id:
-        return service.provider if service.provider.is_active else None
-
     if prefer_local:
         local = CloudProvider.objects.filter(
             provider_type=CloudProvider.ProviderType.LOCAL,
@@ -144,6 +141,9 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
         ).first()
         if local:
             return local
+
+    if service.provider_id:
+        return service.provider if service.provider.is_active else None
 
     remote = CloudProvider.objects.filter(
         provider_type=CloudProvider.ProviderType.REMOTE,
@@ -153,6 +153,21 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
         return remote
 
     return CloudProvider.objects.filter(is_active=True).first()
+
+
+def _deployment_effective_server(deployment):
+    """Return the server this deployment should use, honoring explicit local."""
+    if bool(getattr(deployment, "target_is_local", False)):
+        return None
+    return getattr(deployment, "target_server", None) or getattr(deployment.service, "server", None)
+
+
+def _is_local_deployment_server(server, config) -> bool:
+    return (
+        not server
+        or bool(getattr(server, "is_primary", False))
+        or str(getattr(server, "host", "") or "") == str(getattr(config, "server_ip", "") or "")
+    )
 
 
 def recover_stalled_queued_deployments(limit: int = 100) -> dict:
@@ -170,7 +185,10 @@ def recover_stalled_queued_deployments(limit: int = 100) -> dict:
     )
     for deployment in deployments:
         results["seen"] += 1
-        provider = _resolve_provider_for_service(deployment.service)
+        provider = _resolve_provider_for_service(
+            deployment.service,
+            prefer_local=bool(getattr(deployment, "target_is_local", False)),
+        )
         if not provider:
             append_log(
                 deployment,
@@ -1107,15 +1125,10 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                     _handle_remote_deployment(deployment, target, skip_review=skip_review)
                     return
 
-        # Determine deployment locality. A service is considered local if:
-        #  - It has no server assigned, OR
-        #  - Its server is the primary (master) node, OR
-        #  - Its server host matches this controller's IP.
-        # This prevents accidental remote delegation when the user explicitly
-        # wants to deploy to the master node.
-        # If deployment.target_server is explicitly set, use it instead of service.server.
-        effective_server = deployment.target_server or service.server
-        is_local = (not effective_server) or effective_server.is_primary or (effective_server.host == config.server_ip)
+        # Use the per-deployment target first. Explicit local deployments must
+        # stay local even when the service is normally assigned to a remote node.
+        effective_server = _deployment_effective_server(deployment)
+        is_local = _is_local_deployment_server(effective_server, config)
 
         if not is_local:
             if deployment.remote_deployment_id:
@@ -1212,11 +1225,12 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
         
         # Loop Prevention: If this is already a delegated deployment, handle it locally.
         is_delegated = deployment.source_node is not None
-        is_local = is_delegated or (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
+        effective_server = _deployment_effective_server(deployment)
+        is_local = is_delegated or _is_local_deployment_server(effective_server, config)
 
         if not is_local:
             if deployment.remote_deployment_id:
-                _resume_remote_deployment(deployment, service.server)
+                _resume_remote_deployment(deployment, effective_server)
                 return
 
             # Build-agent optimization: build locally, then delegate
@@ -1230,7 +1244,7 @@ def resume_deploy_task(self, deployment_id: str, provider_id: str):
                     built_image = manager.run_build_only()
 
             _handle_remote_deployment(
-                deployment, service.server, image_name=built_image,
+                deployment, effective_server, image_name=built_image,
             )
             return
 
@@ -1284,6 +1298,7 @@ def _handle_remote_deployment_legacy(deployment, server):
         )
         return
 
+    orchestrator.sync_env_vars(service, remote_svc_id)
     update_stage(deployment, 'Remote Sync', 'success')
     update_stage(deployment, 'Remote Deploy', 'running')
 
@@ -1591,11 +1606,16 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
             append_log(deployment, "Remote deployment completed successfully.\n")
             return
 
-        if status == Deployment.Status.FAILED:
+        if status in (
+            Deployment.Status.FAILED,
+            Deployment.Status.BUILD_FAILED,
+            Deployment.Status.BACKUP_FAILED,
+            Deployment.Status.MIGRATION_FAILED,
+        ):
             _handle_failure(
                 None,
                 deployment,
-                remote_status.get("error") or "Remote deployment failed.",
+                remote_status.get("error") or f"Remote deployment failed with status: {status}.",
                 "Remote Execution Failure",
             )
             return

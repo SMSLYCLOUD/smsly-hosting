@@ -14,7 +14,7 @@ from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework import status as http_status
-from apps.deployments.models import Service, Deployment
+from apps.deployments.models import Service, Deployment, ManagedServer
 from apps.cloud.models import CloudProvider
 
 
@@ -220,6 +220,74 @@ class ServiceDeployActionTests(APITestCase):
         url = f'/api/v1/services/{self.service.id}/deploy/'
         self.client.post(url, {}, format='json')
         mock_task.assert_called_once()
+
+    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    def test_manual_deploy_cannot_skip_review(self, mock_enqueue):
+        """User-triggered deploys cannot bypass the SafeDeploy review gate."""
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(url, {'skip_review': True}, format='json')
+
+        self.assertEqual(response.status_code, http_status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Deployment.objects.filter(service=self.service).exists())
+        mock_enqueue.assert_not_called()
+
+    @patch('apps.deployments.views.ServerGuard.check_user_workload_allowed',
+           return_value={'ok': True})
+    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    def test_explicit_local_target_overrides_assigned_remote_server(
+        self, mock_enqueue, _guard
+    ):
+        """Explicit local deploy stays local even when the service has a remote node."""
+        remote = ManagedServer.objects.create(
+            owner=self.user,
+            name='node-1',
+            host='69.164.244.51',
+            status=ManagedServer.Status.ONLINE,
+        )
+        self.service.server = remote
+        self.service.save(update_fields=['server'])
+
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(
+            url,
+            {'target_server_id': None},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        deployment = Deployment.objects.get(service=self.service)
+        self.assertIsNone(deployment.target_server)
+        self.assertTrue(deployment.target_is_local)
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.server_id, remote.id)
+        self.assertFalse(mock_enqueue.call_args.kwargs['skip_review'])
+
+    @patch('apps.deployments.views.ServerGuard.check_user_workload_allowed',
+           return_value={'ok': True})
+    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    def test_explicit_remote_target_is_saved_on_deployment(
+        self, mock_enqueue, _guard
+    ):
+        """Remote deploy target is per-deployment and still enters review."""
+        remote = ManagedServer.objects.create(
+            owner=self.user,
+            name='node-2',
+            host='203.0.113.42',
+            status=ManagedServer.Status.ONLINE,
+        )
+
+        url = f'/api/v1/services/{self.service.id}/deploy/'
+        response = self.client.post(
+            url,
+            {'target_server_id': str(remote.id)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        deployment = Deployment.objects.get(service=self.service)
+        self.assertEqual(deployment.target_server_id, remote.id)
+        self.assertFalse(deployment.target_is_local)
+        self.assertFalse(mock_enqueue.call_args.kwargs['skip_review'])
 
     @patch('apps.deployments.tasks.smart_deploy_task.delay')
     def test_deploy_action_ignores_stale_queued_older_than_active(self, mock_task):

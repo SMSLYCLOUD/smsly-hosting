@@ -193,6 +193,16 @@ def _refresh_managed_server_health(server):
                 except requests.RequestException:
                     pass
 
+        try:
+            if not server.is_primary and (server.ssh_key or server.ssh_password):
+                from apps.deployments.services.wireguard_service import WireGuardService
+                WireGuardService.ensure_server_in_default_mesh(
+                    server,
+                    deploy_async=True,
+                )
+        except Exception as exc:
+            logger.warning("Automatic VPN mesh setup failed for %s: %s", server.id, exc)
+
     return server
 
 
@@ -228,6 +238,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                     "X-Request-Timestamp": ts,
                 },
                 timeout=15,
+                verify=False,
             )
             if resp.status_code == 200:
                 token = resp.json().get("token")
@@ -254,6 +265,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                         "node_name": f"Node-{server.host}",
                     },
                     timeout=15,
+                    verify=False,
                 )
                 if resp.status_code == 200:
                     token = resp.json().get("token")
@@ -277,6 +289,7 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                     f"{base_url}/api/v1/auth/login/",
                     json={"username": username, "password": ssh_password},
                     timeout=15,
+                    verify=False,
                 )
                 if resp.status_code == 200:
                     token = resp.json().get("key") or resp.json().get("token")
@@ -596,14 +609,22 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         server = serializer.save(owner=self.request.user)
-        # Attempt to auto-fetch the service count when connecting an existing server
-        if server.api_url and server.api_token:
-            from threading import Thread
-            Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
+        self._start_server_health_sync(server)
 
     def perform_update(self, serializer):
         server = serializer.save()
-        if server.api_url and server.api_token:
+        self._start_server_health_sync(server)
+
+    def _start_server_health_sync(self, server):
+        """Start background health/auth/mesh repair for a connected server."""
+        has_connection_hint = bool(
+            server.api_url
+            or server.api_token
+            or server.gateway_secret
+            or server.ssh_key
+            or server.ssh_password
+        )
+        if server.host and has_connection_hint:
             from threading import Thread
             Thread(target=self._sync_server_health, args=(server.id,), daemon=True).start()
 
@@ -611,28 +632,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         """Background worker to check a server's health and service count upon connection."""
         try:
             server = ManagedServer.objects.get(id=server_id)
-            base = server.api_url.rstrip('/')
-
-            # Check online status
-            resp = requests.get(f"{base}/health", timeout=10)
-            server.status = ManagedServer.Status.ONLINE if resp.status_code < 500 else ManagedServer.Status.OFFLINE
-
-            # Fetch services count if online
-            if server.status == ManagedServer.Status.ONLINE:
-                api_path = "/api/v1/services/"
-                headers = _build_remote_headers(server, method="GET", path=api_path)
-                try:
-                    resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        services = data.get("results", data) if isinstance(data, dict) else data
-                        server.services_count = len(services) if isinstance(services, list) else 0
-                except requests.RequestException:
-                    pass
-
-            server.last_health_check = timezone.now()
-            server.save(update_fields=["status", "last_health_check", "services_count"])
-
+            _refresh_managed_server_health(server)
         except Exception as e:
             logger.warning(f"Background server sync failed for {server_id}: {e}")
 

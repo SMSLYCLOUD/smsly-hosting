@@ -116,6 +116,23 @@ const PROXY_BYPASS_PREFIXES = [
   '/platform-updates/',
 ];
 
+const LOCAL_DEPLOY_TARGETS = new Set(['', 'local', 'localhost', 'controller', 'master', 'primary']);
+
+function normalizeDeployTarget(targetServerId?: string | null): { specified: boolean; value: string | null } {
+  if (targetServerId === undefined) {
+    return { specified: false, value: null };
+  }
+  if (targetServerId === null) {
+    return { specified: true, value: null };
+  }
+
+  const raw = String(targetServerId).trim();
+  if (LOCAL_DEPLOY_TARGETS.has(raw.toLowerCase())) {
+    return { specified: true, value: null };
+  }
+  return { specified: true, value: raw };
+}
+
 api.interceptors.request.use((config) => {
   if (typeof window === 'undefined') return config;
   if ((config as any)?._skipRemoteProxy) return config;
@@ -306,6 +323,8 @@ export interface Service {
   health_check_retries?: number;
   // Project grouping
   project?: string | null;
+  server?: string | null;
+  server_id?: string | null;
   project_name?: string | null;
   project_slug?: string | null;
   project_emoji?: string | null;
@@ -438,10 +457,12 @@ export const servicesApi = {
   },
   deploy: async (id: string, ref: string = 'HEAD', targetServerId?: string | null) => {
     const body: Record<string, unknown> = { ref };
-    if (targetServerId !== undefined) {
-      body.target_server_id = targetServerId;
+    const target = normalizeDeployTarget(targetServerId);
+    if (target.specified) {
+      body.target_server_id = target.value;
     }
-    const response = await api.post(`/services/${id}/deploy/`, body);
+    const requestConfig = target.specified ? { _skipRemoteProxy: true } : undefined;
+    const response = await api.post(`/services/${id}/deploy/`, body, requestConfig);
     return response.data;
   },
   restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {
