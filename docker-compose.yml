@@ -43,7 +43,7 @@ services:
     volumes:
       - ./backend:/app
       - ./caddy-config:/caddy-config
-      - repo_cache_data:/app/repo_cache
+
     depends_on:
       - redis
       - db
@@ -68,7 +68,7 @@ services:
       - ./:/platform-src:ro
       - ./caddy-config:/caddy-config
       - backups_data:/app/backups
-      - repo_cache_data:/app/repo_cache
+
     depends_on:
       - redis
       - db
@@ -90,7 +90,7 @@ services:
     volumes:
       - ./backend:/app
       - ./caddy-config:/caddy-config
-      - repo_cache_data:/app/repo_cache
+
     depends_on:
       - redis
       - db
@@ -150,7 +150,7 @@ services:
       - ./install.sh:/app/install.sh:ro
       - ./:/platform-src:ro
       - backups_data:/app/backups
-      - repo_cache_data:/app/repo_cache
+
       - ./caddy-config:/caddy-config
     ports:
       - "8000:8000"
@@ -193,7 +193,7 @@ services:
     command: celery -A config beat -l info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
     volumes:
       - ./backend:/app
-      - repo_cache_data:/app/repo_cache
+
     env_file:
       - .env
     environment:
@@ -292,4 +292,3 @@ volumes:
   postgres_data:
   registry_data:
   backups_data:
-  repo_cache_data:

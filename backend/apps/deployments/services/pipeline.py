@@ -374,13 +374,13 @@ class PipelineManager:
             except Exception: # pylint: disable=broad-exception-caught
                 pass
 
-            from services.repo_cache import get_or_clone
-            self.source_dir = get_or_clone(
-                repo_url=self.service.repository_url,
-                branch=requested_branch,
-                token=repo_token,
-                destination=self.build_dir,
+            self._clone_with_github_token(
+                self.service.repository_url,
+                requested_branch,
+                repo_token,
+                self.build_dir,
             )
+            self.source_dir = self.build_dir
 
             # Metadata
             # pylint: disable=no-member
@@ -404,6 +404,50 @@ class PipelineManager:
 
         # Auto-inject .env file from repo (if present)
         self._inject_dotenv_from_repo()
+
+    def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str):
+        """Clone repository directly without using repo cache."""
+        if self.build_dir.exists():
+            shutil.rmtree(self.build_dir)
+        self.build_dir.mkdir(parents=True, exist_ok=True)
+
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        askpass_path = None
+
+        if token:
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(repo_url)
+            host = parsed.hostname or "github.com"
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
+            remote_url = urlunparse(parsed._replace(netloc=f"x-access-token@{host}"))
+
+            askpass_path = self.build_dir / ".askpass.sh"
+            askpass_path.write_text(
+                "#!/bin/sh\n"
+                "case \"$1\" in\n"
+                "  *Username*) printf \"%s\" \"x-access-token\" ;;\n"
+                "  *) printf \"%s\" \"$SMSLY_GIT_PASSWORD\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            os.chmod(askpass_path, 0o700)
+            env["GIT_ASKPASS"] = str(askpass_path)
+            env["SMSLY_GIT_PASSWORD"] = token
+        else:
+            remote_url = repo_url
+
+        try:
+            subprocess.run(
+                ["git", "clone", "--branch", branch, "--single-branch", remote_url, str(self.build_dir)],
+                check=True,
+                capture_output=True,
+                timeout=300,
+                env=env,
+            )
+        finally:
+            if askpass_path and askpass_path.exists():
+                askpass_path.unlink()
 
     def _inject_dotenv_from_repo(self):
         """Auto-inject env vars from .env files found in the cloned repo.
@@ -1982,11 +2026,3 @@ class PipelineManager:
                 shutil.rmtree(self.build_dir)
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Failed to cleanup build dir %s: %s", self.build_dir, e)
-
-        # Cleanup cached worktrees
-        try:
-            if self.service and self.service.repository_url:
-                from services.repo_cache import cleanup_worktrees
-                cleanup_worktrees(self.service.repository_url)
-        except Exception as e: # pylint: disable=broad-exception-caught
-            logger.warning("Failed to cleanup repo cache: %s", e)

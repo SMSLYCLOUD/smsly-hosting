@@ -1108,10 +1108,10 @@ ensure_infrastructure_permissions() {
     [ -f "$caddy_config_dir/Caddyfile" ] && chmod 664 "$caddy_config_dir/Caddyfile" 2>/dev/null || true
     [ -f "$caddy_config_dir/.reload" ] && chmod 664 "$caddy_config_dir/.reload" 2>/dev/null || true
 
-    # 2. Handle Named Volumes (repo_cache_data, backups_data)
+    # 2. Handle Named Volumes (backups_data)
         # We use a one-off container to safely chown existing named volumes.
     if command -v docker >/dev/null 2>&1; then
-        for vol in repo_cache_data backups_data; do
+        for vol in backups_data; do
             if docker volume inspect "$vol" >/dev/null 2>&1; then
                 echo -e "${BLUE}     ↳ Setting permissions for volume: $vol...${NC}"
                 docker run --rm -v "${vol}:/data" alpine chown -R 1000:1000 /data 2>/dev/null || true
