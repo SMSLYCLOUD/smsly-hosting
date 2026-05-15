@@ -1,10 +1,10 @@
 "use client"
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { servicesApi, Service, Deployment, EnvVar } from '@/lib/api';
+import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server } from 'lucide-react';
 import Editor from "@monaco-editor/react";
 import dynamic from 'next/dynamic';
 import { LogsTab } from '@/components/logs/LogsTab';
@@ -65,6 +65,8 @@ export default function ServiceDetailPage() {
     const [alertPhone, setAlertPhone] = useState('');
     const [telegramChatId, setTelegramChatId] = useState('');
     const [whatsappTo, setWhatsappTo] = useState('');
+    const [servers, setServers] = useState<ManagedServer[]>([]);
+    const [targetServerId, setTargetServerId] = useState<string | null>(null);
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     const loadWatchConfig = useCallback(async (serviceId: string) => {
@@ -158,7 +160,7 @@ export default function ServiceDetailPage() {
         if (!await confirm({ title: 'Deploy service?', message: 'Trigger a new deployment for this service now?', confirmText: 'Deploy' })) return;
         try {
             setRedeploying(true);
-            const deployResult = await servicesApi.deploy(service.id);
+            const deployResult = await servicesApi.deploy(service.id, 'HEAD', targetServerId);
             if (deployResult?.existing_deployment) {
                 const statusLabel = deployResult?.existing_deployment?.status || 'in progress';
                 toast({
@@ -234,6 +236,22 @@ export default function ServiceDetailPage() {
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
     }, [id]);
+
+    useEffect(() => {
+        const fetchServers = async () => {
+            try {
+                const data = await serversApi.list();
+                setServers(data);
+                if (service?.server_id) {
+                    setTargetServerId(service.server_id);
+                } else if (data.length > 0) {
+                    const primary = data.find((s: ManagedServer) => s.is_primary);
+                    setTargetServerId(primary?.id || data[0].id);
+                }
+            } catch (err) { console.error(err); }
+        };
+        fetchServers();
+    }, [id, service?.server_id]);
 
     useEffect(() => {
         if (!id) return;
@@ -528,14 +546,27 @@ export default function ServiceDetailPage() {
                                         {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                                         Restart
                                     </button>
-                                    <button
-                                        className="bg-primary hover:bg-primary/90 text-white font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-                                        onClick={handleRedeploy}
-                                        disabled={redeploying}
-                                    >
-                                        {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-                                        {redeploying ? 'Deploying...' : 'Redeploy'}
-                                    </button>
+                                    <div className="flex gap-2">
+                                        <select
+                                            value={targetServerId || ''}
+                                            onChange={(e) => setTargetServerId(e.target.value || null)}
+                                            className="flex-1 bg-card border border-border rounded-lg px-2 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                                        >
+                                            {servers.map((s) => (
+                                                <option key={s.id} value={s.id}>
+                                                    {s.name}{s.is_primary ? ' (Master)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            className="bg-primary hover:bg-primary/90 text-white font-bold py-2 px-3 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                            onClick={handleRedeploy}
+                                            disabled={redeploying}
+                                        >
+                                            {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                                            {redeploying ? 'Deploying...' : 'Redeploy'}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         ) : <p className="text-muted-foreground">No deployment found.</p>}

@@ -436,8 +436,12 @@ export const servicesApi = {
     const response = await api.patch(`/services/${id}/`, data);
     return response.data;
   },
-  deploy: async (id: string, ref: string = 'HEAD') => {
-    const response = await api.post(`/services/${id}/deploy/`, { ref });
+  deploy: async (id: string, ref: string = 'HEAD', targetServerId?: string | null) => {
+    const body: Record<string, unknown> = { ref };
+    if (targetServerId !== undefined) {
+      body.target_server_id = targetServerId;
+    }
+    const response = await api.post(`/services/${id}/deploy/`, body);
     return response.data;
   },
   restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {
