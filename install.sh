@@ -2063,9 +2063,17 @@ $target_domain {
     log {
         output file /var/log/caddy/access.log
     }
+}
+
 :443 {
     tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
-    redir http://{host}{uri} 308
+    @ip host_regexp ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+    handle @ip {
+        redir http://{host}{uri} 308
+    }
+    handle {
+        redir https://{host}{uri} 308
+    }
 }
 
 :80 {
@@ -2292,7 +2300,13 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
 :443 {
     tls $caddy_cert $caddy_key
-    redir http://{host}{uri} 308
+    @ip host_regexp ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+    handle @ip {
+        redir http://{host}{uri} 308
+    }
+    handle {
+        redir https://{host}{uri} 308
+    }
 }
 TLS443
 )
