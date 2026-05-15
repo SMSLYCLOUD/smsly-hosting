@@ -627,10 +627,10 @@ def generate_caddyfile(config) -> str:
         if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
             # IP-specific HTTPS block using SNI routing.
             # Caddy routes TLS by SNI hostname: domain requests go to domain
-            # blocks (Let's Encrypt), IP requests go here (internal cert + redirect).
+            # blocks (Let's Encrypt), IP requests go here (self-signed + redirect).
             sections.append(
                 f"""{_server_ip} {{
-    tls internal
+    tls {_caddy_crt} {_caddy_key}
     redir http://{_server_ip}{{uri}} 308
 }}"""
             )
@@ -648,7 +648,7 @@ def generate_caddyfile(config) -> str:
         reverse_proxy nginx:80
     }
     @redirectable {
-        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
         not host 127.0.0.1
         not host *.local

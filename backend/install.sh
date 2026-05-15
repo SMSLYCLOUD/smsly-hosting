@@ -2204,7 +2204,7 @@ ${cf_known_stanza}
         reverse_proxy localhost:8090
     }
     @redirectable {
-        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
         not host 127.0.0.1
         not host *.local
@@ -3292,7 +3292,7 @@ $DOMAIN {
         reverse_proxy localhost:8090
     }
     @redirectable {
-        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
+        not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
         not host localhost
         not host 127.0.0.1
         not host *.local
