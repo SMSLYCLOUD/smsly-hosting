@@ -211,6 +211,11 @@ elif 'SITE_URL' not in locals():
     _proto_site = 'https' if (_use_ssl_site and not _is_ip_site and not _is_local_site) else 'http'
     SITE_URL = ('http://localhost:3000' if DEBUG else f'{_proto_site}://{DOMAIN}')
 
+# GitHub OAuth Callback URL (explicit override to prevent redirect_uri mismatch)
+# If set, this value is used verbatim for GitHub OAuth redirect_uri
+# Format: https://your-domain.com/auth/github/callback
+GITHUB_OAUTH_CALLBACK_URL = config('GITHUB_OAUTH_CALLBACK_URL', default=None)
+
 # Stripe Billing (optional but required for paid plans)
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')
 STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')

@@ -164,22 +164,24 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    # CRITICAL: Always use SITE_URL to ensure exact match with GitHub App settings
-    site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+    # Priority: GITHUB_OAUTH_CALLBACK_URL env var > SITE_URL > request-based fallback
+    callback_url = getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None)
     
-    # Force HTTPS in production to match GitHub App settings
-    if not settings.DEBUG and site_url:
-        site_url = site_url.replace('http://', 'https://')
-    
-    if site_url:
-        callback_url = f"{site_url}/auth/github/callback"
-    else:
-        # Fallback only if SITE_URL is not configured
-        scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
-        origin = f"{scheme}://{request.get_host()}"
-        callback_url = f"{origin}/auth/github/callback"
+    if not callback_url:
+        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+        # Force HTTPS in production to match GitHub App settings
+        if not settings.DEBUG and site_url:
+            site_url = site_url.replace('http://', 'https://')
+        
+        if site_url:
+            callback_url = f"{site_url}/auth/github/callback"
+        else:
+            # Fallback only if SITE_URL is not configured
+            scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
+            origin = f"{scheme}://{request.get_host()}"
+            callback_url = f"{origin}/auth/github/callback"
 
-    logger.info("GitHub OAuth authorize URL - callback_url=%s, site_url=%s, DEBUG=%s", callback_url, site_url, settings.DEBUG)
+    logger.info("GitHub OAuth authorize URL - callback_url=%s, DEBUG=%s", callback_url, settings.DEBUG)
 
     scopes = settings.SOCIALACCOUNT_PROVIDERS.get("github", {}).get(
         "SCOPE", ["user", "repo", "read:org"]
@@ -240,21 +242,23 @@ def github_oauth_callback(request):
         )
 
     # Build the same callback URL the frontend used
-    # CRITICAL: Always use SITE_URL to ensure exact match with GitHub App settings
-    site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+    # Priority: GITHUB_OAUTH_CALLBACK_URL env var > SITE_URL > request-based fallback
+    callback_url = getattr(settings, 'GITHUB_OAUTH_CALLBACK_URL', None)
     
-    # Force HTTPS in production to match GitHub App settings
-    if not settings.DEBUG and site_url:
-        site_url = site_url.replace('http://', 'https://')
-    
-    if not site_url:
-        # Fallback only if SITE_URL is not configured
-        scheme = "https" if request.is_secure() else "http"
-        origin = f"{scheme}://{request.get_host()}"
-        site_url = origin
-    callback_url = f"{site_url}/auth/github/callback"
+    if not callback_url:
+        site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+        # Force HTTPS in production to match GitHub App settings
+        if not settings.DEBUG and site_url:
+            site_url = site_url.replace('http://', 'https://')
+        
+        if not site_url:
+            # Fallback only if SITE_URL is not configured
+            scheme = "https" if request.is_secure() else "http"
+            origin = f"{scheme}://{request.get_host()}"
+            site_url = origin
+        callback_url = f"{site_url}/auth/github/callback"
 
-    logger.info("GitHub OAuth callback exchange - callback_url=%s, site_url=%s, DEBUG=%s", callback_url, site_url, settings.DEBUG)
+    logger.info("GitHub OAuth callback exchange - callback_url=%s, DEBUG=%s", callback_url, settings.DEBUG)
 
     # ── Step 1: Exchange code for access token ──────────────────────────
     try:
