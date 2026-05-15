@@ -625,20 +625,24 @@ def generate_caddyfile(config) -> str:
                     except OSError:
                         pass
         if os.path.exists(_crt_path) and os.path.exists(_key_path):
-            # Add :443 self-signed catch-all for IP-only mode and domain-without-SSL mode
-            # so that https://<ip-or-domain> redirects to http://<ip-or-domain>.
-            # The self-signed cert is unavoidable (TLS requires a cert before redirect),
-            # but the user accepts the warning once and gets redirected to HTTP.
-            # Skip when domain+SSL is configured — the platform domain block's
-            # auto-HTTPS (Let's Encrypt) handles HTTPS properly.
-            _skip = use_ssl and domain and not _is_ip(domain)
-            if not _skip:
-                sections.append(
-                    f""":443 {{
+            # Always add :443 self-signed catch-all so direct IP HTTPS
+            # requests get a proper response (self-signed cert + redirect to HTTP)
+            # instead of ERR_SSL_PROTOCOL_ERROR.
+            # Caddy's most-specific-match routing ensures domain-specific HTTPS
+            # blocks (e.g. grid.smsly.cloud with Let's Encrypt) take priority;
+            # this catch-all only handles unmatched hosts like raw IP addresses.
+            sections.append(
+                f""":443 {{
     tls {_caddy_crt} {_caddy_key}
-    redir http://{{host}}{{uri}} 308
+    @ip host_regexp ^([0-9]{{1,3}}[.]){{3}}[0-9]{{1,3}}$
+    handle @ip {{
+        redir http://{{host}}{{uri}} 308
+    }}
+    handle {{
+        redir https://{{host}}{{uri}} 308
+    }}
 }}"""
-                )
+            )
     except Exception as _exc:
         logger.warning("Could not generate self-signed cert for IP redirect: %s", _exc)
 
