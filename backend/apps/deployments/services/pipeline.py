@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import yaml
+from pathlib import Path
 from urllib.parse import urlparse as parse_url
 
 import git
@@ -407,9 +408,10 @@ class PipelineManager:
 
     def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str):
         """Clone repository directly without using repo cache."""
-        if self.build_dir.exists():
-            shutil.rmtree(self.build_dir)
-        self.build_dir.mkdir(parents=True, exist_ok=True)
+        build_path = Path(self.build_dir)
+        if build_path.exists():
+            shutil.rmtree(build_path)
+        build_path.mkdir(parents=True, exist_ok=True)
 
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         askpass_path = None
@@ -422,7 +424,7 @@ class PipelineManager:
                 host = f"{host}:{parsed.port}"
             remote_url = urlunparse(parsed._replace(netloc=f"x-access-token@{host}"))
 
-            askpass_path = self.build_dir / ".askpass.sh"
+            askpass_path = build_path / ".askpass.sh"
             askpass_path.write_text(
                 "#!/bin/sh\n"
                 "case \"$1\" in\n"
@@ -439,7 +441,7 @@ class PipelineManager:
 
         try:
             subprocess.run(
-                ["git", "clone", "--branch", branch, "--single-branch", remote_url, str(self.build_dir)],
+                ["git", "clone", "--branch", branch, "--single-branch", remote_url, str(build_path)],
                 check=True,
                 capture_output=True,
                 timeout=300,
