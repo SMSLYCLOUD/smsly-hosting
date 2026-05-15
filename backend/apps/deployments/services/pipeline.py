@@ -419,10 +419,10 @@ class PipelineManager:
 
     def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str):
         """Clone repository directly without using repo cache."""
-        build_path = Path(self.build_dir)
+        build_path = Path(target_dir)
         if build_path.exists():
             shutil.rmtree(build_path)
-        build_path.mkdir(parents=True, exist_ok=True)
+        build_path.parent.mkdir(parents=True, exist_ok=True)
 
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         askpass_path = None
@@ -435,7 +435,13 @@ class PipelineManager:
                 host = f"{host}:{parsed.port}"
             remote_url = urlunparse(parsed._replace(netloc=f"x-access-token@{host}"))
 
-            askpass_path = build_path / ".askpass.sh"
+            askpass_fd, askpass_name = tempfile.mkstemp(
+                prefix=".smsly-git-askpass-",
+                suffix=".sh",
+                dir=str(build_path.parent),
+            )
+            os.close(askpass_fd)
+            askpass_path = Path(askpass_name)
             askpass_path.write_text(
                 "#!/bin/sh\n"
                 "case \"$1\" in\n"
@@ -450,17 +456,43 @@ class PipelineManager:
         else:
             remote_url = repo_url
 
+        clone_cmd = [
+            "git", "clone", "--branch", branch, "--single-branch", remote_url, str(build_path)
+        ]
         try:
             subprocess.run(
-                ["git", "clone", "--branch", branch, "--single-branch", remote_url, str(build_path)],
+                clone_cmd,
                 check=True,
                 capture_output=True,
+                text=True,
                 timeout=300,
                 env=env,
             )
+        except subprocess.CalledProcessError as exc:
+            details = self._format_git_clone_error(exc, token)
+            raise RuntimeError(details) from exc
         finally:
             if askpass_path and askpass_path.exists():
                 askpass_path.unlink()
+
+    def _format_git_clone_error(self, exc: subprocess.CalledProcessError, token: str | None) -> str:
+        """Return a concise, redacted clone failure with Git's real stderr."""
+        parts = [f"git clone exited with code {exc.returncode}"]
+        stream_values = (
+            ("stderr", exc.stderr),
+            ("stdout", exc.stdout or exc.output),
+        )
+        for label, value in stream_values:
+            if not value:
+                continue
+            text = value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value)
+            text = text.strip()
+            if not text:
+                continue
+            redaction_values = [token] if token else []
+            text = redact_values(text, redaction_values + getattr(self, "secret_values", []))
+            parts.append(f"{label}: {text}")
+        return " | ".join(parts)
 
     def _inject_dotenv_from_repo(self):
         """Auto-inject env vars from .env files found in the cloned repo.
