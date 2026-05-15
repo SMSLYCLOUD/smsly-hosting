@@ -218,8 +218,9 @@ class RemoteOrchestrator:
         if auth_mode in (None, "hmac") and gateway_secret:
             timestamp = str(int(time.time()))
             body_hash = hashlib.sha256(body).hexdigest()
-            sign_path = path.split("?")[0] if "?" in path else path
-            payload = f"{method}|{sign_path}|{timestamp}|{body_hash}"
+            # Use the full path including query params to match server-side
+            # request.get_full_path() in ZeroTrustHMACAuthentication
+            payload = f"{method}|{path}|{timestamp}|{body_hash}"
             signature = hmac_mod.new(
                 gateway_secret.encode(),
                 payload.encode(),
