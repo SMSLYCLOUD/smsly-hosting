@@ -844,7 +844,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
             commit_message=f"Remote Deploy: {ref}" if source_node else f"Manual Trigger: {ref}",
-            source_node=None if is_docker_delegated else source_node
+            source_node=None if is_docker_delegated else source_node,
+            target_server=target_server
         )
 
         try:
@@ -868,10 +869,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
             deployment.save(
                 update_fields=['status', 'finished_at', 'build_logs', 'updated_at']
             )
-            # Restore original server if we changed it
-            if target_server_id is not None and original_server:
-                service.server = original_server
-                service.save(update_fields=["server"])
             return Response(
                 {
                     'error': 'Failed to queue deployment task. Check Celery/Redis health.',
@@ -879,6 +876,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        finally:
+            # Restore original server if we changed it
+            if target_server_id is not None and original_server:
+                service.server = original_server
+                service.save(update_fields=["server"])
         return Response(DeploymentSerializer(deployment).data)
 
     # ── Preview Environments ─────────────────────────────────────────────
