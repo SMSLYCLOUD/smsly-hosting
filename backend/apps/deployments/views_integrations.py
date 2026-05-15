@@ -164,12 +164,12 @@ def github_oauth_url(request):
         )
 
     # Build callback URL pointing to the FRONTEND callback page
-    # Use SITE_URL as the preferred base for callback to ensure https in production
+    # CRITICAL: Always use SITE_URL to ensure exact match with GitHub App settings
     site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
-    if site_url and 'localhost' not in site_url:
+    if site_url:
         callback_url = f"{site_url}/auth/github/callback"
     else:
-        # Fallback to request-based derivation
+        # Fallback only if SITE_URL is not configured
         scheme = "https" if request.is_secure() or request.headers.get('X-Forwarded-Proto') == 'https' else "http"
         origin = f"{scheme}://{request.get_host()}"
         callback_url = f"{origin}/auth/github/callback"
@@ -233,9 +233,14 @@ def github_oauth_callback(request):
         )
 
     # Build the same callback URL the frontend used
-    scheme = "https" if request.is_secure() else "http"
-    origin = f"{scheme}://{request.get_host()}"
-    callback_url = f"{origin}/auth/github/callback"
+    # CRITICAL: Always use SITE_URL to ensure exact match with GitHub App settings
+    site_url = getattr(settings, 'SITE_URL', '').rstrip('/')
+    if not site_url:
+        # Fallback only if SITE_URL is not configured
+        scheme = "https" if request.is_secure() else "http"
+        origin = f"{scheme}://{request.get_host()}"
+        site_url = origin
+    callback_url = f"{site_url}/auth/github/callback"
 
     # ── Step 1: Exchange code for access token ──────────────────────────
     try:
