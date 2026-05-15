@@ -625,11 +625,11 @@ def generate_caddyfile(config) -> str:
                     except OSError:
                         pass
         if os.path.exists(_crt_path) and os.path.exists(_key_path) and _server_ip:
-            # Use IP-specific HTTPS block so it doesn't intercept domain HTTPS.
-            # Caddy routes by SNI: domain requests go to domain blocks (LE certs),
-            # IP requests go to this block (self-signed cert + redirect to HTTP).
+            # IP-specific HTTPS block using SNI routing.
+            # Caddy routes TLS by SNI hostname: domain requests go to domain
+            # blocks (Let's Encrypt), IP requests go here (self-signed + redirect).
             sections.append(
-                f"""https://{_server_ip} {{
+                f"""{_server_ip} {{
     tls {_caddy_crt} {_caddy_key}
     redir http://{_server_ip}{{uri}} 308
 }}"""
