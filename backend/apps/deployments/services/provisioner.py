@@ -500,21 +500,24 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
 def _provision_node_db_credentials(server: ManagedServer):
     """
     Create a dedicated PostgreSQL user on the Master DB for this node.
+
+    Grants ALL PRIVILEGES on existing tables AND sets ALTER DEFAULT PRIVILEGES
+    so future tables created by migrations are automatically accessible.
     """
     master_db_url = os.environ.get("DATABASE_URL")
     if not master_db_url:
         return None, None
-    
+
     # Node-specific username
     node_id_short = str(server.id).split('-')[0]
     username = f"node_agent_{node_id_short}"
     password = secrets.token_urlsafe(24)
-    
+
     try:
         import psycopg2
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
         from psycopg2 import sql
-        
+
         conn = psycopg2.connect(master_db_url)
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         with conn.cursor() as cur:
@@ -524,26 +527,30 @@ def _provision_node_db_credentials(server: ManagedServer):
                 cur.execute(sql.SQL("ALTER USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
             else:
                 cur.execute(sql.SQL("CREATE USER {} WITH PASSWORD %s").format(sql.Identifier(username)), (password,))
-            
+
             # Grant access to the primary database
             parsed = urlparse(master_db_url)
             db_name = parsed.path.lstrip('/')
-            
+
             cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON DATABASE {} TO {}").format(
                 sql.Identifier(db_name), sql.Identifier(username)
             ))
-            
-            # Note: Permissions on schemas/tables need to be set in the target DB
-            # We connect to the target DB to grant schema permissions
+
+            # Connect to the target DB to grant schema permissions
             conn.close()
-            
+
             target_db_url = master_db_url.replace(f"/{db_name}", f"/{db_name}")
             conn = psycopg2.connect(target_db_url)
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             with conn.cursor() as target_cur:
+                # Grant schema access
                 target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON SCHEMA public TO {}").format(sql.Identifier(username)))
+                # Grant access to all existing tables and sequences
                 target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(username)))
                 target_cur.execute(sql.SQL("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {}").format(sql.Identifier(username)))
+                # CRITICAL: Auto-grant permissions on future tables created by migrations
+                target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {}").format(sql.Identifier(username)))
+                target_cur.execute(sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {}").format(sql.Identifier(username)))
 
         logger.info("Created dedicated Master DB credentials for node %s: %s", server.name, username)
         return username, password

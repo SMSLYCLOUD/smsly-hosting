@@ -113,6 +113,16 @@ setup_social_apps_nonfatal() {
         echo "SMSLY_RUN_ENTRYPOINT_TASKS=false; skipping entrypoint migrations/static/admin bootstrap."
     fi
 
+    # Self-healing: ensure node agent DB permissions are always correct.
+    # This fixes permissions for tables created by recent migrations that
+    # the node agent user may not have access to.
+    fix_node_db_permissions() {
+        echo "Checking node agent database permissions..."
+        python manage.py fix_node_db_permissions 2>&1 || \
+            echo "WARNING: fix_node_db_permissions failed (non-fatal)"
+    }
+    fix_node_db_permissions
+
 ensure_caddy_config_writable() {
     if [ -d /caddy-config ]; then
         chown -R smsly:smsly /caddy-config 2>/dev/null || true
