@@ -456,7 +456,6 @@ def build_local_source_bundle() -> str:
         ".credentials",
         ".git-credentials",
         "backups",
-        "repo_cache",
         "scratch",
         "media",
     }

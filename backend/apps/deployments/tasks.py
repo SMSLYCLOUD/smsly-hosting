@@ -3486,7 +3486,6 @@ def _clear_orphaned_runtime_resources() -> dict:
         errors.append({"name": "dangling-images", "error": str(exc)})
 
     cache_results = [
-        _clear_directory_contents("/app/repo_cache"),
         _clear_directory_contents("/opt/smsly-cache"),
     ]
 
