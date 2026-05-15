@@ -634,7 +634,7 @@ def generate_caddyfile(config) -> str:
             sections.append(
                 f""":443 {{
     tls {_caddy_crt} {_caddy_key}
-    @ip host_regexp ^([0-9]{{1,3}}[.]){{3}}[0-9]{{1,3}}$
+    @ip expression `host.matches('^([0-9]{{1,3}}[.]){{3}}[0-9]{{1,3}}$')`
     handle @ip {{
         redir http://{{host}}{{uri}} 308
     }}
