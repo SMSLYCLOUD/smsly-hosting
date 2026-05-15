@@ -190,6 +190,103 @@ class RemoteOrchestrator:
             
         return False
 
+    def _exchange_gateway_secret_for_token(self, base_url: str) -> bool:
+        """
+        Use the stored remote GATEWAY_SECRET to mint and persist a fresh API token.
+
+        HMAC can authenticate remote sync requests, but a saved smsly_ token keeps
+        future calls fast and avoids repeated signed fallbacks.
+        """
+        gateway_secret = str(self.server.gateway_secret or "").strip()
+        if not gateway_secret:
+            return False
+
+        path = "/api/v1/auth/node-token-exchange-hmac/"
+        body = self._encode_json({
+            "node_name": f"Node-{self.server.host or self.server.name}"[:100],
+        })
+        timestamp = str(int(time.time()))
+        body_hash = hashlib.sha256(body).hexdigest()
+        payload = f"POST|{path}|{timestamp}|{body_hash}"
+        signature = hmac_mod.new(
+            gateway_secret.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        url = f"{base_url.rstrip('/')}{path}"
+        verify_ssl = _REMOTE_VERIFY if url.startswith("https://") else False
+
+        try:
+            response = requests.request(
+                "POST",
+                url,
+                data=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Gateway-Signature-V2": signature,
+                    "X-Request-Timestamp": timestamp,
+                },
+                timeout=self._timeout(15),
+                allow_redirects=False,
+                verify=verify_ssl,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "Gateway token exchange request failed for %s at %s: %s",
+                self.server.host,
+                base_url,
+                exc,
+            )
+            return False
+
+        if response.status_code != 200:
+            logger.warning(
+                "Gateway token exchange failed for %s at %s: HTTP %s. %s",
+                self.server.host,
+                base_url,
+                response.status_code,
+                _safe_error_snippet(getattr(response, "text", "")),
+            )
+            return False
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning(
+                "Gateway token exchange for %s returned non-JSON response.",
+                self.server.host,
+            )
+            return False
+
+        token = str(data.get("token") or "").strip() if isinstance(data, dict) else ""
+        if not token:
+            logger.warning(
+                "Gateway token exchange for %s returned no token.",
+                self.server.host,
+            )
+            return False
+
+        if self.server.api_token != token:
+            self.server.api_token = token
+            self.server.save(update_fields=["api_token", "updated_at"])
+        logger.info(
+            "Gateway token exchange refreshed API token for %s (%s).",
+            self.server.name,
+            self.server.host,
+        )
+        return True
+
+    def _try_gateway_token_exchange(self, base_urls: list[str] | None = None) -> bool:
+        """Try token exchange against candidate remote API base URLs."""
+        if not str(self.server.gateway_secret or "").strip():
+            return False
+
+        for base_url in base_urls or self._candidate_base_urls():
+            if self._exchange_gateway_secret_for_token(base_url):
+                return True
+        return False
+
     def _get_headers(
         self,
         method: str,
@@ -315,13 +412,18 @@ class RemoteOrchestrator:
         network_retry_statuses = {429, 500, 502, 503, 504}
         last_response = None
         modes = self._auth_modes()
+        base_urls = self._candidate_base_urls()
 
         if retry_auth and (not modes or modes == ["none"]):
             # If no auth modes, try auto-auth first
             if self.auto_authenticate():
                 modes = self._auth_modes()
 
-        for base_url in self._candidate_base_urls():
+        if retry_auth and "token" not in modes and "hmac" in modes:
+            if self._try_gateway_token_exchange(base_urls):
+                modes = self._auth_modes()
+
+        for base_url in base_urls:
             url = f"{base_url}{request_path}"
             redirected = False
 
@@ -394,6 +496,22 @@ class RemoteOrchestrator:
                         continue
 
                     has_more_modes = index < len(modes) - 1
+                    if (
+                        retry_auth
+                        and mode == "token"
+                        and status in auth_retry_statuses
+                        and str(self.server.gateway_secret or "").strip()
+                    ):
+                        if self._try_gateway_token_exchange([base_url]):
+                            return self._request(
+                                method_upper,
+                                path,
+                                payload=payload,
+                                params=params,
+                                timeout=timeout,
+                                retry_auth=False,
+                            )
+
                     if has_more_modes and status in auth_retry_statuses:
                         self._set_last_error(
                             (
