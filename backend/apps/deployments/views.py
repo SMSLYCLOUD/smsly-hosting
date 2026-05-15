@@ -785,7 +785,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
-        skip_review = _parse_bool(request.data.get('skip_review', False))
+        skip_review = _parse_bool(request.data.get('skip_review', True))
         source_node = request.data.get('source_node')
         image_name = request.data.get('image_name', '').strip()
         target_server_id = request.data.get('target_server_id')
@@ -2744,7 +2744,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             service_id = serializer.validated_data['service_id']
             provider_id = serializer.validated_data['provider_id']
-            skip_review = serializer.validated_data.get('skip_review', False)
+            skip_review = serializer.validated_data.get('skip_review', True)
 
             try:
                 # ZH-011 FIX: Verify service ownership before triggering deployment
@@ -2774,7 +2774,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 smart_deploy_task.delay(
                     deployment_id=str(deployment.id), 
                     provider_id=str(provider.id),
-                    skip_review=request.data.get('skip_review', False)
+                    skip_review=skip_review
                 )
 
                 return Response({
@@ -4194,7 +4194,7 @@ class RemoteTriggerView(GenericAPIView):
 
         service_id = serializer.validated_data['service_id']
         provider_id = serializer.validated_data['provider_id']
-        skip_review = serializer.validated_data.get('skip_review', False)
+        skip_review = serializer.validated_data.get('skip_review', True)
         ref = serializer.validated_data.get('commit_hash', 'HEAD')
         source_node = request.data.get('source_node', 'remote-controller')
 

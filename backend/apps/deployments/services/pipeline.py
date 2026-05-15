@@ -250,6 +250,15 @@ class PipelineManager:
             self.source_dir = self.build_dir
             self._clone_repo()
 
+        if not self._source_tree_available(self.source_dir):
+            append_log(
+                self.deployment,
+                "Build source from review phase is unavailable locally. Re-cloning repository for build phase...\n"
+            )
+            self.build_dir = os.path.join(_BUILDS_ROOT, f"svc_{self.service.id}")
+            self.source_dir = None
+            self._clone_repo()
+
         # Reload secrets for log redaction
         env_vars = self.service.env_vars.all()
         self.secret_values = [
@@ -260,6 +269,22 @@ class PipelineManager:
                 re.IGNORECASE,
             )
         ]
+
+    @staticmethod
+    def _source_tree_available(source_dir: str | None) -> bool:
+        """Return True when a path still contains cloned source files."""
+        if not source_dir or not os.path.isdir(source_dir):
+            return False
+        if os.path.isdir(os.path.join(source_dir, ".git")):
+            return True
+        try:
+            return any(
+                name not in {".", ".."}
+                and not name.startswith(".smsly-git-askpass-")
+                for name in os.listdir(source_dir)
+            )
+        except OSError:
+            return False
 
     def _build_review_summary(self) -> dict:
         """Compile the review summary from current service+deployment state."""
@@ -1325,6 +1350,13 @@ class PipelineManager:
                     (timezone.now() - start_time).total_seconds()
                 )
                 return
+
+            if self.service.deploy_type == 'GIT' and not self._source_tree_available(self.source_dir):
+                append_log(
+                    self.deployment,
+                    "Build source directory is missing. Re-cloning before build...\n",
+                )
+                self._clone_repo()
 
             tag_hash = self.deployment.commit_hash[:7]
             self.image_name = f"smsly/{self.service.name.lower()}:{tag_hash}"
