@@ -114,6 +114,28 @@ def _master_gateway_secret() -> str:
     ).strip()
 
 
+def _get_master_mesh_ip() -> str:
+    """Return the WireGuard mesh IP of the primary/master server.
+
+    Lite agents must use the mesh IP for database, RabbitMQ, and Redis
+    connections because the public IP is typically firewalled.
+    """
+    from apps.deployments.models_core import ManagedServer
+    primary = ManagedServer.get_primary()
+    if not primary:
+        return ""
+    wg = str(getattr(primary, "wg_address", "") or "").strip()
+    if wg:
+        return wg
+    try:
+        peer = primary.wg_peers.filter(is_active=True).order_by("-updated_at").first()
+        if peer and peer.wg_address:
+            return str(peer.wg_address)
+    except Exception:
+        pass
+    return ""
+
+
 def build_agent_lite_install_env(
     server: ManagedServer,
     master_ip: str | None = None,
@@ -124,6 +146,11 @@ def build_agent_lite_install_env(
     Lite agents share the master's database, broker, Redis, and HMAC secret.
     They also need a deterministic node queue so deployments sent to the agent
     cannot be consumed by the control-plane worker.
+
+    IMPORTANT: MASTER_IP is the public IP used for HTTP API calls, but
+    MASTER_MESH_IP is the WireGuard IP used for database, RabbitMQ, and Redis.
+    This separation is required because the public IP is typically firewalled
+    for internal ports (5432, 5672, 6379).
     """
     messages: list[str] = []
 
@@ -165,6 +192,17 @@ def build_agent_lite_install_env(
         or "127.0.0.1"
     )
 
+    # WireGuard mesh IP for internal services (DB, MQ, Redis)
+    master_mesh_ip = _get_master_mesh_ip()
+    if master_mesh_ip:
+        messages.append(f"Master mesh IP for internal services: {master_mesh_ip}")
+    else:
+        messages.append(
+            "Warning: No WireGuard mesh IP found for master. "
+            "Falling back to public IP for internal services (may fail if firewalled)."
+        )
+        master_mesh_ip = resolved_master_ip
+
     node_id = str(server.id)
     node_queue = _node_queue_name(server)
     # SEC-ZT-003: Generate a unique per-agent GATEWAY_SECRET instead of
@@ -180,6 +218,7 @@ def build_agent_lite_install_env(
     return (
         {
             "MASTER_IP": resolved_master_ip,
+            "MASTER_MESH_IP": master_mesh_ip,
             "MASTER_DB_USER": master_db_user,
             "MASTER_DB_PASSWORD": master_db_pass,
             "MASTER_MQ_PASSWORD": master_mq_pass,
