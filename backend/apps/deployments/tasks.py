@@ -1108,11 +1108,13 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
         #  - Its server host matches this controller's IP.
         # This prevents accidental remote delegation when the user explicitly
         # wants to deploy to the master node.
-        is_local = (not service.server) or service.server.is_primary or (service.server.host == config.server_ip)
+        # If deployment.target_server is explicitly set, use it instead of service.server.
+        effective_server = deployment.target_server or service.server
+        is_local = (not effective_server) or effective_server.is_primary or (effective_server.host == config.server_ip)
 
         if not is_local:
             if deployment.remote_deployment_id:
-                _resume_remote_deployment(deployment, service.server)
+                _resume_remote_deployment(deployment, effective_server)
                 return
 
             # Build-agent optimization: for GIT services on remote
@@ -1129,12 +1131,12 @@ def smart_deploy_task(self, deployment_id: str, provider_id: str,
                         broadcast_status(deployment)
                         return
                 _handle_remote_deployment(
-                    deployment, service.server,
+                    deployment, effective_server,
                     skip_review=skip_review, image_name=built_image,
                 )
                 return
 
-            _handle_remote_deployment(deployment, service.server, skip_review=skip_review)
+            _handle_remote_deployment(deployment, effective_server, skip_review=skip_review)
             return
 
         # 1. Build Phase (Pipeline)
