@@ -307,9 +307,6 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     - Otherwise, if prefer_local is true, try to find an active LOCAL provider.
     - Fall back to the first active global provider.
     """
-    if service.provider:
-        return service.provider if service.provider.is_active else None
-
     if prefer_local:
         local = CloudProvider.objects.filter(
             provider_type=CloudProvider.ProviderType.LOCAL,
@@ -317,6 +314,9 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
         ).first()
         if local:
             return local
+
+    if service.provider:
+        return service.provider if service.provider.is_active else None
 
     # Global preference: Remote nodes first, then Local as last resort
     remote = CloudProvider.objects.filter(
@@ -386,6 +386,115 @@ def _parse_bool(value):
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
+_DEPLOY_TARGET_MISSING = object()
+_LOCAL_DEPLOY_TARGET_VALUES = {
+    "",
+    "local",
+    "localhost",
+    "controller",
+    "master",
+    "primary",
+    "none",
+    "null",
+}
+
+
+def _is_local_deploy_target(value) -> bool:
+    """Return True for explicit client values that mean the local controller."""
+    if value is None:
+        return True
+    return str(value).strip().lower() in _LOCAL_DEPLOY_TARGET_VALUES
+
+
+def _resolve_local_provider():
+    return CloudProvider.objects.filter(
+        provider_type=CloudProvider.ProviderType.LOCAL,
+        is_active=True,
+    ).first()
+
+
+def _resolve_provider_for_target(service: Service, *, target_is_local: bool = False):
+    """Resolve a provider for the chosen deployment target."""
+    if target_is_local:
+        return _resolve_local_provider()
+    return _resolve_provider_for_service(service)
+
+
+def _resolve_requested_deploy_target(request, service: Service):
+    """
+    Resolve the optional per-deploy target.
+
+    Omitted target_server_id keeps legacy behavior: deploy where the service is
+    assigned. Explicit null/empty/"local" means this one deployment runs on the
+    local controller even if the service is normally assigned to a remote node.
+    """
+    raw_target = request.data.get('target_server_id', _DEPLOY_TARGET_MISSING)
+    if raw_target is _DEPLOY_TARGET_MISSING:
+        return {
+            "ok": True,
+            "specified": False,
+            "target_server": None,
+            "target_is_local": False,
+            "effective_server": getattr(service, 'server', None),
+        }
+
+    if _is_local_deploy_target(raw_target):
+        return {
+            "ok": True,
+            "specified": True,
+            "target_server": None,
+            "target_is_local": True,
+            "effective_server": None,
+        }
+
+    from apps.deployments.models_core import ManagedServer
+
+    target_id = str(raw_target or "").strip()
+    queryset = ManagedServer.objects.all()
+    if not request.user.is_superuser:
+        queryset = queryset.filter(owner=request.user)
+    target_server = queryset.filter(id=target_id).first()
+    if not target_server:
+        return {
+            "ok": False,
+            "response": Response(
+                {'error': f'Server {target_id} not found'},
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        }
+
+    if target_server.is_primary:
+        return {
+            "ok": True,
+            "specified": True,
+            "target_server": None,
+            "target_is_local": True,
+            "effective_server": None,
+        }
+
+    if target_server.status != ManagedServer.Status.ONLINE:
+        return {
+            "ok": False,
+            "response": Response(
+                {
+                    'error': (
+                        f'Server {target_server.name} is {target_server.status}. '
+                        'Only ONLINE remote servers can receive deployments.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            ),
+        }
+
+    return {
+        "ok": True,
+        "specified": True,
+        "target_server": target_server,
+        "target_is_local": False,
+        "effective_server": target_server,
+    }
+
+
 _ENV_KEY_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _MASKED_SECRET_PATTERN = re.compile(r'^[\*\u2022]{4,}$')
 
@@ -421,12 +530,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def _is_remote_sync_request(self):
         token = getattr(self.request, 'auth', None)
+        authenticator = getattr(self.request, 'successful_authenticator', None)
+        authenticator_name = authenticator.__class__.__name__ if authenticator else ''
+        is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
+        is_node_token = (
+            hasattr(token, 'prefix')
+            and str(getattr(token, 'name', '') or '').startswith('node:')
+        )
         return (
             self.request.headers.get('X-SMSLY-Remote-Sync') == '1'
-            or (
-                hasattr(token, 'prefix')
-                and str(getattr(token, 'name', '') or '').startswith('node:')
-            )
+            and (is_node_token or is_hmac_remote_sync)
         )
 
     def perform_create(self, serializer):
@@ -780,29 +893,38 @@ class ServiceViewSet(viewsets.ModelViewSet):
             "image_name": "registry:5000/...",
             "target_server_id": "uuid-or-null"
         }
-        When target_server_id is null/omitted, deploy to the master/local node.
-        When target_server_id is a server UUID, deploy to that specific node.
+        When target_server_id is omitted, deploy to the service's assigned node.
+        When target_server_id is null/empty/"local" (or a primary server UUID),
+        deploy this one run to the local controller.
+        When target_server_id is a worker UUID, deploy to that specific node.
         """
         service = self.get_object()
         ref = request.data.get('ref', 'HEAD')
-        skip_review = _parse_bool(request.data.get('skip_review', True))
-        source_node = request.data.get('source_node')
-        image_name = request.data.get('image_name', '').strip()
-        target_server_id = request.data.get('target_server_id')
+        is_remote_sync = self._is_remote_sync_request()
+        requested_skip_review = _parse_bool(request.data.get('skip_review', False))
+        skip_review = requested_skip_review if is_remote_sync else False
+        source_node = str(request.data.get('source_node') or '').strip()
+        image_name = str(request.data.get('image_name') or '').strip()
 
-        # Resolve target server if explicitly specified
-        target_server = None
-        if target_server_id is not None:
-            from apps.deployments.models_core import ManagedServer
-            target_server = ManagedServer.objects.filter(id=target_server_id).first()
-            if not target_server:
-                return Response(
-                    {'error': f'Server {target_server_id} not found'},
-                    status=status.HTTP_400_BAD_REQUEST)
+        if (source_node or image_name or requested_skip_review) and not is_remote_sync:
+            return Response(
+                {
+                    'error': (
+                        'source_node, image_name, and skip_review are reserved '
+                        'for authenticated node-to-node deployment requests.'
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        # Use explicit target server, or fall back to service's assigned server
-        server = target_server or getattr(service, 'server', None)
-        guard = ServerGuard.check_user_workload_allowed(server)
+        target = _resolve_requested_deploy_target(request, service)
+        if not target["ok"]:
+            return target["response"]
+        target_server = target["target_server"]
+        target_is_local = target["target_is_local"]
+        effective_server = target["effective_server"]
+
+        guard = ServerGuard.check_user_workload_allowed(effective_server)
         if not guard["ok"]:
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
@@ -816,10 +938,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_409_CONFLICT)
 
         # Determine provider
-        provider = _resolve_provider_for_service(service)
+        provider = _resolve_provider_for_target(
+            service,
+            target_is_local=target_is_local,
+        )
         if not provider:
-            return Response({'error': 'No active cloud provider configured'},
-                            status=status.HTTP_400_BAD_REQUEST)
+            message = (
+                'No active local cloud provider configured'
+                if target_is_local
+                else 'No active cloud provider configured'
+            )
+            return Response({'error': message}, status=status.HTTP_400_BAD_REQUEST)
 
         # For DOCKER type services triggered from a remote master, clear
         # source_node to prevent the task from re-delegating back.
@@ -833,19 +962,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
             service.docker_image = image_name
             service.save(update_fields=["docker_image"])
 
-        # Temporarily override service.server if user selected a different target
-        original_server = service.server
-        if target_server_id is not None and service.server_id != target_server_id:
-            service.server = target_server
-            service.save(update_fields=["server"])
-
         deployment = Deployment.objects.create(
             service=service,
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
             commit_message=f"Remote Deploy: {ref}" if source_node else f"Manual Trigger: {ref}",
             source_node=None if is_docker_delegated else source_node,
-            target_server=target_server
+            target_server=target_server,
+            target_is_local=target_is_local,
         )
 
         try:
@@ -876,11 +1000,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        finally:
-            # Restore original server if we changed it
-            if target_server_id is not None and original_server:
-                service.server = original_server
-                service.save(update_fields=["server"])
         return Response(DeploymentSerializer(deployment).data)
 
     # ── Preview Environments ─────────────────────────────────────────────
@@ -1146,6 +1265,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                             status=Deployment.Status.QUEUED,
                             commit_hash=ref if ref != 'HEAD' else 'latest',
                             commit_message=f"Multi-deploy: {ref}",
+                            target_is_local=True,
                         )
                         try:
                             smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id))
@@ -2744,7 +2864,12 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             service_id = serializer.validated_data['service_id']
             provider_id = serializer.validated_data['provider_id']
-            skip_review = serializer.validated_data.get('skip_review', True)
+            if serializer.validated_data.get('skip_review', False):
+                return Response(
+                    {'error': 'skip_review is reserved for trusted internal deployment paths.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            skip_review = False
 
             try:
                 # ZH-011 FIX: Verify service ownership before triggering deployment
@@ -2960,10 +3085,18 @@ class DeploymentViewSet(viewsets.ModelViewSet):
 
         # Resolve provider BEFORE changing status (fail-safe: stays in
         # REVIEW if no provider, so user can retry)
-        provider = _resolve_provider_for_service(service)
+        provider = _resolve_provider_for_target(
+            service,
+            target_is_local=bool(getattr(deployment, 'target_is_local', False)),
+        )
         if not provider:
+            message = (
+                'No active local cloud provider configured'
+                if getattr(deployment, 'target_is_local', False)
+                else 'No active cloud provider configured'
+            )
             return Response(
-                {'error': 'No active cloud provider configured'},
+                {'error': message},
                 status=status.HTTP_400_BAD_REQUEST)
 
         # Provider exists — now safe to transition status
@@ -4194,7 +4327,7 @@ class RemoteTriggerView(GenericAPIView):
 
         service_id = serializer.validated_data['service_id']
         provider_id = serializer.validated_data['provider_id']
-        skip_review = serializer.validated_data.get('skip_review', True)
+        skip_review = serializer.validated_data.get('skip_review', False)
         ref = serializer.validated_data.get('commit_hash', 'HEAD')
         source_node = request.data.get('source_node', 'remote-controller')
 

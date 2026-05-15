@@ -28,6 +28,7 @@ import { ResourceAlerts } from '@/components/dashboard/ResourceAlerts';
 
 const XtermConsole = dynamic(() => import('@/components/terminal/XtermConsole'), { ssr: false });
 type ServiceEnvMap = Record<string, { id: number; value: string }>;
+const LOCAL_DEPLOY_TARGET = 'local';
 
 const getAuthTokenFromCookie = (): string | null => {
     if (typeof document === 'undefined') return null;
@@ -66,7 +67,7 @@ export default function ServiceDetailPage() {
     const [telegramChatId, setTelegramChatId] = useState('');
     const [whatsappTo, setWhatsappTo] = useState('');
     const [servers, setServers] = useState<ManagedServer[]>([]);
-    const [targetServerId, setTargetServerId] = useState<string | null>(null);
+    const [targetServerId, setTargetServerId] = useState<string>(LOCAL_DEPLOY_TARGET);
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     const loadWatchConfig = useCallback(async (serviceId: string) => {
@@ -242,16 +243,12 @@ export default function ServiceDetailPage() {
             try {
                 const data = await serversApi.list();
                 setServers(data);
-                if (service?.server_id) {
-                    setTargetServerId(service.server_id);
-                } else if (data.length > 0) {
-                    const primary = data.find((s: ManagedServer) => s.is_primary);
-                    setTargetServerId(primary?.id || data[0].id);
-                }
+                const assignedServerId = service?.server_id || service?.server || '';
+                setTargetServerId(assignedServerId || LOCAL_DEPLOY_TARGET);
             } catch (err) { console.error(err); }
         };
         fetchServers();
-    }, [id, service?.server_id]);
+    }, [id, service?.server_id, service?.server]);
 
     useEffect(() => {
         if (!id) return;
@@ -548,13 +545,14 @@ export default function ServiceDetailPage() {
                                     </button>
                                     <div className="flex gap-2">
                                         <select
-                                            value={targetServerId || ''}
-                                            onChange={(e) => setTargetServerId(e.target.value || null)}
+                                            value={targetServerId}
+                                            onChange={(e) => setTargetServerId(e.target.value || LOCAL_DEPLOY_TARGET)}
                                             className="flex-1 bg-card border border-border rounded-lg px-2 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                                         >
-                                            {servers.map((s) => (
+                                            <option value={LOCAL_DEPLOY_TARGET}>Local Server</option>
+                                            {servers.filter((s) => !s.is_primary).map((s) => (
                                                 <option key={s.id} value={s.id}>
-                                                    {s.name}{s.is_primary ? ' (Master)' : ''}
+                                                    {s.name}
                                                 </option>
                                             ))}
                                         </select>

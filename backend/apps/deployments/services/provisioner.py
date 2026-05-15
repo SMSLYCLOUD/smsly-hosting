@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import time
 import hashlib
+import hmac as hmac_mod
+import json
 import secrets
 import requests
 from urllib.parse import urlparse
@@ -911,6 +913,67 @@ def provision_server(self, server_id: str):
 
         api_url = api_urls[0] if api_urls else f"http://{server.host}"
 
+        remote_gateway_secret = ""
+        try:
+            stdin, stdout, stderr = ssh.exec_command(
+                "grep -E '^GATEWAY_SECRET=' /opt/smsly-hosting/.env "
+                "2>/dev/null | head -1"
+            )
+            secret_line = stdout.read().decode("utf-8", errors="replace").strip()
+            if "=" in secret_line:
+                remote_gateway_secret = secret_line.split("=", 1)[1].strip().strip("'\"")
+        except Exception as secret_exc:
+            _append_log(server, f"Warning: could not read remote gateway secret: {secret_exc}")
+
+        if not api_token and remote_gateway_secret:
+            token_errors = []
+            for candidate_url in api_urls:
+                path = "/api/v1/auth/node-token-exchange-hmac/"
+                body = json.dumps(
+                    {"node_name": f"Node-{server.host or server.name}"[:100]},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+                timestamp = str(int(time.time()))
+                body_hash = hashlib.sha256(body).hexdigest()
+                payload = f"POST|{path}|{timestamp}|{body_hash}"
+                signature = hmac_mod.new(
+                    remote_gateway_secret.encode(),
+                    payload.encode(),
+                    hashlib.sha256,
+                ).hexdigest()
+                try:
+                    response = requests.post(
+                        f"{candidate_url}{path}",
+                        data=body,
+                        headers={
+                            "Accept": "application/json",
+                            "Content-Type": "application/json",
+                            "X-Gateway-Signature-V2": signature,
+                            "X-Request-Timestamp": timestamp,
+                        },
+                        timeout=20,
+                        verify=candidate_url.startswith("https://"),
+                    )
+                    if not response.ok:
+                        token_errors.append(f"{candidate_url}:HTTP {response.status_code}")
+                        continue
+                    token_value = response.json().get("token", "")
+                    if token_value:
+                        api_token = token_value
+                        api_url = candidate_url
+                        _append_log(server, "HMAC token exchange succeeded.")
+                        break
+                    token_errors.append(f"{candidate_url}:empty token payload")
+                except Exception as token_exc:
+                    token_errors.append(f"{candidate_url}:{token_exc}")
+            if not api_token and token_errors:
+                _append_log(
+                    server,
+                    "Warning: HMAC token exchange failed via all candidates: "
+                    + "; ".join(token_errors),
+                )
+
         # If installer did not emit an API token, exchange admin credentials for one.
         if not api_token and admin_user and admin_password:
             token_errors = []
@@ -970,13 +1033,17 @@ def provision_server(self, server_id: str):
             "api_url", "api_token", "provision_status", "status",
             "provider_metadata", "updated_at",
         ]
+        if remote_gateway_secret:
+            server.gateway_secret = remote_gateway_secret
+            update_fields.append("gateway_secret")
+            _append_log(server, "Remote HMAC gateway secret synchronized.")
         if getattr(server, "is_lite_agent", False):
             gateway_secret = str(install_env.get("MASTER_GATEWAY_SECRET") or "").strip()
             node_queue = str(install_env.get("SMSLY_NODE_QUEUE") or _node_queue_name(server))
             provider_metadata["node_id"] = str(server.id)
             provider_metadata["node_queue"] = node_queue
             provider_metadata["node_host"] = str(server.host or "")
-            if gateway_secret:
+            if gateway_secret and not remote_gateway_secret:
                 server.gateway_secret = gateway_secret
                 update_fields.append("gateway_secret")
                 _append_log(
@@ -993,6 +1060,22 @@ def provision_server(self, server_id: str):
         _append_log(server, f"🖥️ Server '{server.name}' is now online at {api_url}")
 
         # -- Step 7: Auto-exchange — get a proper smsly_ API token --
+        try:
+            from apps.deployments.services.wireguard_service import WireGuardService
+            mesh_result = WireGuardService.ensure_server_in_default_mesh(
+                server,
+                deploy_async=True,
+            )
+            _append_log(
+                server,
+                f"VPN mesh auto-connect queued: {mesh_result.get('wg_address')}",
+            )
+        except Exception as mesh_exc:
+            _append_log(
+                server,
+                f"Warning: VPN mesh auto-connect could not complete yet: {mesh_exc}",
+            )
+
         # The token from provisioning may be a DRF session token.
         # Try to exchange it for a long-lived smsly_ API token via the
         # node-token-exchange endpoint on the new server.

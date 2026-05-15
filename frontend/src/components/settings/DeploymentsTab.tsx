@@ -9,6 +9,8 @@ import { toast } from '@/components/ui/use-toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatDistanceToNow } from 'date-fns';
 
+const LOCAL_DEPLOY_TARGET = 'local';
+
 export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const confirm = useConfirm();
     const [deployments, setDeployments] = useState<Deployment[]>([]);
@@ -23,7 +25,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     const [bulkCancelling, setBulkCancelling] = useState(false);
     const [promotingId, setPromotingId] = useState<string | null>(null);
     const [servers, setServers] = useState<ManagedServer[]>([]);
-    const [targetServerId, setTargetServerId] = useState<string | null>(null);
+    const [targetServerId, setTargetServerId] = useState<string>(LOCAL_DEPLOY_TARGET);
 
     const loadDeployments = useCallback(async () => {
         try {
@@ -47,10 +49,7 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
             try {
                 const data = await serversApi.list();
                 setServers(data);
-                if (data.length > 0) {
-                    const primary = data.find((s: ManagedServer) => s.is_primary);
-                    setTargetServerId(primary?.id || data[0].id);
-                }
+                setTargetServerId(LOCAL_DEPLOY_TARGET);
             } catch (err) { console.error(err); }
         };
         fetchServers();
@@ -262,13 +261,14 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
                         </Button>
                         <div className="flex items-center gap-2">
                             <select
-                                value={targetServerId || ''}
-                                onChange={(e) => setTargetServerId(e.target.value || null)}
+                                value={targetServerId}
+                                onChange={(e) => setTargetServerId(e.target.value || LOCAL_DEPLOY_TARGET)}
                                 className="bg-card border border-border rounded-md px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                             >
-                                {servers.map((s) => (
+                                <option value={LOCAL_DEPLOY_TARGET}>Local Server</option>
+                                {servers.filter((s) => !s.is_primary).map((s) => (
                                     <option key={s.id} value={s.id}>
-                                        {s.name}{s.is_primary ? ' (Master)' : ''}
+                                        {s.name}
                                     </option>
                                 ))}
                             </select>

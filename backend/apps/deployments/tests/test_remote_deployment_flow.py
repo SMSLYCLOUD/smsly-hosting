@@ -123,3 +123,33 @@ class RemoteDeploymentFlowTests(TestCase):
 
         resume_mock.assert_called_once()
         handle_mock.assert_not_called()
+
+    @patch("apps.deployments.tasks._deploy_container")
+    @patch("apps.deployments.tasks.PipelineManager")
+    @patch("apps.deployments.tasks._handle_remote_deployment")
+    @patch("apps.deployments.tasks._resume_remote_deployment")
+    def test_resume_task_honors_explicit_local_target(
+        self, resume_mock, handle_mock, pipeline_cls, deploy_container
+    ):
+        self.deployment.remote_deployment_id = "remote-deployment-id"
+        self.deployment.target_is_local = True
+        self.deployment.status = Deployment.Status.BUILDING
+        self.deployment.save(update_fields=[
+            "remote_deployment_id",
+            "target_is_local",
+            "status",
+        ])
+        pipeline_cls.return_value.run_build_only.return_value = "local-image"
+
+        resume_deploy_task.run(
+            deployment_id=str(self.deployment.id),
+            provider_id=str(self.provider.id),
+        )
+
+        resume_mock.assert_not_called()
+        handle_mock.assert_not_called()
+        deploy_container.assert_called_once_with(
+            self.deployment,
+            self.provider,
+            "local-image",
+        )

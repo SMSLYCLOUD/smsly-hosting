@@ -276,15 +276,48 @@ class SSHClient:
         """Create an API token via drf_create_token and return it."""
         quoted_path = shlex.quote(hosting_path)
 
-        # Strategy 1: use DRF's drf_create_token command
-        cmds = [
-            f"cd {quoted_path}",
-            f"docker compose exec -T backend python manage.py drf_create_token admin 2>&1",
-        ]
-        cmd = " && ".join(cmds)
+        api_token_shell = (
+            "from django.contrib.auth import get_user_model; "
+            "from apps.deployments.api_token_auth import APIToken; "
+            "User=get_user_model(); "
+            "u=User.objects.filter(is_superuser=True,is_active=True).first(); "
+            "assert u, 'no active superuser'; "
+            "APIToken.objects.filter(user=u,name='node:auto-ssh',is_active=True).update(is_active=False); "
+            "obj, raw=APIToken.create_token(u, name='node:auto-ssh'); "
+            "print('SMSLY_TOKEN: '+raw)"
+        )
+        compose_prefixes = (
+            "docker compose exec -T backend",
+            "docker-compose exec -T backend",
+        )
+
         try:
+            for prefix in compose_prefixes:
+                cmd = (
+                    f"cd {quoted_path} && {prefix} python manage.py shell -c "
+                    f"{shlex.quote(api_token_shell)} 2>&1"
+                )
+                out, err, _code = self.exec_command(cmd, raise_on_error=False)
+                raw = (out or "") + (err or "")
+                m = re.search(r"SMSLY_TOKEN:\s*(smsly_[A-Za-z0-9_]+)", raw)
+                if m:
+                    return m.group(1)
+
+            # Strategy 2: use DRF's drf_create_token command for older nodes.
+            cmds = [
+                f"cd {quoted_path}",
+                "docker compose exec -T backend python manage.py drf_create_token admin 2>&1",
+            ]
+            cmd = " && ".join(cmds)
             out, err, code = self.exec_command(cmd, raise_on_error=False)
             raw = (out or "") + (err or "")
+            if code != 0:
+                out, err, code = self.exec_command(
+                    f"cd {quoted_path} && docker-compose exec -T backend python manage.py drf_create_token admin 2>&1",
+                    raise_on_error=False,
+                )
+                raw = (out or "") + (err or "")
+
             for line in raw.splitlines():
                 line = line.strip()
                 if "Key:" in line:
@@ -294,7 +327,7 @@ class SSHClient:
                 if len(line) == 40 and line.isalnum():
                     return line
 
-            # Strategy 2: create token directly via Django ORM shell
+            # Strategy 3: create DRF token directly via Django ORM shell.
             logger.info("drf_create_token failed, trying Django ORM fallback")
             shell_cmd = (
                 f"cd {quoted_path} && "

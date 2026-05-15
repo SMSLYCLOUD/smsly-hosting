@@ -661,6 +661,9 @@ class Deployment(TimeStampedModel):
         blank=True,
         related_name='target_deployments',
         help_text="Server this deployment was explicitly routed to")
+    target_is_local = models.BooleanField(
+        default=False,
+        help_text="True when this deployment was explicitly routed to the local controller")
 
     class Meta:
         ordering = ['-created_at']

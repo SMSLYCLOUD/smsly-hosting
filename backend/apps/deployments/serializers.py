@@ -58,6 +58,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         many=True, queryset=Region.objects.all(), required=False)
     primary_region = serializers.PrimaryKeyRelatedField(
         queryset=Region.objects.all(), required=False)
+    server_id = serializers.SerializerMethodField()
     repository_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     docker_image = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     latest_deployment = serializers.SerializerMethodField()
@@ -111,6 +112,9 @@ class ServiceSerializer(serializers.ModelSerializer):
             "host": server.host,
             "status": server.status,
         }
+
+    def get_server_id(self, obj: Service) -> str | None:
+        return str(obj.server_id) if obj.server_id else None
 
     def get_estimated_cost(self, obj: Service) -> dict:
         import os
@@ -190,7 +194,7 @@ class DeploymentTriggerSerializer(serializers.Serializer):
     service_id = serializers.UUIDField()
     provider_id = serializers.UUIDField()
     commit_hash = serializers.CharField(required=False, allow_blank=True)
-    skip_review = serializers.BooleanField(default=True)
+    skip_review = serializers.BooleanField(default=False)
 
     # Optional overrides
     cpu_cores = serializers.DecimalField(

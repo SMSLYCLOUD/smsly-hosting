@@ -203,24 +203,30 @@ class WireGuardService:
         private_key, public_key = cls.generate_keypair()
         wg_address = mesh.next_available_ip()
 
-        # Build endpoint (Prefer Private IP for AWS/Internal if same VPC)
+        # Build endpoint. Public host is the safe default for arbitrary VPS
+        # fleets; private IP only works when the operator explicitly marks the
+        # node as sharing a routable private network.
         endpoint = ""
         if server:
-            # Check if we should use private_ip (e.g. same VPC or provider)
-            # Default to private_ip if available for better AWS performance
-            if server.private_ip:
+            metadata = getattr(server, "provider_metadata", {}) or {}
+            prefer_private = str(
+                metadata.get("mesh_endpoint")
+                or metadata.get("wireguard_endpoint")
+                or ""
+            ).lower() == "private" or bool(metadata.get("prefer_private_mesh"))
+            if server.private_ip and prefer_private:
                 endpoint = f"{server.private_ip}:{mesh.listen_port}"
                 log_event(
                     action="MESH_ENDPOINT_SELECTION",
                     target=f"Server: {server.name}",
-                    metadata={"selected": "private", "ip": server.private_ip, "reason": "AWS/Internal Optimization"}
+                    metadata={"selected": "private", "ip": server.private_ip, "reason": "Explicit private mesh preference"}
                 )
             else:
                 endpoint = f"{server.host}:{mesh.listen_port}"
                 log_event(
                     action="MESH_ENDPOINT_SELECTION",
                     target=f"Server: {server.name}",
-                    metadata={"selected": "public", "ip": server.host, "reason": "No Private IP available"}
+                    metadata={"selected": "public", "ip": server.host, "reason": "Default routable endpoint"}
                 )
         elif is_local:
             # For local server, try to detect public IP
@@ -243,6 +249,98 @@ class WireGuardService:
             f"(server: {server or 'local'})"
         )
         return peer
+
+    @classmethod
+    def ensure_server_in_default_mesh(cls, server, *, deploy_async: bool = True) -> dict:
+        """
+        Ensure the local controller and a connected server are in the default mesh.
+
+        This is idempotent and intended for server provisioning/connect flows.
+        """
+        from apps.deployments.models_mesh import MeshNetwork
+        from apps.deployments.models_core import ManagedServer
+
+        if not server:
+            raise ValueError("server is required")
+        if server.status != ManagedServer.Status.ONLINE:
+            raise ValueError(f"Server '{server.name}' is {server.status}; only ONLINE servers can join a mesh.")
+        if server.is_primary:
+            return {"mesh": None, "peer": None, "queued": False, "reason": "primary server is local peer"}
+        if not (server.ssh_key or server.ssh_password):
+            raise ValueError(f"Server '{server.name}' has no SSH credentials for automatic VPN mesh setup.")
+
+        project = getattr(server, "project", None)
+        mesh = MeshNetwork.objects.filter(
+            project=project,
+            name="default",
+        ).order_by("created_at").first()
+        if not mesh:
+            mesh = MeshNetwork.objects.create(
+                project=project,
+                name="default",
+                subnet="10.100.0.0/24",
+                listen_port=51820,
+                interface_name="wg0",
+                is_active=True,
+            )
+        elif not mesh.is_active:
+            mesh.is_active = True
+            mesh.save(update_fields=["is_active", "updated_at"])
+
+        from apps.deployments.models_mesh import WireGuardPeer
+        local_existed = WireGuardPeer.objects.filter(
+            mesh=mesh,
+            server=None,
+            is_local=True,
+        ).exists()
+        peer_existed = WireGuardPeer.objects.filter(
+            mesh=mesh,
+            server=server,
+            is_local=False,
+        ).exists()
+
+        local_peer = cls.add_peer_to_mesh(mesh, server=None, is_local=True)
+        peer = cls.add_peer_to_mesh(mesh, server=server, is_local=False)
+
+        update_fields = []
+        if getattr(server, "wg_address", None) != peer.wg_address:
+            server.wg_address = peer.wg_address
+            update_fields.append("wg_address")
+        if update_fields:
+            server.save(update_fields=update_fields + ["updated_at"])
+
+        primary = ManagedServer.get_primary()
+        if primary and getattr(primary, "wg_address", None) != local_peer.wg_address:
+            primary.wg_address = local_peer.wg_address
+            primary.save(update_fields=["wg_address", "updated_at"])
+
+        queued = False
+        should_deploy = (
+            not local_existed
+            or not peer_existed
+            or mesh.mesh_status != "ACTIVE"
+        )
+        if deploy_async and should_deploy and mesh.peers.filter(is_active=True).count() >= 2:
+            if mesh.mesh_status != "DEPLOYING":
+                mesh.mesh_status = "DEPLOYING"
+                mesh.mesh_last_error = ""
+                mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
+                try:
+                    from apps.deployments.tasks_mesh import deploy_mesh_task
+                    deploy_mesh_task.delay(str(mesh.id))
+                    queued = True
+                except Exception as exc:
+                    mesh.mesh_status = "FAILED"
+                    mesh.mesh_last_error = _bounded_error(exc)
+                    mesh.save(update_fields=["mesh_status", "mesh_last_error", "updated_at"])
+                    raise
+
+        return {
+            "mesh": str(mesh.id),
+            "peer": str(peer.id),
+            "wg_address": str(peer.wg_address),
+            "queued": queued,
+        }
 
     @classmethod
     def remove_peer_from_mesh(cls, peer):
@@ -545,6 +643,18 @@ class WireGuardService:
     def _detect_local_endpoint(port: int) -> str:
         """Detect this server's public IP for the WireGuard endpoint."""
         import requests as req
+        try:
+            from apps.deployments.models_core import PlatformConfig
+            config = PlatformConfig.load()
+            configured_ip = str(getattr(config, "server_ip", "") or "").strip()
+            if configured_ip:
+                return f"{configured_ip}:{port}"
+        except Exception:
+            pass
+        import os
+        env_ip = str(os.environ.get("PUBLIC_IP", "") or "").strip()
+        if env_ip:
+            return f"{env_ip}:{port}"
         for url in [
             "https://api.ipify.org",
             "https://ifconfig.me/ip",
