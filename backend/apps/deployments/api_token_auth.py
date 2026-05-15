@@ -5,10 +5,13 @@ Supports multiple named tokens per user (unlike DRF's built-in single token).
 """
 
 import hashlib
+import hmac
 import secrets
+import time
 import uuid
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
@@ -125,3 +128,59 @@ class APITokenAuthentication(BaseAuthentication):
 
     def authenticate_header(self, request):
         return self.keyword
+
+
+class RemoteSyncHMACAuthentication(BaseAuthentication):
+    """
+    Authenticate inter-node sync requests signed with the remote node's
+    GATEWAY_SECRET.
+
+    This is intentionally scoped to X-SMSLY-Remote-Sync requests so a gateway
+    secret does not become a general-purpose browser/API credential.
+    """
+
+    def authenticate(self, request):
+        if request.headers.get("X-SMSLY-Remote-Sync") != "1":
+            return None
+
+        signature = str(request.headers.get("X-Gateway-Signature-V2", "")).strip()
+        timestamp = str(request.headers.get("X-Request-Timestamp", "")).strip()
+        if not signature and not timestamp:
+            return None
+        if not signature or not timestamp:
+            raise AuthenticationFailed("Incomplete remote sync signature.")
+
+        try:
+            request_ts = int(timestamp)
+        except ValueError as exc:
+            raise AuthenticationFailed("Invalid remote sync timestamp.") from exc
+
+        if abs(int(time.time()) - request_ts) > 300:
+            raise AuthenticationFailed("Remote sync timestamp expired.")
+
+        gateway_secret = str(
+            getattr(settings, "GATEWAY_SECRET", "") or getattr(settings, "SECRET_KEY", "")
+        ).strip()
+        if not gateway_secret:
+            raise AuthenticationFailed("Remote sync gateway secret is not configured.")
+
+        body_hash = hashlib.sha256(request.body).hexdigest()
+        payload = f"{request.method}|{request.get_full_path()}|{timestamp}|{body_hash}"
+        expected = hmac.new(
+            gateway_secret.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(expected, signature):
+            raise AuthenticationFailed("Invalid remote sync signature.")
+
+        User = get_user_model()
+        admin = User.objects.filter(is_superuser=True, is_active=True).first()
+        if not admin:
+            raise AuthenticationFailed("No active admin user is available for remote sync.")
+
+        return (admin, None)
+
+    def authenticate_header(self, request):
+        return "RemoteSyncHMAC"

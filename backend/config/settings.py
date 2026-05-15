@@ -495,6 +495,7 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 100,
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'apps.deployments.api_token_auth.APITokenAuthentication',
+        'apps.deployments.api_token_auth.RemoteSyncHMACAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         # CSRF-exempt session auth: prevents 403 when token auth fails and
         # DRF falls through to session auth (which enforces CSRF by default).

@@ -30,22 +30,72 @@ class RemoteOrchestratorTests(TestCase):
     @patch("apps.deployments.services.remote_orchestrator.requests.request")
     def test_sync_service_falls_back_to_hmac_when_token_is_rejected(self, request_mock):
         token_response = Mock(status_code=403, text="forbidden")
+        exchange_response = Mock(status_code=503, text="exchange unavailable")
         hmac_response = Mock(status_code=200)
         hmac_response.json.return_value = {
             "results": [{"id": "remote-service-id", "name": "api"}]
         }
-        request_mock.side_effect = [token_response, hmac_response]
+        request_mock.side_effect = [token_response, exchange_response, hmac_response]
 
         remote_id = RemoteOrchestrator(self.server).sync_service(self.service)
 
         self.assertEqual(remote_id, "remote-service-id")
-        self.assertEqual(request_mock.call_count, 2)
+        self.assertEqual(request_mock.call_count, 3)
         first_headers = request_mock.call_args_list[0].kwargs["headers"]
-        second_headers = request_mock.call_args_list[1].kwargs["headers"]
+        second_headers = request_mock.call_args_list[2].kwargs["headers"]
         self.assertEqual(first_headers["Authorization"], "Bearer smsly_stale_token")
         self.assertIn("X-Gateway-Signature-V2", second_headers)
         self.assertEqual(second_headers["X-SMSLY-Remote-Sync"], "1")
-        self.assertIn("/api/v1/services/?search=api", request_mock.call_args_list[1].args[1])
+        self.assertIn("/api/v1/services/?search=api", request_mock.call_args_list[2].args[1])
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_sync_service_exchanges_gateway_secret_when_token_missing(self, request_mock):
+        self.server.api_token = ""
+        self.server.save(update_fields=["api_token"])
+
+        exchange_response = Mock(status_code=200)
+        exchange_response.json.return_value = {"token": "smsly_fresh_token"}
+        search_response = Mock(status_code=200)
+        search_response.json.return_value = {
+            "results": [{"id": "remote-service-id", "name": "api"}]
+        }
+        request_mock.side_effect = [exchange_response, search_response]
+
+        remote_id = RemoteOrchestrator(self.server).sync_service(self.service)
+
+        self.assertEqual(remote_id, "remote-service-id")
+        self.server.refresh_from_db()
+        self.assertEqual(self.server.api_token, "smsly_fresh_token")
+        self.assertEqual(request_mock.call_args_list[0].args[0], "POST")
+        self.assertIn(
+            "/api/v1/auth/node-token-exchange-hmac/",
+            request_mock.call_args_list[0].args[1],
+        )
+        search_headers = request_mock.call_args_list[1].kwargs["headers"]
+        self.assertEqual(search_headers["Authorization"], "Bearer smsly_fresh_token")
+
+    @patch("apps.deployments.services.remote_orchestrator.requests.request")
+    def test_sync_service_refreshes_stale_token_with_gateway_secret(self, request_mock):
+        stale_response = Mock(status_code=401, text='{"detail":"Authentication credentials were not provided."}')
+        exchange_response = Mock(status_code=200)
+        exchange_response.json.return_value = {"token": "smsly_refreshed_token"}
+        search_response = Mock(status_code=200)
+        search_response.json.return_value = {
+            "results": [{"id": "remote-service-id", "name": "api"}]
+        }
+        request_mock.side_effect = [stale_response, exchange_response, search_response]
+
+        remote_id = RemoteOrchestrator(self.server).sync_service(self.service)
+
+        self.assertEqual(remote_id, "remote-service-id")
+        self.server.refresh_from_db()
+        self.assertEqual(self.server.api_token, "smsly_refreshed_token")
+        self.assertEqual(request_mock.call_args_list[0].kwargs["headers"]["Authorization"], "Bearer smsly_stale_token")
+        self.assertIn(
+            "/api/v1/auth/node-token-exchange-hmac/",
+            request_mock.call_args_list[1].args[1],
+        )
+        self.assertEqual(request_mock.call_args_list[2].kwargs["headers"]["Authorization"], "Bearer smsly_refreshed_token")
 
     @patch("apps.deployments.services.remote_orchestrator.requests.request")
     def test_trigger_deploy_posts_ref_payload_expected_by_remote_api(self, request_mock):

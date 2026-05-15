@@ -207,6 +207,7 @@ class Command(BaseCommand):
             # Standardized payload: excludes query string
             payload_str = f"GET|{api_path}|{ts}|{body_hash}"
             sig = hmac.new(gw_secret.encode(), payload_str.encode(), hashlib.sha256).hexdigest()
+            headers["X-SMSLY-Remote-Sync"] = "1"
             headers["X-Gateway-Signature-V2"] = sig
             headers["X-Request-Timestamp"] = ts
 

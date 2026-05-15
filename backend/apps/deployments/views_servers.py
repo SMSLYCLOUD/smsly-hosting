@@ -322,7 +322,11 @@ def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b
     Build auth headers for a remote server.
     Strategy: token auth when available, otherwise HMAC V2 signing.
     """
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-SMSLY-Remote-Sync": "1",
+    }
 
     token = str(server.api_token or "").strip()
     gateway_secret = str(server.gateway_secret or "").strip()

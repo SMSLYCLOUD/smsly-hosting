@@ -1,11 +1,16 @@
 # pylint: disable=invalid-name
 """Tests for API Token authentication (model + DRF backend + views)."""
 
+import hashlib
+import hmac
+import time
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from ..api_token_auth import APIToken
+from ..models import Service
 
 User = get_user_model()
 
@@ -109,3 +114,47 @@ class APITokenViewTests(TestCase):
         client = APIClient()
         resp = client.get("/api/v1/tokens/")
         self.assertIn(resp.status_code, [401, 403])
+
+
+class RemoteSyncHMACAuthenticationTests(TestCase):
+    """Regression tests for node-to-node HMAC remote sync authentication."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username="remote-owner",
+            email="remote-owner@test.com",
+            password="testpass123",
+        )
+        User.objects.create_superuser(
+            username="admin",
+            email="admin@test.com",
+            password="testpass123",
+        )
+        Service.objects.create(
+            owner=self.owner,
+            name="hmac-api",
+            repository_url="https://github.com/example/hmac-api.git",
+        )
+
+    @override_settings(GATEWAY_SECRET="remote-sync-secret")
+    def test_remote_sync_hmac_can_list_services_without_api_token(self):
+        path = "/api/v1/services/?search=hmac-api"
+        timestamp = str(int(time.time()))
+        body_hash = hashlib.sha256(b"").hexdigest()
+        payload = f"GET|{path}|{timestamp}|{body_hash}"
+        signature = hmac.new(
+            b"remote-sync-secret",
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+        client = APIClient()
+        response = client.generic(
+            "GET",
+            path,
+            HTTP_X_SMSLY_REMOTE_SYNC="1",
+            HTTP_X_GATEWAY_SIGNATURE_V2=signature,
+            HTTP_X_REQUEST_TIMESTAMP=timestamp,
+        )
+
+        self.assertEqual(response.status_code, 200)
