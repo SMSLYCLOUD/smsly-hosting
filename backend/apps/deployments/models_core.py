@@ -654,6 +654,13 @@ class Deployment(TimeStampedModel):
         blank=True,
         related_name='rollback_deployments',
         help_text="The deployment this was rolled back from")
+    target_server = models.ForeignKey(
+        'deployments.ManagedServer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='target_deployments',
+        help_text="Server this deployment was explicitly routed to")
 
     class Meta:
         ordering = ['-created_at']
