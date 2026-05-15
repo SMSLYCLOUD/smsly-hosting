@@ -605,6 +605,9 @@ apply_agent_lite_env_overrides() {
     if [ -z "${MASTER_IP:-}" ] && [ -f "$env_file" ]; then
         MASTER_IP="$(env_get_value "$env_file" "MASTER_IP")"
     fi
+    if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "$env_file" ]; then
+        MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+    fi
     if [ -z "${MASTER_DB_PASSWORD:-}" ] && [ -f "$env_file" ]; then
         # If we are updating and MASTER_DB_PASSWORD wasn't passed, try to preserve the existing one
         local db_url
@@ -621,6 +624,10 @@ apply_agent_lite_env_overrides() {
         exit 1
     fi
 
+    # MASTER_MESH_IP is the WireGuard IP used for internal services (DB, MQ, Redis).
+    # Falls back to MASTER_IP if not set (for backwards compatibility).
+    MASTER_MESH_IP="${MASTER_MESH_IP:-$MASTER_IP}"
+
     MASTER_DB_USER="${MASTER_DB_USER:-smsly_admin}"
     # If password is still missing after recovery attempt, we must stop.
     if [ -z "${MASTER_DB_PASSWORD:-}" ]; then
@@ -636,9 +643,10 @@ apply_agent_lite_env_overrides() {
     node_slug="$(sanitize_node_identifier "$SMSLY_NODE_ID")"
     SMSLY_NODE_QUEUE="${SMSLY_NODE_QUEUE:-smsly-node-${node_slug}}"
 
-    local redis_url="redis://${MASTER_IP}:6379/1"
+    # Use MASTER_MESH_IP for internal services (DB, MQ, Redis)
+    local redis_url="redis://${MASTER_MESH_IP}:6379/1"
     if [ -n "${MASTER_REDIS_PASSWORD:-}" ]; then
-        redis_url="redis://:${MASTER_REDIS_PASSWORD}@${MASTER_IP}:6379/1"
+        redis_url="redis://:${MASTER_REDIS_PASSWORD}@${MASTER_MESH_IP}:6379/1"
     fi
 
     # --- Persistence: Save a recovery seed for future manual updates ---
@@ -646,6 +654,7 @@ apply_agent_lite_env_overrides() {
 # SMSLY Lite Agent Recovery Seed
 # Generated on $(date)
 MASTER_IP="$MASTER_IP"
+MASTER_MESH_IP="$MASTER_MESH_IP"
 MASTER_DB_USER="$MASTER_DB_USER"
 MASTER_DB_PASSWORD="$MASTER_DB_PASSWORD"
 MASTER_MQ_PASSWORD="$MASTER_MQ_PASSWORD"
@@ -658,12 +667,13 @@ EOF
 
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "MASTER_IP" "$MASTER_IP"
+    env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
     env_set_value "$env_file" "SMSLY_NODE_HOST" "$SMSLY_NODE_HOST"
     env_set_value "$env_file" "SMSLY_NODE_ID" "$SMSLY_NODE_ID"
     env_set_value "$env_file" "SMSLY_NODE_QUEUE" "$SMSLY_NODE_QUEUE"
-    env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
-    env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_IP}:5432/smsly_hosting"
-    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_IP}:5672//"
+    env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
+    env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
+    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_MESH_IP}:5672//"
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
@@ -677,21 +687,27 @@ verify_agent_lite_connectivity() {
     [ "$MODE_AGENT_LITE" = "true" ] || return 0
     echo -e "${BLUE}  → Verifying connectivity to Master node (${MASTER_IP})...${NC}"
     
-    # 1. Ping Master
+    # 1. Ping Master (public IP)
     if ! ping -c 1 -W 2 "$MASTER_IP" >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠ Warning: Master node ${MASTER_IP} is not responding to ICMP. Proceeding anyway...${NC}"
     fi
 
-    # 2. Check Database port
-    if ! timeout 2 bash -c "</dev/tcp/${MASTER_IP}/5432" 2>/dev/null; then
-        echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${MASTER_IP}.${NC}"
-        echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP.${NC}"
+    # 2. Check Database port via mesh IP (internal services use WireGuard)
+    local db_check_ip="${MASTER_MESH_IP:-$MASTER_IP}"
+    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5432" 2>/dev/null; then
+        echo -e "${RED}  ✗ ERROR: Master Database (port 5432) is unreachable on ${db_check_ip}.${NC}"
+        echo -e "${YELLOW}    Ensure the Master allows port 5432 from this node's IP via WireGuard mesh.${NC}"
         return 1
     fi
 
-    # 3. Check Redis port
-    if ! timeout 2 bash -c "</dev/tcp/${MASTER_IP}/6379" 2>/dev/null; then
-        echo -e "${YELLOW}  ⚠ Warning: Master Redis (port 6379) is unreachable. Background tasks may fail.${NC}"
+    # 3. Check Redis port via mesh IP
+    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/6379" 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ Warning: Master Redis (port 6379) is unreachable on ${db_check_ip}. Background tasks may fail.${NC}"
+    fi
+
+    # 4. Check RabbitMQ port via mesh IP
+    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5672" 2>/dev/null; then
+        echo -e "${YELLOW}  ⚠ Warning: Master RabbitMQ (port 5672) is unreachable on ${db_check_ip}. Celery tasks will fail.${NC}"
     fi
 
     echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
