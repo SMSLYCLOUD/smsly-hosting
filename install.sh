@@ -1544,6 +1544,17 @@ run_backend_migrations() {
         [ "$MODE_AGENT_LITE" != "true" ] && diagnose_migration_locks
         return "$rc"
     fi
+
+    # Self-healing: fix node agent DB permissions after migrations.
+    # This ensures node_agent_* users have access to newly created tables.
+    echo -e "${BLUE}  -> Fixing node agent database permissions...${NC}"
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -T \
+        "${user_args[@]}" \
+        -e SMSLY_DISABLE_STARTUP_TASKS=true \
+        backend python manage.py fix_node_db_permissions 2>&1 || true
+    set -e
+
     return 0
 }
 
