@@ -2067,12 +2067,12 @@ $target_domain {
 
 :443 {
     tls /etc/caddy/certs/ip.crt /etc/caddy/certs/ip.key
-    @ip expression `request.host.matches('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')`
+    @ip header_regexp Host ^([0-9]{1,3}[.]){3}[0-9]{1,3}$
     handle @ip {
-        redir http://{request.host}{request.uri} 308
+        redir http://{host}{uri} 308
     }
     handle {
-        redir https://{request.host}{request.uri} 308
+        redir https://{host}{uri} 308
     }
 }
 
