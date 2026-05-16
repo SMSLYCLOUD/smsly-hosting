@@ -42,6 +42,13 @@ def _safe_service_name(name: str) -> str:
     return re.sub(r'[^a-zA-Z0-9 _.-]', '', name)[:255]
 
 
+def _safe_backup_basename(file_path: str) -> str:
+    """Extract a safe filename from a backup path, preventing path traversal."""
+    name = os.path.basename(file_path)
+    name = re.sub(r'[^a-zA-Z0-9_.-]', '', name)
+    return name[:255]
+
+
 def _redact_transfer_text(text: str) -> str:
     """Keep persisted transfer logs useful without storing secrets."""
     if not text:
@@ -290,7 +297,7 @@ class ServerTransferService:
             temp_decrypted = BackupService.decrypt_backup(local_path, key)
             local_path = temp_decrypted
 
-        remote_path = f"/tmp/{os.path.basename(local_path)}"
+        remote_path = f"/tmp/{_safe_backup_basename(local_path)}"
         self._uploaded_remote_backup_path = remote_path
 
         try:
@@ -323,7 +330,7 @@ class ServerTransferService:
         self._update(60, 'Restoring services on target server...')
 
         backup = self.transfer.source_backup or self.transfer.source_server_backup
-        backup_filename = os.path.basename(backup.file_path)
+        backup_filename = _safe_backup_basename(backup.file_path)
         remote_backup_path = (
             self._uploaded_remote_backup_path
             or f"/tmp/{backup_filename}"
