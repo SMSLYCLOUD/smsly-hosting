@@ -185,6 +185,19 @@ EOF
         echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
     else
         # This is the Master node (or MASTER_IP matches local IP)
+        local my_ip
+        my_ip="$(detect_public_ip)"
+        if [ "$my_ip" != "127.0.0.1" ]; then
+            echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
+            mkdir -p /etc/docker
+            cat > /etc/docker/daemon.json <<EOF
+{
+  "insecure-registries": ["registry:5000", "${my_ip}:5000", "127.0.0.1:5000"]
+}
+EOF
+            systemctl restart docker || true
+        fi
+
         # Ensure the mirror service is UP if it exists in the compose file
         if [ -f "$compose_f" ] && grep -q "docker-mirror:" "$compose_f"; then
             echo -e "${BLUE}  → Ensuring Docker pull-through cache mirror is running...${NC}"

@@ -264,8 +264,8 @@ def _harden_master_firewall(server: ManagedServer) -> None:
     _append_log(server, f"🛡️ Hardening Master firewall for Node IP: {server.host}...")
     
     # Ports required for Lite Agent -> Master communication
-    # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery
-    ports = ["5432", "6379", "5672"]
+    # 5432: Postgres, 6379: Redis, 5672: RabbitMQ/Celery, 5000: Docker Registry
+    ports = ["5432", "6379", "5672", "5000"]
     
     for port in ports:
         # Note: This runs on the Master (local host) since provisioner runs in Master backend.
