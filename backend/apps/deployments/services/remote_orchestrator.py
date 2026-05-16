@@ -68,10 +68,10 @@ class RemoteOrchestrator:
             self.server = server
         self.base_url = (self.server.api_url or f"http://{self.server.host}").rstrip('/')
         self.last_error = ""
-        token_preview = (str(self.server.api_token or "")[:12] + "...") if self.server.api_token else "(empty)"
+        token_preview = "***" if self.server.api_token else "(empty)"
         logger.info(
-            "RemoteOrchestrator initialized for %s (%s) api_token=%s",
-            self.server.name, self.server.host, token_preview,
+            "RemoteOrchestrator initialized for %s (%s)",
+            self.server.name, self.server.host,
         )
 
     def _set_last_error(self, message: str, response: requests.Response | None = None):

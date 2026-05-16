@@ -100,8 +100,13 @@ def _resolve_incoming_owner(request, source_ip):
     if server and server.owner_id:
         return server.owner
 
-    User = get_user_model()
-    return User.objects.filter(is_superuser=True, is_active=True).first()
+    # If HMAC was verified against GATEWAY_SECRET, the global auth class would have
+    # set request.user to admin. If we reach here (per-server secret, no server owner),
+    # reject rather than silently assigning a superuser.
+    raise RuntimeError(
+        f"Cannot resolve owner for incoming transfer from {source_ip}. "
+        "The source ManagedServer has no owner assigned."
+    )
 
 
 class ServerTransferViewSet(viewsets.ModelViewSet):
@@ -156,13 +161,27 @@ class ServerTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not request.user.is_authenticated and not _verify_transfer_sync_hmac(request, source_ip, raw_body):
+        # Require HMAC + Remote-Sync header for ALL requests to this
+        # internal endpoint, regardless of session/token auth.
+        is_remote_sync = request.headers.get('X-SMSLY-Remote-Sync') == '1'
+        if not is_remote_sync or not _verify_transfer_sync_hmac(request, source_ip, raw_body):
             return Response(
                 {'error': 'Valid node authentication is required.'},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        # Verify the source IP corresponds to a known ManagedServer
+        if not ManagedServer.objects.filter(
+            Q(host=source_ip) | Q(private_ip=source_ip)
+        ).exists():
+            return Response(
+                {'error': 'Unknown source node. Register the server first.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
-        owner = _resolve_incoming_owner(request, source_ip)
+        try:
+            owner = _resolve_incoming_owner(request, source_ip)
+        except RuntimeError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Check if a similar incoming transfer already exists
         existing = ServerTransfer.objects.filter(
