@@ -546,14 +546,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         
-        # Seamless: If no server is assigned, pick a node automatically.
-        # Prefer non-primary online nodes so user workloads spread
-        # across the fleet instead of all landing on the primary.
+        # Seamless: If no server is assigned, default to the primary (local)
+        # controller so user workloads land on the local server by default.
         if not server:
-            non_primary = ManagedServer.objects.filter(
-                is_primary=False, status='ONLINE'
-            ).order_by('?').first()
-            server = non_primary or ManagedServer.get_primary()
+            server = ManagedServer.get_primary()
+            if not server:
+                server = ManagedServer.objects.filter(
+                    status='ONLINE'
+                ).order_by('?').first()
             if server:
                 logger.info("Auto-assigning server %s to service %s", server.name, serializer.validated_data.get('name'))
         
@@ -580,12 +580,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         from .models_core import ManagedServer
         server = serializer.validated_data.get('server')
         
-        # Seamless: If no server is assigned during update, pick a node automatically
+        # Seamless: If no server is assigned during update, default to primary
         if not server:
-            non_primary = ManagedServer.objects.filter(
-                is_primary=False, status='ONLINE'
-            ).order_by('?').first()
-            server = non_primary or ManagedServer.get_primary()
+            server = ManagedServer.get_primary()
+            if not server:
+                server = ManagedServer.objects.filter(
+                    status='ONLINE'
+                ).order_by('?').first()
             if server:
                 logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
         
