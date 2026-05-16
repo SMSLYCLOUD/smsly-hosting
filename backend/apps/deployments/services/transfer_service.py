@@ -639,32 +639,51 @@ if svc:
         return None
 
     def _ensure_target_platform_started(self):
-        """Start an installed Grid target when Docker is up but the stack is down."""
+        """Start an installed Grid target when Docker is up but the stack is down.
+
+        Handles both full-platform nodes and Lite Agents (which use
+        infrastructure/docker/docker-compose.agent-lite.yml).
+        """
         hosting_path = self.ssh.find_hosting_path()
         safe_path = shlex.quote(hosting_path)
         timeout = int(getattr(settings, "TRANSFER_TARGET_START_TIMEOUT", 1200))
+        agent_lite = "infrastructure/docker/docker-compose.agent-lite.yml"
         cmd = " && ".join([
             f"cd {safe_path}",
             "mkdir -p caddy-config /opt/smsly-cache",
             "docker network inspect smsly-net >/dev/null 2>&1 || docker network create smsly-net >/dev/null",
             "docker network inspect smsly-proxy >/dev/null 2>&1 || docker network create smsly-proxy >/dev/null",
-            "(test -f docker-compose.prod.yml && docker compose -f docker-compose.prod.yml up -d --build || docker compose up -d --build)",
+            "("
+            f"test -f {shlex.quote(agent_lite)} "
+            f"&& docker compose -f {shlex.quote(agent_lite)} up -d --build"
+            " || ("
+            "test -f docker-compose.prod.yml "
+            "&& docker compose -f docker-compose.prod.yml up -d --build"
+            " || docker compose up -d --build"
+            ")"
+            ")",
         ])
         self._update(8, 'Starting Grid platform on target server...')
         self.ssh.exec_command(cmd, timeout=timeout)
 
     def _wait_for_remote_backend_ready(self, backend_container):
-        """Wait until target platform health confirms backend dependencies."""
+        """Wait until target platform health confirms backend dependencies.
+
+        Uses docker exec inside the backend container so it works for both
+        full-platform nodes and Lite Agents (which do not expose port 8000
+        to the host).
+        """
+        safe_container = shlex.quote(backend_container)
         command = (
-            "for i in $(seq 1 60); do "
-            "curl -fsS -m 5 http://127.0.0.1:8000/health/live 2>/dev/null "
-            "| grep -q '\"status\": \"alive\"' "
-            "&& echo READY && exit 0; "
-            "curl -fsS -m 5 http://127.0.0.1:8000/health 2>/dev/null "
-            "| grep -q '\"status\": \"healthy\"' "
-            "&& echo READY && exit 0; "
-            "sleep 5; "
-            "done; echo NOT_READY; exit 1"
+            f"for i in $(seq 1 60); do "
+            f"docker exec {safe_container} curl -fsS -m 5 http://localhost:8000/health/live 2>/dev/null "
+            f"| grep -q '\"status\": \"alive\"' "
+            f"&& echo READY && exit 0; "
+            f"docker exec {safe_container} curl -fsS -m 5 http://localhost:8000/health 2>/dev/null "
+            f"| grep -q '\"status\": \"healthy\"' "
+            f"&& echo READY && exit 0; "
+            f"sleep 5; "
+            f"done; echo NOT_READY; exit 1"
         )
         output = _command_text(self.ssh.exec_command(command, timeout=330))
         if "READY" not in output:
