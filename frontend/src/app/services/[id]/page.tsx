@@ -239,16 +239,8 @@ export default function ServiceDetailPage() {
     }, [id]);
 
     useEffect(() => {
-        const fetchServers = async () => {
-            try {
-                const data = await serversApi.list();
-                setServers(data);
-                const assignedServerId = service?.server_id || service?.server || '';
-                setTargetServerId(assignedServerId || LOCAL_DEPLOY_TARGET);
-            } catch (err) { console.error(err); }
-        };
-        fetchServers();
-    }, [id, service?.server_id, service?.server]);
+        serversApi.list().then(setServers).catch(() => {});
+    }, [id]);
 
     useEffect(() => {
         if (!id) return;
