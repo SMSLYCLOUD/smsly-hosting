@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import subprocess
 
 from apps.deployments.domain_utils import normalize_domain
 
@@ -908,21 +909,38 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             with os.fdopen(os.open(CADDY_TOKEN_CLEAR_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write("clear")
 
-        # Trigger reload via Docker API
-        import subprocess
-        logger.info("Triggering Caddy reload via Docker...")
-        res = subprocess.run(
-            ["docker", "exec", "smsly-hosting-caddy-1", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
+        # Trigger reload — try Docker container first, fall back to systemd
+        CONTAINER_NAME = "smsly-hosting-caddy-1"
+        logger.info("Triggering Caddy reload via Docker container %s...", CONTAINER_NAME)
+        dock_res = subprocess.run(
+            ["docker", "exec", CONTAINER_NAME, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
             capture_output=True,
             text=True
         )
-        if res.returncode != 0:
-            logger.error("Caddy reload failed: %s", res.stderr)
-            result["message"] = f"Caddy reload failed: {res.stderr}"
-            return result
+        if dock_res.returncode == 0:
+            result["ok"] = True
+            result["message"] = "Caddyfile written and reloaded via Docker"
+            logger.info("Caddyfile reloaded via Docker container %s", CONTAINER_NAME)
+        else:
+            logger.warning("Docker reload failed (%s), trying systemd: %s", CONTAINER_NAME, dock_res.stderr.strip())
+            sysd_res = subprocess.run(
+                ["systemctl", "reload", "caddy"],
+                capture_output=True,
+                text=True
+            )
+            if sysd_res.returncode == 0:
+                result["ok"] = True
+                result["message"] = "Caddyfile written and reloaded via systemd"
+                logger.info("Caddyfile reloaded via systemd")
+            else:
+                logger.error("Caddy reload failed (Docker and systemd): %s / %s",
+                             dock_res.stderr.strip(), sysd_res.stderr.strip())
+                result["message"] = (
+                    f"Caddy reload failed — Docker: {dock_res.stderr.strip()}; "
+                    f"systemd: {sysd_res.stderr.strip()}"
+                )
+                return result
 
-        result["ok"] = True
-        result["message"] = "Caddyfile written and reloaded successfully"
         logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
 
     except Exception as exc:
