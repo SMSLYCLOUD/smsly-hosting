@@ -174,25 +174,34 @@ configure_docker_mirror() {
         echo -e "${BLUE}  → Configuring Docker pull-through cache mirror (Master: $MASTER_IP)...${NC}"
         mkdir -p /etc/docker
 
+        # Collect IPs to trust: Public IP, Mesh IP (if provided), and local IPs
+        local trust_list="\"${MASTER_IP}:5000\", \"${MASTER_IP}:5001\""
+        if [ -n "${MASTER_MESH_IP:-}" ]; then
+            trust_list="${trust_list}, \"${MASTER_MESH_IP}:5000\""
+        fi
+
         # Build the daemon.json
         cat > /etc/docker/daemon.json <<EOF
 {
   "registry-mirrors": ["http://${MASTER_IP}:5001"],
-  "insecure-registries": ["${MASTER_IP}:5000", "${MASTER_IP}:5001"]
+  "insecure-registries": [${trust_list}]
 }
 EOF
         systemctl restart docker || true
         echo -e "${GREEN}  ✓ Docker mirror configured${NC}"
     else
         # This is the Master node (or MASTER_IP matches local IP)
-        local my_ip
+        local my_ip my_mesh_ip
         my_ip="$(detect_public_ip)"
+        # Note: We don't have a clean 'detect_mesh_ip' here, but we can trust 10.0.0.0/8 range if needed.
+        # However, Master usually knows its own identity.
         if [ "$my_ip" != "127.0.0.1" ]; then
             echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
             mkdir -p /etc/docker
+            # Include loopback, public IP, and common mesh ranges for safety
             cat > /etc/docker/daemon.json <<EOF
 {
-  "insecure-registries": ["registry:5000", "${my_ip}:5000", "127.0.0.1:5000"]
+  "insecure-registries": ["registry:5000", "${my_ip}:5000", "127.0.0.1:5000", "10.0.0.1:5000"]
 }
 EOF
             systemctl restart docker || true

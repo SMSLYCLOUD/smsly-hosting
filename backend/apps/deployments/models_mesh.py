@@ -161,6 +161,17 @@ class WireGuardPeer(models.Model):
         ordering = ["wg_address"]
         unique_together = [("mesh", "server"), ("mesh", "wg_address")]
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Automatically sync the wg_address to the linked ManagedServer
+        if self.server and self.is_active and self.wg_address:
+            # We use update() to avoid triggering the server's own save signals
+            # which might cause recursion or unnecessary overhead.
+            from .models_core import ManagedServer
+            ManagedServer.objects.filter(id=self.server_id).update(
+                wg_address=self.wg_address
+            )
+
     def __str__(self):
         label = self.server.name if self.server else "local"
         return f"{label} ({self.wg_address})"

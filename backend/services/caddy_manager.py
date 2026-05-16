@@ -146,10 +146,25 @@ def _remote_server_mesh_ip(server) -> str:
 
 
 def _remote_upstream_url_for_service(service) -> str:
-    mesh_ip = _remote_server_mesh_ip(getattr(service, "server", None))
-    if not mesh_ip:
+    """Return the proxy upstream for a remote service, falling back to public IP if mesh is down."""
+    server = getattr(service, "server", None)
+    if not server or getattr(server, "is_primary", False):
         return ""
-    return f"http://{mesh_ip}"
+
+    # Priority 1: WireGuard Mesh (Secure & Private)
+    mesh_ip = _remote_server_mesh_ip(server)
+    if mesh_ip:
+        return f"http://{mesh_ip}"
+
+    # Priority 2: Public IP Fallback (Remote nodes listen on port 80 via Traefik)
+    host = str(server.host or "").strip()
+    if host:
+        # SEC-ZT-005: Inter-server TLS enforcement is handled by the reverse_proxy
+        # transport logic if the host supports HTTPS. For now, we proxy to port 80
+        # as that is where Traefik expects incoming edge traffic on remote nodes.
+        return f"http://{host}"
+
+    return ""
 
 
 def _service_proxy_upstream() -> str:
@@ -434,6 +449,9 @@ def _get_wildcard_remote_host_map(wildcard_domain: str) -> dict[str, list[str]]:
 
         suffix = f".{wildcard_domain}"
         for service in Service.objects.select_related("server").all():
+            svr = getattr(service, "server", None)
+            if not svr or svr.is_primary:
+                continue
             upstream_url = _remote_upstream_url_for_service(service)
             if not upstream_url:
                 continue
