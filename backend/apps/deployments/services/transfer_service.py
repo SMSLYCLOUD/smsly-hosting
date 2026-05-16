@@ -342,6 +342,13 @@ class ServerTransferService:
             self._restore_full_server(remote_backup_path)
 
     def _restore_single_service(self, remote_backup_path):
+        target_server = self._target_server_record()
+        is_lite_agent = getattr(target_server, 'is_lite_agent', False) if target_server else False
+        
+        if is_lite_agent:
+            self._restore_single_service_lite(remote_backup_path)
+            return
+
         self._update(65, 'Uploading backup archive to remote Grid API container...')
         
         # 1. We must execute the restoration inside the remote server's Grid
@@ -412,6 +419,109 @@ class ServerTransferService:
         run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
         self.ssh.exec_command(run_cmd)
         self._seed_target_deployment_record(backend_container, metadata)
+
+    def _restore_single_service_lite(self, remote_backup_path):
+        """Restore a single service on a Lite Agent target (no local database)."""
+        self._update(65, 'Extracting backup metadata on remote server...')
+
+        backend_container = self._find_remote_backend_container(required=True)
+        safe_backend_container = shlex.quote(backend_container)
+        container_backup_path = f"/tmp/transfer_backup_{self.transfer.id}.tar.gz"
+
+        # Copy backup into backend container for metadata extraction
+        self.ssh.exec_command(
+            f"docker cp {shlex.quote(remote_backup_path)} "
+            f"{safe_backend_container}:{shlex.quote(container_backup_path)}"
+        )
+
+        # Extract metadata.json from the backup inside the container
+        extract_dir = f"/tmp/transfer_extract_{self.transfer.id}"
+        self.ssh.exec_command(
+            f"docker exec {safe_backend_container} mkdir -p {shlex.quote(extract_dir)}"
+        )
+        self.ssh.exec_command(
+            f"docker exec {safe_backend_container} tar -xzf {shlex.quote(container_backup_path)} "
+            f"-C {shlex.quote(extract_dir)} metadata.json"
+        )
+
+        # Read metadata
+        metadata_result = _command_text(self.ssh.exec_command(
+            f"docker exec {safe_backend_container} cat "
+            f"{shlex.quote(extract_dir)}/metadata.json"
+        ))
+        try:
+            metadata = json.loads(metadata_result)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                f"Failed to parse backup metadata from target container"
+            )
+
+        self._update(75, 'Loading service image on target...')
+        self._load_service_image_on_target(remote_backup_path)
+
+        # Restore volumes
+        volumes = metadata.get('volumes', [])
+        if volumes:
+            self._update(80, 'Restoring service volumes on target...')
+            volume_tmp = f"/tmp/vol_restore_{self.transfer.id}"
+            self.ssh.exec_command(f"mkdir -p {shlex.quote(volume_tmp)}")
+
+            docker_root = _command_text(self.ssh.exec_command(
+                "docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null "
+                "|| echo '/var/lib/docker'); echo \"$docker_root\""
+            )).strip()
+
+            for vol_meta in volumes:
+                vol_name = vol_meta.get('name', '')
+                vol_filename = vol_meta.get('filename', '')
+                if not vol_name or not vol_filename:
+                    continue
+
+                # Extract the volume's tar.gz from the main backup archive
+                self.ssh.exec_command(
+                    f"tar -xzf {shlex.quote(remote_backup_path)} -C "
+                    f"{shlex.quote(volume_tmp)} {shlex.quote(vol_filename)} 2>/dev/null || true"
+                )
+
+                vol_tar_path = f"{volume_tmp}/{vol_filename}"
+
+                if vol_name.startswith('/'):
+                    # Host path bind mount
+                    self.ssh.exec_command(f"mkdir -p {shlex.quote(vol_name)}")
+                    self.ssh.exec_command(
+                        f"tar -xzf {shlex.quote(vol_tar_path)} -C "
+                        f"{shlex.quote(vol_name)} 2>/dev/null || true"
+                    )
+                else:
+                    # Docker named volume — create and populate via host filesystem
+                    self.ssh.exec_command(
+                        f"docker volume create {shlex.quote(vol_name)} 2>/dev/null || true"
+                    )
+                    vol_data_dir = f"{docker_root}/volumes/{vol_name}/_data"
+                    self.ssh.exec_command(f"mkdir -p {shlex.quote(vol_data_dir)}")
+                    self.ssh.exec_command(
+                        f"tar -xzf {shlex.quote(vol_tar_path)} -C "
+                        f"{shlex.quote(vol_data_dir)} 2>/dev/null || true"
+                    )
+
+            # Cleanup volume temp dir
+            self.ssh.exec_command(f"rm -rf {shlex.quote(volume_tmp)} || true")
+
+        # Start service container
+        self._update(90, 'Starting service container on target...')
+        run_cmd = self._generate_docker_run_command(self.transfer.service, metadata)
+        self.ssh.exec_command(run_cmd)
+
+        # Cleanup backup artifacts on container and host
+        self.ssh.exec_command(
+            f"docker exec {safe_backend_container} rm -rf "
+            f"{shlex.quote(extract_dir)} {shlex.quote(container_backup_path)} || true",
+            raise_on_error=False
+        )
+        self.ssh.exec_command(
+            f"rm -f {shlex.quote(remote_backup_path)} || true",
+            raise_on_error=False
+        )
 
     def _remap_target_platform_env(self, backend_container):
         """
