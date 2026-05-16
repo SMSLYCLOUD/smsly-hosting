@@ -16,7 +16,8 @@ class EcosystemGraph:
 
     def get_service_dependencies(self, service_key: str) -> List[str]:
         service = self.services.get(service_key, {})
-        return service.get("dependencies", [])
+        # Ensure consistent order of dependencies themselves to aid determinism
+        return sorted(service.get("dependencies", []))
 
     def get_topological_order(self) -> List[str]:
         visited = set()
@@ -28,6 +29,7 @@ class EcosystemGraph:
                 raise ValueError(f"Circular dependency detected at node {node}")
             if node not in visited:
                 temp_mark.add(node)
+                # Visit dependencies in deterministic alphabetical order
                 for dep in self.get_service_dependencies(node):
                     if dep in self.services:
                         visit(dep)
@@ -35,7 +37,8 @@ class EcosystemGraph:
                 visited.add(node)
                 order.append(node)
 
-        for service_key in self.services:
+        # Iterate through services in deterministic alphabetical order
+        for service_key in sorted(self.services.keys()):
             if service_key not in visited:
                 visit(service_key)
 
