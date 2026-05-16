@@ -775,12 +775,15 @@ class RemoteOrchestrator:
         if image_name:
             # [FIX] Build-Agent Optimization: Rewrite internal registry name for remote nodes.
             # Master pushes to 'registry:5000' (internal Docker DNS).
-            # Remote nodes must pull from 'MASTER_IP:5000'.
-            internal_registry = "registry:5000"
-            if image_name.startswith(f"{internal_registry}/") and config.server_ip:
-                public_image = image_name.replace(internal_registry, f"{config.server_ip}:5000", 1)
-                logger.info("Rewriting image name for remote pull: %s -> %s", image_name, public_image)
-                image_name = public_image
+            # ── Zero-Trust Registry Rewriting ──────────────────────────
+            # If the image refers to the internal build-agent registry,
+            # we must rewrite it to a reachable address for the remote node.
+            if "registry:5000" in image_name:
+                from apps.deployments.services.provisioner import _get_master_mesh_ip
+                master_ip = _get_master_mesh_ip() or os.environ.get("PUBLIC_IP") or "127.0.0.1"
+                image_name = image_name.replace("registry:5000", f"{master_ip}:5000")
+                logger.info(f"Rewrote registry image for remote node: {image_name} (via {master_ip})")
+            
             payload["image_name"] = image_name
         
         try:
