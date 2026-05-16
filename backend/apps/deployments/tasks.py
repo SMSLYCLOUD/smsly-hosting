@@ -2348,6 +2348,7 @@ def _deploy_container(deployment, provider, image_name):
             (timezone.now() - start).total_seconds()
         )
         broadcast_status(deployment)
+        _regenerate_caddyfile()
         append_log(
             deployment,
             f"[DEPLOY] ✅ Container live with Traefik routing enabled.\n"
