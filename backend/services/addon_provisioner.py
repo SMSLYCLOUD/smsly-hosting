@@ -10,6 +10,7 @@ using Docker directly, without external PaaS dependencies.
 
 Uses the same Docker network as deployed services for internal connectivity.
 """
+import os
 import secrets
 import subprocess
 import logging
