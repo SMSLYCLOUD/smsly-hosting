@@ -778,10 +778,14 @@ class RemoteOrchestrator:
             # ── Zero-Trust Registry Rewriting ──────────────────────────
             # If the image refers to the internal build-agent registry,
             # we must rewrite it to a reachable address for the remote node.
-            if "registry:5000" in image_name:
+            internal_registry_markers = ["registry:5000", "localhost:5000", "127.0.0.1:5000"]
+            if any(marker in image_name for marker in internal_registry_markers):
                 from apps.deployments.services.provisioner import _get_master_mesh_ip
                 master_ip = _get_master_mesh_ip() or os.environ.get("PUBLIC_IP") or "127.0.0.1"
-                image_name = image_name.replace("registry:5000", f"{master_ip}:5000")
+                
+                for marker in internal_registry_markers:
+                    image_name = image_name.replace(marker, f"{master_ip}:5000")
+                
                 logger.info(f"Rewrote registry image for remote node: {image_name} (via {master_ip})")
             
             payload["image_name"] = image_name
