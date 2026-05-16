@@ -114,6 +114,20 @@ const PROXY_BYPASS_PREFIXES = [
   '/clusters/',
   '/replication/',
   '/platform-updates/',
+  '/deployments/',
+];
+
+// Sub-paths under /services/ that must always hit the local controller
+// (deploy, deploy list, previews, etc.)
+const PROXY_BYPASS_SUFFIX_PATTERNS = [
+  '/deploy',
+  '/deployments',
+  '/multi-deploy',
+  '/restart',
+  '/stop',
+  '/previews',
+  '/create-preview',
+  '/destroy-preview',
 ];
 
 const LOCAL_DEPLOY_TARGETS = new Set(['', 'local', 'localhost', 'controller', 'master', 'primary']);
@@ -145,8 +159,14 @@ api.interceptors.request.use((config) => {
   // Only proxy /api/v1/ calls (relative paths like /services/ or absolute)
   const relPath = url.startsWith('/api/v1/') ? url.slice(7) : url; // strip /api/v1 prefix if absolute
 
-  // Skip if it's a bypass path
+  // Skip if it's a bypass path (exact prefix match)
   if (PROXY_BYPASS_PREFIXES.some(prefix => relPath.startsWith(prefix))) {
+    return config;
+  }
+
+  // Skip if the service sub-path matches a bypass pattern (suffix match)
+  // e.g. /services/{id}/deploy, /services/{id}/deployments, /services/{id}/previews
+  if (PROXY_BYPASS_SUFFIX_PATTERNS.some(pattern => relPath.endsWith(pattern) || relPath.includes(pattern + '/'))) {
     return config;
   }
 
@@ -461,8 +481,7 @@ export const servicesApi = {
     if (target.specified) {
       body.target_server_id = target.value;
     }
-    const requestConfig = target.specified ? { _skipRemoteProxy: true } : undefined;
-    const response = await api.post(`/services/${id}/deploy/`, body, requestConfig);
+    const response = await api.post(`/services/${id}/deploy/`, body, { _skipRemoteProxy: true });
     return response.data;
   },
   restart: async (id: string, forceRebuild: boolean = false): Promise<any> => {
