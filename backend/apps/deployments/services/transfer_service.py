@@ -37,6 +37,11 @@ def _command_text(result) -> str:
     return "" if result is None else str(result)
 
 
+def _safe_service_name(name: str) -> str:
+    """Sanitize service name to alphanumeric and basic safe chars only."""
+    return re.sub(r'[^a-zA-Z0-9 _.-]', '', name)[:255]
+
+
 def _redact_transfer_text(text: str) -> str:
     """Keep persisted transfer logs useful without storing secrets."""
     if not text:
@@ -49,8 +54,18 @@ def _redact_transfer_text(text: str) -> str:
         flags=re.DOTALL,
     )
     safe = re.sub(
-        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL)[A-Z0-9_]*=)([^\s]+)",
+        r"(?i)((?:TOKEN|SECRET|PASSWORD|KEY|DSN|DATABASE_URL|REDIS_URL|AMQP_URL|BROKER_URL|API_KEY)[A-Z0-9_]*=)([^\s\"']+)",
         r"\1***",
+        safe,
+    )
+    safe = re.sub(
+        r"(?i)((?:Authorization|X-API-Key|X-Auth-Token):\s*)(\S+)",
+        r"\1***",
+        safe,
+    )
+    safe = re.sub(
+        r"(?:https?://)[^:/\s]+:[^@\s]+@",
+        "***@",
         safe,
     )
     return safe
@@ -404,7 +419,8 @@ class ServerTransferService:
         if not self.transfer.service or not self.ssh:
             return
 
-        payload = {'service_name': self.transfer.service.name}
+        service_name = _safe_service_name(self.transfer.service.name)
+        payload = {'service_name': service_name}
         remap_code = """
 import json
 import os
@@ -463,7 +479,7 @@ if svc:
         if not self.transfer.service or not self.ssh:
             return
 
-        service_name = self.transfer.service.name
+        service_name = _safe_service_name(self.transfer.service.name)
         image_ref = (
             str((metadata or {}).get('docker_image') or '').strip()
             or str(self.transfer.service.docker_image or '').strip()
@@ -1123,6 +1139,8 @@ if os.path.exists(services_dir):
 
         self.transfer.status = 'ROLLED_BACK'
         self.transfer.can_rollback = False
+        self.transfer.target_ssh_key = ''
+        self.transfer.target_ssh_password = ''
         self.transfer.save()
 
     def _update(self, percent, step):

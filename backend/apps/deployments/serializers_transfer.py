@@ -59,9 +59,16 @@ class ServerTransferCreateSerializer(serializers.Serializer):
 
     def validate_target_ssh_key(self, value):
         if value and value.strip():
-            # Basic sanity check for common PEM/OpenSSH key formats.
-            if "BEGIN" not in value:
-                raise serializers.ValidationError("Invalid SSH private key format.")
+            key = value.strip()
+            if not (key.startswith('-----BEGIN ') and 'PRIVATE KEY-----' in key.splitlines()[0]):
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Must be a valid PEM-encoded private key "
+                    "starting with '-----BEGIN ... PRIVATE KEY-----'."
+                )
+            if '-----END ' not in key or 'PRIVATE KEY-----' not in key.rsplit('\n', 2)[-2]:
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Missing '-----END ... PRIVATE KEY-----' footer."
+                )
         return value
 
     def validate(self, attrs):
