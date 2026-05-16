@@ -23,7 +23,7 @@ class TestDeletionViews(TestCase):
         self.assertEqual(response.status_code, 202)
         self.service.refresh_from_db()
         self.assertEqual(self.service.status, Service.Status.DELETION_PENDING)
-        mock_delay.assert_called_once_with(str(self.service.id))
+        mock_delay.assert_called_once_with(str(self.service.id), force=False)
 
     @patch('apps.deployments.tasks.delete_addon_task.delay')
     def test_addon_delete_endpoint(self, mock_delay):

@@ -31,7 +31,8 @@ class DisasterRecoveryTest(TestCase):
             commit_hash='abc1234'
         )
 
-    def test_deployment_failure_does_not_affect_active_container(self):
+    @patch('apps.deployments.tasks_alerts._create_in_app_notification')
+    def test_deployment_failure_does_not_affect_active_container(self, mock_notify):
         # Current active container
         self.deployment.status = 'BUILDING'
         self.deployment.save()
