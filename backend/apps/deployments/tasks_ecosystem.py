@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
 
 # SEC-ZT-007: Ecosystem plan schema validation keys
 _PLAN_REQUIRED_KEYS = {"services"}
-_PLAN_OPTIONAL_KEYS = {"addons", "manifest", "wave_size", "server_id", "ai_provider"}
+_PLAN_OPTIONAL_KEYS = {
+    "addons", "manifest", "wave_size", "server_id", "ai_provider",
+    "ecosystem_name", "deploy_sequence",
+    "total_repos_scanned", "deployable_repos",
+    "scan_warning_count", "scan_warnings", "message",
+}
 _SERVICE_REQUIRED_KEYS = {"repo"}
 _SERVICE_OPTIONAL_KEYS = {
     "name", "stack", "build", "port", "env_vars", "depends_on",
@@ -303,7 +308,7 @@ def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
 def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
-    shared_addons_urls: Dict[str, str] = None,
+    shared_addons: Dict[str, str] = None,
 ) -> Dict[str, str]:
     """Resolve known placeholders into concrete values."""
     resolved: Dict[str, str] = {}
