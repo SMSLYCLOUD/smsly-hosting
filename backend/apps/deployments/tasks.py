@@ -3356,13 +3356,13 @@ def cleanup_old_backups_task():
                         logger.warning(f"Error deleting backup file {backup.file_path}: {e}")
                 backup.delete()
 
-@shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=4200)
 def execute_server_transfer_task(self, transfer_id):
     from .models_transfer import ServerTransfer as TransferModel
     from apps.deployments.services.transfer_service import ServerTransferService, _redact_transfer_text
 
     lock_key = f"server-transfer:{transfer_id}"
-    if not cache.add(lock_key, "1", timeout=7500):
+    if not cache.add(lock_key, "1", timeout=3600):
         logger.warning("Transfer Task: duplicate execution ignored for %s", transfer_id)
         return {"status": "skipped", "reason": "already_running"}
 
