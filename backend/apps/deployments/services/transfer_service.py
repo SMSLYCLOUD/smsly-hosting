@@ -183,17 +183,29 @@ class ServerTransferService:
             self.transfer.save(update_fields=['status'])
             self._restore()
 
-            self.transfer.status = 'DNS_CUTOVER'
-            self.transfer.save(update_fields=['status'])
-            self._dns_cutover()
-
             self.transfer.status = 'VERIFYING'
             self.transfer.save(update_fields=['status'])
             self._verify()
 
+            self.transfer.status = 'FINAL_SYNC'
+            self.transfer.save(update_fields=['status'])
+            self._final_sync()
+
+            self.transfer.status = 'DNS_CUTOVER'
+            self.transfer.save(update_fields=['status'])
+            self._dns_cutover()
+
+            self.transfer.status = 'STABILITY_MONITORING'
+            self.transfer.save(update_fields=['status'])
+            self._monitor_stability()
+
             self._complete()
         except Exception as exc:
             self._handle_failure(exc)
+            try:
+                self.rollback()
+            except Exception as rollback_exc:
+                logger.error(f"Rollback also failed: {rollback_exc}")
         finally:
             if self.ssh:
                 self.ssh.close()
@@ -278,6 +290,70 @@ class ServerTransferService:
             backup = backup_svc.backup_server()
             self.transfer.source_server_backup = backup
             self.transfer.save(update_fields=['source_server_backup'])
+
+    def _final_sync(self):
+        """Perform a final, fast synchronization of stateful volumes before cutover."""
+        if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
+            return
+
+        self._update(80, 'Performing final data synchronization...')
+
+        from ..models_storage import Volume
+        volumes = Volume.objects.filter(service=self.transfer.service)
+        if not volumes.exists():
+            self._log("No volumes to synchronize, skipping final sync.")
+            return
+
+        self._log("Volumes found, performing fast final sync...")
+
+        # Brief write pause: pause the container to prevent split-brain writes while allowing routing
+        self._log(f"Pausing writes on source container {self.transfer.service.name} using container pause...")
+        container_name = self.transfer.service.name
+
+        is_local = not self.transfer.source_server_ip or self.transfer.source_server_ip == "local"
+
+        def set_container_pause_state(pause: bool):
+            action = "pause" if pause else "unpause"
+            if is_local:
+                try:
+                    import docker
+                    from apps.cloud.docker_client import get_docker_client
+                    client = get_docker_client()
+                    container = client.containers.get(container_name)
+                    if pause:
+                        container.pause()
+                    else:
+                        container.unpause()
+                except Exception as e:
+                    self._log(f"Warning: Could not {action} local source container: {e}")
+            else:
+                try:
+                    from ..models_core import ManagedServer
+                    from .remote_orchestrator import RemoteOrchestrator
+                    source_server = ManagedServer.objects.filter(host=self.transfer.source_server_ip).first()
+                    if source_server:
+                        orch = RemoteOrchestrator(source_server)
+                        if getattr(orch, 'ssh', None) and hasattr(orch.ssh, 'exec_command'):
+                            orch.ssh.exec_command(f"docker {action} {shlex.quote(container_name)}")
+                except Exception as e:
+                    self._log(f"Warning: Could not {action} remote source container: {e}")
+
+        set_container_pause_state(True)
+
+        try:
+            backup_svc = BackupService()
+            final_backup = backup_svc.backup_service(
+                self.transfer.service.id,
+                backup_type='TRANSFER',
+            )
+            self.transfer.source_backup = final_backup
+            self.transfer.save(update_fields=['source_backup'])
+
+            self._upload()
+            self._restore()
+        finally:
+            self._log(f"Resuming writes on source container {self.transfer.service.name}...")
+            set_container_pause_state(False)
 
     def _upload(self):
         """Step 2: upload backup to target."""
@@ -1144,20 +1220,77 @@ if os.path.exists(services_dir):
             except requests.RequestException as e:
                 logger.warning("Target health check failed: %s (non-fatal)", e)
         elif self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
-            # Check if the container is running on the target
+            self._verify_service_readiness()
+
+    def _verify_service_readiness(self):
+        container_name = self.transfer.service.name
+        port = self.transfer.service.internal_port or 80
+
+        # Layer 1: Runtime Verification
+        result = _command_text(self.ssh.exec_command(
+            f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}"
+        ))
+        if result.strip() != 'true':
+            raise RuntimeError(f"Service container {container_name} is not running on target")
+
+        restarts = _command_text(self.ssh.exec_command(
+            f"docker inspect -f '{{{{.RestartCount}}}}' {shlex.quote(container_name)}"
+        ))
+        try:
+            if int(restarts.strip()) > 3:
+                raise RuntimeError(f"Service container {container_name} is crash-looping (restarts: {restarts.strip()})")
+        except ValueError:
+            pass
+
+        # Layer 3 & 5: Repeated Application Verification
+        self._log(f"Waiting for {container_name} readiness on target...")
+        ready = False
+        health_cmd = getattr(self.transfer.service, 'health_check_cmd', None)
+        health_path = getattr(self.transfer.service, 'health_check_path', None)
+
+        # Require 3 consecutive successes to prove stable readiness
+        consecutive_successes = 0
+        for attempt in range(15): # 15 * 5 = 75s
+            time.sleep(5)
             try:
-                container_name = self.transfer.service.name
-                result = _command_text(self.ssh.exec_command(
-                    f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}"
-                ))
-                if result.strip() != 'true':
-                    raise RuntimeError(
-                        f"Service container {container_name} is not running on target"
-                    )
-                logger.info("Service container %s verified running on target", container_name)
+                if health_cmd:
+                    # Execute custom health check
+                    _command_text(self.ssh.exec_command(
+                        f"docker exec {shlex.quote(container_name)} sh -c {shlex.quote(health_cmd)}",
+                        raise_on_error=True
+                    ))
+                    consecutive_successes += 1
+                elif health_path:
+                    _command_text(self.ssh.exec_command(
+                        f"docker exec {shlex.quote(container_name)} curl -fsS http://127.0.0.1:{port}{health_path}",
+                        raise_on_error=True
+                    ))
+                    consecutive_successes += 1
+                else:
+                    # Fallback to HTTP root, or if not HTTP, TCP port check
+                    is_http = (port in (80, 443, 8080, 3000, 5000, 8000)) or getattr(self.transfer.service, 'public_domain', None) or getattr(self.transfer.service, 'custom_domains', None)
+                    if is_http:
+                        _command_text(self.ssh.exec_command(
+                            f"docker exec {shlex.quote(container_name)} curl -fsS http://127.0.0.1:{port}/",
+                            raise_on_error=True
+                        ))
+                    else:
+                        _command_text(self.ssh.exec_command(
+                            f"docker exec {shlex.quote(container_name)} sh -c 'nc -z 127.0.0.1 {port} || (cat /dev/null > /dev/tcp/127.0.0.1/{port})'",
+                            raise_on_error=True
+                        ))
+                    consecutive_successes += 1
             except Exception as e:
-                logger.warning("Service verification failed: %s", e)
-                raise RuntimeError(f"Service verification failed: {e}") from e
+                consecutive_successes = 0
+
+            if consecutive_successes >= 3:
+                ready = True
+                break
+
+        if not ready:
+            raise RuntimeError(f"Service container {container_name} failed readiness checks on target")
+
+        self._log(f"Service container {container_name} verified running and healthy on target")
 
     def _verify_between_servers(self):
         """
