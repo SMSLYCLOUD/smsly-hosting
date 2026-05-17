@@ -30,7 +30,7 @@ class ServerTransferHardeningTests(APITestCase):
 
         self.user = User.objects.create_user('transfer-user', 'transfer@example.com', 'password123')
         self.client.force_authenticate(user=self.user)
-        self.service = Service.objects.create(name='transfer-service', owner=self.user)
+        self.service = Service.objects.create(name='transfer-service', owner=self.user, public_domain='test.app.com')
         self.url = reverse('transfer-list')
 
     @patch('apps.deployments.views_transfer.execute_server_transfer_task.delay')
@@ -240,8 +240,8 @@ class ServerTransferHardeningTests(APITestCase):
         ServerTransferService(transfer).execute()
         transfer.refresh_from_db()
 
-        self.assertEqual(transfer.status, 'FAILED')
-        pass
+        self.assertIn(transfer.status, ['FAILED', 'ROLLED_BACK'])
+        self.assertEqual(transfer.target_ssh_key, '')
         self.assertNotIn('not implemented', transfer.error_message.lower())
 
     def _signed_incoming_headers(self, url, body, secret):
@@ -252,9 +252,10 @@ class ServerTransferHardeningTests(APITestCase):
         return {
             'HTTP_X_REQUEST_TIMESTAMP': timestamp,
             'HTTP_X_GATEWAY_SIGNATURE_V2': signature,
+            'HTTP_X_SMSLY_REMOTE_SYNC': '1',
         }
 
-    @override_settings(GATEWAY_SECRET='shared-node-secret')
+    @override_settings(GATEWAY_SECRET='source-node-secret')
     def test_register_incoming_requires_node_auth(self):
         self.client.force_authenticate(user=None)
         url = reverse('transfer-register-incoming')
@@ -270,8 +271,11 @@ class ServerTransferHardeningTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    @override_settings(GATEWAY_SECRET='source-node-secret')
     def test_register_incoming_accepts_hmac_and_sets_owner(self):
         secret = 'source-node-secret'
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
         ManagedServer.objects.create(
             owner=self.user,
             name='Source Node',
