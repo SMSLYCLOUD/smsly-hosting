@@ -1134,6 +1134,45 @@ if os.path.exists(services_dir):
         except Exception as exc:
             self._log(f"Warning: Could not regenerate Caddyfile after DNS cutover: {exc}")
 
+        # Validate public availability before returning success
+        self._update(88, 'Validating public routing and availability...')
+        if self.transfer.transfer_type == 'SERVICE' and self.transfer.service:
+            svc = self.transfer.service
+
+            # Use public_domain or first custom_domain if available
+            domain = getattr(svc, 'public_domain', None)
+            if not domain and getattr(svc, 'custom_domains', None) and isinstance(svc.custom_domains, list) and len(svc.custom_domains) > 0:
+                domain = svc.custom_domains[0]
+
+            # If no domain is defined, we can't test public routing via URL.
+            if domain:
+                public_url = f"https://{domain}" if getattr(svc, 'force_ssl', True) else f"http://{domain}"
+                health_path = getattr(svc, 'health_check_path', None) or "/"
+                check_url = f"{public_url}{health_path}"
+
+                self._log(f"Testing public route: {check_url}")
+                consecutive_successes = 0
+                for attempt in range(6): # Wait up to 30s for caddy/dns propagation
+                    try:
+                        resp = requests.get(check_url, timeout=5)
+                        if 200 <= resp.status_code < 400 or resp.status_code == 401:
+                            consecutive_successes += 1
+                            self._log(f"Public route validated (HTTP {resp.status_code}).")
+                            if consecutive_successes >= 2:
+                                break
+                        else:
+                            consecutive_successes = 0
+                            self._log(f"Public route returned HTTP {resp.status_code}, retrying...")
+                    except Exception as e:
+                        consecutive_successes = 0
+                        self._log(f"Public route validation error: {e}, retrying...")
+                    time.sleep(5)
+
+                if consecutive_successes < 2:
+                    raise RuntimeError(f"Public route validation failed after DNS cutover for {check_url}")
+            else:
+                self._log("No public domain or custom domains configured. Skipping public route validation.")
+
     def _interconnect_servers(self):
         """
         Automatically interconnect the source and target servers using the WireGuard Mesh.
@@ -1352,6 +1391,54 @@ if os.path.exists(services_dir):
                 self._log(f"Warning: Caddyfile regeneration failed: {result.get('message')}")
         except Exception as exc:
             self._log(f"Warning: Could not regenerate Caddyfile: {exc}")
+
+    def _monitor_stability(self):
+        self._update(90, 'Monitoring stability window on target server...')
+
+        if self.transfer.transfer_type != 'SERVICE' or not self.transfer.service:
+            return
+
+        container_name = self.transfer.service.name
+        port = self.transfer.service.internal_port or 80
+
+        # Monitor for 120s
+        for _ in range(24): # 24 * 5 = 120s
+            time.sleep(5)
+            # Verify container is still running
+            result = _command_text(self.ssh.exec_command(
+                f"docker inspect -f '{{{{.State.Running}}}}' {shlex.quote(container_name)}",
+                raise_on_error=False
+            ))
+            if result.strip() != 'true':
+                raise RuntimeError(f"Service container {container_name} crashed during stability window")
+
+            # Verify restart count hasn't increased
+            restarts = _command_text(self.ssh.exec_command(
+                f"docker inspect -f '{{{{.RestartCount}}}}' {shlex.quote(container_name)}",
+                raise_on_error=False
+            ))
+            try:
+                if int(restarts.strip()) > 3:
+                    raise RuntimeError(f"Service container {container_name} is crash-looping during stability window")
+            except ValueError:
+                pass
+
+            # HTTP verification over local gateway (if domain exists)
+            svc = self.transfer.service
+            domain = getattr(svc, 'public_domain', None)
+            if not domain and getattr(svc, 'custom_domains', None) and isinstance(svc.custom_domains, list) and len(svc.custom_domains) > 0:
+                domain = svc.custom_domains[0]
+
+            if domain:
+                public_url = f"https://{domain}" if getattr(svc, 'force_ssl', True) else f"http://{domain}"
+                health_path = getattr(svc, 'health_check_path', None) or "/"
+                check_url = f"{public_url}{health_path}"
+                try:
+                    resp = requests.get(check_url, timeout=5)
+                    if resp.status_code >= 500:
+                        raise RuntimeError(f"Service {domain} returned HTTP {resp.status_code} during stability window")
+                except requests.exceptions.RequestException as e:
+                    pass
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'

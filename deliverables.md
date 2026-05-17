@@ -49,3 +49,4 @@ Mission Complete.## Updates from Final Verification Gate:
 3. **Public Gateway Validation**: `_dns_cutover` explicitly validates public accessibility by polling the `public_domain` (or active `custom_domains`) with an HTTP loop post Caddyfile/DNS reloading, forcing an automatic rollback if proxy cache or DNS propagations fail.
 
 Zero-downtime execution and rollback resiliency confirmed.
+4. **Stability Monitoring Added**: Implemented `_monitor_stability` method that executes immediately after cutover. It actively monitors the health of the destination container and the HTTP health endpoint for an additional 120 seconds. If any failure or crash loops occur within this window, `_monitor_stability` throws an exception triggering a rollback to the source node.
