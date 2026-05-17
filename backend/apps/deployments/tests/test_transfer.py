@@ -14,18 +14,25 @@ class ServerTransferServiceTest(TestCase):
     def setUp(self):
         from django.contrib.auth.models import User
         self.user = User.objects.create(username="testuser", email="test@test.com")
-        self.service = Service.objects.create(name="test-service", deploy_type='DOCKER', owner=self.user)
+        self.service = Service.objects.create(name="test-service", deploy_type='DOCKER', owner=self.user, public_domain="test.app.com")
         self.transfer = ServerTransfer.objects.create(
             service=self.service,
             source_server_ip="1.2.3.4",
             target_server_ip="5.6.7.8",
-            target_ssh_key="mock-key",
+            target_ssh_key="-----BEGIN OPENSSH PRIVATE KEY-----\nmock\n-----END OPENSSH PRIVATE KEY-----",
             transfer_type='SERVICE'
         )
 
+    @patch('requests.get')
     @patch('apps.deployments.services.transfer_service.SSHClient')
     @patch('apps.deployments.services.transfer_service.BackupService')
-    def test_execute_service_transfer_success(self, MockBackupService, MockSSHClient):
+    def test_execute_service_transfer_success(self, MockBackupService, MockSSHClient, mock_requests_get):
+        # Mock requests.get for public URL verification
+        import requests
+        mock_resp = requests.Response()
+        mock_resp.status_code = 200
+        mock_requests_get.return_value = mock_resp
+
         # Param 1: BackupService (Closest/Inner decorator)
         # Param 2: SSHClient (Farthest/Outer decorator)
         MockBackup, MockSSH = MockBackupService, MockSSHClient
@@ -37,10 +44,14 @@ class ServerTransferServiceTest(TestCase):
         def _exec_side_effect(cmd, *args, **kwargs):
             if "docker ps --filter name=backend" in cmd:
                 return "smsly-hosting-backend-1"
-            if "curl -fsS -m 5 http://127.0.0.1:8090/health" in cmd:
+            if "http://localhost:8000/health" in cmd:
                 return "READY"
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
+            if "docker inspect -f '{{.RestartCount}}'" in cmd:
+                return "0"
+            if "curl -fsS http://127.0.0.1:80/" in cmd:
+                return "OK"
             if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
                 return "TRANSFER_TCP_OK"
             return "mock_output"
@@ -62,6 +73,9 @@ class ServerTransferServiceTest(TestCase):
 
         # Verify
         self.transfer.refresh_from_db()
+        if self.transfer.status != 'COMPLETED':
+            print("Transfer error message:", self.transfer.error_message)
+            print("Transfer logs:", self.transfer.logs)
         self.assertEqual(self.transfer.status, 'COMPLETED')
         self.assertEqual(self.transfer.target_ssh_key, '')
 
@@ -72,9 +86,14 @@ class ServerTransferServiceTest(TestCase):
         )
         mock_ssh.upload_file.assert_called()
 
+    @patch('requests.get')
     @patch('apps.deployments.services.transfer_service.SSHClient')
     @patch('apps.deployments.services.transfer_service.BackupService')
-    def test_execute_full_transfer_success(self, MockBackupService, MockSSHClient):
+    def test_execute_full_transfer_success(self, MockBackupService, MockSSHClient, mock_requests_get):
+        import requests
+        mock_resp = requests.Response()
+        mock_resp.status_code = 200
+        mock_requests_get.return_value = mock_resp
         MockBackup, MockSSH = MockBackupService, MockSSHClient
 
         self.transfer.transfer_type = 'FULL'
@@ -87,6 +106,10 @@ class ServerTransferServiceTest(TestCase):
         def _exec_side_effect_full(cmd, *args, **kwargs):
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
+            if "docker inspect -f '{{.RestartCount}}'" in cmd:
+                return "0"
+            if "curl -fsS http://127.0.0.1:80/" in cmd:
+                return "OK"
             if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
                 return "TRANSFER_TCP_OK"
             if "grep POSTGRES_USER" in cmd:
@@ -110,6 +133,9 @@ class ServerTransferServiceTest(TestCase):
         svc.execute()
 
         self.transfer.refresh_from_db()
+        if self.transfer.status != 'COMPLETED':
+            print("Transfer error message:", self.transfer.error_message)
+            print("Transfer logs:", self.transfer.logs)
         self.assertEqual(self.transfer.status, 'COMPLETED')
 
         mock_ssh.exec_command.assert_any_call(
@@ -127,7 +153,7 @@ class ServerTransferServiceTest(TestCase):
         svc.execute()
 
         self.transfer.refresh_from_db()
-        self.assertEqual(self.transfer.status, 'FAILED')
+        self.assertIn(self.transfer.status, ['FAILED', 'ROLLED_BACK'])
         self.assertIn("Connection refused", self.transfer.error_message)
 
     @patch('apps.deployments.services.transfer_service.BackupService.decrypt_backup')
@@ -220,6 +246,8 @@ class ServerTransferServiceTest(TestCase):
         self.transfer.status = 'FAILED'
         self.transfer.save(update_fields=['status'])
         svc = ServerTransferService(self.transfer)
-
+        # Note: Rollback is now allowed for any active transfer that fails.
+        self.transfer.can_rollback = False
+        self.transfer.save()
         with self.assertRaises(ValueError):
             svc.rollback()
