@@ -65,7 +65,8 @@ class ServerTransferCreateSerializer(serializers.Serializer):
                     "Invalid SSH private key format. Must be a valid PEM-encoded private key "
                     "starting with '-----BEGIN ... PRIVATE KEY-----'."
                 )
-            if '-----END ' not in key or 'PRIVATE KEY-----' not in key.rsplit('\n', 2)[-2]:
+            lines = [line.strip() for line in key.splitlines() if line.strip()]
+            if '-----END ' not in key or not ('-----END ' in lines[-1] and 'PRIVATE KEY-----' in lines[-1]):
                 raise serializers.ValidationError(
                     "Invalid SSH private key format. Missing '-----END ... PRIVATE KEY-----' footer."
                 )
