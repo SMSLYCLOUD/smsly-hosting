@@ -106,6 +106,10 @@ class ServerTransferServiceTest(TestCase):
         def _exec_side_effect_full(cmd, *args, **kwargs):
             if "docker inspect -f '{{.State.Running}}'" in cmd:
                 return "true"
+            if "docker inspect -f '{{.RestartCount}}'" in cmd:
+                return "0"
+            if "curl -fsS http://127.0.0.1:80/" in cmd:
+                return "OK"
             if "TRANSFER_TCP_OK" in cmd or "echo TRANSFER_TCP_OK" in cmd:
                 return "TRANSFER_TCP_OK"
             if "grep POSTGRES_USER" in cmd:
