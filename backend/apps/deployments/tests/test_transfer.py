@@ -22,6 +22,7 @@ class ServerTransferServiceTest(TestCase):
             target_ssh_key="-----BEGIN OPENSSH PRIVATE KEY-----\nmock\n-----END OPENSSH PRIVATE KEY-----",
             transfer_type='SERVICE'
         )
+#        )
 
     @patch('requests.get')
     @patch('apps.deployments.services.transfer_service.SSHClient')
