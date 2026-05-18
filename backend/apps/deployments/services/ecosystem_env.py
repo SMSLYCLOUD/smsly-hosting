@@ -53,21 +53,6 @@ class EcosystemEnvResolver:
 
         self._resolve_shared_groups()
 
-        # Build cross-service links
-        service_links = {}
-        for service_key, service in self.graph.services.items():
-            service_links[service_key] = f"http://{service_key}"
-
-        addon_links = {}
-        for addon_key, addon in self.graph.addons.items():
-            addon_type = addon.get("type", "").lower()
-            if addon_type == "postgres":
-                addon_links[addon_key] = f"postgresql://user:pass@{addon_key}:5432/db"
-            elif addon_type == "redis":
-                addon_links[addon_key] = f"redis://{addon_key}:6379/0"
-            else:
-                addon_links[addon_key] = f"tcp://{addon_key}:1234"
-
         for service_key, service in self.graph.services.items():
             service_env = {}
             for env_key, config in service.get("env", {}).items():
@@ -78,37 +63,21 @@ class EcosystemEnvResolver:
                 if source == "generated":
                     value = generate_strong_secret(config.get("min_length", 48))
                 elif source == "addon":
-                    addon_name = config.get('addon')
-                    if addon_name in addon_links:
-                        value = addon_links[addon_name]
-                    else:
-                        errors.append(f"Service '{service_key}' references missing addon '{addon_name}'")
+                    value = f"addon_placeholder_for_{config.get('addon')}"
                 elif source == "service_public_url":
-                    svc_name = config.get('service')
-                    if svc_name in self.graph.services:
-                        value = f"https://{svc_name}.placeholder.domain"
-                    else:
-                        errors.append(f"Service '{service_key}' references missing service '{svc_name}'")
-                elif source == "service_internal_url":
-                    svc_name = config.get('service')
-                    if svc_name in service_links:
-                        value = service_links[svc_name]
-                    else:
-                        errors.append(f"Service '{service_key}' references missing service '{svc_name}'")
+                    value = f"https://{config.get('service')}.placeholder.domain"
                 elif source == "external_required":
                     errors.append(f"Service '{service_key}' missing external required env '{env_key}'")
                 elif source == "shared_group":
                     group = config.get("group")
-                    # allow referencing specific variable in the group, default to env_key
-                    var_name = config.get("var", env_key)
-                    if group in self.shared_secrets and var_name in self.shared_secrets[group]:
-                        value = self.shared_secrets[group][var_name]
+                    if group in self.shared_secrets and env_key in self.shared_secrets[group]:
+                        value = self.shared_secrets[group][env_key]
 
                 if required and not value and source != "external_required":
                     errors.append(f"Service '{service_key}' failed to resolve required env '{env_key}'")
 
                 if value is not None:
-                    if self.graph.manifest.get("mode") == "production" and is_weak_value(value) and source not in ["addon", "service_public_url", "service_internal_url"]:
+                    if self.graph.manifest.get("mode") == "production" and is_weak_value(value) and source not in ["addon", "service_public_url"]:
                          errors.append(f"Service '{service_key}' env '{env_key}' contains weak value in production")
                     service_env[env_key] = value
 
