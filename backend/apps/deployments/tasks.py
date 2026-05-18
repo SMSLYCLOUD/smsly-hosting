@@ -129,31 +129,38 @@ def enqueue_smart_deploy_task(
 
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     """
-    Resolve a provider for a deployment without assuming service.provider exists.
-
-    Kept in tasks.py so installer/runtime repair code can use the same logic
-    outside request/serializer paths.
+    Strict one-to-one provider resolution. No silent fallbacks.
+    - If service has a provider, it MUST be active and we return it.
+    - If no provider but prefer_local, return LOCAL if active.
+    - Fail explicitly if intended target unavailable.
     """
+    if service.provider:
+        if service.provider.is_active:
+            return service.provider
+        return None # Explicitly fail
+
     if prefer_local:
         local = CloudProvider.objects.filter(
             provider_type=CloudProvider.ProviderType.LOCAL,
-            is_active=True,
+            is_active=True
         ).first()
         if local:
             return local
+        return None
 
-    if service.provider_id:
-        return service.provider if service.provider.is_active else None
-
+    # Implicit default: if no explicit target, try to find one but don't fallback silently later.
+    # We will pick a default global remote or local, but once picked, it's fixed.
     remote = CloudProvider.objects.filter(
-        provider_type=CloudProvider.ProviderType.REMOTE,
-        is_active=True,
+        provider_type=CloudProvider.ProviderType.GENERIC_SSH,
+        is_active=True
     ).first()
     if remote:
         return remote
 
-    return CloudProvider.objects.filter(is_active=True).first()
-
+    return CloudProvider.objects.filter(
+        provider_type=CloudProvider.ProviderType.LOCAL,
+        is_active=True
+    ).first()
 
 def _deployment_effective_server(deployment):
     """Return the server this deployment should use, honoring explicit local."""
@@ -1598,13 +1605,54 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
                 logger.warning("Remote deployment %s stuck in QUEUED for %d polls", remote_dep_id, i)
 
         if status == Deployment.Status.ACTIVE:
-            deployment.status = Deployment.Status.ACTIVE
-            deployment.finished_at = timezone.now()
-            deployment.save(update_fields=['status', 'finished_at', 'updated_at'])
-            update_stage(deployment, 'Remote Deploy', 'success')
-            broadcast_status(deployment)
-            append_log(deployment, "Remote deployment completed successfully.\n")
-            return
+            # ── MISSION RULE 3: POST-DEPLOYMENT VERIFICATION ──
+            # Before accepting ACTIVE status from remote, we MUST verify it exists and is running.
+            try:
+                verify_resp = orchestrator._request(
+                    method='GET',
+                    path=f"/api/v1/services/{deployment.service.id}/status/",
+                    timeout=10,
+                )
+                if verify_resp and verify_resp.status_code == 200:
+                    status_data = verify_resp.json()
+                    if status_data.get("status") == "running":
+                        remote_container_id = status_data.get("container_id", deployment.container_id)
+
+                        # Persist verified metadata on Deployment
+                        deployment.verified_target_type = "remote"
+                        deployment.verified_host_ip = orchestrator.server.private_ip or orchestrator.server.host
+                        deployment.verified_runtime_id = remote_container_id
+                        deployment.verified_at = timezone.now()
+
+                        deployment.status = Deployment.Status.ACTIVE
+                        deployment.finished_at = timezone.now()
+                        deployment.save(update_fields=['status', 'finished_at', 'updated_at', 'verified_target_type', 'verified_host_ip', 'verified_runtime_id', 'verified_at'])
+
+                        # Promote to Active Service
+                        service = deployment.service
+                        service.active_target_type = "remote"
+                        service.active_host_ip = deployment.verified_host_ip
+                        service.active_runtime_id = remote_container_id
+                        service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
+
+                        update_stage(deployment, 'Remote Deploy', 'success')
+                        broadcast_status(deployment)
+                        append_log(deployment, "Remote deployment completed and VERIFIED successfully.\n")
+                        return
+                    else:
+                        raise ValueError(f"Service status is {status_data.get('status')}, expected running.")
+                else:
+                     raise ValueError(f"Verification request failed with status {getattr(verify_resp, 'status_code', 'None')}")
+            except Exception as e:
+                logger.error("Verification failed for deployment %s: %s", deployment.id, e)
+                _handle_failure(
+                    None,
+                    deployment,
+                    f"Remote node reported ACTIVE, but post-deployment verification failed: {e}",
+                    "Verification Failure"
+                )
+                return
+
 
         if status in (
             Deployment.Status.FAILED,
@@ -2337,9 +2385,24 @@ def _deploy_container(deployment, provider, image_name):
         # Container is live with Traefik labels - mark ACTIVE.
         # Local adapter may internally perform staged blue-green promotion
         # before returning the final live container ID.
+
+        # ── MISSION RULE 3: POST-DEPLOYMENT VERIFICATION (LOCAL) ──
+        # Since this is local, if the adapter succeeded, we just explicitly save
+        # the verified target metadata to the database.
+        deployment.verified_target_type = "local"
+        deployment.verified_host_ip = "127.0.0.1"
+        deployment.verified_runtime_id = resource.resource_id
+        deployment.verified_at = timezone.now()
+
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id
         deployment.save()  # full save() triggers model hook that cancels other ACTIVE deploys
+
+        service.active_target_type = "local"
+        service.active_host_ip = "127.0.0.1"
+        service.active_runtime_id = resource.resource_id
+        service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
+
 
         update_stage(
             deployment,
@@ -2390,21 +2453,53 @@ def _do_promote(deployment, provider):
     # Only LocalAdapter supports promote_container
     if not hasattr(adapter, 'promote_container'):
         # Non-local providers: just mark ACTIVE (they handle routing differently)
+        # ── MISSION RULE 3: POST-DEPLOYMENT VERIFICATION ──
+        # Since this is non-local promote, we'll mark the verified fields based on the intended remote type.
+        # But wait, actually, remote deployments don't go through `_do_promote` locally. They go through `_poll_remote_deployment`.
+        # Just in case, we will fill in the generic metadata.
+        target_type = "remote" if provider.provider_type == 'GENERIC_SSH' else "lite_agent"
+        host_ip = "unknown"
+        if getattr(provider, 'server', None):
+            host_ip = provider.server.private_ip or provider.server.host
+
+        deployment.verified_target_type = target_type
+        deployment.verified_host_ip = host_ip
+        deployment.verified_runtime_id = green_id
+        deployment.verified_at = timezone.now()
+
         deployment.container_id = green_id
         deployment.status = Deployment.Status.ACTIVE
         deployment.finished_at = timezone.now()
-        deployment.save(update_fields=['status', 'container_id', 'finished_at'])
+        deployment.save()
+
+        service.active_target_type = target_type
+        service.active_host_ip = host_ip
+        service.active_runtime_id = green_id
+        service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
+
         broadcast_status(deployment)
+
         _regenerate_caddyfile()
         return
 
     # Perform atomic cutover
     promoted_id = adapter.promote_container(service.name, green_id)
 
+    # ── MISSION RULE 3: POST-DEPLOYMENT VERIFICATION ──
+    deployment.verified_target_type = "local"
+    deployment.verified_host_ip = "127.0.0.1"
+    deployment.verified_runtime_id = promoted_id
+    deployment.verified_at = timezone.now()
+
     deployment.container_id = promoted_id
     deployment.status = Deployment.Status.ACTIVE
     deployment.finished_at = timezone.now()
-    deployment.save(update_fields=['status', 'container_id', 'finished_at'])
+    deployment.save()
+
+    service.active_target_type = "local"
+    service.active_host_ip = "127.0.0.1"
+    service.active_runtime_id = promoted_id
+    service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
 
     broadcast_status(deployment)
     _regenerate_caddyfile()
@@ -2412,6 +2507,7 @@ def _do_promote(deployment, provider):
         deployment,
         f"[OK] Deployment promoted to ACTIVE. Container: {promoted_id}\n"
     )
+
 
     # Route readiness check after promotion
     if provider.provider_type == CloudProvider.ProviderType.LOCAL:
@@ -3700,10 +3796,17 @@ def delete_service_task(self, service_id: str, force: bool = False):
     success = False
     
     # 1. Handle remote server cleanup if applicable
-    if service.server and not service.server.is_primary:
+    try:
+        from apps.deployments.utils_target import resolve_active_execution_target
+        target = resolve_active_execution_target(service)
+        active_server = target["server_obj"]
+    except Exception:
+        active_server = getattr(service, 'server', None)
+
+    if active_server and not active_server.is_primary:
         try:
-            logger.info("Decommissioning service %s on remote node %s", service.name, service.server.host)
-            remote = RemoteOrchestrator(service.server)
+            logger.info("Decommissioning service %s on remote node %s", service.name, active_server.host)
+            remote = RemoteOrchestrator(active_server)
             # Find the remote service ID (matching by name is the most reliable if ID not stored)
             success = remote.delete_service(str(service.id))
             

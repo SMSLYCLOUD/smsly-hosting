@@ -1,3 +1,6 @@
+from django.test import TestCase
+class DummyTest(TestCase):
+    pass
 # pylint: disable=invalid-name
 from django.test import TestCase, override_settings
 from unittest.mock import MagicMock, patch

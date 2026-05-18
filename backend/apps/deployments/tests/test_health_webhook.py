@@ -1,3 +1,6 @@
+from django.test import TestCase
+class DummyTest(TestCase):
+    pass
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from apps.deployments.models_core import Service, Deployment

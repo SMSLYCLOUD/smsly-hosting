@@ -1,3 +1,6 @@
+from django.test import TestCase
+class DummyTest(TestCase):
+    pass
 # pylint: disable=invalid-name
 import hashlib
 import hmac

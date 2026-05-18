@@ -435,6 +435,26 @@ class Service(TimeStampedModel):
         default=True,
         help_text="If False, Traefik route is disabled; service only reachable via Docker DNS")
 
+
+    # Verified execution metadata (Truthful routing and UI)
+    active_target_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="The verified runtime environment where this service is actually executing (e.g., 'local', 'remote', 'lite_agent')."
+    )
+    active_host_ip = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="The verified IP address or hostname where the service is executing."
+    )
+    active_runtime_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="The verified container ID or process ID of the running service."
+    )
     def __str__(self):
         return f"{self.name} ({self.slug})"
 
@@ -675,6 +695,31 @@ class Deployment(TimeStampedModel):
             return (self.finished_at - self.started_at).total_seconds()
         return None
 
+
+    # Post-deployment verification metadata
+    verified_target_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="The verified runtime environment where this deployment actually executed."
+    )
+    verified_host_ip = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="The verified IP address or hostname where the deployment executed."
+    )
+    verified_runtime_id = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="The verified container ID or process ID of the deployment."
+    )
+    verified_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the execution location was verified."
+    )
     def __str__(self):
         label = f"{self.service.name} - {self.commit_hash[:7]} ({self.status})"
         if self.is_rollback:

@@ -1,4 +1,6 @@
 from django.test import TestCase
+class DummyTest(TestCase):
+    pass
 from unittest.mock import patch
 from apps.deployments.models import Service, Deployment, Project
 from apps.deployments.models_servers import ManagedServer

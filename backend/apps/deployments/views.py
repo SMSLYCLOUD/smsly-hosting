@@ -302,11 +302,16 @@ def _has_active_deployment(service):
 
 def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     """
-    Resolve provider for deployment in a fail-closed way.
-    - If service has an assigned provider, it must be active.
-    - Otherwise, if prefer_local is true, try to find an active LOCAL provider.
-    - Fall back to the first active global provider.
+    Strict one-to-one provider resolution. No silent fallbacks.
+    - If service has a provider, it MUST be active and we return it.
+    - If no provider but prefer_local, return LOCAL if active.
+    - Fail explicitly if intended target unavailable.
     """
+    if service.provider:
+        if service.provider.is_active:
+            return service.provider
+        return None # Explicitly fail
+
     if prefer_local:
         local = CloudProvider.objects.filter(
             provider_type=CloudProvider.ProviderType.LOCAL,
@@ -314,11 +319,10 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
         ).first()
         if local:
             return local
+        return None
 
-    if service.provider:
-        return service.provider if service.provider.is_active else None
-
-    # Global preference: Remote nodes first, then Local as last resort
+    # Implicit default: if no explicit target, try to find one but don't fallback silently later.
+    # We will pick a default global remote or local, but once picked, it's fixed.
     remote = CloudProvider.objects.filter(
         provider_type=CloudProvider.ProviderType.REMOTE,
         is_active=True
@@ -326,8 +330,10 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     if remote:
         return remote
 
-    return CloudProvider.objects.filter(is_active=True).first()
-
+    return CloudProvider.objects.filter(
+        provider_type=CloudProvider.ProviderType.LOCAL,
+        is_active=True
+    ).first()
 
 def _normalize_request_domain(raw_domain: str):
     """Normalize and validate user-provided domains."""
@@ -707,6 +713,22 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """
         service = self.get_object()
 
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target["server_obj"]
+
+            if target["target_type"] in ("remote", "lite_agent") and active_server:
+                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                orchestrator = RemoteOrchestrator(active_server)
+                orchestrator._request(
+                    method='POST',
+                    path=f"/api/v1/services/{service.id}/stop/",
+                    timeout=15,
+                )
+        except Exception as e:
+            logger.warning("Stop resolution/remote call failed for service %s: %s", service.id, e)
+
         # Cancel any active/building deployments
         active_deployments = service.deployments.filter(
             status__in=[
@@ -761,15 +783,39 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # ── Fast restart path: just docker restart the container ──
         if not force_rebuild:
-            active_deploy = (
-                service.deployments
-                .filter(status=Deployment.Status.ACTIVE)
-                .order_by('-created_at')
-                .first()
-            )
-            container_id = active_deploy.container_id if active_deploy else None
+            try:
+                from apps.deployments.utils_target import resolve_active_execution_target
+                target = resolve_active_execution_target(service)
+                active_server = target.get("server_obj")
+                target_type = target.get("target_type")
+                container_id = target.get("runtime_id")
+            except Exception as e:
+                logger.warning("Target resolution failed for restart, falling back to db: %s", e)
+                active_deploy = service.deployments.filter(status=Deployment.Status.ACTIVE).order_by('-created_at').first()
+                container_id = active_deploy.container_id if active_deploy else None
+                target_type = "local"
+                active_server = None
 
-            if container_id:
+            if target_type in ("remote", "lite_agent") and active_server:
+                try:
+                    from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+                    orchestrator = RemoteOrchestrator(active_server)
+                    resp = orchestrator._request(
+                        method='POST',
+                        path=f"/api/v1/services/{service.id}/restart/",
+                        params={'force_rebuild': 'false'},
+                        timeout=15,
+                    )
+                    if resp and resp.status_code in (200, 202):
+                        return Response({
+                            'message': f'Service {service.name} restarted (fast) remotely',
+                            'method': 'remote_docker_restart',
+                        })
+                    logger.warning("Fast remote restart failed for %s. Falling back to full rebuild.", service.name)
+                except Exception as exc:
+                    logger.warning("Fast remote restart request failed: %s", exc)
+
+            elif container_id:
                 try:
                     import docker as docker_lib
                     client = docker_lib.from_env()
@@ -3175,9 +3221,17 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         tail = min(tail, 1000)  # Cap at 1000 lines
 
         service = deployment.service
-        
-        # [FIX] Proxy to remote node if service is assigned remotely
-        if service.server and not service.server.is_primary:
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = getattr(service, 'server', None)
+            target_type = "remote" if active_server and not active_server.is_primary else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
             if not deployment.remote_deployment_id:
                 return Response({
                     'id': str(deployment.id),
@@ -3186,7 +3240,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
                 })
             try:
                 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-                orchestrator = RemoteOrchestrator(service.server)
+                orchestrator = RemoteOrchestrator(active_server)
                 resp = orchestrator._request(
                     method='GET',
                     path=f"/api/v1/deployments/{deployment.remote_deployment_id}/runtime-logs/",

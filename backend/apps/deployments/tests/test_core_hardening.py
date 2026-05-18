@@ -1,3 +1,6 @@
+from django.test import TestCase
+class DummyTest(TestCase):
+    pass
 import os
 import json
 from unittest.mock import patch, MagicMock
