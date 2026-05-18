@@ -23,13 +23,8 @@ class CloudIntelligenceAliasTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-
-    def test_ask_alias_routes_to_chat(self):
-        pass
-        return
-
-        return
-
+    @patch("apps.cloud.views.ask_with_fallback")
+    def test_ask_alias_routes_to_chat(self, mock_ask_with_fallback):
         mock_ask_with_fallback.return_value = ("Hello from AI", "Mock AI")
 
         response = self.client.post(
@@ -42,13 +37,8 @@ class CloudIntelligenceAliasTests(TestCase):
         self.assertEqual(response.data["response"], "Hello from AI")
         self.assertEqual(response.data["provider"], "Mock AI")
 
-
-    def test_ask_alias_without_trailing_slash_routes_to_chat(self):
-        pass
-        return
-
-        return
-
+    @patch("apps.cloud.views.ask_with_fallback")
+    def test_ask_alias_without_trailing_slash_routes_to_chat(self, mock_ask_with_fallback):
         mock_ask_with_fallback.return_value = ("Hello no slash", "Mock AI")
 
         response = self.client.post(
@@ -60,13 +50,8 @@ class CloudIntelligenceAliasTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["response"], "Hello no slash")
 
-
-    def test_ask_alias_fails_open_when_provider_errors(self):
-        pass
-        return
-
-        return
-
+    @patch("apps.cloud.views.ask_with_fallback", side_effect=RuntimeError("provider down"))
+    def test_ask_alias_fails_open_when_provider_errors(self, _mock_ask):
         response = self.client.post(
             "/api/v1/cloud/intelligence/ask/",
             {"message": "hello"},
@@ -77,13 +62,8 @@ class CloudIntelligenceAliasTests(TestCase):
         self.assertTrue(response.data.get("degraded"))
         self.assertEqual(response.data.get("provider"), "Mock AI (degraded)")
 
-
-    def test_providers_endpoint_fails_open(self):
-        pass
-        return
-
-        return
-
+    @patch("apps.cloud.views.get_available_providers", side_effect=RuntimeError("provider status failed"))
+    def test_providers_endpoint_fails_open(self, _mock_providers):
         response = self.client.get("/api/v1/cloud/intelligence/providers/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])

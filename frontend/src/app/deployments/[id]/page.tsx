@@ -53,7 +53,7 @@ export default function DeploymentWatchPage() {
         clearInterval(interval);
         resetSpaceOpsState(); // Reset background on unmount
     };
-  }, [id, fetchDeployment, resetSpaceOpsState]);
+  }, [id]);
 
   useEffect(() => {
     // Simulate streaming logs if active
@@ -63,7 +63,7 @@ export default function DeploymentWatchPage() {
         setLogs(prev => prev + `[${new Date().toISOString()}] Waiting for status update...\n`);
     }, 3000);
     return () => clearInterval(interval);
-  }, [deployment?.status, deployment]);
+  }, [deployment?.status]);
 
   if (loading) {
     return (
