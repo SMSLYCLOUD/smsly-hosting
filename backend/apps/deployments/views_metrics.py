@@ -106,17 +106,22 @@ def _current_has_activity(current):
 
 
 def _live_metrics_fallback(service: Service):
-    latest = (
-        service.deployments.filter(status='ACTIVE')
-        .order_by('-created_at')
-        .first()
-    )
-    if not latest or not latest.container_id:
+    try:
+        from apps.deployments.utils_target import resolve_active_execution_target
+        target = resolve_active_execution_target(service)
+        if target["target_type"] != "local":
+            return None # remote metrics should be routed or come from prometheus/db
+        container_id = target["runtime_id"]
+    except Exception:
+        latest = service.deployments.filter(status='ACTIVE').order_by('-created_at').first()
+        container_id = latest.container_id if latest else None
+
+    if not container_id:
         return None
 
     from .tasks_metrics import _collect_container_stats  # local import to avoid eager deps
 
-    stats = _collect_container_stats(str(latest.container_id))
+    stats = _collect_container_stats(str(container_id))
     if not stats:
         return None
 

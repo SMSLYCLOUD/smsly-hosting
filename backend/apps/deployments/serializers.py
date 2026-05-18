@@ -103,15 +103,18 @@ class ServiceSerializer(serializers.ModelSerializer):
         }
 
     def get_node_metadata(self, obj: Service) -> dict:
-        server = getattr(obj, "server", None)
-        if not server:
-            return {}
-        return {
-            "id": str(server.id),
-            "name": server.name,
-            "host": server.host,
-            "status": server.status,
-        }
+        # Use truthful active execution location if verified, otherwise indicate unknown
+        if obj.active_target_type:
+            target_type_label = obj.active_target_type.replace('_', ' ').title()
+            if target_type_label == "Remote":
+                target_type_label = "Remote Server"
+            return {
+                "target_type": target_type_label,
+                "host": obj.active_host_ip,
+                "status": "active"
+            }
+
+        return {"target_type": "Unknown", "host": "Unknown", "status": "unknown"}
 
     def get_server_id(self, obj: Service) -> str | None:
         return str(obj.server_id) if obj.server_id else None
