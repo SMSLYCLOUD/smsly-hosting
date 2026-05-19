@@ -486,7 +486,8 @@ services:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       - DOMAIN=${DOMAIN}
     volumes:
-      - caddy_config:/etc/caddy
+      - ./caddy-config/Caddyfile:/etc/caddy/Caddyfile
+      - caddy_config:/config
       - caddy_data:/data
     depends_on:
       - nginx

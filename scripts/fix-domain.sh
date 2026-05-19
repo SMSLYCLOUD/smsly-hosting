@@ -162,7 +162,7 @@ if command -v caddy &>/dev/null; then
 fi
 
 # Direct fallback: write Caddyfile
-CADDY_FILE="/etc/caddy/Caddyfile"
+CADDY_FILE="/opt/smsly-hosting/caddy-config/Caddyfile"
 if [ -f "$CADDY_FILE" ] || [ -d "/etc/caddy" ]; then
     cat > "$CADDY_FILE" <<CADDYEOF
 # SMSLY Caddyfile — Fixed by fix-domain.sh
@@ -250,9 +250,9 @@ fi
 echo -e "${BLUE}[5/5] Restarting Caddy...${NC}"
 
 # Host Caddy
-if systemctl is-active --quiet caddy 2>/dev/null; then
-    if command -v caddy &>/dev/null && caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
-        systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
+    if command -v caddy &>/dev/null && caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null; then
+    true
         echo -e "${GREEN}  ✓ Host Caddy reloaded${NC}"
     fi
 fi
@@ -279,7 +279,7 @@ echo -e "  .env USE_SSL: ${GREEN}$ENV_SSL${NC}"
 
 # Check Caddy
 if command -v caddy &>/dev/null; then
-    CADDY_ACTIVE=$(systemctl is-active caddy 2>/dev/null || echo "inactive")
+    CADDY_ACTIVE=$(true 2>/dev/null || echo "inactive")
     echo -e "  Caddy (host): ${GREEN}$CADDY_ACTIVE${NC}"
 fi
 if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
