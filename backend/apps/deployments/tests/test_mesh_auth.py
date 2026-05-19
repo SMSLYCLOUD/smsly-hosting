@@ -1,7 +1,7 @@
+import pytest
+from django.test import TestCase
 import os
-import unittest
-import django
-django.setup()
+
 
 from unittest.mock import patch, MagicMock
 from apps.deployments.views_attestation import attestation_verify
@@ -20,7 +20,8 @@ class MockThrottle(BaseThrottle):
     def allow_request(self, request, view):
         return True
 
-class TestMeshAuth(unittest.TestCase):
+@pytest.mark.django_db(transaction=True)
+class TestMeshAuth(TestCase):
     def setUp(self):
         self.factory = APIRequestFactory()
         User = get_user_model()
