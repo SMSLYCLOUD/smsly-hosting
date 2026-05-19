@@ -159,7 +159,7 @@ class RemoteSyncHMACAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Remote sync timestamp expired.")
 
         gateway_secret = str(
-            getattr(settings, "GATEWAY_SECRET", "") or getattr(settings, "SECRET_KEY", "")
+            getattr(settings, "GATEWAY_SECRET", "")
         ).strip()
         if not gateway_secret:
             raise AuthenticationFailed("Remote sync gateway secret is not configured.")

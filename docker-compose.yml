@@ -246,7 +246,7 @@ services:
   # Nginx (Reverse proxy for backend + frontend)
   # ============================================================
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
       - "127.0.0.1:8090:80"

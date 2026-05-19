@@ -28,7 +28,7 @@ _ENFORCE_TLS = os.environ.get("SMSLY_ENFORCE_INTERSERVER_TLS", "false").lower() 
 )
 # SEC-ZT-005: TLS certificate verification for inter-server requests.
 # Set SMSLY_REMOTE_VERIFY=0 to disable (self-signed certs, lab environments).
-_REMOTE_VERIFY = os.environ.get("SMSLY_REMOTE_VERIFY", "1").lower() not in (
+_REMOTE_VERIFY = os.environ.get("SMSLY_REMOTE_VERIFY", "true").lower() not in (
     "0", "false", "no", "off",
 )
 
