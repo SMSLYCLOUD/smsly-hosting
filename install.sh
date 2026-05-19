@@ -681,10 +681,13 @@ apply_agent_lite_env_overrides() {
     node_slug="$(sanitize_node_identifier "$SMSLY_NODE_ID")"
     SMSLY_NODE_QUEUE="${SMSLY_NODE_QUEUE:-smsly-node-${node_slug}}"
 
-    # Use MASTER_MESH_IP for internal services (DB, MQ, Redis)
-    local redis_url="redis://${MASTER_MESH_IP}:6379/1"
-    if [ -n "${MASTER_REDIS_PASSWORD:-}" ]; then
-        redis_url="redis://:${MASTER_REDIS_PASSWORD}@${MASTER_MESH_IP}:6379/1"
+    # Use MASTER_MESH_IP for database only (shared DB).
+    # Redis and RabbitMQ run locally on each node — no cross-node dependency.
+    local node_redis_password
+    node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    local redis_url="redis://redis:6379/0"
+    if [ -n "$node_redis_password" ]; then
+        redis_url="redis://:${node_redis_password}@redis:6379/0"
     fi
 
     # --- Persistence: Save a recovery seed for future manual updates ---
@@ -711,8 +714,13 @@ EOF
     env_set_value "$env_file" "SMSLY_NODE_QUEUE" "$SMSLY_NODE_QUEUE"
     env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
     env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
-    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_MESH_IP}:5672//"
+    # Local RabbitMQ (runs on the same node via docker-compose.agent-lite.yml)
+    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://guest:guest@rabbitmq:5672//"
+    # Local Redis (runs on the same node via docker-compose.agent-lite.yml)
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
+    env_set_value "$env_file" "REDIS_PASSWORD" "${node_redis_password:-}"
+    env_set_value "$env_file" "REDIS_HOST" "redis"
+    env_set_value "$env_file" "REDIS_PORT" "6379"
     env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${MASTER_IP}:5000"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
@@ -739,15 +747,8 @@ verify_agent_lite_connectivity() {
         return 1
     fi
 
-    # 3. Check Redis port via mesh IP
-    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/6379" 2>/dev/null; then
-        echo -e "${YELLOW}  ⚠ Warning: Master Redis (port 6379) is unreachable on ${db_check_ip}. Background tasks may fail.${NC}"
-    fi
-
-    # 4. Check RabbitMQ port via mesh IP
-    if ! timeout 2 bash -c "</dev/tcp/${db_check_ip}/5672" 2>/dev/null; then
-        echo -e "${YELLOW}  ⚠ Warning: Master RabbitMQ (port 5672) is unreachable on ${db_check_ip}. Celery tasks will fail.${NC}"
-    fi
+    # 3. Redis and RabbitMQ run locally on agent-lite nodes (no Master dependency)
+    echo -e "${BLUE}  → Redis and RabbitMQ will run locally on this node.${NC}"
 
     echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
     return 0

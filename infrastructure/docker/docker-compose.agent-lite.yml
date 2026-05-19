@@ -28,6 +28,39 @@ services:
       - /tmp
 
   # ============================================================
+  # Redis (Local cache & throttling for the agent)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - smsly-net
+
+  # ============================================================
+  # RabbitMQ (Local message broker for Celery workers)
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:3-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - smsly-net
+
+  # ============================================================
   # Agent Core (Backend API for Master Orchestration)
   # ============================================================
   backend:
@@ -40,8 +73,15 @@ services:
     env_file: ../../.env
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
-      - socket-proxy
+      socket-proxy:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.agent-api.rule=PathPrefix(`/api`) || PathPrefix(`/health`)
@@ -68,9 +108,17 @@ services:
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
       - DOCKER_NETWORK=smsly-net
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     depends_on:
-      - backend
-      - socket-proxy
+      backend:
+        condition: service_healthy
+      socket-proxy:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - smsly-net
       - socket-proxy
@@ -96,6 +144,9 @@ services:
       - smsly-net
       - socket-proxy
 
+volumes:
+  redis_data:
+
 networks:
   smsly-net:
     external: true
@@ -103,3 +154,4 @@ networks:
   socket-proxy:
     driver: bridge
     internal: true
+
