@@ -763,9 +763,10 @@ def generate_caddyfile(config) -> str:
     _server_ip = str(getattr(config, "server_ip", "") or "").strip()
     _crt_path = os.path.join(_cert_dir, "ip.crt")
     _key_path = os.path.join(_cert_dir, "ip.key")
-    # Paths from Caddy container's perspective (always /etc/caddy)
-    _caddy_crt = "/etc/caddy/certs/ip.crt"
-    _caddy_key = "/etc/caddy/certs/ip.key"
+    # Paths from Caddy container's perspective
+    # docker-compose mounts caddy_config at /config in the caddy container
+    _caddy_crt = "/config/certs/ip.crt"
+    _caddy_key = "/config/certs/ip.key"
     try:
         os.makedirs(_cert_dir, exist_ok=True)
         if _server_ip and ipaddress.ip_address(_server_ip):
