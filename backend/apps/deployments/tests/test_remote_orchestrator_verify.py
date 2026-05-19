@@ -1,14 +1,15 @@
+import pytest
+from django.test import TestCase
 import os
-import unittest
-import django
-django.setup()
+
 
 from unittest.mock import patch, MagicMock
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
 from apps.deployments.models import ManagedServer
 from django.contrib.auth import get_user_model
 
-class TestRemoteOrchestratorVerify(unittest.TestCase):
+@pytest.mark.django_db(transaction=True)
+class TestRemoteOrchestratorVerify(TestCase):
     def test_verify_ssl_enforcement(self):
         server = MagicMock(spec=ManagedServer)
         server.api_url = "https://example.com"
