@@ -846,7 +846,8 @@ class PlatformConfig(models.Model):
             obj.cloudflare_api_token = env_cf_token
             changed = True
         # Clear any known-fake token that got persisted
-        if (obj.cloudflare_api_token or "").strip().lower() in _fake_tokens:
+        current_token = (obj.cloudflare_api_token or "").strip()
+        if current_token and current_token.lower() in _fake_tokens:
             obj.cloudflare_api_token = ""
             changed = True
         if env_ip and not obj.server_ip:
