@@ -1,4 +1,5 @@
 """Core models for Deployments app."""
+import ipaddress
 import uuid
 import re
 from django.db import models
@@ -510,7 +511,13 @@ class Service(TimeStampedModel):
     @property
     def service_url(self):
         """Railway-style auto-generated URL for the service."""
-        return f"https://{self.public_domain}" if self.public_domain else None
+        if not self.public_domain:
+            return None
+        try:
+            ipaddress.ip_address(self.public_domain)
+            return f"http://{self.public_domain}"
+        except ValueError:
+            return f"https://{self.public_domain}"
 
     @classmethod
     def default_public_base_domain(cls) -> str:
@@ -526,8 +533,17 @@ class Service(TimeStampedModel):
             if platform_cfg and platform_cfg.domain:
                 configured = platform_cfg.domain.strip().lower().rstrip(".")
         except Exception:
-            # App startup/migrations can run before DB tables exist.
             pass
+
+        # If the resolved domain is a bare IP, it can't be used as a base
+        # for service subdomains — wildcard TLS and Let's Encrypt don't
+        # support IPs. Fall back to the default cloud domain.
+        if configured:
+            try:
+                ipaddress.ip_address(configured)
+                configured = ""
+            except ValueError:
+                pass
 
         return configured or fallback
 
