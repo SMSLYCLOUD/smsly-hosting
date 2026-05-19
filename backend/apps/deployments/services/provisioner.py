@@ -458,9 +458,20 @@ def _broadcast_provision_log(server: ManagedServer, message: str):
 
 def _append_log(server: ManagedServer, line: str):
     """Append a line to provision_logs and broadcast."""
-    server.provision_logs += line + "\n"
+    import re
+    from django.utils import timezone
+    import uuid
+    timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+    correlation_id = getattr(server, "_provision_correlation_id", None)
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())[:8]
+        server._provision_correlation_id = correlation_id
+    line = re.sub(r'([A-Za-z0-9+/=]{40,})', r'[REDACTED]', line)
+    line = re.sub(r'([0-9a-f]{32,})', r'[REDACTED]', line)
+    formatted_line = f"[{timestamp}] [tx:{correlation_id}] {line}"
+    server.provision_logs += formatted_line + "\n"
     server.save(update_fields=["provision_logs", "updated_at"])
-    _broadcast_provision_log(server, line)
+    _broadcast_provision_log(server, formatted_line)
 
 
 def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
@@ -471,7 +482,19 @@ def _get_ssh_client(server: ManagedServer) -> paramiko.SSHClient:
     # after server reboots (AutoAddPolicy only handles *missing* keys, not
     # *changed* ones).  WarningPolicy logs but accepts any host key, which
     # is appropriate for infrastructure automation inside a trusted network.
-    client.set_missing_host_key_policy(paramiko.WarningPolicy())
+
+    strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")).lower() not in ("false", "0", "no")
+    allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
+
+    if strict_mode and not allow_auto_add:
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    elif allow_auto_add:
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    else:
+        client.set_missing_host_key_policy(paramiko.WarningPolicy())
+        import warnings
+        warnings.warn("Strict SSH host key checking is disabled. This is insecure!")
+
 
     connect_kwargs = {
         "hostname": server.host,

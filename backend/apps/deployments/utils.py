@@ -396,8 +396,17 @@ def append_log(deployment, log_line):
     if not log_line:
         return
 
+    import uuid
+    from django.utils import timezone
+    correlation_id = getattr(deployment, "_deploy_correlation_id", None)
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())[:8]
+        deployment._deploy_correlation_id = correlation_id
+    timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+
     # 1. Sanitize for PostgreSQL (NUL bytes are not allowed in text/varchar)
     sanitized_log = str(log_line).replace('\x00', '')
+    sanitized_log = f"[{timestamp}] [tx:{correlation_id}] {sanitized_log}"
 
     sanitized_log = re.sub(r"(redis(?:s)?://(?:[^:]*:)?)[^@]+(@)", r"\1***\2", sanitized_log)
     sanitized_log = re.sub(r"(postgres(?:ql)?://(?:[^:]*:)?)[^@]+(@)", r"\1***\2", sanitized_log)
