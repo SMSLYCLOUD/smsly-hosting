@@ -24,6 +24,11 @@ BUILDKIT_CACHE_ERROR_SIGNATURES = [
     'lazyChecksum',
     'cacheContext',
     'cacheManager',
+    # Registry cache import failures caused by auth/scope issues,
+    # which corrupt the buildkit daemon's internal state.
+    'registry cache importer',
+    'insufficient_scope',
+    'failed to configure registry cache',
 ]
 
 

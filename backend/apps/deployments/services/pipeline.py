@@ -1337,6 +1337,29 @@ class PipelineManager:
         start_time = timezone.now()
         self._check_cancellation('Build')
 
+        # Pre-flight: check disk space before starting a build.
+        # Low disk is the #1 cause of "error reading from server: EOF" during
+        # the final image export phase.
+        try:
+            usage = shutil.disk_usage("/")
+            free_gb = usage.free // (1024 ** 3)
+            if free_gb < 5:
+                raise BuildError(
+                    f"Insufficient disk space for build: only {free_gb}GB free, "
+                    f"need at least 5GB. Free up space (e.g. 'docker system prune -af' "
+                    f"&& 'docker builder prune -af') and retry."
+                )
+            if free_gb < 10:
+                append_log(
+                    self.deployment,
+                    f"⚠ Low disk space warning: {free_gb}GB free — "
+                    f"builds may fail if cache is large.\n"
+                )
+        except BuildError:
+            raise
+        except OSError:
+            pass  # disk check is best-effort
+
         try:
             # For DOCKER type services with a pre-built image, use it directly
             if self.service.deploy_type == 'DOCKER' and self.service.docker_image:
@@ -1822,12 +1845,19 @@ class PipelineManager:
         # without needing --load, which avoids buildkit-container issues.
         self._ensure_docker_driver()
 
+        # Only use --cache-from when the image is registry-qualified.
+        # Bare image names (e.g. "smsly/name:tag") cause BuildKit to
+        # resolve them to docker.io, triggering "insufficient_scope"
+        # errors when the repo doesn't exist or requires auth.
+        registry_host = self.image_name.split("/")[0] if "/" in self.image_name else ""
+        use_cache = bool(registry_host) and ("." in registry_host or ":" in registry_host)
+
         cmd = [
             "docker", "build",
             "-t", self.image_name,
             "-f", dockerfile_path,
             "--load",
-            "--cache-from", self.image_name,
+            *(["--cache-from", self.image_name] if use_cache else []),
             *build_args,
             context_dir
         ]
