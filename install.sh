@@ -713,6 +713,7 @@ EOF
     env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
     env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${MASTER_MQ_PASSWORD}@${MASTER_MESH_IP}:5672//"
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
+    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${MASTER_IP}:5000"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
     fi

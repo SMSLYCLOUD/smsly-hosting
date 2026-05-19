@@ -39,16 +39,7 @@ services:
     command: gunicorn config.asgi:application --bind 0.0.0.0:8000 --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 600
     env_file: ../../.env
     environment:
-      - MODE=agent
-      - SMSLY_NODE_HOST=${SMSLY_NODE_HOST:-}
-      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-agent}
-      - SMSLY_NODE_QUEUE=${SMSLY_NODE_QUEUE:-deploy}
       - DOCKER_HOST=tcp://socket-proxy:2375
-      # These are populated by the installer into .env
-      - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - REDIS_URL=${REDIS_URL}
-      - CONTAINER_REGISTRY_URL=${MASTER_IP}:5000
     depends_on:
       - socket-proxy
     labels:
@@ -75,16 +66,8 @@ services:
     command: sh -c 'celery -A config worker --loglevel=info -Q "$${SMSLY_NODE_QUEUE:-deploy},fast,celery" --hostname="$${SMSLY_NODE_ID:-agent}@%h" --concurrency=4'
     env_file: ../../.env
     environment:
-      - MODE=agent
-      - SMSLY_NODE_HOST=${SMSLY_NODE_HOST:-}
-      - SMSLY_NODE_ID=${SMSLY_NODE_ID:-agent}
-      - SMSLY_NODE_QUEUE=${SMSLY_NODE_QUEUE:-deploy}
       - DOCKER_HOST=tcp://socket-proxy:2375
       - DOCKER_NETWORK=smsly-net
-      - DATABASE_URL=${DATABASE_URL}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - REDIS_URL=${REDIS_URL}
-      - CONTAINER_REGISTRY_URL=${MASTER_IP}:5000
     depends_on:
       - backend
       - socket-proxy
