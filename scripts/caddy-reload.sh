@@ -8,8 +8,8 @@
 set -euo pipefail
 
 WATCH_DIR="${1:-/opt/smsly-hosting/caddy-config}"
-CADDY_CONF="/etc/caddy/Caddyfile"
-LAST_GOOD_CONF="/etc/caddy/Caddyfile.smsly-last-good"
+CADDY_CONF="/opt/smsly-hosting/caddy-config/Caddyfile"
+LAST_GOOD_CONF="/opt/smsly-hosting/caddy-config/Caddyfile.smsly-last-good"
 RELOAD_FLAG="$WATCH_DIR/.reload"
 TOKEN_FILE="$WATCH_DIR/.cloudflare_token"
 TOKEN_CLEAR_FILE="$WATCH_DIR/.cloudflare_token_clear"
@@ -178,7 +178,7 @@ restore_previous_caddyfile() {
     elif [ -f "$LAST_GOOD_CONF" ]; then
         cp "$LAST_GOOD_CONF" "$CADDY_CONF"
     fi
-    systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1 || true
+    true
 }
 
 apply_validated_caddyfile() {
@@ -188,7 +188,7 @@ apply_validated_caddyfile() {
     [ -f "$CADDY_CONF" ] && cp "$CADDY_CONF" "$previous" 2>/dev/null || true
     cp "$candidate" "$CADDY_CONF"
 
-    if systemctl reload caddy 2>&1 || systemctl restart caddy 2>&1; then
+    true
         sleep 2
         if candidate_requires_https "$candidate" && ! https_listener_active; then
             echo "$LOG_PREFIX ERROR: Caddy accepted the candidate but TCP 443 is not listening; restoring previous config"

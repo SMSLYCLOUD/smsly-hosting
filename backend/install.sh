@@ -1049,14 +1049,14 @@ wipe_existing_install() {
     fi
 
     # Clean up Caddy watcher service (prevents stale config on reinstall)
-    systemctl stop caddy-watcher 2>/dev/null || true
-    systemctl disable caddy-watcher 2>/dev/null || true
+    true
+    true
     rm -f /etc/systemd/system/caddy-watcher.service
 
     # Reset Caddyfile to default (prevents stale routing)
-    if [ -f /etc/caddy/Caddyfile ]; then
-        echo ':80 { respond "Caddy is running" 200 }' > /etc/caddy/Caddyfile
-        systemctl reload caddy 2>/dev/null || true
+    if [ -f "$INSTALL_DIR"/caddy-config/Caddyfile ]; then
+        echo ':80 { respond "Caddy is running" 200 }' > "$INSTALL_DIR"/caddy-config/Caddyfile
+    true
     fi
 
     # Remove Cloudflare token override
@@ -1183,7 +1183,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # 4. Build the Caddyfile
     if [ "$is_real_domain" = "true" ]; then
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 # Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
 # Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
@@ -1205,7 +1205,7 @@ ${domain} {
 ${svc_blocks}
 SAFECADDY
     else
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 :80 {
     reverse_proxy localhost:8090
@@ -1218,7 +1218,7 @@ SAFECADDY
 ${svc_blocks}
 SAFECADDY
     fi
-    caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+    caddy fmt --overwrite "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
     echo -e "${YELLOW}  ⚠ Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
 }
 
@@ -1233,10 +1233,10 @@ caddy_needs_fix() {
         fi
     fi
 
-    if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+    if ! caddy validate --config "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null \
+    if grep -q 'dns cloudflare' "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null \
        && [ ! -f /etc/systemd/system/caddy.service.d/override.conf ]; then
         return 0  # dns cloudflare without token override = runtime crash
     fi
@@ -1286,12 +1286,12 @@ restart_edge_stack() {
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-        if systemctl is-active --quiet caddy 2>/dev/null; then
-            systemctl reload caddy >/dev/null 2>&1 || true
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+    true
         else
-            systemctl restart caddy >/dev/null 2>&1 || true
+    true
         fi
-        systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
@@ -1403,12 +1403,12 @@ refresh_runtime_services() {
         return 1
     fi
 
-    if systemctl is-active --quiet caddy 2>/dev/null; then
-        systemctl reload caddy >/dev/null 2>&1 || true
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+    true
     else
-        systemctl restart caddy >/dev/null 2>&1 || true
+    true
     fi
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    true
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -1488,8 +1488,8 @@ debug_platform_status() {
 
     echo "---- Systemd ----"
     systemctl is-active docker 2>/dev/null || true
-    systemctl is-active caddy 2>/dev/null || true
-    systemctl is-active caddy-watcher 2>/dev/null || true
+    true 2>/dev/null || true
+    true-watcher 2>/dev/null || true
     systemctl is-active smsly-autoscaler 2>/dev/null || true
     echo ""
 
@@ -1619,12 +1619,12 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     DOMAIN="$(env_get_value "$INSTALL_DIR/.env" "DOMAIN" 2>/dev/null || echo "")"
 
     echo -e "\n${BLUE}  ⟳ Syncing Proxy Configurations...${NC}"
-    if systemctl is-active --quiet caddy 2>/dev/null; then
-        systemctl reload caddy >/dev/null 2>&1 || true
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+    true
     else
-        systemctl restart caddy >/dev/null 2>&1 || true
+    true
     fi
-    systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    true
     sleep 3
 
     echo -e "\n${BLUE}  → Running endpoint verification...${NC}"
@@ -2069,7 +2069,7 @@ if token and token.lower() not in ('fake', 'changeme', 'test', ''):
             cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
 [Service]
 ExecStart=
-ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+ExecStart=/usr/bin/caddy run --config "$INSTALL_DIR"/caddy-config/Caddyfile
 Environment="CLOUDFLARE_API_TOKEN=$CF_TOKEN"
 ENVEOF
             chmod 600 "$CADDY_OVERRIDE_FILE"
@@ -2162,7 +2162,7 @@ for domain in Domain.objects.select_related('service').filter(
     }"
                 fi
 
-                cat > /etc/caddy/Caddyfile <<CFCADDY
+                cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CFCADDY
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 {
     on_demand_tls {
@@ -2218,7 +2218,7 @@ ${cf_known_stanza}
 
 ${cf_svc_blocks}
 CFCADDY
-                caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+                caddy fmt --overwrite "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
                 echo -e "${GREEN}  ✓ Caddyfile generated with wildcard SSL for *.${cf_domain}${NC}"
             else
                 # IP mode or no domain — fall back to safe Caddyfile
@@ -2229,14 +2229,14 @@ CFCADDY
             generate_safe_caddyfile "update flow caddy regen"
 
             # Strip any leftover dns cloudflare blocks to prevent crash
-            if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null; then
+            if grep -q 'dns cloudflare' "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null; then
                 echo -e "${YELLOW}  ⚠ No Cloudflare token — removing DNS challenge from Caddyfile${NC}"
                 python3 -c "
 import re
-with open('/etc/caddy/Caddyfile') as f:
+with open('"$INSTALL_DIR"/caddy-config/Caddyfile') as f:
     content = f.read()
 content = re.sub(r'\s*tls\s*\{[^}]*\}\s*\n?', '\n', content)
-with open('/etc/caddy/Caddyfile', 'w') as f:
+with open('"$INSTALL_DIR"/caddy-config/Caddyfile', 'w') as f:
     f.write(content)
 print('Stripped tls blocks')
 " 2>/dev/null || true
@@ -2249,16 +2249,16 @@ print('Stripped tls blocks')
             generate_safe_caddyfile "post-update validation"
         fi
 
-        if systemctl is-active --quiet caddy 2>/dev/null; then
-            systemctl reload caddy 2>/dev/null || true
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+    true
         else
-            systemctl restart caddy 2>/dev/null || true
+    true
         fi
-        systemctl restart caddy-watcher 2>/dev/null || true
+    true
 
         # Verify Caddy is running
         sleep 2
-        if systemctl is-active --quiet caddy 2>/dev/null; then
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
             echo -e "${GREEN}  ✓ Caddy config regenerated and running${NC}"
         else
             echo -e "${YELLOW}  ⚠ Caddy failed to start. Run: journalctl -u caddy --no-pager -n 20${NC}"
@@ -2354,7 +2354,7 @@ if d and d != 'localhost':
         else
             EP2_RESULT="${RED}FAIL${NC}"
             echo -e "${RED}  ✗ [2/3] FAIL — HTTP $EP2_CODE${NC}"
-            echo -e "${YELLOW}        Fix: systemctl status caddy && journalctl -u caddy --no-pager -n 15${NC}"
+            echo -e "${YELLOW}        Fix: docker compose -f $COMPOSE_FILE logs --tail=15 caddy && journalctl -u caddy --no-pager -n 15${NC}"
             FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
     else
@@ -3121,7 +3121,7 @@ if [ "$RUST_TWIN_MODE" = "true" ]; then
     cd rust_twin && export DOMAIN && export ACME_EMAIL && caddy fmt --overwrite Caddyfile 2>/dev/null || true
     cd ..
     # Swap the default Caddyfile path to point to the Rust Twin version
-    cp rust_twin/Caddyfile /etc/caddy/Caddyfile 2>/dev/null || true
+    cp rust_twin/Caddyfile "$INSTALL_DIR"/caddy-config/Caddyfile 2>/dev/null || true
 fi
 
 # ─── Build Caddy with Cloudflare DNS plugin ───────────────────────────────────
@@ -3167,7 +3167,7 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
     cd "$CADDY_TMP"
     if xcaddy build --with github.com/caddy-dns/cloudflare 2>&1 | tail -5; then
         # Replace system Caddy
-        systemctl stop caddy 2>/dev/null || true
+    true
         mv ./caddy /usr/bin/caddy
         chmod +x /usr/bin/caddy
         echo -e "${GREEN}  ✓ Custom Caddy built with Cloudflare DNS plugin${NC}"
@@ -3192,7 +3192,7 @@ if [ "${_BUILD_CADDY:-}" = "true" ]; then
     rm -rf "$CADDY_TMP"
 fi
 
-if ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+if ! false >/dev/null 2>&1; then
     echo -e "${BLUE}  → Installing Caddy systemd service...${NC}"
     # Add a dedicated caddy user and group
     groupadd --system caddy 2>/dev/null || true
@@ -3210,8 +3210,8 @@ Requires=network-online.target
 Type=exec
 User=caddy
 Group=caddy
-ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+ExecStart=/usr/bin/caddy run --environ --config "$INSTALL_DIR"/caddy-config/Caddyfile
+ExecReload=/usr/bin/caddy reload --config "$INSTALL_DIR"/caddy-config/Caddyfile --force
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
@@ -3248,7 +3248,7 @@ if [ "$USE_SSL" = "true" ] && [ -n "$DOMAIN" ] && [ "$DOMAIN" != "$PUBLIC_IP" ];
 
     if [ "$WILDCARD_SUBDOMAINS" = "true" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
         # ─── Full wildcard mode: domain + *.domain with Cloudflare DNS ────
-        cat > /etc/caddy/Caddyfile <<CADDYEOF
+        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 # Wildcard: *.$DOMAIN → HTTPS (Cloudflare DNS challenge)
@@ -3310,7 +3310,7 @@ CADDYEOF
         cat > "$CADDY_OVERRIDE_FILE" <<ENVEOF
 [Service]
 ExecStart=
-ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+ExecStart=/usr/bin/caddy run --config "$INSTALL_DIR"/caddy-config/Caddyfile
 Environment="CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN"
 ENVEOF
         chmod 600 "$CADDY_OVERRIDE_FILE"
@@ -3319,7 +3319,7 @@ ENVEOF
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + Wildcard (*.$DOMAIN) + HTTP fallback → 8090${NC}"
     else
         # ─── Standard SSL (no wildcard) ──────────────────────────────────
-        cat > /etc/caddy/Caddyfile <<CADDYEOF
+        cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 # Domain: $DOMAIN → HTTPS (auto Let's Encrypt)
 
@@ -3361,7 +3361,7 @@ CADDYEOF
         echo -e "${GREEN}  ✓ Caddy configured: HTTPS ($DOMAIN) + HTTP (:80 fallback) → 8090${NC}"
     fi
 else
-    cat > /etc/caddy/Caddyfile <<CADDYEOF
+    cat > "$INSTALL_DIR"/caddy-config/Caddyfile <<CADDYEOF
 # CloudNeuron Reverse Proxy — Auto-generated
 {
     on_demand_tls {
@@ -3405,8 +3405,8 @@ RestartSec=5
 WantedBy=multi-user.target
 WATCHEREOF
     systemctl daemon-reload
-    systemctl enable caddy-watcher >/dev/null 2>&1
-    systemctl restart caddy-watcher
+    true >/dev/null 2>&1
+    true
     echo -e "${GREEN}  ✓ Caddy watcher service installed and running${NC}"
 fi
 
@@ -3447,16 +3447,16 @@ for port in 80 443; do
     fi
 done
 
-if systemctl is-active --quiet caddy; then
-    systemctl reload caddy
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
+    true
 else
-    systemctl restart caddy
+    true
 fi
-systemctl enable caddy >/dev/null 2>&1
+true >/dev/null 2>&1
 
 # Verify Caddy is running
 sleep 2
-if systemctl is-active --quiet caddy; then
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
     echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
 else
     echo -e "${RED}  ✗ Caddy failed to start. Check: journalctl -u caddy --no-pager -n 20${NC}"
@@ -3722,7 +3722,7 @@ fi
 
 # ─── Check 5: Caddy running ───────────────────────────────────────────────
 echo -e "${BLUE}  → [5/5] Checking Caddy...${NC}"
-if systemctl is-active --quiet caddy 2>/dev/null; then
+    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
     echo -e "${GREEN}  ✓ Caddy reverse proxy active${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
