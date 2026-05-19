@@ -999,8 +999,8 @@ if __name__ == '__main__':
         self.ssh.exec_command(f"cp /tmp/.env.restore {quoted_hosting_path}/.env")
 
         remote_temp_dir = f"/tmp/restore_{self.transfer.id}"
-        self.ssh.exec_command(f"mkdir -p {remote_temp_dir}")
-        self.ssh.exec_command(f"tar -xzf {remote_backup_path} -C {remote_temp_dir}")
+        self.ssh.exec_command(f"mkdir -p {shlex.quote(remote_temp_dir)}")
+        self.ssh.exec_command(f"tar -xzf {shlex.quote(remote_backup_path)} -C {shlex.quote(remote_temp_dir)}")
 
         self._update(75, 'Restoring database...')
         db_dump = f"{remote_temp_dir}/db_dump.sql"
@@ -1008,7 +1008,7 @@ if __name__ == '__main__':
         self.ssh.exec_command(f"{compose} up -d db; }}")
         time.sleep(20)
 
-        self.ssh.exec_command(f"docker cp {db_dump} smsly-db:/tmp/dump.sql")
+        self.ssh.exec_command(f"docker cp {shlex.quote(db_dump)} smsly-db:/tmp/dump.sql")
 
         db_user = _command_text(self.ssh.exec_command(
             f"grep POSTGRES_USER {quoted_hosting_path}/.env | cut -d= -f2"

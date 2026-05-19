@@ -76,7 +76,24 @@ class SSHClient:
         # after server reboots (AutoAddPolicy only handles *missing* keys, not
         # *changed* ones).  WarningPolicy logs but accepts any host key, which
         # is appropriate for infrastructure automation inside a trusted network.
-        self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
+
+        strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")).lower() not in ("false", "0", "no")
+        if strict_mode:
+            # We enforce host key checking by default. The key should either be added to known_hosts
+            # or the user has explicitly allowed the first-trust policy.
+            # However, since cloud provisioning typically requires TOFU (Trust On First Use),
+            # we use AutoAddPolicy but log a warning if strict mode is disabled but not fully supported in this context.
+            # To actually fix SEC-ZT-002, we respect strict mode. If strict mode is ON, we use RejectPolicy.
+            allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
+            if allow_auto_add:
+                self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                warnings.warn("Using AutoAddPolicy due to ALLOW_SSH_AUTOADD=true")
+            else:
+                self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        else:
+            self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
+            warnings.warn("Strict SSH host key checking is disabled. This is insecure!")
+
 
         # Determine auth method: key or password
         connect_kwargs = {

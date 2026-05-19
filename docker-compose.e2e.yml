@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # The Grid control plane
+  control-plane:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: grid-e2e-control-plane
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - SECRET_KEY=super-secret-e2e-key
+      - FIELD_ENCRYPTION_KEY=LyqeUecMN-ZRJFar9Gegvst3EdlOEOnX_c0npcJ8KG8=
+      - DOMAIN=localhost
+      - ALLOW_SSH_AUTOADD=true
+      - SMSLY_STRICT_SSH_HOST_KEY_CHECK=false
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    command: python manage.py runserver 0.0.0.0:8000
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: grid-e2e-worker
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/smsly
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - SECRET_KEY=super-secret-e2e-key
+      - FIELD_ENCRYPTION_KEY=LyqeUecMN-ZRJFar9Gegvst3EdlOEOnX_c0npcJ8KG8=
+      - DOMAIN=localhost
+      - ALLOW_SSH_AUTOADD=true
+      - SMSLY_STRICT_SSH_HOST_KEY_CHECK=false
+    depends_on:
+      - control-plane
+    command: celery -A config worker -l info
+
+  # Infrastructure components
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=smsly
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Simulated worker nodes (ssh enabled)
+  worker-1:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: grid-e2e-node-1
+    environment:
+      - PUID=0
+      - PGID=0
+      - TZ=Etc/UTC
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD=gridpass
+      - USER_NAME=root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  worker-2:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: grid-e2e-node-2
+    environment:
+      - PUID=0
+      - PGID=0
+      - TZ=Etc/UTC
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD=gridpass
+      - USER_NAME=root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  worker-3:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: grid-e2e-node-3
+    environment:
+      - PUID=0
+      - PGID=0
+      - TZ=Etc/UTC
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD=gridpass
+      - USER_NAME=root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -1,11 +1,11 @@
 # Stage 1: Build Caddy with xcaddy
-FROM caddy:2-builder AS builder
+FROM caddy:2.7-builder AS builder
 
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare
 
 # Stage 2: Final Image
-FROM caddy:2-alpine
+FROM caddy:2.7-alpine
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 
