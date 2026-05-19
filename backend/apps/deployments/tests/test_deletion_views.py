@@ -1,7 +1,5 @@
 from unittest.mock import patch
 from django.test import TestCase
-class DummyTest(TestCase):
-    pass
 from rest_framework.test import APIClient
 from django.contrib.auth import get_user_model
 from apps.deployments.models_core import Service

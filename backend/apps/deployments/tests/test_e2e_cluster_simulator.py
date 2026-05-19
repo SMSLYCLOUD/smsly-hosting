@@ -1,15 +1,16 @@
+import pytest
+from django.test import TestCase
 import os
-import unittest
-import django
-django.setup()
+
 
 from unittest.mock import patch, MagicMock
 from apps.deployments.services.provisioner import provision_server
 from apps.deployments.models import ManagedServer
 from django.contrib.auth import get_user_model
-import threading
 
-class TestE2EClusterSimulator(unittest.TestCase):
+
+@pytest.mark.django_db(transaction=True)
+class TestE2EClusterSimulator(TestCase):
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(username="e2e_admin", password="123", is_superuser=True)
