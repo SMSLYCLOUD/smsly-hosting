@@ -18,14 +18,32 @@ def _sync_caddy_once(delay: float = 3.0):
     """Delay a few seconds to let migrations/settings load, then apply Caddy."""
     try:
         time.sleep(delay)
-        from apps.deployments.models import PlatformConfig
-        from services.caddy_manager import generate_caddyfile, apply_caddyfile
+        
+        # Debounce across multiple gunicorn workers using a lock file
+        import os
+        lock_file = "/tmp/caddy_sync_startup.lock"
+        try:
+            fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except OSError:
+            # Lock exists, another worker is already doing this
+            logger.debug("Startup Caddy sync skipped (lock exists)")
+            return
 
-        cfg = PlatformConfig.load()
-        content = generate_caddyfile(cfg)
-        token = (getattr(cfg, "cloudflare_api_token", "") or "").strip()
-        result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
-        logger.info("Startup Caddy sync: %s", result.get("message", "ok"))
+        try:
+            from apps.deployments.models import PlatformConfig
+            from services.caddy_manager import generate_caddyfile, apply_caddyfile
+    
+            cfg = PlatformConfig.load()
+            content = generate_caddyfile(cfg)
+            token = (getattr(cfg, "cloudflare_api_token", "") or "").strip()
+            result = apply_caddyfile(content, cloudflare_token=token, preserve_existing_token=True)
+            logger.info("Startup Caddy sync: %s", result.get("message", "ok"))
+        finally:
+            try:
+                os.unlink(lock_file)
+            except OSError:
+                pass
 
         # 2. Trigger Auto-Authentication for nodes missing API tokens
         try:
