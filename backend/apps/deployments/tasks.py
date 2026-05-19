@@ -506,34 +506,41 @@ def _docker_safe_segment(value: str, fallback: str = "app") -> str:
     return slug[:63]
 
 
-def _detect_exposed_port(service) -> int | None:
+def _detect_exposed_port(service, image_name: str = None) -> int | None:
     """Auto-detect port from Docker image EXPOSE directive.
 
-    Inspects the last deployed image for this service. If the image has
-    EXPOSE ports, returns the first one. This prevents the common mismatch
-    where Dockerfile EXPOSE says 3000 but we default PORT to 8000.
+    Inspects the specified image name, or the last deployed image for this service.
+    If the image has EXPOSE ports, returns the first one. This prevents the common
+    mismatch where Dockerfile EXPOSE says 3000 but we default PORT to 8000.
     """
     try:
-        last_dep = service.deployments.filter(
-            container_id__isnull=False
-        ).order_by('-created_at').first()
-        if not last_dep or not last_dep.container_id:
-            return None
-
         client = docker.from_env()
-        try:
-            container = client.containers.get(last_dep.container_id)
-            exposed = container.image.attrs.get('Config', {}).get('ExposedPorts', {})
-        except docker.errors.NotFound:
-            # Container gone, try looking up image directly
-            image_tag = last_dep.image_name or ''
-            if not image_tag:
-                return None
+        exposed = None
+
+        if image_name:
             try:
-                img = client.images.get(image_tag)
+                img = client.images.get(image_name)
                 exposed = img.attrs.get('Config', {}).get('ExposedPorts', {})
             except docker.errors.ImageNotFound:
-                return None
+                pass
+
+        if not exposed:
+            last_dep = service.deployments.filter(
+                container_id__isnull=False
+            ).order_by('-created_at').first()
+            if last_dep:
+                if last_dep.container_id:
+                    try:
+                        container = client.containers.get(last_dep.container_id)
+                        exposed = container.image.attrs.get('Config', {}).get('ExposedPorts', {})
+                    except docker.errors.NotFound:
+                        pass
+                if not exposed and last_dep.image_name:
+                    try:
+                        img = client.images.get(last_dep.image_name)
+                        exposed = img.attrs.get('Config', {}).get('ExposedPorts', {})
+                    except docker.errors.ImageNotFound:
+                        pass
 
         if exposed:
             # ExposedPorts looks like {"3000/tcp": {}, "8080/tcp": {}}
@@ -601,7 +608,7 @@ def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None
     }
 
 
-def _build_runtime_env(service: Service) -> dict:
+def _build_runtime_env(service: Service, image_name: str = None) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
     env_vars = {env.key: env.value for env in service.env_vars.all()}
 
@@ -630,12 +637,22 @@ def _build_runtime_env(service: Service) -> dict:
         explicit_env_port = str(env_vars.get('PORT', '')).strip()
         if explicit_env_port:
             env_vars['PORT'] = explicit_env_port
+            try:
+                p_val = int(explicit_env_port)
+                if service.internal_port != p_val:
+                    service.internal_port = p_val
+                    service.save(update_fields=['internal_port'])
+            except ValueError:
+                pass
         elif service.internal_port and int(service.internal_port) != 8000:
             env_vars['PORT'] = str(service.internal_port)
         else:
-            detected_port = _detect_exposed_port(service)
+            detected_port = _detect_exposed_port(service, image_name=image_name)
             if detected_port:
                 env_vars['PORT'] = str(detected_port)
+                if service.internal_port != detected_port:
+                    service.internal_port = detected_port
+                    service.save(update_fields=['internal_port'])
             else:
                 env_vars['PORT'] = '8000'
 
@@ -2291,7 +2308,7 @@ def _deploy_container(deployment, provider, image_name):
             except Exception as _retag_err:
                 logger.warning("Image retag fallback failed: %s", _retag_err)
 
-        env_vars = _build_runtime_env(service)
+        env_vars = _build_runtime_env(service, image_name=image_name)
 
         # Inject addon connection URLs into deployed container
         from services.addon_provisioner import AddonProvisioner
