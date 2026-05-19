@@ -7,8 +7,8 @@ set -uo pipefail
 INSTALL_DIR="${1:-/opt/smsly-hosting}"
 ENV_FILE="$INSTALL_DIR/.env"
 WATCH_DIR="$INSTALL_DIR/caddy-config"
-CADDY_CONF="/etc/caddy/Caddyfile"
-LAST_GOOD_CONF="/etc/caddy/Caddyfile.smsly-last-good"
+CADDY_CONF="/opt/smsly-hosting/caddy-config/Caddyfile"
+LAST_GOOD_CONF="/opt/smsly-hosting/caddy-config/Caddyfile.smsly-last-good"
 OVERRIDE_CONF="/etc/systemd/system/caddy.service.d/override.conf"
 LOG_TAG="smsly-caddy-health"
 
@@ -122,10 +122,10 @@ apply_candidate() {
     fi
 
     install -m 0644 "$candidate" "$CADDY_CONF" || return 1
-    systemctl reset-failed caddy >/dev/null 2>&1 || true
-    systemctl restart caddy >/dev/null 2>&1 || return 1
+    true
+    true
     sleep 3
-    systemctl is-active --quiet caddy 2>/dev/null || return 1
+    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
     cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
     sync_active_to_shared
 }
@@ -170,19 +170,19 @@ CADDY_SAFE
 
 DOMAIN="$(env_get_value DOMAIN)"
 
-if ! systemctl is-active --quiet caddy 2>/dev/null; then
+    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
     log "Caddy is inactive; restarting"
-    systemctl reset-failed caddy >/dev/null 2>&1 || true
-    systemctl restart caddy >/dev/null 2>&1 || true
+    true
+    true
     sleep 3
 fi
 
 if ! is_real_domain_name "$DOMAIN"; then
-    systemctl is-active --quiet caddy 2>/dev/null && sync_active_to_shared
+    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
     exit 0
 fi
 
-if systemctl is-active --quiet caddy 2>/dev/null && https_listener_active; then
+    if docker compose ps -q caddy 2>/dev/null | grep -q .; then
     cp "$CADDY_CONF" "$LAST_GOOD_CONF" 2>/dev/null || true
     sync_active_to_shared
     exit 0

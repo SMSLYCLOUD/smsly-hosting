@@ -943,24 +943,10 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             result["message"] = "Caddyfile written and reloaded via Docker"
             logger.info("Caddyfile reloaded via Docker container %s", CONTAINER_NAME)
         else:
-            logger.warning("Docker reload failed (%s), trying systemd: %s", CONTAINER_NAME, dock_res.stderr.strip())
-            sysd_res = subprocess.run(
-                ["systemctl", "reload", "caddy"],
-                capture_output=True,
-                text=True
-            )
-            if sysd_res.returncode == 0:
-                result["ok"] = True
-                result["message"] = "Caddyfile written and reloaded via systemd"
-                logger.info("Caddyfile reloaded via systemd")
-            else:
-                logger.error("Caddy reload failed (Docker and systemd): %s / %s",
-                             dock_res.stderr.strip(), sysd_res.stderr.strip())
-                result["message"] = (
-                    f"Caddy reload failed — Docker: {dock_res.stderr.strip()}; "
-                    f"systemd: {sysd_res.stderr.strip()}"
-                )
-                return result
+            logger.error("Docker reload failed (%s): %s", CONTAINER_NAME, dock_res.stderr.strip())
+            result["message"] = f"Reload failed (Docker). Error: {dock_res.stderr.strip()}"
+            result["ok"] = False
+            return result
 
         logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
 
