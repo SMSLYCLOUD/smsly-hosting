@@ -706,9 +706,6 @@ def generate_caddyfile(config) -> str:
                         f"    handle {matcher} {{",
                         f"        reverse_proxy {upstream_url} {{",
                         "            header_up Host {host}",
-                        "            health_uri /",
-                        "            health_status 2xx",
-                        "            health_timeout 2s",
                         "        }",
                         "    }",
                     ]
