@@ -66,3 +66,25 @@ class RuntimeEnvDomainAssemblyTests(TestCase):
 
         self.assertNotIn('CUSTOM_DOMAINS', env)
         self.assertEqual(env['PORT'], '8000')
+
+    def test_explicit_port_env_persists_to_service(self):
+        EnvironmentVariable.objects.create(
+            service=self.service,
+            key='PORT',
+            value='3000',
+            is_secret=False,
+        )
+        self.assertEqual(self.service.internal_port, 8000)
+        env = _build_runtime_env(self.service)
+        self.service.refresh_from_db()
+        self.assertEqual(env['PORT'], '3000')
+        self.assertEqual(self.service.internal_port, 3000)
+
+    def test_detected_port_persists_to_service(self):
+        from unittest.mock import patch
+        self.assertEqual(self.service.internal_port, 8000)
+        with patch('apps.deployments.tasks._detect_exposed_port', return_value=4000):
+            env = _build_runtime_env(self.service)
+        self.service.refresh_from_db()
+        self.assertEqual(env['PORT'], '4000')
+        self.assertEqual(self.service.internal_port, 4000)
