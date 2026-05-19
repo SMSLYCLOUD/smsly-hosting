@@ -103,18 +103,45 @@ class ServiceSerializer(serializers.ModelSerializer):
         }
 
     def get_node_metadata(self, obj: Service) -> dict:
-        # Use truthful active execution location if verified, otherwise indicate unknown
+        server = obj.server
         if obj.active_target_type:
             target_type_label = obj.active_target_type.replace('_', ' ').title()
             if target_type_label == "Remote":
                 target_type_label = "Remote Server"
+
+            srv_name = server.name if server else "Unknown Server"
+            srv_id = str(server.id) if server else "unknown"
+            if server and server.is_primary and target_type_label == "Local":
+                srv_name = "Local Server"
+                srv_id = "local"
+            elif not server and target_type_label == "Local":
+                srv_name = "Local Server"
+                srv_id = "local"
+
             return {
+                "id": srv_id,
+                "name": srv_name,
                 "target_type": target_type_label,
-                "host": obj.active_host_ip,
-                "status": "active"
+                "host": obj.active_host_ip or (server.host if server else "Unknown"),
+                "status": (server.status.lower() if server and server.status else "active")
             }
 
-        return {"target_type": "Unknown", "host": "Unknown", "status": "unknown"}
+        if server:
+            return {
+                "id": "local" if server.is_primary else str(server.id),
+                "name": "Local Server" if server.is_primary else server.name,
+                "target_type": "Local" if server.is_primary else "Remote Server",
+                "host": server.host,
+                "status": server.status.lower() if server.status else "active"
+            }
+
+        return {
+            "id": "local",
+            "name": "Local Server",
+            "target_type": "Local",
+            "host": "127.0.0.1",
+            "status": "active"
+        }
 
     def get_server_id(self, obj: Service) -> str | None:
         return str(obj.server_id) if obj.server_id else None
