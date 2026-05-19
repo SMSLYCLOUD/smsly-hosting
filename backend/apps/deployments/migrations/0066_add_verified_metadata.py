@@ -14,19 +14,17 @@ def backfill_metadata(apps, schema_editor):
             service.active_host_ip = service.server.private_ip or service.server.host
             service.active_target_type = "remote"
             service.save(update_fields=['active_host_ip', 'active_target_type'])
-        elif service.is_agent_service:
-            service.active_target_type = "lite_agent"
-            service.save(update_fields=['active_target_type'])
         else:
             service.active_target_type = "local"
             service.save(update_fields=['active_target_type'])
 
     # Backfill Deployment based on related Service (conservative approximation)
     for deployment in Deployment.objects.exclude(status='FAILED'):
-        if deployment.service.active_target_type:
+        if getattr(deployment.service, 'active_target_type', None):
             deployment.verified_target_type = deployment.service.active_target_type
             deployment.verified_host_ip = deployment.service.active_host_ip
             deployment.save(update_fields=['verified_target_type', 'verified_host_ip'])
+
 
 class Migration(migrations.Migration):
 
@@ -37,7 +35,6 @@ class Migration(migrations.Migration):
 
 
     operations = [
-        migrations.RunPython(backfill_metadata, reverse_code=migrations.RunPython.noop),
         migrations.AddField(
             model_name="deployment",
             name="verified_at",
@@ -107,4 +104,6 @@ class Migration(migrations.Migration):
                 null=True,
             ),
         ),
+        migrations.RunPython(backfill_metadata, reverse_code=migrations.RunPython.noop),
     ]
+

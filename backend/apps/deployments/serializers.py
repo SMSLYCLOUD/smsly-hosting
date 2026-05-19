@@ -104,6 +104,11 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def get_node_metadata(self, obj: Service) -> dict:
         server = obj.server
+        if not server:
+            latest_deploy = obj.deployments.order_by('-created_at').first()
+            if latest_deploy and latest_deploy.target_server:
+                server = latest_deploy.target_server
+
         if obj.active_target_type:
             target_type_label = obj.active_target_type.replace('_', ' ').title()
             if target_type_label == "Remote":
@@ -142,6 +147,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             "host": "127.0.0.1",
             "status": "active"
         }
+
 
     def get_server_id(self, obj: Service) -> str | None:
         return str(obj.server_id) if obj.server_id else None
