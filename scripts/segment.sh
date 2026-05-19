@@ -60,7 +60,7 @@ PY
 
     # 4. Build the Caddyfile
     if [ "$is_real_domain" = "true" ]; then
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > /opt/smsly-hosting/caddy-config/Caddyfile <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 # Individual service domains get SSL via Let's Encrypt HTTP-01 challenge.
 # Set CLOUDFLARE_API_TOKEN in .env and run --update to re-enable wildcard SSL.
@@ -82,7 +82,7 @@ ${domain} {
 ${svc_blocks}
 SAFECADDY
     else
-        cat > /etc/caddy/Caddyfile <<SAFECADDY
+        cat > /opt/smsly-hosting/caddy-config/Caddyfile <<SAFECADDY
 # Auto-generated safe fallback (reason: $reason)
 :80 {
     reverse_proxy localhost:8090
@@ -95,7 +95,7 @@ SAFECADDY
 ${svc_blocks}
 SAFECADDY
     fi
-    caddy fmt --overwrite /etc/caddy/Caddyfile 2>/dev/null || true
+    caddy fmt --overwrite /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null || true
     echo -e "${YELLOW}  [WARN] Wildcard HTTPS disabled. Individual service domains have HTTP-01 SSL.${NC}"
 }
 
@@ -110,10 +110,10 @@ caddy_needs_fix() {
         fi
     fi
 
-    if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+    if ! caddy validate --config /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null; then
         return 0  # Syntax error
     fi
-    if grep -q 'dns cloudflare' /etc/caddy/Caddyfile 2>/dev/null \
+    if grep -q 'dns cloudflare' /opt/smsly-hosting/caddy-config/Caddyfile 2>/dev/null \
        && [ ! -f /etc/systemd/system/caddy.service.d/override.conf ]; then
         return 0  # dns cloudflare without token override = runtime crash
     fi
@@ -167,8 +167,8 @@ restart_edge_stack() {
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-        systemctl restart caddy >/dev/null 2>&1 || true
-        systemctl restart caddy-watcher >/dev/null 2>&1 || true
+    true
+    true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }

@@ -2,7 +2,7 @@
 FROM caddy:2-builder AS builder
 
 RUN xcaddy build \
-    --with github.com/caddy-dns/cloudflare
+    --with github.com/caddy-dns/cloudflare@v0.2.4
 
 # Stage 2: Final Image
 FROM caddy:2-alpine

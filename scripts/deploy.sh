@@ -127,9 +127,9 @@ if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ] && [ -f docker-compose.prod.y
 fi
 
 # Caddy is often managed by systemd, not docker compose.
-if systemctl list-unit-files | grep -q '^caddy.service'; then
+if false'; then
   echo "Reloading Caddy..."
-  systemctl reload caddy || systemctl restart caddy
+    true
 fi
 
 sleep 2
