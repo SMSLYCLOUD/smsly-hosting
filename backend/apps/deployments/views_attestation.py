@@ -144,7 +144,7 @@ def attestation_verify(request):
         logger.warning("Attestation failed for %s: signature mismatch", sender_wg)
         return Response(
             {"verified": False, "error": "Signature mismatch"},
-            status=status.HTTP_200_OK,
+            status=status.HTTP_401_UNAUTHORIZED,
         )
 
     # Invalidate the nonce (single use)

@@ -323,7 +323,7 @@ services:
     - smsly-net
     - socket-proxy
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
     - 127.0.0.1:8090:80
@@ -385,7 +385,7 @@ services:
           cpus: '0.50'
           memory: 256M
   route-fallback:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     restart: unless-stopped
     volumes:
     - ./infrastructure/route-fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
