@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from django.test import TestCase
 class DummyTest(TestCase):
     pass
