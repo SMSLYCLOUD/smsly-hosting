@@ -1,7 +1,7 @@
+import pytest
+from django.test import TestCase
 import os
-import unittest
-import django
-django.setup()
+
 
 from unittest.mock import patch, MagicMock
 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
@@ -9,7 +9,8 @@ from apps.deployments.models import ManagedServer
 from django.contrib.auth import get_user_model
 import requests
 
-class TestRemoteOrchestratorErrors2(unittest.TestCase):
+@pytest.mark.django_db(transaction=True)
+class TestRemoteOrchestratorErrors2(TestCase):
     def setUp(self):
         User = get_user_model()
         self.user = User.objects.create_user(username="test_orch_err_2", password="123")
