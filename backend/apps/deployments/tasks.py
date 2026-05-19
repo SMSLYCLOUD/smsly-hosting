@@ -1630,10 +1630,12 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
 
                         # Promote to Active Service
                         service = deployment.service
+                        service.server = deployment.target_server
                         service.active_target_type = "remote"
                         service.active_host_ip = deployment.verified_host_ip
                         service.active_runtime_id = remote_container_id
-                        service.save(update_fields=['active_target_type', 'active_host_ip', 'active_runtime_id'])
+                        service.save(update_fields=['server', 'active_target_type', 'active_host_ip', 'active_runtime_id'])
+
 
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)
