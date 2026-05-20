@@ -856,6 +856,13 @@ class PlatformConfig(models.Model):
 
         if changed:
             obj.save()
+
+        # Override the server_ip dynamically on the returned object with environment variable if present,
+        # so that each node correctly sees its own public IP as its local server_ip,
+        # resolving shared-database conflicts.
+        if env_ip:
+            obj.server_ip = env_ip
+
         return obj
 
     def __str__(self):
