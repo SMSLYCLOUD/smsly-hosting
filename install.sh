@@ -48,14 +48,14 @@ RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
 
-# Read NODE_TYPE and MASTER_IP early from .env if it exists (prevents unbound variable crashes during updates)
+# Read and export all variables from .env early if it exists (prevents unbound variable crashes and ensures docker-compose inherits them)
 if [ -f "/opt/smsly-hosting/.env" ]; then
-    _ENV_NODE_TYPE="$(grep -m1 '^NODE_TYPE=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
-    if [ "$_ENV_NODE_TYPE" = "agent-lite" ]; then
+    set -a
+    source /opt/smsly-hosting/.env
+    set +a
+    if [ "${NODE_TYPE:-}" = "agent-lite" ]; then
         MODE_AGENT_LITE=true
     fi
-    MASTER_IP="$(grep -m1 '^MASTER_IP=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
-    MASTER_MESH_IP="$(grep -m1 '^MASTER_MESH_IP=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
 fi
 
 case "$NON_INTERACTIVE" in
