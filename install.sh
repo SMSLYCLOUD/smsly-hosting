@@ -2385,7 +2385,10 @@ bust_core_build_cache() {
 }
 
 restart_edge_stack() {
-    local edge_services="socket-proxy traefik route-fallback nginx"
+    local edge_services="socket-proxy traefik"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        edge_services="socket-proxy traefik route-fallback nginx"
+    fi
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
@@ -2393,13 +2396,17 @@ restart_edge_stack() {
 
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+        ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    fi
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
-    docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
-        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
+            docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
+    fi
 
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then
@@ -3342,13 +3349,15 @@ if a_count > 0:
 
     # Verify nginx loaded the correct custom config (not the default)
     sleep 2
-    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-        echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
-    else
-        echo -e "${RED}  ✗ WARNING: Nginx may be running default config!${NC}"
-        echo -e "${YELLOW}    Expected 'events {' but got: $NGINX_CONFIG_CHECK${NC}"
-        echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
+        if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
+            echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
+        else
+            echo -e "${RED}  ✗ WARNING: Nginx may be running default config!${NC}"
+            echo -e "${YELLOW}    Expected 'events {' but got: $NGINX_CONFIG_CHECK${NC}"
+            echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
+        fi
     fi
 
     # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
@@ -3596,7 +3605,11 @@ if d and d != 'localhost':
     FAIL_COUNT=0
 
     # ── Check 1: Backend API health (through local Nginx on port 8090) ──
-    EP1_URL="http://127.0.0.1:8090/health"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        EP1_URL="http://127.0.0.1/health"
+    else
+        EP1_URL="http://127.0.0.1:8090/health"
+    fi
     echo -e "${BLUE}  [1/3] Backend API health...${NC}"
     echo -e "${BLUE}        Endpoint: $EP1_URL${NC}"
     BACKEND_OK=false
@@ -3609,7 +3622,7 @@ if d and d != 'localhost':
             break
             ;;
         esac
-        if [ "$attempt" -eq 1 ]; then
+        if [ "$attempt" -eq 1 ] && [ "$MODE_AGENT_LITE" != "true" ]; then
             docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
         fi
         sleep 3
@@ -3689,7 +3702,11 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 " 2>/dev/null | tr -d '\r' || true)"
 
     # Also check Traefik port directly
-    EP3_URL="http://127.0.0.1:8081/"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        EP3_URL="http://127.0.0.1/"
+    else
+        EP3_URL="http://127.0.0.1:8081/"
+    fi
     EP3_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP3_URL" 2>/dev/null) || EP3_CODE="000"
     if [ "$EP3_CODE" != "000" ] && [ "$EP3_CODE" != "502" ]; then
         EP3_RESULT="${GREEN}PASS${NC}"
