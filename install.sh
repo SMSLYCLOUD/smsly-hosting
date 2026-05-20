@@ -4240,7 +4240,9 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     fi
 
     # Source existing values for summary output.
+    set -a
     source "$INSTALL_DIR/.env" 2>/dev/null || true
+    set +a
     DOMAIN="${DOMAIN:-localhost}"
     USE_SSL="${USE_SSL:-false}"
     WILDCARD_SUBDOMAINS="${WILDCARD_SUBDOMAINS:-false}"
@@ -4567,7 +4569,9 @@ fi
 # ─── Sync DB password to match .env (handles volume from previous install) ──
 # The DB volume persists with the password from FIRST init.
 # Always reset the password inside PostgreSQL to match the current .env.
+set -a
 source "$INSTALL_DIR/.env" 2>/dev/null || true
+set +a
 echo -e "${BLUE}  → Syncing database password...${NC}"
 
 # Try local trust auth first (Docker default), then try with PGPASSWORD
