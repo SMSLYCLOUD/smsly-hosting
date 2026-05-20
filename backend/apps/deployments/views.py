@@ -554,7 +554,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         is_hmac_remote_sync = authenticator_name == 'RemoteSyncHMACAuthentication'
         is_node_token = (
             hasattr(token, 'prefix')
-            and str(getattr(token, 'name', '') or '').startswith('node:')
+            and str(getattr(token, 'name', '') or '').lower().startswith('node')
         )
         return (
             self.request.headers.get('X-SMSLY-Remote-Sync') == '1'
