@@ -48,6 +48,16 @@ RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 NO_SCREEN="${NO_SCREEN:-false}"
 
+# Read NODE_TYPE and MASTER_IP early from .env if it exists (prevents unbound variable crashes during updates)
+if [ -f "/opt/smsly-hosting/.env" ]; then
+    _ENV_NODE_TYPE="$(grep -m1 '^NODE_TYPE=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
+    if [ "$_ENV_NODE_TYPE" = "agent-lite" ]; then
+        MODE_AGENT_LITE=true
+    fi
+    MASTER_IP="$(grep -m1 '^MASTER_IP=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
+    MASTER_MESH_IP="$(grep -m1 '^MASTER_MESH_IP=' /opt/smsly-hosting/.env | cut -d= -f2- | tr -d '"'\'' ' || true)"
+fi
+
 case "$NON_INTERACTIVE" in
   1|true|TRUE|yes|YES|on|ON) NON_INTERACTIVE=true ;;
   *) NON_INTERACTIVE=false ;;
@@ -684,7 +694,10 @@ apply_agent_lite_env_overrides() {
     # Use MASTER_MESH_IP for database only (shared DB).
     # Redis and RabbitMQ run locally on each node — no cross-node dependency.
     local node_redis_password
-    node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    node_redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD" 2>/dev/null || true)"
+    if [ -z "$node_redis_password" ]; then
+        node_redis_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    fi
     local redis_url="redis://redis:6379/0"
     if [ -n "$node_redis_password" ]; then
         redis_url="redis://:${node_redis_password}@redis:6379/0"
