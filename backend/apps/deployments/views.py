@@ -548,6 +548,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return qs.filter(owner=self.request.user).order_by('-created_at')
 
     def _is_remote_sync_request(self):
+        logger.debug("Checking remote sync request...")
         token = getattr(self.request, 'auth', None)
         authenticator = getattr(self.request, 'successful_authenticator', None)
         authenticator_name = authenticator.__class__.__name__ if authenticator else ''

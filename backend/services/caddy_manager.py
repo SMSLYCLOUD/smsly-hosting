@@ -888,11 +888,6 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     Write Caddyfile to the shared volume and create a reload flag.
     The host-side watcher script picks up the flag and reloads Caddy.
 
-    Returns dict like {"ok": True, "message": "..."}
-    """
-    if is_agent_lite():
-        logger.debug("Agent-lite mode: skipping apply_caddyfile()")
-        return {"ok": True, "message": "Skipped in agent-lite mode"}
     If cloudflare_token is provided, also write it to a token file so
     the host-side watcher can create the systemd environment override.
     This enables full SSL setup from the web UI without SSH access.
@@ -903,6 +898,10 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     operators to re-enter the Cloudflare token after restarts or background
     sync jobs that didn't pass it through.
     """
+    if is_agent_lite():
+        logger.debug("Agent-lite mode: skipping apply_caddyfile()")
+        return {"ok": True, "message": "Skipped in agent-lite mode"}
+
     result = {"ok": False, "message": ""}
 
     cloudflare_token = (cloudflare_token or "").strip()
