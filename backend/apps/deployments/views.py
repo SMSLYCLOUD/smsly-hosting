@@ -989,8 +989,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response(guard, status=status.HTTP_400_BAD_REQUEST)
 
         # Prevent rapid-fire deployment spam
+        # If this is a remote sync, the master has already created a tracking deployment
+        # and we shouldn't block the remote worker from creating its execution deployment.
         existing = _has_active_deployment(service)
-        if existing:
+        if existing and not is_remote_sync:
             return Response({
                 'error': f'Deployment already in progress (status: {existing.status}). '
                          'Wait for it to finish or cancel it first.',
