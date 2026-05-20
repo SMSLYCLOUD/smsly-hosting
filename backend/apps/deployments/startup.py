@@ -58,6 +58,11 @@ def _sync_caddy_once(delay: float = 3.0):
 
 def schedule_startup_caddy_sync():
     """Fire a one-time background sync."""
+    import os
+    if str(os.environ.get("MODE", "")).strip().lower() == "agent":
+        logger.debug("Agent-lite mode: skipping startup caddy sync")
+        return
+
     global _started  # noqa: PLW0603
     if _started:
         return

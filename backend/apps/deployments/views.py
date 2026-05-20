@@ -266,9 +266,22 @@ _IN_PROGRESS_DEPLOYMENT_STATUSES = [
 
 def _cancel_stale_in_progress_deployments(service):
     """
-    Cancel stale in-progress deployments superseded by a newer ACTIVE deploy.
+    Cancel stale in-progress deployments superseded by a newer ACTIVE deploy,
+    OR deployments that have been stuck in BUILDING for > 30 minutes.
     This prevents zombie QUEUED rows from permanently blocking new deploys.
     """
+    from datetime import timedelta
+    from django.utils import timezone
+    
+    stale_threshold = timezone.now() - timedelta(minutes=30)
+    service.deployments.filter(
+        status=Deployment.Status.BUILDING,
+        updated_at__lt=stale_threshold
+    ).update(
+        status=Deployment.Status.FAILED,
+        ai_diagnosis="Automatically cancelled: Deployment was stuck in BUILDING state for more than 30 minutes."
+    )
+
     latest_active = (
         service.deployments
         .filter(status=Deployment.Status.ACTIVE)

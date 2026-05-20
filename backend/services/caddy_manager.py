@@ -37,6 +37,11 @@ CONTROL_PLANE_UPSTREAMS = {
 }
 
 
+def is_agent_lite() -> bool:
+    """Return True if running in agent-lite mode where Caddy does not exist."""
+    return str(os.environ.get("MODE", "")).strip().lower() == "agent"
+
+
 def _generate_selfsigned_cert(cert_path: str, key_path: str, ip_address: str):
     """Generate a self-signed X.509 cert with the IP as SAN using cryptography.
     
@@ -635,6 +640,10 @@ def generate_caddyfile(config) -> str:
     Generate Caddyfile content from a PlatformConfig instance.
     Uses On-Demand TLS for custom domains.
     """
+    if is_agent_lite():
+        logger.debug("Agent-lite mode: skipping generate_caddyfile()")
+        return ""
+
     sections = []
     domain = ""
     cloudflare_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
@@ -879,6 +888,11 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
     Write Caddyfile to the shared volume and create a reload flag.
     The host-side watcher script picks up the flag and reloads Caddy.
 
+    Returns dict like {"ok": True, "message": "..."}
+    """
+    if is_agent_lite():
+        logger.debug("Agent-lite mode: skipping apply_caddyfile()")
+        return {"ok": True, "message": "Skipped in agent-lite mode"}
     If cloudflare_token is provided, also write it to a token file so
     the host-side watcher can create the systemd environment override.
     This enables full SSL setup from the web UI without SSH access.
