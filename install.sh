@@ -703,6 +703,13 @@ apply_agent_lite_env_overrides() {
         redis_url="redis://:${node_redis_password}@redis:6379/0"
     fi
 
+    local node_rabbitmq_password
+    node_rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+    if [ -z "$node_rabbitmq_password" ]; then
+        node_rabbitmq_password="$(python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || openssl rand -hex 16 2>/dev/null || echo "")"
+    fi
+    local celery_broker_url="amqp://smsly_user:${node_rabbitmq_password}@rabbitmq:5672//"
+
     # --- Persistence: Save a recovery seed for future manual updates ---
     cat > "$seed_file" <<EOF
 # SMSLY Lite Agent Recovery Seed
@@ -728,7 +735,8 @@ EOF
     env_set_value "$env_file" "DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
     env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
     # Local RabbitMQ (runs on the same node via docker-compose.agent-lite.yml)
-    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://guest:guest@rabbitmq:5672//"
+    env_set_value "$env_file" "RABBITMQ_PASSWORD" "${node_rabbitmq_password:-}"
+    env_set_value "$env_file" "CELERY_BROKER_URL" "$celery_broker_url"
     # Local Redis (runs on the same node via docker-compose.agent-lite.yml)
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
     env_set_value "$env_file" "REDIS_PASSWORD" "${node_redis_password:-}"
@@ -1219,7 +1227,8 @@ ensure_env_runtime_defaults() {
             # Use Master IP directly for external connections
             expected_database_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
             expected_direct_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
-            expected_celery_broker_url="amqp://smsly_user:${mq_pass}@${MASTER_IP}:5672//"
+            # Local RabbitMQ is used for Lite Agent node
+            expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"

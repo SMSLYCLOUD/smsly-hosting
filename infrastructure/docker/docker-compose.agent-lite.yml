@@ -49,14 +49,17 @@ services:
   # RabbitMQ (Local message broker for Celery workers)
   # ============================================================
   rabbitmq:
-    image: rabbitmq:3-alpine
+    image: rabbitmq:3-management-alpine
     restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: smsly_user
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     networks:
       - smsly-net
 
