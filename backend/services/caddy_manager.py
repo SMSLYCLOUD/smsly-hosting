@@ -131,6 +131,14 @@ def _remote_server_mesh_ip(server) -> str:
     if not server or getattr(server, "is_primary", False):
         return ""
 
+    # Try "default" mesh first to be extremely robust
+    try:
+        peer = server.wg_peers.filter(mesh__name="default", is_active=True).first()
+        if peer and peer.wg_address:
+            return str(peer.wg_address)
+    except Exception:
+        pass
+
     address = str(getattr(server, "wg_address", "") or "").strip()
     if address:
         return address

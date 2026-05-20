@@ -165,12 +165,13 @@ class WireGuardPeer(models.Model):
         super().save(*args, **kwargs)
         # Automatically sync the wg_address to the linked ManagedServer
         if self.server and self.is_active and self.wg_address:
-            # We use update() to avoid triggering the server's own save signals
-            # which might cause recursion or unnecessary overhead.
-            from .models_core import ManagedServer
-            ManagedServer.objects.filter(id=self.server_id).update(
-                wg_address=self.wg_address
-            )
+            # Only sync if it's the 'default' mesh network to prevent secondary meshes
+            # from overwriting the primary wg_address field.
+            if self.mesh.name == "default":
+                from .models_core import ManagedServer
+                ManagedServer.objects.filter(id=self.server_id).update(
+                    wg_address=self.wg_address
+                )
 
     def __str__(self):
         label = self.server.name if self.server else "local"
