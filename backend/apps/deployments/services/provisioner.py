@@ -126,6 +126,15 @@ def _get_master_mesh_ip() -> str:
     primary = ManagedServer.get_primary()
     if not primary:
         return ""
+
+    # Try "default" mesh first to be extremely robust
+    try:
+        peer = primary.wg_peers.filter(mesh__name="default", is_active=True).first()
+        if peer and peer.wg_address:
+            return str(peer.wg_address)
+    except Exception:
+        pass
+
     wg = str(getattr(primary, "wg_address", "") or "").strip()
     if wg:
         return wg
