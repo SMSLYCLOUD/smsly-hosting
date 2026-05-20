@@ -2578,10 +2578,15 @@ recover_runtime_stack() {
     fi
 
     echo -e "${BLUE}    -> Starting dependency services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy registry || true
-    wait_for_container_ready "smsly-hosting-db-1" 120 || true
-    wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
-    wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+    else
+        docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy registry || true
+        wait_for_container_ready "smsly-hosting-db-1" 120 || true
+        wait_for_container_ready "smsly-hosting-pgcat-1" 120 || true
+        wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+    fi
 
     if command -v caddy >/dev/null 2>&1; then
         if caddy_needs_fix; then
@@ -3107,7 +3112,7 @@ PYEOF
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy
             else
                 docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             fi
@@ -3227,7 +3232,7 @@ PYEOF
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy
             else
                 docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
             fi
