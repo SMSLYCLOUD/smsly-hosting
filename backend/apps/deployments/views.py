@@ -273,13 +273,13 @@ def _cancel_stale_in_progress_deployments(service):
     from datetime import timedelta
     from django.utils import timezone
     
-    stale_threshold = timezone.now() - timedelta(minutes=30)
+    stale_threshold = timezone.now() - timedelta(minutes=15)
     service.deployments.filter(
         status=Deployment.Status.BUILDING,
         updated_at__lt=stale_threshold
     ).update(
         status=Deployment.Status.FAILED,
-        ai_diagnosis="Automatically cancelled: Deployment was stuck in BUILDING state for more than 30 minutes."
+        ai_diagnosis="Automatically cancelled: Deployment was stuck in BUILDING state for more than 15 minutes."
     )
 
     latest_active = (
