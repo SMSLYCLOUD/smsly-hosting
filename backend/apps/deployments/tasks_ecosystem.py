@@ -715,7 +715,7 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
 
 
 @shared_task(bind=True, soft_time_limit=1800, time_limit=2100)
-def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str = None) -> dict:
+def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str = None, selected_repos: list = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
     This is async because fetching and AI analysis can take 30-60s.
@@ -737,7 +737,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
     try:
-        return scan_and_analyze(token, ai_provider=ai_provider)
+        return scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos)
     except SoftTimeLimitExceeded:
         logger.warning("Ecosystem scan timed out for user %s", user_id, exc_info=True)
         return {

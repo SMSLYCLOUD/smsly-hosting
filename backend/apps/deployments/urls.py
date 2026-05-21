@@ -16,7 +16,7 @@ from .views_storage import VolumeViewSet
 from .views_templates import TemplateViewSet
 from .views_blueprints import BlueprintViewSet
 from .views_topology import TopologyViewSet
-from .views_analysis import RepoAnalysisView
+from .views_analysis import RepoAnalysisView, CodeIntelligenceView, DeepScanTaskStatusView
 from .views_chat import AIChatView
 from .views_webhooks import GitHubWebhookView
 from .views_tunnels import TunnelViewSet
@@ -108,6 +108,8 @@ urlpatterns = [
     # Non-router views
     path('auth/session-token/', SessionTokenView.as_view(), name='session-token'),
     path('analyze-repo/', RepoAnalysisView.as_view(), name='analyze-repo'),
+    path('ecosystem/deep_scan/', CodeIntelligenceView.as_view(), name='ecosystem-deep-scan'),
+    path('ecosystem/deep_scan/status/', DeepScanTaskStatusView.as_view(), name='ecosystem-deep-scan-status'),
     path('ai-chat/', AIChatView.as_view(), name='ai-chat'),
     path('webhooks/github/', GitHubWebhookView.as_view(), name='github-webhook'),
     path('services/<uuid:service_id>/health/webhook/', ServiceHealthWebhookView.as_view(), name='service-health-webhook'),

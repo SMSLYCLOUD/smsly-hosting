@@ -65,17 +65,21 @@ def patch_runtime_settings():
         
         # 5. Sync Django Site table (required for allauth)
         try:
-            site = Site.objects.get(id=settings.SITE_ID)
-            if site.domain != effective_domain:
-                site.domain = effective_domain
-                site.name = f'CloudNeuron ({effective_domain})'
-                site.save()
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Accessing the database during app initialization")
+                site = Site.objects.get(id=settings.SITE_ID)
+                if site.domain != effective_domain:
+                    site.domain = effective_domain
+                    site.name = f'CloudNeuron ({effective_domain})'
+                    site.save()
         except Site.DoesNotExist:
-            Site.objects.create(
-                id=settings.SITE_ID,
-                domain=effective_domain,
-                name=f'CloudNeuron ({effective_domain})'
-            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message="Accessing the database during app initialization")
+                Site.objects.create(
+                    id=settings.SITE_ID,
+                    domain=effective_domain,
+                    name=f'CloudNeuron ({effective_domain})'
+                )
         logger.info("[patch] Runtime settings synchronized successfully.")
     except Exception as exc:
         logger.warning("[patch] Runtime patching skipped or failed: %s", exc)

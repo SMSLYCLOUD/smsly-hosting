@@ -552,9 +552,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
         ai_provider = request.data.get('ai_provider')
+        selected_repos = request.data.get('selected_repos')
         
         # Keep a stable call signature for API/tests while task internals may evolve.
-        task = ecosystem_scan_task.delay(str(request.user.id), 30, ai_provider=ai_provider)
+        task = ecosystem_scan_task.delay(str(request.user.id), 30, ai_provider=ai_provider, selected_repos=selected_repos)
 
         return Response({'task_id': task.id, 'status': 'scanning'})
 

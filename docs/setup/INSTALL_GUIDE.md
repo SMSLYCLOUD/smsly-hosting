@@ -72,7 +72,7 @@ The installer runs 8 automated steps:
 | **1. Pre-flight** | Checks OS, root access, available resources |
 | **2. Dependencies** | Installs Docker, Python, system packages. Stops conflicting services (nginx, apache2) |
 | **3. Configuration** | Generates all secrets: Django `SECRET_KEY`, Fernet encryption key, DB password, Redis password, HMAC gateway secret |
-| **4. Deployment** | Builds and starts all Docker containers (backend, frontend, celery, DB, Redis, nginx) |
+| **4. Deployment** | Builds and starts all Docker containers (backend, frontend, celery, DB, Redis) |
 | **5. Database** | Waits for PostgreSQL, syncs passwords, runs Django migrations |
 | **6. Admin User** | Creates admin superuser (credentials saved to `/opt/smsly-hosting/.credentials`) |
 | **7. Reverse Proxy** | Installs and configures Caddy for HTTP or HTTPS with auto-SSL |
@@ -176,7 +176,7 @@ sudo bash install.sh --update-backend
 
 1. **Stashes** any local changes (restored on failure)
 2. **Pulls** latest code from GitHub (`git pull origin main`)
-3. **Validates** required files exist (Dockerfiles, nginx.conf, compose file)
+3. **Validates** required files exist (Dockerfiles, compose file)
 4. **Rebuilds** targeted containers with `--no-cache`
 5. **Runs migrations** (backend/full update only)
 6. **Verifies** health check passes
@@ -251,7 +251,6 @@ curl http://localhost:8090/health
 |---------|--------------|---------|
 | `backend` | 8000 | Django API (Gunicorn) |
 | `frontend` | 3000 | Next.js SSR |
-| `nginx` | 8090 → 80 | Internal routing |
 | `db` | 5432 | PostgreSQL 16 |
 | `redis` | 6379 | Cache + Celery broker |
 | `celery` | — | Background task worker |
@@ -359,9 +358,9 @@ caddy reload --config /etc/caddy/Caddyfile
 ### Dashboard Not Loading
 
 1. Check containers: `docker compose -f docker-compose.prod.yml ps`
-2. Check nginx is running and bound to 8090
-3. Check firewall: `ufw status` — port 8090 should be allowed
-4. Check Caddy: `systemctl status caddy`
+2. Check that backend and frontend containers are healthy
+3. Check Caddy: `systemctl status caddy`
+4. Check firewall: `ufw status` — port 8090 should be allowed
 
 ### Database Connection Error
 

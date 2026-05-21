@@ -22,9 +22,8 @@ The legacy monolith has been decomposed into a highly modular Cargo Workspace, d
 
 ### A. Client Traffic Ingress
 1. **External Traffic (Internet)** hits the `Caddy` reverse proxy (`Caddyfile`). Caddy handles automated Let's Encrypt SSL termination and Gzip/Zstd compression.
-2. Caddy proxies the traffic internally to `localhost:8090` where the `Nginx` router listens.
-3. **Nginx Routing:**
-   - Traffic to `/api/*` is forwarded to the `api` (Axum) container on port `8000`.
+2. **Caddy Routing:**
+   - Traffic to `/api/*`, `/ws/*`, `/health`, `/admin`, `/static/*`, `/media/*` is forwarded to the `api` (Axum) container on port `8000`.
    - All other traffic `/` is forwarded to the `frontend` (Nginx static + Leptos WASM) container on port `80`.
 
 ### B. Deployment Pipeline (The "Smart Deploy")

@@ -21,7 +21,7 @@
 ### Request Flow
 
 ```
-Client → Caddy (SSL) → Nginx (:8090) → Gunicorn (:8000) → Django
+Client → Caddy (SSL) → Gunicorn (:8000) → Django
                                                             ↓
                                         Middleware Chain:
                                         1. SecurityMiddleware (HMAC V2)
@@ -190,7 +190,7 @@ servicesApi.approveDeployment(dId)     // Approve REVIEW → BUILDING
 | `celery-beat` | Same as backend | Periodic task scheduler |
 | `db` | postgres:16-alpine | Primary database |
 | `redis` | redis:7-alpine | Cache + Celery broker |
-| `nginx` | nginx:1.25-alpine | Internal reverse proxy |
+| `caddy` | caddy:2.7-alpine | Reverse proxy, SSL termination, routing |
 | `socket-proxy` | tecnativa/docker-socket-proxy | Read-only Docker socket |
 | `registry` | registry:2 | Private Docker registry for user images |
 | `traefik` | traefik:v3.6 | Dynamic routing for deployed services |

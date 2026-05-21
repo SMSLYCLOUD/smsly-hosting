@@ -25,13 +25,13 @@
 | **Cache/Queue** | Redis 7.x | Celery broker, session store |
 | **Task Queue** | Celery | Async deployment tasks, health checks |
 | **Reverse Proxy** | Caddy or Traefik | SSL termination, automatic HTTPS |
-| **Internal Routing** | Nginx | Backend/frontend traffic routing |
+| **Internal Routing** | Caddy | Backend/frontend traffic routing (direct) |
 | **Builder** | Nixpacks (auto-detect) | Language-agnostic build system |
 
 ### Request Flow
 
 ```
-Internet → Caddy (:80/:443, SSL) → Nginx (:8090) → Backend (:8000) / Frontend (:3000)
+Internet → Caddy (:80/:443, SSL) → Backend (:8000) / Frontend (:3000)
                                               ↓
                                     PostgreSQL + Redis
 ```

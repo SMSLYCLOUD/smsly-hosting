@@ -1,0 +1,200 @@
+import os
+import tempfile
+import logging
+import json
+import re
+from typing import List, Dict, Any
+from apps.intelligence.providers import ask_with_fallback
+from services.ecosystem import _clone_repo
+
+logger = logging.getLogger(__name__)
+
+CODE_OVERVIEW_PROMPT = """You are an expert Software Architect analyzing a chunk of a massive codebase.
+Below are file paths and extracted code skeletons (imports, class/function signatures) or file summaries.
+Your job is to write a concise but deep technical summary of what this chunk of code does, how it communicates with other services, and what external infrastructure it depends on (e.g. S3 buckets, Redis, databases).
+Be specific. If you see it needs `REDIS_URL` or `AWS_ACCESS_KEY_ID`, mention it.
+
+Return ONLY a markdown summary."""
+
+VERIFICATION_PROMPT = """You are a Principal DevOps Engineer performing a critical safety check on a deployment.
+You are given:
+1. The DEEP CODEBASE ARCHITECTURE (a unified overview of what the actual code does and needs).
+2. The PROPOSED DEPLOYMENT PLAN (what the infrastructure and environment variables are currently set to).
+
+Your job is to CROSS-VERIFY the two.
+1. Does the code expect an environment variable (e.g. a bucket name, a secret, a Redis URL) that is MISSING in the deploy plan?
+2. Does the code expect to communicate with a service that isn't defined?
+
+Return a strict JSON output matching this schema:
+{
+    "is_valid": boolean,
+    "missing_env_vars": [
+        {"service_name": "...", "env_key": "...", "reason": "..."}
+    ],
+    "architectural_warnings": [
+        "..."
+    ]
+}
+
+DO NOT wrap the JSON in markdown blocks (no ```json). Output raw JSON only.
+"""
+
+def _extract_skeleton(file_path: str, content: str) -> str:
+    """Extracts a skeleton (imports, classes, functions) from code to save tokens."""
+    ext = os.path.splitext(file_path)[1].lower()
+    skeleton = []
+    
+    if ext in ['.py']:
+        for line in content.splitlines():
+            if line.startswith('import ') or line.startswith('from '):
+                skeleton.append(line)
+            elif line.startswith('class ') or line.startswith('def '):
+                skeleton.append(line)
+    elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+        for line in content.splitlines():
+            if line.startswith('import ') or line.startswith('export '):
+                skeleton.append(line)
+            elif line.startswith('class ') or line.startswith('function '):
+                skeleton.append(line)
+            elif ' = (' in line and '=>' in line: # arrow functions
+                skeleton.append(line)
+    elif ext in ['.go']:
+        in_import = False
+        for line in content.splitlines():
+            if line.startswith('import'):
+                if '(' in line:
+                    in_import = True
+                skeleton.append(line)
+            elif in_import:
+                skeleton.append(line)
+                if ')' in line:
+                    in_import = False
+            elif line.startswith('func ') or line.startswith('type '):
+                skeleton.append(line)
+    else:
+        # Fallback: just return the first 50 lines (likely contains imports)
+        return "\n".join(content.splitlines()[:50])
+        
+    if not skeleton:
+        return "\n".join(content.splitlines()[:50])
+        
+    return "\n".join(skeleton)
+
+def analyze_codebase_chunked(repos_data: List[dict], deploy_plan: dict, github_token: str = None, ai_provider: str = None) -> dict:
+    """
+    Deep scan the codebase to verify the ecosystem deploy plan.
+    """
+    try:
+        from celery import current_task
+    except ImportError:
+        current_task = None
+
+    chunk_summaries = []
+    
+    with tempfile.TemporaryDirectory(prefix="deep-scan-") as workspace_dir:
+        logger.info(f"Created deep scan workspace: {workspace_dir}")
+        
+        # 1. Clone all repos
+        valid_repos = []
+        for i, rd in enumerate(repos_data):
+            repo_full = rd.get('repo')
+            if not repo_full:
+                continue
+                
+            if current_task:
+                current_task.update_state(state='PROGRESS', meta={'state': f'Cloning repository {i+1}/{len(repos_data)}: {repo_full}'})
+                
+            repo_name = repo_full.split('/')[-1]
+            target_dir = os.path.join(workspace_dir, repo_name)
+            
+            success = _clone_repo(repo_full, target_dir, github_token)
+            if success:
+                valid_repos.append({"repo": repo_full, "dir": target_dir})
+            else:
+                logger.warning(f"Failed to clone {repo_full} for deep scan")
+
+        # 2. Extract skeletons and chunk them
+        if current_task:
+            current_task.update_state(state='PROGRESS', meta={'state': 'Extracting codebase skeletons...'})
+            
+        all_files_content = []
+        for vr in valid_repos:
+            repo_dir = vr['dir']
+            for root, dirs, files in os.walk(repo_dir):
+                # Ignore common noisy directories
+                dirs[:] = [d for d in dirs if d not in ['.git', 'node_modules', 'venv', 'env', '__pycache__', 'dist', 'build']]
+                
+                for file in files:
+                    # Ignore binaries, lockfiles, and images
+                    if file.endswith(('.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.pyc', '.lock', '.exe', '.dll', '.so', '.pdf')):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    rel_path = f"{vr['repo']}/{os.path.relpath(file_path, repo_dir)}"
+                    
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        
+                        # Optimization: Skip extremely large files
+                        if len(content) > 500000:
+                            continue
+                            
+                        skeleton = _extract_skeleton(rel_path, content)
+                        all_files_content.append(f"### FILE: {rel_path}\n```\n{skeleton}\n```\n")
+                    except Exception:
+                        pass # Ignore decoding errors
+
+        # 3. Process in batches to generate chunk summaries
+        # Let's chunk the files list (e.g. 20 files per chunk)
+        chunk_size = 30
+        file_chunks = [all_files_content[i:i + chunk_size] for i in range(0, len(all_files_content), chunk_size)]
+        
+        for i, chunk in enumerate(file_chunks):
+            if current_task:
+                current_task.update_state(state='PROGRESS', meta={'state': f'Analyzing codebase chunk {i+1} of {len(file_chunks)}...'})
+                
+            prompt = "Please analyze the following codebase chunk:\n\n" + "\n".join(chunk)
+            summary, _ = ask_with_fallback(prompt, system_prompt=CODE_OVERVIEW_PROMPT, provider_id=ai_provider)
+            chunk_summaries.append(f"## CHUNK {i+1} SUMMARY:\n{summary}")
+
+    # 4. Global Synthesis (Overview of All)
+    if current_task:
+        current_task.update_state(state='PROGRESS', meta={'state': 'Synthesizing global codebase overview...'})
+        
+    synthesis_prompt = "You are synthesizing a global architecture overview. Read the following chunk summaries and provide a unified, comprehensive architecture map of the system, highlighting all cross-service dependencies and environment variables required.\n\n"
+    synthesis_prompt += "\n\n".join(chunk_summaries)
+    
+    global_overview, _ = ask_with_fallback(synthesis_prompt, system_prompt="You are an expert Software Architect.", provider_id=ai_provider)
+    
+    # 5. Cross-Verification
+    if current_task:
+        current_task.update_state(state='PROGRESS', meta={'state': 'Cross-verifying against deploy plan...'})
+        
+    verification_prompt = "### DEEP CODEBASE ARCHITECTURE:\n" + global_overview + "\n\n"
+    verification_prompt += "### PROPOSED DEPLOYMENT PLAN (ENV VARS):\n" + json.dumps(deploy_plan, indent=2) + "\n\n"
+    verification_prompt += "Execute verification."
+    
+    verification_result, _ = ask_with_fallback(verification_prompt, system_prompt=VERIFICATION_PROMPT, provider_id=ai_provider)
+    
+    try:
+        # Extract JSON
+        start_idx = verification_result.find('{')
+        end_idx = verification_result.rfind('}')
+        if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
+            json_str = verification_result[start_idx:end_idx+1]
+            verification = json.loads(json_str)
+        else:
+            raise ValueError("JSON not found")
+    except Exception as e:
+        logger.error(f"Failed to parse verification result: {e}")
+        verification = {
+            "is_valid": False,
+            "missing_env_vars": [],
+            "architectural_warnings": [f"Failed to parse AI verification: {str(e)}"]
+        }
+
+    return {
+        "global_overview": global_overview,
+        "verification": verification
+    }

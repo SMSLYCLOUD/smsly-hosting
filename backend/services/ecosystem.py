@@ -562,7 +562,44 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                 scan = scanner.scan()
                 rd['env_vars_context'] = scan.get('env_vars_context', {})
                 rd['stack'] = scan.get('stack', rd.get('stack', 'unknown'))
-                rd['configs_summary'] = {k: v[:500] for k, v in scan.get('configs', {}).items()}
+                
+                # Intelligent Config Extraction (Context Size Optimization)
+                configs_summary = {}
+                priority_files = ['docker-compose.yml', 'docker-compose.yaml', 'Dockerfile', 'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod']
+                
+                raw_configs = scan.get('configs', {})
+                critical_configs = [(k, v) for k, v in raw_configs.items() if any(p in os.path.basename(k) for p in priority_files)]
+                
+                # Sort by priority, then limit to top 4 files to prevent token bloat
+                def _sort_key(item):
+                    bname = os.path.basename(item[0])
+                    for i, pf in enumerate(priority_files):
+                        if pf in bname: return i
+                    return 99
+                
+                critical_configs.sort(key=_sort_key)
+                
+                for k, v in critical_configs[:4]:
+                    bname = os.path.basename(k)
+                    if 'package.json' in bname:
+                        import json as _json
+                        try:
+                            parsed = _json.loads(v)
+                            slim = {
+                                "scripts": parsed.get("scripts", {}),
+                                "dependencies": parsed.get("dependencies", {}),
+                            }
+                            configs_summary[k] = _json.dumps(slim, indent=2)
+                        except Exception:
+                            configs_summary[k] = v[:300] + "\n...[truncated]"
+                    elif 'Dockerfile' in bname or 'docker-compose' in bname:
+                        # Keep full logic but strip comments and blanks
+                        lines = [line for line in v.split('\n') if line.strip() and not line.strip().startswith('#')]
+                        configs_summary[k] = '\n'.join(lines)[:800]
+                    else:
+                        configs_summary[k] = v[:300] + "\n...[truncated]"
+                        
+                rd['configs_summary'] = configs_summary
                 rd['structure'] = scan.get('structure', '')
 
         # 4. Build the Cross-Repo Intelligence Brief
@@ -627,11 +664,15 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
 
     # 7. Parse and structure the plan (Workspace is now deleted)
     try:
-        json_match = _re.search(r'\{.*\}', response_text, _re.DOTALL)
-        if not json_match:
-            raise ValueError("No JSON found in Senate response")
+        # Intelligently extract JSON block by finding the outermost braces
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
         
-        plan = json.loads(json_match.group(0))
+        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+            raise ValueError("No JSON found in Senate response")
+            
+        json_str = response_text[start_idx:end_idx+1]
+        plan = json.loads(json_str)
         if isinstance(plan, dict) and isinstance(plan.get("services"), list):
             # 5. Apply the Senate's environment resolutions
             for svc in plan["services"]:
@@ -650,6 +691,107 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         logger.error("Failed to parse AI ecosystem response: %s", e)
         # Fall back to heuristic-only plan
         return _build_heuristic_plan(repos_data, str(e))
+
+
+def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, ai_provider: str = None, chunk_size: int = 4) -> dict:
+    """
+    Analyzes repos in batches of `chunk_size` to prevent token limits.
+    After accumulating the partial plans, it runs a final AI synthesis pass
+    to fix cross-repo links and consolidate addons.
+    """
+    import json
+    
+    global_services = []
+    global_addons_map = {}
+    
+    # Process in chunks
+    chunks = [repos_data[i:i + chunk_size] for i in range(0, len(repos_data), chunk_size)]
+    
+    for i, chunk in enumerate(chunks):
+        logger.info(f"Processing ecosystem chunk {i+1}/{len(chunks)}")
+        try:
+            from celery import current_task
+            if current_task:
+                current_task.update_state(
+                    state='PROGRESS', 
+                    meta={'state': f'Processing batch {i+1} of {len(chunks)}...'}
+                )
+        except Exception:
+            pass
+        
+        # Note: We reuse analyze_ecosystem here, which will create a temporary workspace
+        # and do the AI scan for just these 3-4 repos.
+        plan = analyze_ecosystem(chunk, github_token, ai_provider)
+        
+        services = plan.get("services", [])
+        global_services.extend(services)
+        
+        for addon in plan.get("addons", []):
+            if isinstance(addon, dict):
+                atype = str(addon.get("type", "")).strip().upper()
+                if atype:
+                    global_addons_map.setdefault(atype, set()).update(addon.get("shared_by", []))
+                    
+    # Rebuild preliminary addons
+    global_addons = [{"type": k, "shared_by": list(v)} for k, v in global_addons_map.items()]
+    
+    # Final AI Synthesis Pass if there was more than one chunk
+    if len(chunks) > 1:
+        synthesis_prompt = f"""
+        You are the Senate Architect performing a FINAL SYNTHESIS pass.
+        We have processed a massive ecosystem in batches. Here is the combined JSON plan of all services and addons.
+        
+        YOUR JOB:
+        1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{{{SERVICE:service-b}}}}.
+        2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
+        3. Ensure 100% env var coverage.
+        4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
+        
+        CURRENT COMBINED PLAN:
+        ```json
+        {json.dumps({{"services": global_services, "addons": global_addons}}, indent=2)}
+        ```
+        
+        Return ONLY valid JSON matching this exact structure:
+        {{
+          "ecosystem_name": "Synthesized Ecosystem",
+          "services": [...],
+          "addons": [...]
+        }}
+        """
+        try:
+            from apps.intelligence.providers import ask_with_fallback
+            response_text, provider = ask_with_fallback(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}')
+            if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
+                json_str = response_text[start_idx:end_idx+1]
+                synth_plan = json.loads(json_str)
+                if isinstance(synth_plan.get("services"), list):
+                    global_services = synth_plan["services"]
+                if isinstance(synth_plan.get("addons"), list):
+                    global_addons = synth_plan["addons"]
+        except Exception as e:
+            logger.warning(f"Synthesis pass failed, using raw merged plan: {e}")
+
+    # Re-apply strict generic normalization so the backend doesn't crash on bad JSON formats
+    for svc in global_services:
+        if isinstance(svc, dict):
+            svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
+            
+    _apply_plan_repo_defaults(global_services, repos_data)
+    _apply_generic_ecosystem_intelligence(global_services)
+    
+    final_addons = _rebuild_addons_manifest(global_services, global_addons)
+    deploy_sequence = _build_deploy_sequence(global_services)
+    
+    return {
+        "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
+        "services": global_services,
+        "addons": final_addons,
+        "deploy_sequence": deploy_sequence,
+        "ai_provider": ai_provider or "auto"
+    }
 
 
 def _env_plan_map(raw_env: Any) -> Dict[str, str]:
@@ -1008,9 +1150,10 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str, ai_provider: str = None) -> dict:
+def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list = None) -> dict:
     """
     Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
+    If selected_repos is provided, only processes those specific repositories.
 
     Returns the deploy plan dict ready for the frontend.
     """
@@ -1019,6 +1162,11 @@ def scan_and_analyze(token: str, ai_provider: str = None) -> dict:
     # 1. Fetch all repos
     all_repos = fetch_all_repos(token)
     logger.info("Found %d repositories", len(all_repos))
+    
+    # Filter by user selection if provided
+    if selected_repos is not None:
+        all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
+        logger.info("Filtered down to %d selected repositories", len(all_repos))
 
     # 2. Analyze each repo
     repos_data = []
@@ -1067,8 +1215,8 @@ def scan_and_analyze(token: str, ai_provider: str = None) -> dict:
 
     logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
 
-    # 3. AI ecosystem analysis
-    plan = analyze_ecosystem(repos_data, github_token=token, ai_provider=ai_provider)
+    # 3. AI ecosystem analysis (CHUNKED)
+    plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider)
     
     # Propagate AI preference to individual services
     actual_provider = plan.get("ai_provider")
