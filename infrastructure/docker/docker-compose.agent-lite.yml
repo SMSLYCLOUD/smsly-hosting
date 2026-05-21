@@ -78,8 +78,8 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       socket-proxy:
         condition: service_started
@@ -115,8 +115,8 @@ services:
       - DOCKER_NETWORK=smsly-net
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       backend:
         condition: service_healthy
