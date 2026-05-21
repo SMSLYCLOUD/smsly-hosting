@@ -10,7 +10,6 @@ import {
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { tunnelsApi, type Tunnel, type TunnelRequest, type ReservedSubdomain } from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
-import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 const IPV4_HOST_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
 
