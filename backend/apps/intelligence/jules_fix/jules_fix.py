@@ -313,9 +313,15 @@ def jules_fix_deployment_failure(
             result.fix_description = fix_description
             logger.info("PR created: %s", pr_url)
             
-            # Auto-redeploy from the PR branch if enabled
+            # Auto-redeploy from the PR branch if enabled (global toggle with per-service override)
             settings_obj = AIProviderSettings.get_solo()
-            if settings_obj.jules_auto_deploy_pr:
+            per_service_override = deployment.service.environment_variables.filter(
+                key='JULES_AUTO_FIX_DEPLOY'
+            ).first()
+            auto_deploy_enabled = settings_obj.jules_auto_deploy_pr
+            if per_service_override and per_service_override.value and per_service_override.value.lower() == 'false':
+                auto_deploy_enabled = False
+            if auto_deploy_enabled:
                 logger.info("Auto-deploying PR branch %s for deployment %s", branch_name, deployment_id)
                 try:
                     # Create a new deployment record for the PR branch
