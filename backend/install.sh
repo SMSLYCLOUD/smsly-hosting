@@ -3644,6 +3644,27 @@ echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
 
 echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
 
+# ─── Docker insecure registry for mesh registry ─────────────────────────────
+# The internal registry runs on the master and is accessible via WireGuard IP
+# (default 10.100.0.1:5000). Remote nodes must trust this IP over HTTP.
+echo -e "${BLUE}  → Configuring Docker insecure-registries for mesh registry...${NC}"
+DAEMON_JSON="/etc/docker/daemon.json"
+MASTER_MESH_IP="${MASTER_MESH_IP:-10.100.0.1}"
+REGISTRY_URL="${MASTER_MESH_IP}:5000"
+if command -v jq >/dev/null 2>&1; then
+    [ ! -f "$DAEMON_JSON" ] && echo '{}' > "$DAEMON_JSON"
+    if ! jq -e --arg url "$REGISTRY_URL" '."insecure-registries" // [] | index($url)' "$DAEMON_JSON" >/dev/null 2>&1; then
+        jq --arg url "$REGISTRY_URL" '."insecure-registries" //= [] | ."insecure-registries" |= (. + [$url] | unique)' "$DAEMON_JSON" > /tmp/daemon_tmp.json && mv /tmp/daemon_tmp.json "$DAEMON_JSON"
+        echo -e "${GREEN}  ✓ Added $REGISTRY_URL to insecure-registries${NC}"
+        systemctl restart docker 2>/dev/null || true
+    else
+        echo -e "${GREEN}  ✓ $REGISTRY_URL already in insecure-registries${NC}"
+    fi
+else
+    echo -e "${YELLOW}  ⚠ jq not installed; cannot configure insecure-registries automatically.${NC}"
+    echo -e "${YELLOW}     Run manually: jq '.\"insecure-registries\" //= [] | .\"insecure-registries\" |= (. + [\"$REGISTRY_URL\"] | unique)' $DAEMON_JSON > /tmp/daemon_tmp.json && mv /tmp/daemon_tmp.json $DAEMON_JSON && systemctl restart docker${NC}"
+fi
+
 # -----------------------------------------------------------------------------
 # 9. Verification
 # -----------------------------------------------------------------------------
