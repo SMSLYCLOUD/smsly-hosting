@@ -274,7 +274,7 @@ services:
     image: registry:2
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5000:5000"
+      - "5000:5000"
     volumes:
       - registry_data:/var/lib/registry
     networks:
