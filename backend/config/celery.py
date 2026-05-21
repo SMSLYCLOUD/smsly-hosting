@@ -50,6 +50,7 @@ def register_extra_tasks(sender, **kwargs):  # pylint: disable=unused-argument
     import apps.deployments.tasks_election  # noqa: F401
     import apps.deployments.tasks_replication  # noqa: F401
     import apps.deployments.tasks_mesh  # noqa: F401
+    import apps.deployments.services.self_healing_orchestrator  # noqa: F401
 
 # =============================================================================
 # Beat Schedule — Periodic tasks for metrics, health, autoscaling, cleanup
@@ -161,6 +162,11 @@ app.conf.beat_schedule = {
     # Check health of all managed servers every 5 minutes
     'check-managed-servers-health-every-5m': {
         'task': 'apps.deployments.tasks.check_managed_servers_health_task',
+        'schedule': 300.0,
+    },
+    # Node watchdog — checks all remote servers and auto-heals every 5 minutes
+    'node-watchdog-every-5m': {
+        'task': 'apps.deployments.tasks.node_watchdog_task',
         'schedule': 300.0,
     },
 }

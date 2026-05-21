@@ -1029,7 +1029,199 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                         "verified": svc.domain_verified,
                         "verification_token": svc.verification_token or "",
                     })
-            return Response({"domains": domains, "count": len(domains)})
+        return Response({"domains": domains, "count": len(domains)})
+
+    # ── Self-Healing ─────────────────────────────────────────────────────
+
+    @action(detail=True, methods=["post"])
+    def heal(self, request, pk=None):
+        """
+        Trigger self-healing on a remote server.
+
+        Body (optional):
+        {
+            "deployment_id": "uuid",  // specific deployment to heal
+            "action": "restart_container" | "restart_stack" | "diagnose" | "full"
+        }
+
+        If no deployment_id is provided, runs node-level diagnostics and healing.
+        """
+        server = self.get_object()
+
+        if not server.ssh_key and not server.ssh_password:
+            return Response(
+                {"error": "No SSH credentials stored for this server"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        action = request.data.get("action", "full")
+        deployment_id = request.data.get("deployment_id")
+
+        if action == "diagnose":
+            return self._run_diagnostics(server)
+
+        if deployment_id:
+            try:
+                from apps.deployments.models_core import Deployment
+                deployment = Deployment.objects.get(id=deployment_id)
+            except (Deployment.DoesNotExist, ValueError):
+                return Response(
+                    {"error": f"Deployment {deployment_id} not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            from apps.deployments.tasks import self_heal_remote_deployment
+            self_heal_remote_deployment.delay(
+                deployment_id=str(deployment.id),
+                server_id=str(server.id),
+            )
+            return Response({
+                "status": "healing_triggered",
+                "deployment_id": str(deployment.id),
+                "message": "Self-healing task queued",
+            })
+
+        if action in ("restart_container", "restart_stack", "full"):
+            return self._trigger_node_healing(server, action)
+
+        return Response(
+            {"error": f"Unknown action: {action}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    @action(detail=True, methods=["get"])
+    def diagnostics(self, request, pk=None):
+        """
+        Get current diagnostics for a remote server.
+
+        Returns Docker status, resource usage, container states, etc.
+        """
+        server = self.get_object()
+        return self._run_diagnostics(server)
+
+    @action(detail=True, methods=["post"])
+    def run_command(self, request, pk=None):
+        """
+        Run a diagnostic/recovery command on a remote server via SSH.
+
+        Body: { "command": "docker ps -a" }
+
+        Only allows safe diagnostic and recovery commands.
+        """
+        server = self.get_object()
+
+        if not server.ssh_key and not server.ssh_password:
+            return Response(
+                {"error": "No SSH credentials stored for this server"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        command = request.data.get("command", "").strip()
+        if not command:
+            return Response(
+                {"error": "Command is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed_prefixes = (
+            "docker ", "cd /opt/smsly-hosting && docker ",
+            "df ", "free ", "ping ", "systemctl status docker",
+            "cat /opt/smsly-hosting/.env | grep -v SECRET | grep -v PASSWORD | grep -v KEY",
+        )
+        if not any(command.startswith(p) for p in allowed_prefixes):
+            return Response(
+                {"error": "Command not allowed. Only Docker, diagnostic, and safe recovery commands are permitted."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            from apps.deployments.services.self_healing_orchestrator import SelfHealingOrchestrator
+            orchestrator = SelfHealingOrchestrator(server)
+            out, err, code = orchestrator._exec(command, timeout=60)
+            orchestrator._close_ssh()
+
+            return Response({
+                "command": command,
+                "exit_code": code,
+                "stdout": out[:10000],
+                "stderr": err[:5000],
+            })
+        except Exception as exc:
+            return Response(
+                {"error": f"Command execution failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _run_diagnostics(self, server):
+        """Run diagnostics on a remote server and return results."""
+        try:
+            from apps.deployments.services.self_healing_orchestrator import SelfHealingOrchestrator
+            orchestrator = SelfHealingOrchestrator(server)
+            diagnostics = orchestrator.run_full_diagnostics()
+            orchestrator._close_ssh()
+
+            return Response({
+                "server": {
+                    "id": str(server.id),
+                    "name": server.name,
+                    "host": server.host,
+                },
+                "docker_running": diagnostics.docker_running,
+                "disk_usage_pct": diagnostics.disk_usage_pct,
+                "memory_usage_pct": diagnostics.memory_usage_pct,
+                "network_reachable": diagnostics.network_reachable,
+                "failure_type": diagnostics.failure_type.value,
+                "container_state": diagnostics.container_state,
+                "error_details": diagnostics.error_details,
+                "suggested_actions": [a.value for a in diagnostics.suggested_actions],
+                "exited_containers": diagnostics.raw_diagnostics.get("exited_containers", ""),
+            })
+        except Exception as exc:
+            return Response(
+                {"error": f"Diagnostics failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _trigger_node_healing(self, server, action: str):
+        """Trigger node-level healing actions."""
+        try:
+            from apps.deployments.services.self_healing_orchestrator import (
+                SelfHealingOrchestrator,
+                RecoveryAction,
+            )
+
+            orchestrator = SelfHealingOrchestrator(server)
+
+            action_map = {
+                "restart_container": RecoveryAction.RESTART_CONTAINER,
+                "restart_stack": RecoveryAction.RESTART_STACK,
+                "full": RecoveryAction.RESTART_STACK,
+            }
+            recovery_action = action_map.get(action, RecoveryAction.RESTART_STACK)
+
+            class _FakeDeployment:
+                id = "manual"
+                container_id = ""
+                service = type("obj", (object,), {"name": ""})()
+
+            result = orchestrator._execute_recovery(
+                recovery_action, _FakeDeployment(), orchestrator._diagnostics
+            )
+            orchestrator._close_ssh()
+
+            return Response({
+                "action": recovery_action.value,
+                "success": result.success,
+                "details": result.details,
+                "post_recovery_status": result.post_recovery_status,
+                "next_action": result.next_action.value if result.next_action else None,
+                "heal_log": orchestrator.get_heal_log()[-10:],
+            })
+        except Exception as exc:
+            return Response(
+                {"error": f"Healing failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         # ── Full remote server: proxy ──
         if not server.api_url:

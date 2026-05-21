@@ -1723,10 +1723,19 @@ def _poll_remote_deployment(
             Deployment.Status.BACKUP_FAILED,
             Deployment.Status.MIGRATION_FAILED,
         ):
+            error_detail = remote_status.get("error") or f"Remote deployment failed with status: {status}."
+            append_log(deployment, f"[Self-Heal] Remote failure detected — triggering self-healing...\n")
+            try:
+                self_heal_remote_deployment.delay(
+                    deployment_id=str(deployment.id),
+                    server_id=str(orchestrator.server.id),
+                )
+            except Exception as exc:
+                logger.warning("Failed to trigger self-healing from poller: %s", exc)
             _handle_failure(
                 None,
                 deployment,
-                remote_status.get("error") or f"Remote deployment failed with status: {status}.",
+                error_detail,
                 "Remote Execution Failure",
             )
             return
@@ -3047,11 +3056,143 @@ def _handle_failure(task, deployment, error_msg, reason):
             except Exception as e:
                 logger.warning("Failed to trigger Jules auto-fix: %s", e)
 
+            # Step 4: Self-healing for remote deployment failures
+            try:
+                target_server = getattr(deployment, "target_server", None) or getattr(deployment.service, "server", None)
+                if target_server and (target_server.ssh_key or target_server.ssh_password):
+                    logger.info(
+                        "Triggering self-healing for remote deployment %s on server %s",
+                        deployment.id, target_server.name,
+                    )
+                    self_heal_remote_deployment.delay(
+                        deployment_id=str(deployment.id),
+                        server_id=str(target_server.id),
+                    )
+            except Exception as e:
+                logger.warning("Failed to trigger self-healing: %s", e)
+
     # Never auto-retry failed deployments.
     # Build failures are deterministic and system failures should be
     # investigated, not blindly retried. Users can manually redeploy.
     logger.error("Deployment failed (%s), not retrying: %s", reason, error_msg)
     return
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=600, time_limit=660)
+def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
+    """
+    Self-healing task for remote deployment failures.
+
+    Triggered when a remote deployment fails. Attempts automated diagnosis
+    and recovery via SSH before marking the deployment as permanently failed.
+
+    Recovery actions include:
+    - Container restart
+    - Stack restart (docker compose up -d)
+    - Image/volume pruning (disk space)
+    - Network repair
+    - AI escalation for complex failures
+    """
+    try:
+        deployment = Deployment.objects.get(id=deployment_id)
+    except Deployment.DoesNotExist:
+        logger.warning("Self-heal: deployment %s not found", deployment_id)
+        return
+
+    try:
+        from apps.deployments.models_core import ManagedServer
+        server = ManagedServer.objects.get(id=server_id)
+    except Exception as exc:
+        logger.warning("Self-heal: server %s not found: %s", server_id, exc)
+        return
+
+    if not (server.ssh_key or server.ssh_password):
+        logger.info("Self-heal: no SSH credentials for server %s", server.name)
+        return
+
+    append_log(deployment, "\n🔧 Self-healing: diagnosing remote node failure...\n")
+    broadcast_status(deployment)
+
+    try:
+        from apps.deployments.services.self_healing_orchestrator import (
+            SelfHealingOrchestrator,
+            RecoveryAction,
+        )
+
+        orchestrator = SelfHealingOrchestrator(server)
+        result = orchestrator.heal_deployment_failure(deployment)
+
+        append_log(deployment, f"[Self-Heal] Action: {result.action_taken.value}\n")
+        append_log(deployment, f"[Self-Heal] Success: {result.success}\n")
+        append_log(deployment, f"[Self-Heal] Details: {result.details}\n")
+
+        if result.success:
+            append_log(deployment, f"[Self-Heal] Recovery succeeded: {result.action_taken.value}\n")
+            append_log(deployment, f"[Self-Heal] Post-recovery status: {result.post_recovery_status}\n")
+
+            if result.next_action:
+                append_log(deployment, f"[Self-Heal] Suggested next action: {result.next_action.value}\n")
+
+            deployment.refresh_from_db()
+            if deployment.status == Deployment.Status.FAILED:
+                deployment.status = Deployment.Status.QUEUED
+                deployment.build_logs += "\n[Self-Heal] Retrying deployment after successful recovery...\n"
+                deployment.save(update_fields=["status", "build_logs", "updated_at"])
+                broadcast_status(deployment)
+
+                try:
+                    provider = deployment.service.provider
+                    if provider:
+                        enqueue_smart_deploy_task(
+                            deployment_id=str(deployment.id),
+                            provider_id=str(provider.id),
+                            skip_review=True,
+                        )
+                        append_log(deployment, "[Self-Heal] Deployment retry queued\n")
+                except Exception as exc:
+                    append_log(deployment, f"[Self-Heal] Failed to queue retry: {exc}\n")
+                    logger.warning("Self-heal retry queue failed: %s", exc)
+
+        elif result.next_action == RecoveryAction.ESCALATE_TO_AI:
+            append_log(deployment, "[Self-Heal] Escalating to system intelligence (AI)...\n")
+
+            try:
+                diagnostics = orchestrator.run_full_diagnostics(deployment)
+                ai_result = orchestrator.escalate_to_ai(deployment, diagnostics)
+
+                if ai_result.get("success"):
+                    append_log(deployment, "[Self-Heal] AI analysis received\n")
+                    commands = ai_result.get("suggested_commands", [])
+                    if commands:
+                        append_log(deployment, "[Self-Heal] AI suggested commands:\n")
+                        for cmd in commands[:5]:
+                            append_log(deployment, f"  CMD: {cmd}\n")
+
+                    deployment.ai_diagnosis = ai_result.get("ai_response", "")[:2000]
+                    deployment.save(update_fields=["ai_diagnosis", "updated_at"])
+                else:
+                    append_log(deployment, f"[Self-Heal] AI escalation failed: {ai_result.get('error', 'unknown')}\n")
+
+            except Exception as exc:
+                append_log(deployment, f"[Self-Heal] AI escalation error: {exc}\n")
+                logger.warning("Self-heal AI escalation failed: %s", exc)
+
+        else:
+            append_log(deployment, f"[Self-Heal] Recovery failed: {result.details}\n")
+            if result.next_action:
+                append_log(deployment, f"[Self-Heal] Suggested next action: {result.next_action.value}\n")
+
+        heal_log = orchestrator.get_heal_log()
+        if heal_log:
+            append_log(deployment, "[Self-Heal] Heal log:\n")
+            for entry in heal_log[-10:]:
+                append_log(deployment, f"  - {entry}\n")
+
+    except Exception as exc:
+        append_log(deployment, f"[Self-Heal] Exception: {exc}\n")
+        logger.exception("Self-healing task failed for deployment %s", deployment_id)
+    finally:
+        broadcast_status(deployment)
 
 
 @shared_task(bind=True, max_retries=0)
@@ -4321,3 +4462,100 @@ def update_remote_server_task(server_id: str):
         if 'ssh' in locals():
             ssh.close()
         cache.delete(lock_key)
+
+
+@shared_task(bind=True, max_retries=0, soft_time_limit=300, time_limit=330)
+def node_watchdog_task(self):
+    """
+    Periodic watchdog that checks all managed servers for health issues.
+
+    For each server:
+    1. Checks SSH connectivity
+    2. Checks Docker daemon status
+    3. Checks disk and memory usage
+    4. Attempts auto-recovery for critical issues
+    5. Updates server status in the database
+
+    Runs every 5 minutes via Celery beat.
+    """
+    try:
+        from apps.deployments.models_core import ManagedServer
+        from apps.deployments.services.self_healing_orchestrator import (
+            SelfHealingOrchestrator,
+            FailureType,
+        )
+    except ImportError:
+        logger.warning("Self-healing modules not available — watchdog skipped")
+        return
+
+    servers = ManagedServer.objects.filter(
+        is_primary=False,
+    ).exclude(status=ManagedServer.Status.DELETED)
+
+    results = {"checked": 0, "healed": 0, "failed": 0, "offline": 0}
+
+    for server in servers:
+        try:
+            results["checked"] += 1
+
+            if not server.ssh_key and not server.ssh_password:
+                logger.debug("Skipping %s — no SSH credentials", server.name)
+                continue
+
+            orchestrator = SelfHealingOrchestrator(server)
+            diagnostics = orchestrator.run_full_diagnostics()
+
+            old_status = server.status
+            if diagnostics.docker_running and diagnostics.network_reachable:
+                server.status = ManagedServer.Status.ONLINE
+            else:
+                server.status = ManagedServer.Status.OFFLINE
+
+            server.last_health_check = timezone.now()
+            server.save(update_fields=["status", "last_health_check", "updated_at"])
+
+            if diagnostics.docker_running and old_status != ManagedServer.Status.ONLINE:
+                logger.info("Server %s recovered — status: ONLINE", server.name)
+
+            if not diagnostics.docker_running:
+                logger.warning("Server %s — Docker daemon down, attempting recovery", server.name)
+                results["offline"] += 1
+
+                heal_result = orchestrator.heal_deployment_failure(
+                    type("obj", (object,), {"id": "watchdog", "container_id": "", "service": type("o", (object,), {"name": ""})()})()
+                )
+                if heal_result.success:
+                    results["healed"] += 1
+                    server.status = ManagedServer.Status.ONLINE
+                    server.save(update_fields=["status", "updated_at"])
+                    logger.info("Server %s healed via watchdog", server.name)
+
+            elif diagnostics.failure_type == FailureType.DISK_FULL:
+                logger.warning("Server %s — disk full, pruning images", server.name)
+                heal_result = orchestrator._execute_recovery(
+                    type("obj", (object,), {"value": "prune_images"})(),
+                    type("obj", (object,), {"id": "watchdog", "container_id": "", "service": type("o", (object,), {"name": ""})()})(),
+                    diagnostics,
+                )
+                if heal_result.success:
+                    results["healed"] += 1
+                    logger.info("Server %s disk space recovered via watchdog", server.name)
+
+            orchestrator._close_ssh()
+
+        except Exception as exc:
+            results["failed"] += 1
+            logger.warning("Watchdog check failed for %s: %s", server.name, exc)
+            try:
+                server.status = ManagedServer.Status.OFFLINE
+                server.last_health_check = timezone.now()
+                server.save(update_fields=["status", "last_health_check", "updated_at"])
+            except Exception:
+                pass
+
+    logger.info(
+        "Node watchdog complete: checked=%d healed=%d failed=%d offline=%d",
+        results["checked"], results["healed"], results["failed"], results["offline"],
+    )
+    return results
+
