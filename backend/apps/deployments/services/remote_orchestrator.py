@@ -7,6 +7,7 @@ import hmac as hmac_mod
 import json
 import requests
 import re
+import ipaddress
 from typing import Optional
 from urllib.parse import urlencode, urlparse
 from django.conf import settings
@@ -31,6 +32,16 @@ _ENFORCE_TLS = os.environ.get("SMSLY_ENFORCE_INTERSERVER_TLS", "false").lower() 
 _REMOTE_VERIFY = os.environ.get("SMSLY_REMOTE_VERIFY", "true").lower() not in (
     "0", "false", "no", "off",
 )
+
+
+def _host_is_ip(host_port: str) -> bool:
+    host = host_port.rsplit(":", 1)[0] if host_port.count(":") == 1 else host_port
+    host = host.strip("[]")
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
 
 
 REMOTE_RESPONSE_SNIPPET_CHARS = 1200
@@ -352,7 +363,13 @@ class RemoteOrchestrator:
         return f"{path}{separator}{urlencode(params, doseq=True)}"
 
     def _candidate_base_urls(self) -> list[str]:
-        """Return API base URLs worth trying without mutating the saved server."""
+        """Return API base URLs worth trying without mutating the saved server.
+
+        Ordering mirrors _candidate_api_urls in views_servers.py:
+          - Full-install IP-based hosts: port 8090 (Nginx→Django) before port 80 (Traefik)
+          - Lite agent IP-based hosts: port 80 before port 8090
+          - Domain-based hosts: HTTPS first, then HTTP, then HTTP:8090
+        """
         urls: list[str] = []
 
         def append(value: str):
@@ -372,11 +389,25 @@ class RemoteOrchestrator:
 
         has_explicit_port = host_port.count(":") == 1
         # SEC-ZT-005: When TLS enforcement is active, skip plain HTTP URLs
-        if not _ENFORCE_TLS:
-            append(f"http://{host_port}")
-        append(f"https://{host_port}")
-        if not has_explicit_port and not _ENFORCE_TLS:
-            append(f"http://{host_port}:8090")
+        if _host_is_ip(host_port):
+            if getattr(self.server, 'is_lite_agent', False):
+                if not _ENFORCE_TLS:
+                    append(f"http://{host_port}")
+                    append(f"http://{host_port}:8090")
+            else:
+                # Full install: Nginx on 8090 → Django API, Traefik on 80
+                if not _ENFORCE_TLS:
+                    append(f"http://{host_port}:8090")
+                    append(f"http://{host_port}")
+            append(f"https://{host_port}")
+        else:
+            # Domain-based: HTTPS first, then HTTP variants
+            append(f"https://{host_port}")
+            if not _ENFORCE_TLS:
+                append(f"http://{host_port}")
+            if not has_explicit_port and not _ENFORCE_TLS:
+                append(f"http://{host_port}:8090")
+
         if _ENFORCE_TLS and urls:
             https_urls = [u for u in urls if u.startswith("https://")]
             if https_urls:
@@ -545,6 +576,21 @@ class RemoteOrchestrator:
                                 timeout=timeout,
                                 retry_auth=False,
                             )
+
+                    # For safe methods, a 404 means we hit the wrong port/service —
+                    # try the next candidate base URL instead of returning immediately.
+                    if method_upper in SAFE_METHODS and status == 404:
+                        self._set_last_error(
+                            f"Remote API returned HTTP {status} for {method_upper} "
+                            f"{request_path} at {base_url}.",
+                            response=response,
+                        )
+                        logger.warning(
+                            "Trying next base URL after 404 for %s %s at %s",
+                            method_upper, request_path, base_url,
+                        )
+                        redirected = True
+                        break  # L3 break → L2 break via redirected → next base URL
 
                     if status >= 400:
                         self._set_last_error(
