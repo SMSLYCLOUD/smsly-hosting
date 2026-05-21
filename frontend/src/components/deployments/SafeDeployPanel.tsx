@@ -110,9 +110,8 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
 
     setCreating(true);
     try {
-      await api.post(`/services/${serviceId}/previews/`, {
-        branch_name: branchName,
-        commit_sha: commitSha
+      await api.post(`/services/${serviceId}/create-preview/`, {
+        branch: branchName,
       });
       toast({
         title: 'SafeDeploy Initiated',
@@ -134,7 +133,9 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
 
   const handleDeletePreview = async (previewId: string) => {
     try {
-      await api.post(`/services/${serviceId}/previews/${previewId}/destroy_preview/`);
+      await api.delete(`/services/${serviceId}/destroy-preview/`, {
+        data: { preview_id: previewId },
+      });
       toast({
         title: 'Teardown Initiated',
         description: 'SafeDeploy environment is being removed.',
