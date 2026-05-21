@@ -3120,9 +3120,9 @@ PYEOF
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
             else
-                docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
             docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
 
@@ -3223,7 +3223,7 @@ PYEOF
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps $CORE_SERVICES
+            docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
 
             if [ "$MODE_AGENT_LITE" != "true" ]; then
                 # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
@@ -3240,9 +3240,9 @@ PYEOF
             echo -e "${BLUE}  → Ensuring backend dependencies are running...${NC}"
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
-                docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
             else
-                docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
             sleep 10
             # Note: Do NOT run makemigrations — migrations are committed in the repo.
