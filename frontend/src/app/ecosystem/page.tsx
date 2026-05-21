@@ -182,7 +182,7 @@ export default function EcosystemPage() {
         setScanProgress('Fetching your GitHub repositories...');
         
         try {
-            const data = await apiGet('/api/v1/cloud/integrations/github/repos/?per_page=100');
+            const data = await apiGet('/api/v1/integrations/github/repos/?per_page=100');
             setAvailableRepos(data.repos || []);
             // Default select all
             setSelectedRepos((data.repos || []).map((r: any) => r.full_name));

@@ -543,18 +543,28 @@ do_update_full() {
     ensure_agent_env_defaults
     configure_docker_registry_trust
     ensure_networks
-    echo -e "${BLUE}  -> Starting local agent dependencies...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik
-    sync_local_rabbitmq_password
-    echo -e "${BLUE}  → Rebuilding agent image...${NC}"
-    docker compose -f "$COMPOSE_PATH" build backend || {
+    
+    echo -e "${BLUE}  -> Updating Docker images...${NC}"
+    docker compose -f "$COMPOSE_PATH" pull 2>/dev/null || true
+    
+    echo -e "${BLUE}  → Rebuilding agent images...${NC}"
+    docker compose -f "$COMPOSE_PATH" build || {
         echo -e "${RED}✗ Build failed${NC}"; exit 1;
     }
-    echo -e "${BLUE}  → Restarting services...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate backend celery-worker
+    
+    echo -e "${BLUE}  → Restarting all services...${NC}"
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate
+    
+    sync_local_rabbitmq_password
     wait_for_backend 60 3
     run_migrations
     fix_permissions
+    
+    # Restart the docker daemon to ensure all container networks and caches are fully refreshed 
+    # (matching the masternode update behavior which restarts docker and Caddy/Nginx)
+    echo -e "${BLUE}  -> Restarting Docker daemon to apply full system refresh...${NC}"
+    systemctl restart docker >/dev/null 2>&1 || true
+    
     echo -e "\n${GREEN}✅ Agent update complete${NC}"
 }
 
@@ -568,13 +578,21 @@ do_update_half() {
     ensure_agent_env_defaults
     configure_docker_registry_trust
     ensure_networks
-    echo -e "${BLUE}  -> Applying local agent service configuration...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik
+    
+    echo -e "${BLUE}  -> Updating Docker images...${NC}"
+    docker compose -f "$COMPOSE_PATH" pull 2>/dev/null || true
+    
+    echo -e "${BLUE}  -> Restarting all services...${NC}"
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate
+    
     sync_local_rabbitmq_password
-    docker compose -f "$COMPOSE_PATH" up -d --force-recreate backend celery-worker
     wait_for_backend 60 3
     run_migrations
     fix_permissions
+    
+    echo -e "${BLUE}  -> Restarting Docker daemon to apply full system refresh...${NC}"
+    systemctl restart docker >/dev/null 2>&1 || true
+    
     echo -e "\n${GREEN}✅ Agent half-update complete${NC}"
 }
 
