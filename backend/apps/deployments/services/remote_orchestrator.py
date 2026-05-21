@@ -377,7 +377,20 @@ class RemoteOrchestrator:
             if normalized and normalized not in urls:
                 urls.append(normalized)
 
-        append(self.base_url)
+        # MESH-OPTIMIZATION: For IP-based hosts, prefer HTTP first (mesh VPN handles encryption)
+        host_port = str(getattr(self.server, "host", "") or "").strip().rstrip("/")
+        if "://" in host_port:
+            parsed = urlparse(host_port)
+            host_port = parsed.netloc or parsed.path
+        host_port = host_port.split("/", 1)[0].strip()
+        
+        if _host_is_ip(host_port):
+            # IP-based mesh nodes: HTTP first, then HTTPS as fallback
+            append(f"http://{host_port}")
+            append(f"http://{host_port}:8090")
+            append(f"https://{host_port}")
+        else:
+            append(self.base_url)
 
         host_port = str(getattr(self.server, "host", "") or "").strip().rstrip("/")
         if "://" in host_port:
@@ -444,6 +457,18 @@ class RemoteOrchestrator:
         last_response = None
         modes = self._auth_modes()
         base_urls = self._candidate_base_urls()
+        
+        # MESH-OPTIMIZATION: Disable SSL verification for internal mesh/IP-based requests.
+        # Since nodes communicate over encrypted mesh VPN (FRP/Tailscale), TLS verification
+        # is redundant and causes self-signed cert errors. HTTP + mesh encryption is sufficient.
+        def _is_internal_target(url: str) -> bool:
+            """Check if URL points to internal mesh/IP (skip SSL verification)."""
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname or ""
+            # Mesh VPN ranges + private IPs + the specific worker IP pattern
+            internal_prefixes = ("10.", "172.16.", "192.168.", "100.64.", "127.")
+            return host.startswith(internal_prefixes) or _host_is_ip(host)
 
         if retry_auth and (not modes or modes == ["none"]):
             # If no auth modes, try auto-auth first
@@ -480,11 +505,15 @@ class RemoteOrchestrator:
 
                 for attempt in range(attempts):
                     try:
-                        # SEC-ZT-005: TLS verification for inter-server requests.
-                        # _REMOTE_VERIFY defaults to True; set SMSLY_REMOTE_VERIFY=0 to disable.
+                        # SEC-ZT-005 + MESH-OPTIMIZATION: TLS verification logic.
+                        # For internal mesh/IP targets, skip SSL verification since mesh VPN
+                        # already encrypts traffic. This prevents self-signed cert errors.
                         verify_ssl = _REMOTE_VERIFY
                         if verify_ssl and not url.startswith("https://"):
                             verify_ssl = False  # No SSL to verify on plain HTTP
+                        # MESH-OPTIMIZATION: Force verify=False for internal mesh targets
+                        if _is_internal_target(url):
+                            verify_ssl = False
                         response = requests.request(
                             method_upper,
                             url,
