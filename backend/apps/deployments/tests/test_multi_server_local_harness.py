@@ -1,3 +1,5 @@
+import os
+import tempfile
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -7,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.deployments.models import PlatformConfig, Service
+from apps.deployments.models_backup import ServiceBackup
 from apps.deployments.models_mesh import MeshNetwork, WireGuardPeer
 from apps.deployments.models_servers import ManagedServer
 from apps.deployments.models_transfer import ServerTransfer
@@ -135,6 +138,99 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertEqual(transfer.status, "FAILED")
         self.assertIn("backup failed", transfer.error_message)
         self.assertEqual(self.service.server_id, self.worker_a.id)
+
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._sync_target_dashboard")
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._verify_between_servers")
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._interconnect_servers")
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._wait_for_remote_backend_ready")
+    @patch("apps.deployments.services.transfer_service.BackupService.backup_service")
+    @patch("apps.deployments.services.transfer_service.time.sleep", return_value=None)
+    @patch("apps.deployments.services.transfer_service.SSHClient")
+    def test_service_transfer_execute_completes_and_moves_service_to_target(
+        self,
+        ssh_cls,
+        _sleep_mock,
+        backup_mock,
+        _ready_mock,
+        _mesh_mock,
+        _reachability_mock,
+        _sync_mock,
+    ):
+        self.service.docker_image = "registry.local/harness-service:abc123"
+        self.service.public_domain = "harness-service.example.test"
+        self.service.internal_port = 8080
+        self.service.save(update_fields=["docker_image", "public_domain", "internal_port"])
+
+        backup_file = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
+        try:
+            backup_file.write(b"fake-transfer-archive")
+            backup_file.close()
+            backup = ServiceBackup.objects.create(
+                service=self.service,
+                created_by=self.user,
+                status="COMPLETED",
+                backup_type="PRE_TRANSFER",
+                file_path=backup_file.name,
+                metadata={
+                    "docker_image": "registry.local/harness-service:abc123",
+                    "env_vars": [{"key": "PORT", "value": "8080"}],
+                    "volumes": [],
+                },
+            )
+            backup_mock.return_value = backup
+
+            ssh = ssh_cls.return_value
+            ssh.connect.return_value = None
+            ssh.close.return_value = None
+            ssh.check_docker.return_value = True
+            ssh.upload_file.return_value = None
+
+            executed = []
+
+            def exec_side_effect(command, *args, **kwargs):
+                executed.append(command)
+                if "docker ps --filter name=backend" in command:
+                    return "smsly-hosting-backend-1\n"
+                if "restore_trigger" in command and "python3" in command:
+                    return "SUCCESS\n"
+                if "docker inspect -f '{{.Id}}'" in command:
+                    return "container-abc123\n"
+                if "docker inspect -f '{{.State.Running}}'" in command:
+                    return "true\n"
+                return ""
+
+            ssh.exec_command.side_effect = exec_side_effect
+
+            transfer = ServerTransfer.objects.create(
+                owner=self.user,
+                transfer_type="SERVICE",
+                service=self.service,
+                source_server_ip="10.0.0.10",
+                target_server_ip="10.0.0.12",
+                target_ssh_password="worker-b-root",
+            )
+
+            ServerTransferService(transfer).execute()
+
+            transfer.refresh_from_db()
+            self.service.refresh_from_db()
+            self.assertEqual(transfer.status, "COMPLETED")
+            self.assertEqual(transfer.progress_percent, 100)
+            self.assertEqual(transfer.source_backup_id, backup.id)
+            self.assertEqual(self.service.server_id, self.worker_b.id)
+            self.assertEqual(transfer.target_ssh_password, "")
+            self.assertIsNotNone(transfer.rollback_deadline)
+            ssh.upload_file.assert_any_call(
+                backup_file.name,
+                f"/tmp/{os.path.basename(backup_file.name)}",
+            )
+            self.assertTrue(
+                any("docker run" in command and "registry.local/harness-service:abc123" in command
+                    for command in executed)
+            )
+        finally:
+            if os.path.exists(backup_file.name):
+                os.remove(backup_file.name)
 
     def _mesh(self):
         mesh = MeshNetwork.objects.create(name="harness-mesh", subnet="10.100.0.0/24")
