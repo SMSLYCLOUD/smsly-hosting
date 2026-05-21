@@ -132,10 +132,7 @@ def github_repos(request):
         page = int(request.query_params.get("page", 1))
     except (TypeError, ValueError):
         page = 1
-    try:
-        per_page = min(int(request.query_params.get("per_page", 30)), 100)
-    except (TypeError, ValueError):
-        per_page = 30
+    per_page = 100
     sort = request.query_params.get("sort", "updated")
     q = request.query_params.get("q", "").strip()
 
@@ -145,6 +142,7 @@ def github_repos(request):
     }
 
     try:
+        items = []
         if q:
             # Use the search API for query filtering
             gh = requests.get(
@@ -158,25 +156,28 @@ def github_repos(request):
                 },
                 timeout=10,
             )
+            gh.raise_for_status()
+            items = gh.json().get("items", [])
         else:
-            gh = requests.get(
-                "https://api.github.com/user/repos",
-                headers=headers,
-                params={
-                    "sort": sort,
-                    "direction": "desc",
-                    "per_page": per_page,
-                    "page": page,
-                    "affiliation": "owner,collaborator,organization_member",
-                },
-                timeout=10,
-            )
-
-        gh.raise_for_status()
-        raw = gh.json()
-
-        # search API nests inside "items"
-        items = raw.get("items", raw) if q else raw
+            # Loop to fetch up to 3 pages (300 repos) to ensure all repos are returned
+            for p in range(1, 4):
+                gh = requests.get(
+                    "https://api.github.com/user/repos",
+                    headers=headers,
+                    params={
+                        "sort": sort,
+                        "direction": "desc",
+                        "per_page": per_page,
+                        "page": p,
+                        "affiliation": "owner,collaborator,organization_member",
+                    },
+                    timeout=10,
+                )
+                gh.raise_for_status()
+                page_items = gh.json()
+                items.extend(page_items)
+                if len(page_items) < per_page:
+                    break
 
         repos = []
         for r in items:
@@ -291,5 +292,68 @@ def _cluster_repos(repos: list[dict]) -> list[dict]:
                 "count": len(group),
                 "repos": [r["full_name"] for r in group]
             })
-    
     return sorted(clusters, key=lambda x: x["count"], reverse=True)
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_branches(request):
+    """Return branches for a specific repository."""
+    token = _get_github_token(request.user)
+    if not token:
+        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
+    repo = request.query_params.get("repo")
+    if not repo:
+        return Response({"error": "repo parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    try:
+        gh = requests.get(
+            f"https://api.github.com/repos/{repo}/branches",
+            headers=headers,
+            params={"per_page": 100},
+            timeout=10,
+        )
+        gh.raise_for_status()
+        return Response(gh.json())
+    except Exception as exc:
+        logger.warning(f"Failed to fetch branches for {repo}: {exc}")
+        return Response({"error": "Failed to fetch branches"}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def github_commits(request):
+    """Return recent commits for a specific repository and branch."""
+    token = _get_github_token(request.user)
+    if not token:
+        return Response({"error": "GitHub not connected"}, status=status.HTTP_400_BAD_REQUEST)
+
+    repo = request.query_params.get("repo")
+    branch = request.query_params.get("branch")
+    
+    if not repo or not branch:
+        return Response({"error": "repo and branch parameters are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    try:
+        gh = requests.get(
+            f"https://api.github.com/repos/{repo}/commits",
+            headers=headers,
+            params={"sha": branch, "per_page": 30},
+            timeout=10,
+        )
+        gh.raise_for_status()
+        return Response(gh.json())
+    except Exception as exc:
+        logger.warning(f"Failed to fetch commits for {repo} on branch {branch}: {exc}")
+        return Response({"error": "Failed to fetch commits"}, status=status.HTTP_502_BAD_GATEWAY)

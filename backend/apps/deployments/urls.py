@@ -26,7 +26,7 @@ from .views_oauth import oauth_providers_status, oauth_credentials
 from .views_integrations import (
     github_connection, github_connect, github_oauth_url, github_oauth_callback,
 )
-from .views_github import github_repos
+from .views_github import github_repos, github_branches, github_commits
 from .views_tokens import list_tokens, create_token, revoke_token
 from .views_servers import ManagedServerViewSet
 from .views_mesh import MeshNetworkViewSet
@@ -122,6 +122,8 @@ urlpatterns = [
     path('integrations/github/', github_connection, name='github-connection'),
     path('integrations/github/connect/', github_connect, name='github-connect'),
     path('integrations/github/repos/', github_repos, name='github-repos'),
+    path('integrations/github/branches/', github_branches, name='github-branches'),
+    path('integrations/github/commits/', github_commits, name='github-commits'),
     # API-based OAuth (bypasses session cookies for SPA compatibility)
     path('integrations/github/oauth-url/', github_oauth_url, name='github-oauth-url'),
     path('integrations/github/oauth-callback/', github_oauth_callback, name='github-oauth-callback'),
