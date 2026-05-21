@@ -20,6 +20,8 @@ INSTALL_DIR="/opt/smsly-hosting"
 COMPOSE_FILE="infrastructure/docker/docker-compose.agent-lite.yml"
 COMPOSE_PATH="$INSTALL_DIR/$COMPOSE_FILE"
 LOCK_FILE="/tmp/smsly-agent-lite.lock"
+AGENT_SCRIPT_PATH="$INSTALL_DIR/scripts/agent-lite.sh"
+ORIGINAL_ARGS=("$@")
 
 # ─── Parse args ──────────────────────────────────────────────────────────────
 UPDATE_MODE=""
@@ -46,8 +48,12 @@ fi
 
 # ─── Lock file (prevent concurrent runs) ─────────────────────────────────────
 if ! mkdir "$LOCK_FILE" 2>/dev/null; then
-    echo -e "${RED}✗ Another instance is already running (lock: $LOCK_FILE)${NC}"
-    exit 1
+    if [ "${SMSLY_AGENT_LITE_REEXECED:-false}" = "true" ] && [ -d "$LOCK_FILE" ]; then
+        :
+    else
+        echo -e "${RED}✗ Another instance is already running (lock: $LOCK_FILE)${NC}"
+        exit 1
+    fi
 fi
 cleanup() {
     rm -rf "$LOCK_FILE" 2>/dev/null || true
@@ -329,15 +335,34 @@ pull_latest_code() {
     echo -e "${BLUE}  → Pulling latest code...${NC}"
     cd "$INSTALL_DIR"
     git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+    local script_checksum_before=""
+    local script_checksum_after=""
+    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_before="$(sha256sum "$AGENT_SCRIPT_PATH" 2>/dev/null | awk '{print $1}' || true)"
     # Stash any local changes to avoid pull conflicts
-    git stash --include-untracked 2>/dev/null || true
+    local stash_before stash_after stash_created
+    stash_created="false"
+    stash_before="$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
+    git stash push -m "smsly-agent-lite-update" >/dev/null 2>&1 || true
+    stash_after="$(git stash list 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$stash_after" != "$stash_before" ] && stash_created="true"
     if git pull --force origin main 2>/dev/null; then
         echo -e "${GREEN}  ✓ Code updated${NC}"
     else
         echo -e "${YELLOW}  ⚠ Git pull failed, continuing with local code${NC}"
     fi
-    # Pop stash — if it fails (conflicts), leave stashed and warn
-    git stash pop 2>/dev/null || echo -e "${YELLOW}  ⚠ Local changes stashed (git stash list)${NC}"
+    if [ "$stash_created" = "true" ]; then
+        # Pop stash — if it fails (conflicts), leave stashed and warn
+        git stash pop 2>/dev/null || echo -e "${YELLOW}  ⚠ Local changes stashed (git stash list)${NC}"
+    fi
+    [ -f "$AGENT_SCRIPT_PATH" ] && script_checksum_after="$(sha256sum "$AGENT_SCRIPT_PATH" 2>/dev/null | awk '{print $1}' || true)"
+    if [ -n "$UPDATE_MODE" ] && [ "${SMSLY_AGENT_LITE_REEXECED:-false}" != "true" ] \
+       && [ -n "$script_checksum_before" ] && [ -n "$script_checksum_after" ] \
+       && [ "$script_checksum_before" != "$script_checksum_after" ]; then
+        echo -e "${BLUE}  -> Agent script changed during update; restarting with the new script...${NC}"
+        export SMSLY_AGENT_LITE_REEXECED="true"
+        export SKIP_GIT="true"
+        exec bash "$AGENT_SCRIPT_PATH" "${ORIGINAL_ARGS[@]}"
+    fi
 }
 
 run_migrations() {
