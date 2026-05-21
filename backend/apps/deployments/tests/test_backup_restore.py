@@ -1,14 +1,18 @@
 import unittest
 import os
 import tempfile
+import tarfile
+import json
 from django.test import TestCase
 from unittest.mock import patch
 from rest_framework.test import APIClient
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
-from apps.deployments.models import Service, Project
-from apps.deployments.models_backup import ServiceBackup, ServerBackup
+from cryptography.fernet import Fernet
+from apps.deployments.models import Service, Project, EnvironmentVariable
+from apps.deployments.models_backup import ServiceBackup, ServerBackup, BackupSchedule
+from apps.deployments.services.backup_service import BackupService
 import uuid
 
 User = get_user_model()
@@ -82,3 +86,86 @@ class BackupRestoreTest(TestCase):
         finally:
             if os.path.exists(backup_file.name):
                 os.remove(backup_file.name)
+
+    @patch('apps.deployments.tasks.create_service_backup_task.delay')
+    def test_create_service_backup_rejects_foreign_service(self, mock_task):
+        other = User.objects.create_user(username="other", password="pwd")
+        foreign_service = Service.objects.create(name="foreign-service", owner=other)
+
+        response = self.client.post(
+            "/api/v1/backups/",
+            {"service": str(foreign_service.id)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        mock_task.assert_not_called()
+
+    def test_nested_service_backups_are_scoped_to_service(self):
+        other_service = Service.objects.create(name="other-owned-service", owner=self.user)
+        ServiceBackup.objects.create(service=other_service, status="COMPLETED")
+
+        response = self.client.get(f"/api/v1/services/{self.service.id}/backups/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data if isinstance(response.data, list) else response.data.get("results", [])
+        self.assertEqual([item["id"] for item in data], [str(self.service_backup.id)])
+
+    def test_backup_schedule_rejects_foreign_service(self):
+        other = User.objects.create_user(username="schedule-other", password="pwd")
+        foreign_service = Service.objects.create(name="foreign-schedule-service", owner=other)
+
+        response = self.client.post(
+            "/api/v1/backup-schedules/",
+            {
+                "service": str(foreign_service.id),
+                "cron_expression": "0 3 * * *",
+                "retention_days": 7,
+                "enabled": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(BackupSchedule.objects.filter(service=foreign_service).exists())
+
+    def test_encrypted_service_backup_restore_decrypts_archive(self):
+        key = Fernet.generate_key().decode()
+        backup_dir = tempfile.mkdtemp()
+        archive_path = os.path.join(backup_dir, "service.tar.gz")
+        encrypted_path = None
+        try:
+            metadata = {
+                "service_name": self.service.name,
+                "env_vars": [
+                    {"key": "RESTORED_VALUE", "value": "from-encrypted-backup", "is_secret": False},
+                ],
+                "volumes": [],
+            }
+            metadata_path = os.path.join(backup_dir, "metadata.json")
+            with open(metadata_path, "w", encoding="utf-8") as fh:
+                json.dump(metadata, fh)
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(metadata_path, arcname="metadata.json")
+
+            with patch.dict(os.environ, {"BACKUP_ENCRYPTION_KEY": key}):
+                encrypted_path = BackupService()._maybe_encrypt(archive_path)
+                backup = ServiceBackup.objects.create(
+                    service=self.service,
+                    status="COMPLETED",
+                    file_path=encrypted_path,
+                )
+                BackupService().restore_service(backup.id, requesting_user_id=self.user.id)
+
+            env = EnvironmentVariable.objects.get(service=self.service, key="RESTORED_VALUE")
+            self.assertEqual(env.value, "from-encrypted-backup")
+        finally:
+            for path in [archive_path, encrypted_path]:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            if os.path.exists(backup_dir):
+                try:
+                    os.remove(os.path.join(backup_dir, "metadata.json"))
+                except OSError:
+                    pass
+                os.rmdir(backup_dir)

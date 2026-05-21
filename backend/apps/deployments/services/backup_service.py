@@ -46,7 +46,7 @@ class BackupService:
         """Get or create a writable backups directory.
 
         Tries /app/backups/{subdir} first (shared Docker volume in production),
-        then falls back to /tmp/backups/{subdir} if not available.
+        then falls back to the OS temp directory if not available.
         """
         primary = os.path.join('/app', 'backups', subdir)
         try:
@@ -58,7 +58,7 @@ class BackupService:
             os.remove(test_file)
             return primary
         except (PermissionError, OSError) as e:
-            fallback = os.path.join('/tmp', 'backups', subdir)
+            fallback = os.path.join(tempfile.gettempdir(), 'backups', subdir)
             logger.warning(
                 "Cannot write to %s (%s), falling back to %s",
                 primary, e, fallback
@@ -66,36 +66,29 @@ class BackupService:
             os.makedirs(fallback, exist_ok=True)
             return fallback
 
+    @staticmethod
+    def _prepare_archive_for_restore(path: str) -> tuple[str, str | None]:
+        """Return a readable tar.gz path, decrypting encrypted backups if needed."""
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError("Backup archive file not found.")
+        if not path.endswith(".enc"):
+            return path, None
+
+        key = os.environ.get("BACKUP_ENCRYPTION_KEY", "").strip()
+        if not key:
+            raise ValueError("Encrypted backup detected but BACKUP_ENCRYPTION_KEY is not set.")
+        decrypted_path = BackupService.decrypt_backup(path, key)
+        return decrypted_path, decrypted_path
+
     def backup_service(self, service_id, backup_id=None, backup_type='MANUAL') -> ServiceBackup:
-        service = Service.objects.get(id=service_id)
-
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
-                from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-                orchestrator = RemoteOrchestrator(target["server_obj"])
-                # We offload backup generation to remote
-                logger.info("Triggering remote backup for service %s", service.id)
-                # Ensure the backup record exists
-                backup = ServiceBackup.objects.get(id=backup_id) if backup_id else ServiceBackup.objects.create(service=service, status='IN_PROGRESS', backup_type=backup_type)
-                # Normally, we'd trigger an API on remote to do this, and remote would push to storage.
-                # If remote orchestrator lacks full backup API, we fallback to marking failed if it can't execute locally.
-        except Exception as e:
-            logger.warning("Target resolution failed for backup: %s", e)
-
-        if not self.docker_client:
-            raise RuntimeError(
-                "Docker is not available. Backups require a running Docker daemon. "
-                "Please ensure Docker is installed and accessible."
-            )
         service = Service.objects.get(id=service_id)
 
         if backup_id:
             try:
                 backup = ServiceBackup.objects.get(id=backup_id)
                 backup.status = 'IN_PROGRESS'
-                backup.save(update_fields=['status'])
+                backup.error_message = ''
+                backup.save(update_fields=['status', 'error_message'])
             except ServiceBackup.DoesNotExist:
                 backup = ServiceBackup.objects.create(
                     service=service,
@@ -109,6 +102,34 @@ class BackupService:
                 backup_type=backup_type
             )
 
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            if target["target_type"] in ("remote", "lite_agent") and target["server_obj"]:
+                msg = (
+                    "Backups for remote/lite-agent services are not supported "
+                    "until remote backup offload is implemented."
+                )
+                backup.status = 'FAILED'
+                backup.error_message = msg
+                backup.save(update_fields=['status', 'error_message'])
+                raise RuntimeError(msg)
+        except Exception as e:
+            if backup.status == 'FAILED':
+                raise
+            logger.warning("Target resolution failed for backup: %s", e)
+
+        if not self.docker_client:
+            backup.status = 'FAILED'
+            backup.error_message = (
+                "Docker is not available. Backups require a running Docker daemon."
+            )
+            backup.save(update_fields=['status', 'error_message'])
+            raise RuntimeError(
+                "Docker is not available. Backups require a running Docker daemon. "
+                "Please ensure Docker is installed and accessible."
+            )
+
         temp_dir = None
         try:
             # Snapshot env vars. Operator/downloadable backups mask secrets, but
@@ -117,6 +138,7 @@ class BackupService:
                 'TRANSFER',
                 'SERVICE_TRANSFER',
                 'SERVER_TRANSFER',
+                'PRE_TRANSFER',
             }
             env_vars_raw = list(EnvironmentVariable.objects.filter(service=service).values('key', 'value', 'is_secret'))
             env_vars = []
@@ -299,6 +321,8 @@ class BackupService:
         if requesting_user_id is not None:
             backup_qs = backup_qs.filter(service__owner_id=requesting_user_id)
         backup = backup_qs.get(id=backup_id)
+        if backup.status != 'COMPLETED':
+            raise ValueError("Only COMPLETED backups can be restored.")
 
         if not target_service_id:
             target_service = backup.service
@@ -320,12 +344,13 @@ class BackupService:
             logger.warning(f"Failed to create pre-restore snapshot: {e}")
             # We don't fail the restore if snapshot fails, but we log it
 
-        temp_dir = os.path.join(os.path.dirname(backup.file_path), f"restore_{uuid.uuid4().hex}")
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+        temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
             # 1. Extract Archive
-            with tarfile.open(backup.file_path, "r:gz") as tar:
+            with tarfile.open(archive_path, "r:gz") as tar:
                 # Security: reject members with absolute paths or '..' traversal
                 for member in tar.getmembers():
                     if member.name.startswith('/') or '..' in member.name:
@@ -411,26 +436,35 @@ class BackupService:
                         )
                         
                         try:
-                            # 2. Extract the tarball into the volume
-                            # Since vol_tar_path is a .tar.gz, we need to extract it first
-                            # or use a tool that can handle gz. docker-py put_archive expects a tar.
-                            with tarfile.open(vol_tar_path, "r:gz") as tar:
-                                # We extract to a temporary directory then tar it again? No.
-                                # Let's just run tar inside the container and pipe the data.
-                                with open(vol_tar_path, 'rb') as f:
-                                    # exec_run can take a socket-like object? No.
-                                    # But we can use put_archive if we have a pure tar stream.
-                                    # Since we have a .tar.gz, let's just use docker exec with sh.
-                                    # We need to pipe the stream.
-                                    
-                                    # Alternative: use the helper container to extract.
-                                    # We can't easily pipe stdin to exec_run in docker-py.
-                                    # Let's use the 'docker' CLI if available, BUT fallback to a robust method.
-                                    
-                                    # Robust method: upload the tarball to the container first, then extract.
-                                    self.docker_client.api.put_archive(helper.id, "/tmp", open(vol_tar_path, 'rb'))
-                                    helper.exec_run(["sh", "-c", f"tar -xzf /tmp/{vol_meta['filename']} -C /dest"])
-                                    helper.exec_run(["rm", f"/tmp/{vol_meta['filename']}"])
+                            # Docker put_archive expects an uncompressed tar
+                            # stream, so wrap the saved .tar.gz as a file in a
+                            # plain tar, upload it, then extract it in-container.
+                            upload_tar_path = os.path.join(
+                                temp_dir,
+                                f"upload_{uuid.uuid4().hex}.tar",
+                            )
+                            with tarfile.open(upload_tar_path, "w") as upload_tar:
+                                upload_tar.add(
+                                    vol_tar_path,
+                                    arcname=vol_meta['filename'],
+                                )
+                            with open(upload_tar_path, 'rb') as upload_file:
+                                self.docker_client.api.put_archive(
+                                    helper.id,
+                                    "/tmp",
+                                    upload_file,
+                                )
+                            result = helper.exec_run([
+                                "sh",
+                                "-c",
+                                f"tar -xzf /tmp/{vol_meta['filename']} -C /dest",
+                            ])
+                            if getattr(result, "exit_code", 1) != 0:
+                                raise RuntimeError(
+                                    f"Failed to extract volume {vol_obj.name}: "
+                                    f"{getattr(result, 'output', b'')!r}"
+                                )
+                            helper.exec_run(["rm", f"/tmp/{vol_meta['filename']}"])
                         finally:
                             helper.remove(force=True)
 
@@ -443,6 +477,8 @@ class BackupService:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+            if cleanup_archive and os.path.exists(cleanup_archive):
+                os.remove(cleanup_archive)
 
     @staticmethod
     def _split_image_reference(image_ref):
@@ -627,11 +663,14 @@ class BackupService:
         # For now, we'll implement the logic to unpack and trigger service restores.
 
         backup = ServerBackup.objects.get(id=backup_id)
-        temp_dir = os.path.join(os.path.dirname(backup.file_path), f"restore_srv_{uuid.uuid4().hex}")
+        if backup.status != 'COMPLETED':
+            raise ValueError("Only COMPLETED server backups can be restored.")
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(backup.file_path)
+        temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_srv_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
-            with tarfile.open(backup.file_path, "r:gz") as tar:
+            with tarfile.open(archive_path, "r:gz") as tar:
                 for member in tar.getmembers():
                     if member.name.startswith('/') or '..' in member.name:
                         raise ValueError(f"Unsafe path in server backup archive: {member.name}")
@@ -655,6 +694,8 @@ class BackupService:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+            if cleanup_archive and os.path.exists(cleanup_archive):
+                os.remove(cleanup_archive)
 
     def _restore_service_from_file(self, filepath, owner=None):
         """Restore a service from a backup archive file.
@@ -663,10 +704,11 @@ class BackupService:
             filepath: Path to the service backup .tar.gz
             owner: User who owns the restored service (required for new services)
         """
-        temp_dir = os.path.join(os.path.dirname(filepath), f"rest_tmp_{uuid.uuid4().hex}")
+        archive_path, cleanup_archive = self._prepare_archive_for_restore(filepath)
+        temp_dir = os.path.join(os.path.dirname(archive_path), f"rest_tmp_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
         try:
-            with tarfile.open(filepath, "r:gz") as tar:
+            with tarfile.open(archive_path, "r:gz") as tar:
                 for member in tar.getmembers():
                     if member.name.startswith('/') or '..' in member.name:
                         raise ValueError(f"Unsafe path in service backup archive: {member.name}")
@@ -701,6 +743,8 @@ class BackupService:
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
+            if cleanup_archive and os.path.exists(cleanup_archive):
+                os.remove(cleanup_archive)
 
     # ------------------------------------------------------------------
     # Hardening helpers

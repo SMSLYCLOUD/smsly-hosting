@@ -3,6 +3,7 @@
 """Views module."""
 import os
 from rest_framework import viewsets, permissions, status, parsers, serializers, authentication
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -4106,6 +4107,14 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceBackupSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @staticmethod
+    def _user_can_access_service(user, service):
+        if not user or not user.is_authenticated or not service:
+            return False
+        if user.is_superuser or service.owner_id == user.id:
+            return True
+        return service.project_id and service.project.team_id and service.project.team.members.filter(user=user).exists()
+
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
@@ -4123,9 +4132,15 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         project_id = self.request.query_params.get('project_id')
         if project_id:
             qs = qs.filter(service__project_id=project_id)
+        service_pk = self.kwargs.get('service_pk')
+        if service_pk:
+            qs = qs.filter(service_id=service_pk)
         return qs
 
     def perform_create(self, serializer):
+        service = serializer.validated_data.get('service')
+        if not self._user_can_access_service(self.request.user, service):
+            raise PermissionDenied("You do not have access to this service.")
         backup = serializer.save(created_by=self.request.user, status='PENDING')
         create_service_backup_task.delay(service_id=str(backup.service.id), backup_type='MANUAL', backup_id=str(backup.id))
 
@@ -4146,9 +4161,8 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         if target_service_id:
             target_service = Service.objects.filter(
                 id=target_service_id,
-                owner=request.user,
-            ).first()
-            if not target_service:
+            ).select_related('project__team').first()
+            if not self._user_can_access_service(request.user, target_service):
                 return Response(
                     {'error': 'Target service not found'},
                     status=status.HTTP_404_NOT_FOUND,
@@ -4350,7 +4364,40 @@ class BackupScheduleViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
-        return self.queryset.filter(service__owner=self.request.user)
+        qs = self.queryset
+        if not self.request.user.is_superuser:
+            qs = qs.filter(
+                Q(service__owner=self.request.user) |
+                Q(service__project__team__members__user=self.request.user)
+            ).distinct()
+        service_id = self.request.query_params.get('service')
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        return qs
+
+    def _validate_schedule_access(self, serializer):
+        service = serializer.validated_data.get(
+            'service',
+            getattr(serializer.instance, 'service', None),
+        )
+        is_server_wide = serializer.validated_data.get(
+            'is_server_wide',
+            getattr(serializer.instance, 'is_server_wide', False),
+        )
+        if is_server_wide and not self.request.user.is_superuser:
+            raise PermissionDenied("Only admins can manage server-wide backup schedules.")
+        if not service and not is_server_wide:
+            raise PermissionDenied("A service is required for non-server-wide backup schedules.")
+        if service and not ServiceBackupViewSet._user_can_access_service(self.request.user, service):
+            raise PermissionDenied("You do not have access to this service.")
+
+    def perform_create(self, serializer):
+        self._validate_schedule_access(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._validate_schedule_access(serializer)
+        serializer.save()
 from .views_transfer import ServerTransferViewSet
 
 
