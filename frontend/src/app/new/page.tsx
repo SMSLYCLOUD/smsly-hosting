@@ -477,7 +477,7 @@ export default function NewServicePage() {
                           </div>
                         ) : (
                           <div className="max-h-48 overflow-y-auto border rounded-lg divide-y">
-                            {filteredRepos.slice(0, 20).map((repo: any) => (
+                            {filteredRepos.map((repo: any) => (
                               <button
                                 key={repo.id}
                                 type="button"
