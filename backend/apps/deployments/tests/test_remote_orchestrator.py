@@ -291,6 +291,62 @@ class TestRemoteServiceSyncPayload(unittest.TestCase):
         env_mock.assert_called_once()
 
 
+class TestRemoteServiceDeletion(unittest.TestCase):
+    """Tests for controller-to-node service deletion identity resolution."""
+
+    def setUp(self):
+        self.mock_server = Mock()
+        self.mock_server.name = "test-node"
+        self.mock_server.host = "192.168.1.100"
+        self.mock_server.api_url = None
+        self.mock_server.api_token = "test_token"
+        self.mock_server.gateway_secret = "test_secret"
+        self.mock_server.ssh_key = ""
+        self.mock_server.ssh_password = ""
+        self.mock_server.ssh_user = "root"
+        self.mock_server.ssh_port = 22
+
+    def _service(self):
+        return SimpleNamespace(
+            id="controller-service-id",
+            name="frontend-node",
+            slug="frontend-node",
+            active_runtime_id="",
+        )
+
+    def test_delete_service_for_local_uses_remote_search_id(self):
+        orchestrator = RemoteOrchestrator(self.mock_server)
+
+        with patch.object(orchestrator, "_search_remote_service", return_value="remote-service-id"), \
+             patch.object(orchestrator, "delete_service", return_value=True) as delete_mock, \
+             patch.object(orchestrator, "delete_service_runtime_via_ssh", return_value=False) as ssh_mock:
+            result = orchestrator.delete_service_for_local(self._service())
+
+        self.assertTrue(result)
+        delete_mock.assert_called_once_with(
+            "remote-service-id",
+            force=False,
+            not_found_ok=True,
+        )
+        ssh_mock.assert_not_called()
+
+    def test_delete_service_for_local_falls_back_to_ssh_when_remote_row_missing(self):
+        orchestrator = RemoteOrchestrator(self.mock_server)
+
+        with patch.object(orchestrator, "_search_remote_service", return_value=""), \
+             patch.object(orchestrator, "delete_service", return_value=False) as delete_mock, \
+             patch.object(orchestrator, "delete_service_runtime_via_ssh", return_value=True) as ssh_mock:
+            result = orchestrator.delete_service_for_local(self._service())
+
+        self.assertTrue(result)
+        delete_mock.assert_called_once_with(
+            "controller-service-id",
+            force=False,
+            not_found_ok=False,
+        )
+        ssh_mock.assert_called_once()
+
+
 class TestMeshOptimizationIntegration(unittest.TestCase):
     """Integration tests for mesh VPN optimization features."""
 

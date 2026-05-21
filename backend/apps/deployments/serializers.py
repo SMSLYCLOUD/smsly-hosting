@@ -92,7 +92,13 @@ class ServiceSerializer(serializers.ModelSerializer):
         return f"https://{slug}.{base_domain}"
 
     def get_latest_deployment(self, obj: Service) -> dict | None:
-        dep = obj.deployments.order_by('-created_at').first()
+        dep = (
+            obj.deployments
+            .filter(status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+            or obj.deployments.order_by('-created_at').first()
+        )
         if not dep:
             return None
         return {

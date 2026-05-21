@@ -636,6 +636,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         force = _parse_bool(request.query_params.get('force'))
+        if self._is_remote_sync_request():
+            return self._destroy_remote_sync(instance, force=force)
         self.perform_destroy(instance, force=force)
         return Response(
             {
@@ -646,6 +648,50 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 "force": force
             },
             status=status.HTTP_202_ACCEPTED
+        )
+
+    def _destroy_remote_sync(self, instance, force=False):
+        """
+        Inter-node deletes must finish runtime cleanup before the controller
+        removes its local record. Remote nodes may not have a local Celery
+        worker, so queuing delete_service_task here can leave containers alive.
+        """
+        from .models_core import Service
+        from .services.deletion_orchestrator import DeletionOrchestrator
+
+        orchestrator = DeletionOrchestrator()
+        success = orchestrator.delete_service_resources(instance, force=force)
+        if success:
+            service_id = str(instance.id)
+            service_name = instance.name
+            instance.delete()
+            self._sync_caddy()
+            return Response(
+                {
+                    "ok": True,
+                    "status": "deleted",
+                    "message": "Remote runtime resources were removed.",
+                    "resource_id": service_id,
+                    "service_name": service_name,
+                    "force": force,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        instance.status = Service.Status.DELETION_FAILED
+        instance.deletion_error = (
+            "Remote runtime cleanup failed on this node; service was not deleted."
+        )
+        instance.save(update_fields=['status', 'deletion_error'])
+        return Response(
+            {
+                "ok": False,
+                "status": "deletion_failed",
+                "error": instance.deletion_error,
+                "resource_id": str(instance.id),
+                "force": force,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     def perform_destroy(self, instance, force=False):

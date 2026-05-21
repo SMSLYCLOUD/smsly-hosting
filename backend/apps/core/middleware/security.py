@@ -32,6 +32,7 @@ class SecurityMiddleware:
             '/api/v1/auth/node-token-exchange',  # Node token exchange handles own auth
             '/api/v1/transfers/register-incoming/',  # Transfer sync verifies node auth in-view
             '/api/v1/services/check-domain/',  # Caddy On-Demand TLS authorization (Public)
+            '/api/v1/templates/',  # Public template marketplace (AllowAny)
         ]
 
     def __call__(self, request):
