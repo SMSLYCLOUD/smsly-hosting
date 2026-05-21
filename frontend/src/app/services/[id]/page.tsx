@@ -56,6 +56,7 @@ export default function ServiceDetailPage() {
     const [watchConfigLoading, setWatchConfigLoading] = useState(false);
     const [watchConfigSaving, setWatchConfigSaving] = useState(false);
     const [serviceEnvMap, setServiceEnvMap] = useState<ServiceEnvMap>({});
+    const [julesAutoFixDeploy, setJulesAutoFixDeploy] = useState(true);
     const [runtimeWatchEnabled, setRuntimeWatchEnabled] = useState(true);
     const [notifyInApp, setNotifyInApp] = useState(true);
     const [notifySms, setNotifySms] = useState(true);
@@ -80,6 +81,7 @@ export default function ServiceDetailPage() {
             });
             setServiceEnvMap(map);
 
+            setJulesAutoFixDeploy(parseBool(map.JULES_AUTO_FIX_DEPLOY?.value, true));
             setRuntimeWatchEnabled(parseBool(map.JULES_RUNTIME_WATCH?.value, true));
             setNotifyInApp(parseBool(map.JULES_NOTIFY_IN_APP?.value, true));
             setNotifySms(parseBool(map.JULES_NOTIFY_SMS?.value, true));
@@ -127,6 +129,7 @@ export default function ServiceDetailPage() {
         setWatchConfigSaving(true);
         try {
             await Promise.all([
+                saveEnvPair(service.id, 'JULES_AUTO_FIX_DEPLOY', julesAutoFixDeploy ? 'true' : 'false'),
                 saveEnvPair(service.id, 'JULES_RUNTIME_WATCH', runtimeWatchEnabled ? 'true' : 'false'),
                 saveEnvPair(service.id, 'JULES_NOTIFY_IN_APP', notifyInApp ? 'true' : 'false'),
                 saveEnvPair(service.id, 'JULES_NOTIFY_SMS', notifySms ? 'true' : 'false'),
@@ -598,11 +601,13 @@ export default function ServiceDetailPage() {
             {activeTab === 'settings' && (
                 <div className="space-y-6">
                     {/* AI Configuration */}
-                    <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-                        <h3 className="font-bold mb-4 text-xl">Jules AI Configuration</h3>
-                        <p className="text-muted-foreground text-sm mb-4">
-                            Configure your personal API key for Jules AI to enable advanced failure analysis and suggestions.
-                        </p>
+                    <div className="bg-card border border-border p-6 rounded-xl shadow-sm space-y-5">
+                        <div>
+                            <h3 className="font-bold text-xl mb-1">Jules AI Configuration</h3>
+                            <p className="text-muted-foreground text-sm">
+                                Configure your personal API key for Jules AI to enable advanced failure analysis and suggestions.
+                            </p>
+                        </div>
                         <div className="max-w-xl">
                             <label className="block text-sm font-medium mb-2">Jules AI API Key</label>
                             <div className="flex gap-2">
@@ -623,6 +628,15 @@ export default function ServiceDetailPage() {
                                     Save
                                 </button>
                             </div>
+                        </div>
+                        <div>
+                            <label className="flex items-center justify-between gap-3 rounded-lg border border-border p-3">
+                                <div>
+                                    <span className="text-sm font-medium">Jules Auto Fix &amp; Deploy</span>
+                                    <p className="text-xs text-muted-foreground mt-0.5">Automatically apply fixes and redeploy when deployment failures are detected</p>
+                                </div>
+                                <input type="checkbox" checked={julesAutoFixDeploy} onChange={(e) => setJulesAutoFixDeploy(e.target.checked)} />
+                            </label>
                         </div>
                     </div>
 
