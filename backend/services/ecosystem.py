@@ -677,7 +677,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             # 5. Apply the Senate's environment resolutions
             for svc in plan["services"]:
                 if isinstance(svc, dict):
-                    svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
+                    _normalize_service_plan_fields(svc)
             
             _apply_plan_repo_defaults(plan["services"], repos_data)
             _apply_generic_ecosystem_intelligence(plan["services"])
@@ -728,9 +728,12 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         
         for addon in plan.get("addons", []):
             if isinstance(addon, dict):
-                atype = str(addon.get("type", "")).strip().upper()
-                if atype:
-                    global_addons_map.setdefault(atype, set()).update(addon.get("shared_by", []))
+                addon_types = _coerce_addons(addon)
+                if addon_types:
+                    atype = addon_types[0]
+                    global_addons_map.setdefault(atype, set()).update(
+                        _coerce_depends_on(addon.get("shared_by", []))
+                    )
                     
     # Rebuild preliminary addons
     global_addons = [{"type": k, "shared_by": list(v)} for k, v in global_addons_map.items()]
@@ -777,7 +780,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
     # Re-apply strict generic normalization so the backend doesn't crash on bad JSON formats
     for svc in global_services:
         if isinstance(svc, dict):
-            svc["env_vars"] = _env_plan_map(svc.get("env_vars", {}))
+            _normalize_service_plan_fields(svc)
             
     _apply_plan_repo_defaults(global_services, repos_data)
     _apply_generic_ecosystem_intelligence(global_services)
@@ -803,11 +806,22 @@ def _env_plan_map(raw_env: Any) -> Dict[str, str]:
     - [{"key": "KEY", "default": "value", "is_secret": true, ...}, ...]
     """
     if isinstance(raw_env, dict):
-        return {
-            str(k).strip().upper(): "" if v is None else str(v)
-            for k, v in raw_env.items()
-            if str(k).strip()
-        }
+        env_map: Dict[str, str] = {}
+        for key, value in raw_env.items():
+            key_text = str(key).strip().upper()
+            if not key_text:
+                continue
+            if isinstance(value, dict):
+                entry = value
+                value = (
+                    entry.get("value")
+                    if entry.get("value") not in (None, "")
+                    else entry.get("default")
+                )
+                if value in (None, "") and (entry.get("generate") or entry.get("is_secret")):
+                    value = "{{GENERATE}}"
+            env_map[key_text] = "" if value is None else str(value)
+        return env_map
 
     env_map: Dict[str, str] = {}
     if not isinstance(raw_env, list):
@@ -863,16 +877,20 @@ def _is_intelligence_service(service: dict) -> bool:
 
 def _coerce_depends_on(raw_depends: Any) -> List[str]:
     """Normalize depends_on payload to a flat list."""
-    if isinstance(raw_depends, list):
-        return [str(item).strip() for item in raw_depends if str(item).strip()]
-    if isinstance(raw_depends, str):
-        text = raw_depends.strip()
-        if not text:
-            return []
-        if "," in text:
-            return [token.strip() for token in text.split(",") if token.strip()]
-        return [text]
-    return []
+    tokens: List[str] = []
+    _append_tokens(
+        tokens,
+        raw_depends,
+        ("repo", "service", "service_name", "name", "target", "id", "value"),
+    )
+    return _dedupe_preserving_order(tokens)
+
+
+def _normalize_service_plan_fields(service: dict) -> None:
+    """Normalize untrusted AI service fields before planning logic consumes them."""
+    service["env_vars"] = _env_plan_map(service.get("env_vars", {}))
+    service["addons"] = _coerce_addons(service.get("addons", []))
+    service["depends_on"] = _coerce_depends_on(service.get("depends_on", []))
 
 
 def _safe_order(value: Any, default: int = 99) -> int:
@@ -881,6 +899,97 @@ def _safe_order(value: Any, default: int = 99) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+_ADDON_ALIASES = {
+    "POSTGRESQL": "POSTGRES",
+    "POSTGRES_DB": "POSTGRES",
+    "POSTGRES_DATABASE": "POSTGRES",
+    "DATABASE": "POSTGRES",
+    "DB": "POSTGRES",
+    "CACHE": "REDIS",
+    "REDIS_CACHE": "REDIS",
+    "MONGO": "MONGODB",
+    "RABBIT": "RABBITMQ",
+    "AMQP": "RABBITMQ",
+    "VECTOR": "QDRANT",
+    "VECTOR_DB": "QDRANT",
+    "S3": "MINIO",
+    "OBJECT_STORAGE": "MINIO",
+}
+
+
+def _repo_short_name(service: dict) -> str:
+    """Return a stable service name fallback from repo metadata."""
+    repo = str(service.get("repo") or "").strip().rstrip("/")
+    if repo:
+        short_name = repo.split("/")[-1]
+        if short_name.endswith(".git"):
+            short_name = short_name[:-4]
+        if short_name:
+            return short_name
+    return "service"
+
+
+def _append_tokens(tokens: List[str], raw: Any, preferred_keys: Tuple[str, ...]) -> None:
+    """Extract string tokens from flexible AI-generated scalar/list/dict shapes."""
+    if raw is None:
+        return
+
+    if isinstance(raw, dict):
+        for key in preferred_keys:
+            if key in raw:
+                before = len(tokens)
+                _append_tokens(tokens, raw.get(key), preferred_keys)
+                if len(tokens) > before:
+                    return
+
+        for key, value in raw.items():
+            if isinstance(value, bool):
+                if value:
+                    _append_tokens(tokens, key, preferred_keys)
+            elif isinstance(value, (str, int, float)):
+                _append_tokens(tokens, value, preferred_keys)
+        return
+
+    if isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            _append_tokens(tokens, item, preferred_keys)
+        return
+
+    text = str(raw).strip()
+    if not text or text.lower() in {"none", "null", "false"}:
+        return
+    if "," in text:
+        for part in text.split(","):
+            _append_tokens(tokens, part, preferred_keys)
+        return
+    tokens.append(text)
+
+
+def _dedupe_preserving_order(values: List[str]) -> List[str]:
+    seen = set()
+    deduped: List[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            deduped.append(value)
+    return deduped
+
+
+def _normalize_addon_token(token: str) -> str:
+    normalized = str(token or "").strip().upper().replace("-", "_").replace(" ", "_")
+    normalized = _ADDON_ALIASES.get(normalized, normalized)
+    return normalized if normalized else ""
+
+
+def _coerce_addons(raw_addons: Any) -> List[str]:
+    """Normalize addon declarations to a deduped list of addon type strings."""
+    tokens: List[str] = []
+    _append_tokens(tokens, raw_addons, ("type", "addon", "name", "service", "value"))
+    return _dedupe_preserving_order(
+        [addon for addon in (_normalize_addon_token(token) for token in tokens) if addon]
+    )
 
 
 def _build_deploy_sequence(services: List[dict]) -> List[str]:
@@ -900,11 +1009,12 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
         for addon in existing_addons:
             if not isinstance(addon, dict):
                 continue
-            addon_type = str(addon.get("type") or "").strip().upper()
+            addon_types = _coerce_addons(addon)
+            addon_type = addon_types[0] if addon_types else ""
             if not addon_type:
                 continue
             addon_map.setdefault(addon_type, set())
-            for svc_name in addon.get("shared_by", []) or []:
+            for svc_name in _coerce_depends_on(addon.get("shared_by", []) or []):
                 svc_text = str(svc_name or "").strip()
                 if svc_text:
                     addon_map[addon_type].add(svc_text)
@@ -915,8 +1025,9 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
         service_name = str(service.get("name") or _repo_short_name(service)).strip()
         if not service_name:
             continue
-        for addon in service.get("addons", []) or []:
-            addon_type = str(addon or "").strip().upper()
+        normalized_addons = _coerce_addons(service.get("addons", []) or [])
+        service["addons"] = normalized_addons
+        for addon_type in normalized_addons:
             if not addon_type:
                 continue
             addon_map.setdefault(addon_type, set()).add(service_name)
@@ -939,9 +1050,11 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
 
     for svc in deployable:
         env_map = svc.get("env_vars", {})
+        if not isinstance(env_map, dict):
+            env_map = _env_plan_map(env_map)
         svc_name = str(svc.get("name") or "").lower()
         stack = str(svc.get("stack") or "").lower()
-        addons = set(svc.get("addons", []) or [])
+        addons = set(_coerce_addons(svc.get("addons", []) or []))
 
         # 1. Stack-based Addon Defaults
         if stack == "django":
@@ -951,7 +1064,7 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
             if any("DATABASE_URL" in k.upper() for k in env_map.keys()):
                 addons.add("POSTGRES")
 
-        svc["addons"] = list(addons)
+        svc["addons"] = sorted(addons)
 
         # 2. Dynamic Cross-Linking (Intelligent Mesh)
         
@@ -961,25 +1074,31 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
             for key in list(env_map.keys()):
                 key_u = key.upper()
                 if any(k in key_u for k in ["API_URL", "CORE_URL", "PLATFORM_URL", "BACKEND_URL"]):
+                    core_name = str(core_svc.get("name") or _repo_short_name(core_svc)).strip()
+                    if not core_name:
+                        continue
                     # If it's a prefixed var (e.g. MYPROJECT_PLATFORM_API_URL), preserve the key
                     # but wire it to the detected core service
-                    env_map[key] = f"{{{{SERVICE:{core_svc.get('name')}}}}}"
+                    env_map[key] = f"{{{{SERVICE:{core_name}}}}}"
                     
                     # Also add implicit dependency
-                    deps = set(svc.get("depends_on", []) or [])
-                    deps.add(core_svc.get("name"))
-                    svc["depends_on"] = list(deps)
+                    deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    deps.add(core_name)
+                    svc["depends_on"] = sorted(deps)
 
         # Link to Auth Provider
         if auth_svc and svc != auth_svc:
             for key in list(env_map.keys()):
                 key_u = key.upper()
                 if any(k in key_u for k in ["AUTH_URL", "IDENTITY_URL", "OIDC_URL", "SSO_URL"]):
-                    env_map[key] = f"{{{{SERVICE:{auth_svc.get('name')}}}}}"
+                    auth_name = str(auth_svc.get("name") or _repo_short_name(auth_svc)).strip()
+                    if not auth_name:
+                        continue
+                    env_map[key] = f"{{{{SERVICE:{auth_name}}}}}"
                     
-                    deps = set(svc.get("depends_on", []) or [])
-                    deps.add(auth_svc.get("name"))
-                    svc["depends_on"] = list(deps)
+                    deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    deps.add(auth_name)
+                    svc["depends_on"] = sorted(deps)
 
         # 3. Global Secret Synchronization
         for key in list(env_map.keys()):

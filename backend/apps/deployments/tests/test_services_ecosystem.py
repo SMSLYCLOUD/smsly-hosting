@@ -6,6 +6,9 @@ from services.ecosystem import (
     _apply_plan_repo_defaults,
     _apply_generic_ecosystem_intelligence,
     _build_heuristic_plan,
+    _coerce_addons,
+    _coerce_depends_on,
+    _rebuild_addons_manifest,
 )
 
 
@@ -118,3 +121,53 @@ class EcosystemPlanningHelpersTests(SimpleTestCase):
 
         self.assertLess(core["deploy_order"], worker["deploy_order"])
         self.assertIn("platform-api", worker["depends_on"])
+
+    def test_ai_object_shapes_do_not_crash_generic_intelligence(self):
+        services = [
+            {
+                "repo": "acme/platform-api",
+                "name": "platform-api",
+                "stack": "django",
+                "addons": [{"type": "postgres"}, {"type": "redis"}],
+                "env_vars": {},
+                "depends_on": [],
+            },
+            {
+                "repo": "acme/web",
+                "name": "web",
+                "stack": "nextjs",
+                "addons": [{"type": "redis"}],
+                "env_vars": {"PLATFORM_API_URL": ""},
+                "depends_on": [{"name": "platform-api"}],
+            },
+        ]
+
+        _apply_generic_ecosystem_intelligence(services)
+
+        web = next(s for s in services if s["name"] == "web")
+        self.assertIn("REDIS", web["addons"])
+        self.assertIn("platform-api", web["depends_on"])
+        self.assertEqual(web["env_vars"]["PLATFORM_API_URL"], "{{SERVICE:platform-api}}")
+
+    def test_plan_normalizers_accept_ai_dict_entries(self):
+        self.assertEqual(
+            _coerce_addons([{"type": "postgresql"}, {"type": "cache"}]),
+            ["POSTGRES", "REDIS"],
+        )
+        self.assertEqual(
+            _coerce_depends_on([{"service": "api"}, "worker, queue"]),
+            ["api", "worker", "queue"],
+        )
+
+        manifest = _rebuild_addons_manifest(
+            [{"repo": "acme/api", "name": "api", "addons": [{"type": "postgres"}]}],
+            [{"type": "redis", "shared_by": [{"name": "web"}]}],
+        )
+
+        self.assertEqual(
+            manifest,
+            [
+                {"type": "POSTGRES", "shared_by": ["api"]},
+                {"type": "REDIS", "shared_by": ["web"]},
+            ],
+        )
