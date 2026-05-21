@@ -629,6 +629,7 @@ class Deployment(TimeStampedModel):
         ACTIVE = 'ACTIVE', _('Active')
         FAILED = 'FAILED', _('Failed')
         CANCELLED = 'CANCELLED', _('Cancelled')
+        INACTIVE = 'INACTIVE', _('Inactive')
         ROLLING_BACK = 'ROLLING_BACK', _('Rolling Back')
         ROLLED_BACK = 'ROLLED_BACK', _('Rolled Back')
 
@@ -757,7 +758,7 @@ class Deployment(TimeStampedModel):
             Deployment.objects.filter(
                 service_id=self.service_id,
                 status=self.Status.ACTIVE,
-            ).exclude(pk=self.pk).update(status=self.Status.CANCELLED)
+            ).exclude(pk=self.pk).update(status=self.Status.INACTIVE)
         super().save(*args, **kwargs)
 
 

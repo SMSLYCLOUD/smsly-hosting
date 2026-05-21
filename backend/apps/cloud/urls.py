@@ -45,5 +45,11 @@ urlpatterns = [
         IntelligenceViewSet.as_view({'post': 'ecosystem_bulk_env'}),
         name='ecosystem-bulk-env',
     ),
+    # Backward-compatible github integrations path for cached frontends.
+    path(
+        'integrations/github/repos/',
+        __import__('apps.deployments.views_github', fromlist=['github_repos']).github_repos,
+        name='cloud-github-repos-alias',
+    ),
     *router.urls,
 ]
