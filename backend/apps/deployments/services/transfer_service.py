@@ -1240,7 +1240,7 @@ if os.path.exists(services_dir):
                 # Regenerate Caddyfile on the master node so it knows to
                 # route traffic for this service to the remote node via
                 # WireGuard mesh.  Without this, Caddy proxies to the local
-                # Traefik (nginx:80) where the service doesn't exist,
+                # Traefik where the service doesn't exist,
                 # causing HTTP 502 errors.
                 self._regenerate_master_caddyfile()
 

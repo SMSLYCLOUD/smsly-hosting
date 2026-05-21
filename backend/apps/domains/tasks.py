@@ -93,4 +93,6 @@ def _trigger_caddy_reload():
     config = PlatformConfig.load()
     content = generate_caddyfile(config)
     cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-    apply_caddyfile(content, cloudflare_token=cf_token)
+    result = apply_caddyfile(content, cloudflare_token=cf_token)
+    if not result.get("ok"):
+        logger.error("Caddy reload triggered by domain verification failed: %s", result.get("message", "unknown error"))
