@@ -720,6 +720,27 @@ export default function EcosystemPage() {
                                                     </ul>
                                                 </div>
                                             )}
+
+                                            {deepScanResult.verification?.fixed_deploy_plan && !deepScanResult.verification?.is_valid && (
+                                                <div className="mt-4 pt-3 border-t border-border flex justify-end">
+                                                    <button
+                                                        onClick={() => {
+                                                            setPlan(deepScanResult.verification.fixed_deploy_plan);
+                                                            setDeepScanResult({
+                                                                ...deepScanResult,
+                                                                verification: {
+                                                                    ...deepScanResult.verification,
+                                                                    is_valid: true // mark as fixed
+                                                                }
+                                                            });
+                                                        }}
+                                                        className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                                                    >
+                                                        <Sparkles size={16} />
+                                                        Apply AI Fixes to Plan
+                                                    </button>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}

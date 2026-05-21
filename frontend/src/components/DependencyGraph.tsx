@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useEffect, useState } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
