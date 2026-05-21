@@ -19,7 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/components/ui/use-toast';
-import { api } from '@/lib/api';
+import { api, githubApi, servicesApi } from '@/lib/api';
 
 interface SafeDeployPanelProps {
   serviceId: string;
@@ -32,6 +32,52 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
   const [creating, setCreating] = useState(false);
   const [branchName, setBranchName] = useState('');
   const [commitSha, setCommitSha] = useState('');
+  
+  const [githubRepo, setGithubRepo] = useState<string | null>(null);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [commits, setCommits] = useState<any[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [loadingCommits, setLoadingCommits] = useState(false);
+
+  useEffect(() => {
+    servicesApi.get(serviceId).then(s => {
+      if (s.repository_url && s.repository_url.includes('github.com')) {
+        const match = s.repository_url.match(/github\.com\/([^\/]+\/[^\/]+)/);
+        if (match) {
+          let repo = match[1];
+          if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+          setGithubRepo(repo);
+        }
+      }
+    }).catch(() => {});
+  }, [serviceId]);
+
+  useEffect(() => {
+    if (!githubRepo) return;
+    setLoadingBranches(true);
+    githubApi.branches(githubRepo)
+      .then(data => {
+        if (Array.isArray(data)) setBranches(data);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingBranches(false));
+  }, [githubRepo]);
+
+  useEffect(() => {
+    if (!githubRepo || !branchName) return;
+    setLoadingCommits(true);
+    githubApi.commits(githubRepo, branchName)
+      .then(data => {
+        if (Array.isArray(data)) {
+          setCommits(data);
+          if (data.length > 0 && !commitSha) {
+            setCommitSha(data[0].sha);
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingCommits(false));
+  }, [githubRepo, branchName]);
 
   const fetchPreviews = async () => {
     try {
@@ -137,23 +183,58 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
               <Label htmlFor="branch-name" className="text-xs">Target Branch</Label>
               <div className="relative">
                 <GitBranch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input 
-                  id="branch-name"
-                  value={branchName}
-                  onChange={(e) => setBranchName(e.target.value)}
-                  placeholder="e.g. feature/new-auth"
-                  className="pl-10"
-                />
+                {githubRepo ? (
+                  <select
+                    id="branch-name"
+                    value={branchName}
+                    onChange={(e) => {
+                      setBranchName(e.target.value);
+                      setCommitSha('');
+                    }}
+                    disabled={loadingBranches}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background pl-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="">{loadingBranches ? 'Loading branches...' : 'Select branch'}</option>
+                    {branches.map((b: any) => (
+                      <option key={b.name} value={b.name}>{b.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input 
+                    id="branch-name"
+                    value={branchName}
+                    onChange={(e) => setBranchName(e.target.value)}
+                    placeholder="e.g. feature/new-auth"
+                    className="pl-10"
+                  />
+                )}
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="commit-sha" className="text-xs">Commit SHA</Label>
-              <Input 
-                id="commit-sha"
-                value={commitSha}
-                onChange={(e) => setCommitSha(e.target.value)}
-                placeholder="e.g. a1b2c3d"
-              />
+              {githubRepo && branchName ? (
+                <select
+                  id="commit-sha"
+                  value={commitSha}
+                  onChange={(e) => setCommitSha(e.target.value)}
+                  disabled={loadingCommits}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">{loadingCommits ? 'Loading commits...' : 'Select commit'}</option>
+                  {commits.map((c: any) => (
+                    <option key={c.sha} value={c.sha}>
+                      {c.sha.substring(0, 7)} - {c.commit?.message?.split('\n')[0] || 'No message'}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input 
+                  id="commit-sha"
+                  value={commitSha}
+                  onChange={(e) => setCommitSha(e.target.value)}
+                  placeholder="e.g. a1b2c3d"
+                />
+              )}
             </div>
             <div className="flex items-end">
               <Button 

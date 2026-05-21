@@ -707,6 +707,21 @@ export const templatesApi = {
   }
 };
 
+export const githubApi = {
+  repos: async (params?: any): Promise<any> => {
+    const response = await api.get('/integrations/github/repos/', { params });
+    return response.data;
+  },
+  branches: async (repo: string): Promise<any> => {
+    const response = await api.get('/integrations/github/branches/', { params: { repo } });
+    return response.data;
+  },
+  commits: async (repo: string, branch: string): Promise<any> => {
+    const response = await api.get('/integrations/github/commits/', { params: { repo, branch } });
+    return response.data;
+  }
+};
+
 export const systemApi = {
   health: async (): Promise<{ status: string }> => {
     const response = await api.get('/system/health/');
