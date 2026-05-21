@@ -23,6 +23,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models_servers import ManagedServer
+from .models_core import Service, Deployment
+from .serializers import ServiceSerializer, DeploymentSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -153,16 +155,20 @@ def _refresh_managed_server_health(server):
             server.server_version = version
             update_fields.add("server_version")
 
-        api_path = "/api/v1/services/"
-        headers = _build_remote_headers(server, method="GET", path=api_path)
-        try:
-            resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                services = data.get("results", data) if isinstance(data, dict) else data
-                server.services_count = len(services) if isinstance(services, list) else 0
-        except requests.RequestException:
-            pass
+        # Lite agents share the master DB — count services locally
+        if getattr(server, 'is_lite_agent', False):
+            server.services_count = Service.objects.filter(server=server).count()
+        else:
+            api_path = "/api/v1/services/"
+            headers = _build_remote_headers(server, method="GET", path=api_path)
+            try:
+                resp = requests.get(f"{base}{api_path}", headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    services = data.get("results", data) if isinstance(data, dict) else data
+                    server.services_count = len(services) if isinstance(services, list) else 0
+            except requests.RequestException:
+                pass
     else:
         server.status = ManagedServer.Status.OFFLINE
 
@@ -864,8 +870,24 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def services(self, request, pk=None):
-        """Fetch services from a remote server."""
+        """Fetch services for a managed server.
+
+        Lite agents share the master DB so we query locally.
+        Full remote servers are proxied via their API.
+        """
         server = self.get_object()
+
+        # ── Lite agent: local DB query ──
+        if server.is_lite_agent:
+            qs = Service.objects.filter(
+                server=server,
+            ).exclude(
+                status=Service.Status.DELETED,
+            ).select_related('project').order_by('-updated_at')
+            serializer = ServiceSerializer(qs, many=True, context={'request': request})
+            return Response({'results': serializer.data, 'count': len(serializer.data)})
+
+        # ── Full remote server: proxy ──
         if not server.api_url:
             return Response(_safe_remote_error_payload("services", "Server has no API URL yet."))
 
@@ -879,8 +901,22 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def deployments(self, request, pk=None):
-        """Fetch deployments from a remote server."""
+        """Fetch deployments for a managed server.
+
+        Lite agents share the master DB so we query locally.
+        Full remote servers are proxied via their API.
+        """
         server = self.get_object()
+
+        # ── Lite agent: local DB query ──
+        if server.is_lite_agent:
+            qs = Deployment.objects.filter(
+                service__server=server,
+            ).select_related('service').order_by('-created_at')[:50]
+            serializer = DeploymentSerializer(qs, many=True)
+            return Response({'results': serializer.data, 'count': len(serializer.data)})
+
+        # ── Full remote server: proxy ──
         if not server.api_url:
             return Response(_safe_remote_error_payload("deployments", "Server has no API URL yet."))
 
@@ -894,9 +930,36 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"])
     def domains(self, request, pk=None):
-        """Aggregate all custom domains across all services on a remote server."""
+        """Aggregate all custom domains across all services on a managed server.
+
+        Lite agents share the master DB so we query locally.
+        Full remote servers are proxied via their API.
+        """
         server = self.get_object()
 
+        # ── Lite agent: local DB query ──
+        if server.is_lite_agent:
+            services_qs = Service.objects.filter(
+                server=server,
+            ).exclude(
+                status=Service.Status.DELETED,
+            ).only('id', 'name', 'public_domain', 'custom_domains', 'domain_verified', 'verification_token')
+
+            domains = []
+            for svc in services_qs:
+                custom = svc.custom_domains if isinstance(svc.custom_domains, list) else []
+                for domain in custom:
+                    domains.append({
+                        "domain": domain,
+                        "service_id": str(svc.id),
+                        "service_name": svc.name,
+                        "public_domain": svc.public_domain or "",
+                        "verified": svc.domain_verified,
+                        "verification_token": svc.verification_token or "",
+                    })
+            return Response({"domains": domains, "count": len(domains)})
+
+        # ── Full remote server: proxy ──
         if not server.api_url:
             return Response(_safe_remote_error_payload("domains", "Server has no API URL yet."))
 
