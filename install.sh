@@ -3607,7 +3607,15 @@ if d and d != 'localhost':
 
     # ── Check 1: Backend API health (through local Nginx on port 8090) ──
     if [ "$MODE_AGENT_LITE" = "true" ]; then
+        # Lite agents run Traefik only — it routes by Host header.
+        # Curl the backend container directly on its internal port to
+        # avoid depending on a DNS-resolvable domain from inside the node.
         EP1_URL="http://127.0.0.1/health"
+        _LITE_HOST_HEADER=""
+        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
+        if [ -n "$_ep1_domain" ] && [ "$_ep1_domain" != "localhost" ]; then
+            _LITE_HOST_HEADER="$_ep1_domain"
+        fi
     else
         EP1_URL="http://127.0.0.1:8090/health"
     fi
@@ -3616,7 +3624,17 @@ if d and d != 'localhost':
     BACKEND_OK=false
     EP1_CODE="000"
     for attempt in 1 2 3 4 5; do
-        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+        if [ "$MODE_AGENT_LITE" = "true" ]; then
+            if [ -n "${_LITE_HOST_HEADER:-}" ]; then
+                # Route through Traefik with the correct Host header
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+            else
+                # No domain — curl backend container directly (port 8000)
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://$(docker compose -f "$COMPOSE_FILE" port backend 8000 2>/dev/null || echo '127.0.0.1:8000')/health" 2>/dev/null) || EP1_CODE="000"
+            fi
+        else
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+        fi
         case "$EP1_CODE" in
             2*|3*)
             BACKEND_OK=true
