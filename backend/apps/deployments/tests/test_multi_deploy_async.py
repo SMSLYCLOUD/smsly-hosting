@@ -99,3 +99,30 @@ class AsyncMultiDeployTests(APITestCase):
         self.assertEqual(metadata.get("name"), "remote-server-1")
         self.assertEqual(metadata.get("target_type"), "Remote Server")
         self.assertEqual(metadata.get("host"), "192.168.1.200")
+
+    def test_node_metadata_prefers_latest_verified_remote_deploy_over_stale_local_marker(self):
+        self.service.server = None
+        self.service.active_target_type = "local"
+        self.service.active_host_ip = "127.0.0.1"
+        self.service.save(update_fields=["server", "active_target_type", "active_host_ip"])
+
+        Deployment.objects.create(
+            service=self.service,
+            status=Deployment.Status.ACTIVE,
+            commit_hash="4bd993c",
+            target_server=self.server,
+            target_is_local=False,
+            verified_target_type="remote",
+            verified_host_ip="10.150.0.2",
+            verified_runtime_id="container-id",
+        )
+
+        url = reverse("service-detail", kwargs={"pk": str(self.service.id)})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        metadata = response.json().get("node_metadata")
+        self.assertEqual(metadata.get("id"), str(self.server.id))
+        self.assertEqual(metadata.get("name"), "remote-server-1")
+        self.assertEqual(metadata.get("target_type"), "Remote Server")
+        self.assertEqual(metadata.get("host"), "10.150.0.2")

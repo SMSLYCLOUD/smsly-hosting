@@ -745,6 +745,8 @@ EOF
     env_set_value "$env_file" "DIRECT_DATABASE_URL" "postgresql://${MASTER_DB_USER}:${MASTER_DB_PASSWORD}@${MASTER_MESH_IP}:5432/smsly_hosting"
     # Local RabbitMQ (runs on the same node via docker-compose.agent-lite.yml)
     env_set_value "$env_file" "RABBITMQ_PASSWORD" "${node_rabbitmq_password:-}"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "${node_rabbitmq_password:-}"
     env_set_value "$env_file" "CELERY_BROKER_URL" "$celery_broker_url"
     # Local Redis (runs on the same node via docker-compose.agent-lite.yml)
     env_set_value "$env_file" "REDIS_URL" "$redis_url"
@@ -1233,6 +1235,8 @@ ensure_env_runtime_defaults() {
         expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
         current_celery_broker_url="$(env_get_value "$env_file" "CELERY_BROKER_URL")"
 
+        env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+        env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
         env_ensure_var "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url" "Celery broker (RabbitMQ with auth)"
 
         if [[ "$current_celery_broker_url" =~ ^amqp://smsly_user:.*@rabbitmq:5672//$ ]] && [ "$current_celery_broker_url" != "$expected_celery_broker_url" ]; then
@@ -2610,6 +2614,7 @@ sync_agent_lite_rabbitmq_password() {
     rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER" 2>/dev/null || true)"
     rabbitmq_user="${rabbitmq_user:-smsly_user}"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+    rabbitmq_password="${rabbitmq_password:-$(env_get_value "$env_file" "RABBITMQ_DEFAULT_PASS" 2>/dev/null || true)}"
 
     if [ -z "$rabbitmq_password" ]; then
         echo -e "${RED}  ERROR RABBITMQ_PASSWORD is empty after agent-lite env generation${NC}"
@@ -4502,6 +4507,8 @@ DATABASE_CONNECT_TIMEOUT=5
 
 REDIS_PASSWORD=$REDIS_PASSWORD
 RABBITMQ_PASSWORD=$RABBITMQ_PASSWORD
+RABBITMQ_DEFAULT_USER=smsly_user
+RABBITMQ_DEFAULT_PASS=$RABBITMQ_PASSWORD
 REDIS_URL=redis://:$REDIS_PASSWORD@redis:6379/0
 REDIS_SOCKET_TIMEOUT=5
 CELERY_BROKER_URL=amqp://smsly_user:$RABBITMQ_PASSWORD@rabbitmq:5672//

@@ -189,6 +189,7 @@ ensure_agent_env_defaults() {
     fi
     env_set_value "$env_file" "RABBITMQ_PASSWORD" "$rabbitmq_password"
     env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_PASS" "$rabbitmq_password"
     env_set_value "$env_file" "RABBITMQ_HOST" "rabbitmq"
     env_set_value "$env_file" "RABBITMQ_PORT" "5672"
     env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
@@ -346,6 +347,7 @@ sync_local_rabbitmq_password() {
     rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER")"
     rabbitmq_user="${rabbitmq_user:-smsly_user}"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
+    rabbitmq_password="${rabbitmq_password:-$(env_get_value "$env_file" "RABBITMQ_DEFAULT_PASS")}"
 
     if [ -z "$rabbitmq_password" ]; then
         echo -e "${RED}ERROR: RABBITMQ_PASSWORD is still empty after env repair${NC}"

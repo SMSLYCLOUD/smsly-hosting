@@ -1155,6 +1155,29 @@ if os.path.exists(services_dir):
                         f"Service container {container_name} is not running on target"
                     )
                 logger.info("Service container %s verified running on target", container_name)
+
+                domain = str(self.transfer.service.public_domain or '').strip()
+                if domain and not getattr(self.transfer.service, 'public_domain_hidden', False):
+                    route_cmd = (
+                        "code=$(curl -sS -o /dev/null -w '%{http_code}' "
+                        f"-H {shlex.quote('Host: ' + domain)} "
+                        "http://127.0.0.1/ 2>/dev/null || true); "
+                        "echo SMSLY_ROUTE_HTTP:$code"
+                    )
+                    route_result = _command_text(
+                        self.ssh.exec_command(route_cmd, raise_on_error=False)
+                    )
+                    match = re.search(r"SMSLY_ROUTE_HTTP:(\d{3}|000)", route_result)
+                    route_code = match.group(1) if match else "000"
+                    if route_code in {"000", "500", "502", "503", "504"}:
+                        raise RuntimeError(
+                            f"Target Traefik route for {domain} returned HTTP {route_code}"
+                        )
+                    logger.info(
+                        "Service route %s verified through target Traefik (HTTP %s)",
+                        domain,
+                        route_code,
+                    )
             except Exception as e:
                 logger.warning("Service verification failed: %s", e)
                 raise RuntimeError(f"Service verification failed: {e}") from e
@@ -1235,7 +1258,26 @@ if os.path.exists(services_dir):
             ).first()
             if target_server:
                 self.transfer.service.server = target_server
-                self.transfer.service.save(update_fields=['server'])
+                self.transfer.service.active_target_type = (
+                    'lite_agent'
+                    if getattr(target_server, 'is_lite_agent', False)
+                    else 'remote'
+                )
+                self.transfer.service.active_host_ip = (
+                    getattr(target_server, 'wg_address', None)
+                    or target_server.private_ip
+                    or target_server.host
+                    or self.transfer.target_server_ip
+                )
+                self.transfer.service.active_runtime_id = self.transfer.service.name
+                self.transfer.service.save(
+                    update_fields=[
+                        'server',
+                        'active_target_type',
+                        'active_host_ip',
+                        'active_runtime_id',
+                    ]
+                )
 
                 # Regenerate Caddyfile on the master node so it knows to
                 # route traffic for this service to the remote node via
@@ -1320,7 +1362,9 @@ if os.path.exists(services_dir):
 
         # Labels
         run_args.extend(["-l", "traefik.enable=true"])
+        run_args.extend(["-l", f"traefik.docker.network={net}"])
         run_args.extend(["-l", f"traefik.http.routers.{name}.rule=Host(`{domain}`)"])
+        run_args.extend(["-l", f"traefik.http.routers.{name}.service={name}"])
         run_args.extend(["-l", f"traefik.http.services.{name}.loadbalancer.server.port={port}"])
 
         enable_traefik_tls = (

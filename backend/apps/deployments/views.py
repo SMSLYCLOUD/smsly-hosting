@@ -944,6 +944,76 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=['get'], url_path='status')
+    def status(self, request, pk=None):
+        """
+        Return the local runtime state for this service on the current node.
+
+        Controller-side remote deployment verification calls this endpoint on
+        the agent after the agent reports ACTIVE.
+        """
+        service = self.get_object()
+
+        try:
+            from apps.cloud.docker_client import get_docker_client
+            import docker as docker_lib
+
+            client = get_docker_client()
+            container = None
+            try:
+                container = client.containers.get(service.name)
+            except docker_lib.errors.NotFound:
+                candidates = client.containers.list(
+                    all=True,
+                    filters={'name': service.name},
+                )
+                for candidate in candidates:
+                    if getattr(candidate, 'name', '') == service.name:
+                        container = candidate
+                        break
+                if container is None and candidates:
+                    container = candidates[0]
+
+            if container is None:
+                return Response({
+                    'service_id': str(service.id),
+                    'service_name': service.name,
+                    'status': 'not_found',
+                    'running': False,
+                    'container_id': None,
+                })
+
+            container.reload()
+            state = container.attrs.get('State') or {}
+            runtime_status = (state.get('Status') or container.status or 'unknown').lower()
+            health_status = ((state.get('Health') or {}).get('Status') or '').lower()
+            effective_status = runtime_status
+            if runtime_status == 'running' and health_status == 'unhealthy':
+                effective_status = 'unhealthy'
+
+            return Response({
+                'service_id': str(service.id),
+                'service_name': service.name,
+                'status': effective_status,
+                'running': runtime_status == 'running',
+                'health': health_status or None,
+                'container_id': container.id,
+                'container_name': container.name,
+                'image': ','.join(getattr(container.image, 'tags', []) or []),
+            })
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Service runtime status failed for %s: %s", service.id, exc)
+            return Response(
+                {
+                    'service_id': str(service.id),
+                    'service_name': service.name,
+                    'status': 'unknown',
+                    'running': False,
+                    'error': str(exc),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
     @action(detail=True, methods=['post'])
     def deploy(self, request, pk=None):
         """

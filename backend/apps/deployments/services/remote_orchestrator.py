@@ -904,10 +904,7 @@ class RemoteOrchestrator:
                     service.name,
                     self.server.host,
                 )
-                remote_id = remote_svc.get("id")
-                if remote_id:
-                    self.sync_env_vars(service, remote_id)
-                return remote_id
+                return remote_svc.get("id") or ""
 
         return ""
 
@@ -924,6 +921,9 @@ class RemoteOrchestrator:
         try:
             existing_id = self._search_remote_service(service, path)
             if existing_id:
+                if not self._sync_remote_service_config(service, existing_id):
+                    return None
+                self.sync_env_vars(service, existing_id)
                 return existing_id
             if existing_id is None:
                 return None
@@ -934,17 +934,8 @@ class RemoteOrchestrator:
 
         # 2. Not found -> Create it
         logger.info("Creating service %s on remote %s", service.name, self.server.host)
-        payload = {
-            "name": service.name,
-            "deploy_type": service.deploy_type,
-            "repository_url": service.repository_url,
-            "branch": service.branch,
-            "docker_image": service.docker_image,
-            "internal_port": service.internal_port,
-            "is_public": service.is_public,
-            "buildpack": service.buildpack,
-        }
-        
+        payload = self._service_sync_payload(service)
+
         try:
             resp = self._request("POST", path, payload=payload, timeout=15)
             if resp and resp.status_code in (201, 200):
@@ -969,6 +960,62 @@ class RemoteOrchestrator:
             logger.error(self.last_error)
             
         return None
+
+    def _service_sync_payload(self, service: Service) -> dict:
+        """Return the service fields a remote node must mirror exactly."""
+        payload = {
+            "name": service.name,
+            "deploy_type": service.deploy_type,
+            "repository_url": service.repository_url,
+            "branch": service.branch,
+            "docker_image": service.docker_image,
+            "internal_port": service.internal_port,
+            "is_public": service.is_public,
+            "buildpack": service.buildpack,
+            "public_domain": service.public_domain,
+            "public_domain_hidden": service.public_domain_hidden,
+            "custom_domains": service.custom_domains or [],
+            "build_command": service.build_command,
+            "start_command": service.start_command,
+            "root_directory": service.root_directory,
+            "deploy_mode": service.deploy_mode,
+            "compose_file": service.compose_file,
+            "compose_main_service": service.compose_main_service,
+            "health_check_path": service.health_check_path,
+            "health_check_port": service.health_check_port,
+            "health_check_interval": service.health_check_interval,
+            "health_check_timeout": service.health_check_timeout,
+            "health_check_retries": service.health_check_retries,
+            "restart_policy": service.restart_policy,
+            "cpu_cores": str(service.cpu_cores),
+            "memory_mb": service.memory_mb,
+            "min_replicas": service.min_replicas,
+            "max_replicas": service.max_replicas,
+            "vpa_enabled": service.vpa_enabled,
+        }
+        return payload
+
+    def _sync_remote_service_config(self, service: Service, remote_service_id: str) -> bool:
+        """Patch an existing remote service so its routing metadata cannot drift."""
+        path = f"/api/v1/services/{remote_service_id}/"
+        try:
+            resp = self._request(
+                "PATCH",
+                path,
+                payload=self._service_sync_payload(service),
+                timeout=15,
+            )
+            if resp and resp.status_code in (200, 202):
+                return True
+
+            if resp is not None:
+                self._set_last_error("Failed to update service on remote.", response=resp)
+            logger.error(self.last_error)
+        except Exception as e:
+            self._set_last_error(f"Error updating service on remote: {e}")
+            logger.error(self.last_error)
+
+        return False
 
     def sync_env_vars(self, service: Service, remote_service_id: str):
         """Sync environment variables to the remote service."""

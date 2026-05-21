@@ -1479,7 +1479,12 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
     deployment.started_at = deployment.started_at or timezone.now()
     deployment.save(update_fields=['remote_deployment_id', 'status', 'started_at', 'updated_at'])
     append_log(deployment, f"Remote deployment triggered: {remote_dep_id}\n")
-    _poll_remote_deployment(deployment, orchestrator, remote_dep_id)
+    _poll_remote_deployment(
+        deployment,
+        orchestrator,
+        remote_dep_id,
+        remote_service_id=remote_svc_id,
+    )
 
 
 def _resume_remote_deployment(deployment, server):
@@ -1522,7 +1527,12 @@ def _resume_remote_deployment(deployment, server):
 
     update_stage(deployment, 'Remote Approval', 'success')
     update_stage(deployment, 'Remote Deploy', 'running')
-    _poll_remote_deployment(deployment, orchestrator, remote_dep_id)
+    _poll_remote_deployment(
+        deployment,
+        orchestrator,
+        remote_dep_id,
+        remote_service_id=remote_svc_id,
+    )
 
 
 def _copy_remote_deployment_fields(deployment, remote_status: dict):
@@ -1557,7 +1567,12 @@ def _copy_remote_deployment_fields(deployment, remote_status: dict):
         deployment.save(update_fields=update_fields)
 
 
-def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
+def _poll_remote_deployment(
+    deployment,
+    orchestrator,
+    remote_dep_id,
+    remote_service_id=None,
+):
     """Poll a delegated deployment until it reaches REVIEW or a terminal state."""
     max_retries = 90  # 15 minutes (10s intervals)
     max_empty_polls = 12  # 2 minutes of unreachable/invalid poll responses.
@@ -1641,19 +1656,29 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
             # ── MISSION RULE 3: POST-DEPLOYMENT VERIFICATION ──
             # Before accepting ACTIVE status from remote, we MUST verify it exists and is running.
             try:
+                status_service_id = remote_service_id or deployment.service.id
                 verify_resp = orchestrator._request(
                     method='GET',
-                    path=f"/api/v1/services/{deployment.service.id}/status/",
+                    path=f"/api/v1/services/{status_service_id}/status/",
                     timeout=10,
                 )
                 if verify_resp and verify_resp.status_code == 200:
                     status_data = verify_resp.json()
                     if status_data.get("status") == "running":
                         remote_container_id = status_data.get("container_id", deployment.container_id)
+                        target_type = (
+                            "lite_agent"
+                            if getattr(orchestrator.server, "is_lite_agent", False)
+                            else "remote"
+                        )
 
                         # Persist verified metadata on Deployment
-                        deployment.verified_target_type = "remote"
-                        deployment.verified_host_ip = orchestrator.server.private_ip or orchestrator.server.host
+                        deployment.verified_target_type = target_type
+                        deployment.verified_host_ip = (
+                            getattr(orchestrator.server, "wg_address", None)
+                            or orchestrator.server.private_ip
+                            or orchestrator.server.host
+                        )
                         deployment.verified_runtime_id = remote_container_id
                         deployment.verified_at = timezone.now()
 
@@ -1664,11 +1689,12 @@ def _poll_remote_deployment(deployment, orchestrator, remote_dep_id):
                         # Promote to Active Service
                         service = deployment.service
                         service.server = deployment.target_server
-                        service.active_target_type = "remote"
+                        service.active_target_type = target_type
                         service.active_host_ip = deployment.verified_host_ip
                         service.active_runtime_id = remote_container_id
                         service.save(update_fields=['server', 'active_target_type', 'active_host_ip', 'active_runtime_id'])
 
+                        _regenerate_caddyfile()
 
                         update_stage(deployment, 'Remote Deploy', 'success')
                         broadcast_status(deployment)

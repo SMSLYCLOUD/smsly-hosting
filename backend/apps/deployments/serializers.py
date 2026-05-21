@@ -104,13 +104,43 @@ class ServiceSerializer(serializers.ModelSerializer):
 
     def get_node_metadata(self, obj: Service) -> dict:
         server = obj.server
+        latest_deploy = (
+            obj.deployments
+            .filter(status=Deployment.Status.ACTIVE)
+            .order_by('-created_at')
+            .first()
+            or obj.deployments.order_by('-created_at').first()
+        )
         if not server:
-            latest_deploy = obj.deployments.order_by('-created_at').first()
             if latest_deploy and latest_deploy.target_server:
                 server = latest_deploy.target_server
 
-        if obj.active_target_type:
-            target_type_label = obj.active_target_type.replace('_', ' ').title()
+        active_target_type = obj.active_target_type
+        active_host = obj.active_host_ip
+        if (
+            latest_deploy
+            and latest_deploy.target_server
+            and not getattr(latest_deploy, 'target_is_local', False)
+            and (
+                not server
+                or server.is_primary
+                or str(server.id) != str(latest_deploy.target_server_id)
+                or str(active_target_type or '').lower() == 'local'
+            )
+        ):
+            server = latest_deploy.target_server
+            active_target_type = (
+                'lite_agent' if getattr(server, 'is_lite_agent', False) else 'remote'
+            )
+            active_host = (
+                latest_deploy.verified_host_ip
+                or getattr(server, 'wg_address', None)
+                or getattr(server, 'private_ip', None)
+                or getattr(server, 'host', None)
+            )
+
+        if active_target_type:
+            target_type_label = active_target_type.replace('_', ' ').title()
             if target_type_label == "Remote":
                 target_type_label = "Remote Server"
 
@@ -127,15 +157,20 @@ class ServiceSerializer(serializers.ModelSerializer):
                 "id": srv_id,
                 "name": srv_name,
                 "target_type": target_type_label,
-                "host": obj.active_host_ip or (server.host if server else "Unknown"),
+                "host": active_host or (server.host if server else "Unknown"),
                 "status": (server.status.lower() if server and server.status else "active")
             }
 
         if server:
+            target_type_label = (
+                "Local"
+                if server.is_primary
+                else ("Lite Agent" if getattr(server, "is_lite_agent", False) else "Remote Server")
+            )
             return {
                 "id": "local" if server.is_primary else str(server.id),
                 "name": "Local Server" if server.is_primary else server.name,
-                "target_type": "Local" if server.is_primary else "Remote Server",
+                "target_type": target_type_label,
                 "host": server.host,
                 "status": server.status.lower() if server.status else "active"
             }

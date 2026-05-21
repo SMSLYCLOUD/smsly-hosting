@@ -1473,6 +1473,7 @@ class PipelineManager:
         labels = {
             "managed_by": "smsly-hosting",
             "traefik.enable": "true" if is_public else "false",
+            "traefik.docker.network": os.getenv("DOCKER_NETWORK", "smsly-net"),
         }
         if not is_public:
             return labels

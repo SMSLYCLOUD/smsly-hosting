@@ -161,6 +161,7 @@ class LocalAdapter(BaseCloudAdapter):
 
         labels = {
             'traefik.enable': str(is_public).lower(),
+            'traefik.docker.network': os.getenv('DOCKER_NETWORK', 'smsly-net'),
             f'traefik.http.routers.{router_name}.rule': host_rule,
             f'traefik.http.services.{router_name}.loadbalancer.server.port': str(port),
             f'traefik.http.routers.{router_name}.priority': '100',
