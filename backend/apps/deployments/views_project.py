@@ -7,6 +7,7 @@ import logging
 from rest_framework import viewsets, permissions, status, serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db.models import Q
 
 from .models_project import Project
 from .models import Service
@@ -80,11 +81,14 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
 
     def get_queryset(self):
-        """Owner-scoped: users see only their own projects."""
+        """Owner and Team scoped: users see their own projects and team projects."""
         qs = Project.objects.all().order_by('id')
         if self.request.user.is_superuser:
             return qs
-        return qs.filter(owner=self.request.user).order_by('id')
+        return qs.filter(
+            Q(owner=self.request.user) |
+            Q(team__members__user=self.request.user)
+        ).distinct().order_by('id')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -97,7 +101,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project = self.get_object()
         services = Service.objects.filter(
             project=project,
-            owner=request.user,
         ).order_by('-updated_at')
         serializer = ServiceSerializer(services, many=True)
         return Response(serializer.data)

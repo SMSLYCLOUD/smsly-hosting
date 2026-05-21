@@ -545,7 +545,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # hasattr(self.request.auth, 'prefix') means this is an APIToken from another server
         if self.request.user.is_superuser or hasattr(self.request.auth, 'prefix'):
             return qs.all().order_by('-created_at')
-        return qs.filter(owner=self.request.user).order_by('-created_at')
+        return qs.filter(
+            Q(owner=self.request.user) |
+            Q(project__team__members__user=self.request.user)
+        ).distinct().order_by('-created_at')
 
     def _is_remote_sync_request(self):
         logger.debug("Checking remote sync request...")
