@@ -3,6 +3,8 @@ Tests for RemoteOrchestrator mesh optimization and SSL verification logic.
 """
 import os
 import unittest
+from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, Mock
 from urllib.parse import urlparse
 
@@ -220,6 +222,73 @@ class TestRemoteOrchestratorLogging(unittest.TestCase):
         mock_logger.debug.assert_called()
         call_args = mock_logger.debug.call_args[0]
         self.assertIn("is_internal", call_args[0])
+
+
+class TestRemoteServiceSyncPayload(unittest.TestCase):
+    """Tests for canonical service metadata sent to lite agents."""
+
+    def setUp(self):
+        self.mock_server = Mock()
+        self.mock_server.name = "test-node"
+        self.mock_server.host = "192.168.1.100"
+        self.mock_server.api_url = None
+        self.mock_server.api_token = "test_token"
+        self.mock_server.gateway_secret = "test_secret"
+
+    def _service(self):
+        return SimpleNamespace(
+            name="frontend-node",
+            deploy_type="GIT",
+            repository_url="https://github.com/example/frontend",
+            branch="main",
+            docker_image="",
+            internal_port=3000,
+            is_public=True,
+            buildpack="NIXPACKS",
+            public_domain="frontend-node-81ffed.grid.smsly.cloud",
+            public_domain_hidden=False,
+            custom_domains=["app.example.com"],
+            build_command="",
+            start_command="npm start",
+            root_directory="/",
+            deploy_mode="SINGLE",
+            compose_file="",
+            compose_main_service="",
+            health_check_path="/",
+            health_check_port=None,
+            health_check_interval=30,
+            health_check_timeout=300,
+            health_check_retries=90,
+            restart_policy="unless-stopped",
+            cpu_cores=Decimal("0.50"),
+            memory_mb=512,
+            min_replicas=1,
+            max_replicas=1,
+            vpa_enabled=False,
+        )
+
+    def test_service_sync_payload_includes_canonical_route_fields(self):
+        orchestrator = RemoteOrchestrator(self.mock_server)
+
+        payload = orchestrator._service_sync_payload(self._service())
+
+        self.assertEqual(payload["public_domain"], "frontend-node-81ffed.grid.smsly.cloud")
+        self.assertEqual(payload["custom_domains"], ["app.example.com"])
+        self.assertEqual(payload["internal_port"], 3000)
+        self.assertEqual(payload["start_command"], "npm start")
+        self.assertEqual(payload["cpu_cores"], "0.50")
+
+    def test_sync_service_patches_existing_remote_service_before_returning(self):
+        orchestrator = RemoteOrchestrator(self.mock_server)
+
+        with patch.object(orchestrator, "_search_remote_service", return_value="remote-id"), \
+             patch.object(orchestrator, "_sync_remote_service_config", return_value=True) as update_mock, \
+             patch.object(orchestrator, "sync_env_vars") as env_mock:
+            remote_id = orchestrator.sync_service(self._service())
+
+        self.assertEqual(remote_id, "remote-id")
+        update_mock.assert_called_once()
+        env_mock.assert_called_once()
 
 
 class TestMeshOptimizationIntegration(unittest.TestCase):

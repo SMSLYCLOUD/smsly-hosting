@@ -18,6 +18,8 @@ services:
       COMMIT: 1
       PUT: 1
       DELETE: 1
+      PING: 1
+      VERSION: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -26,18 +28,30 @@ services:
     tmpfs:
       - /run
       - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 2375"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   # ============================================================
   # Redis (Local cache & throttling for the agent)
   # ============================================================
   redis:
     image: redis:7-alpine
-    command: redis-server ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    env_file: ../../.env
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        exec redis-server --requirepass "$$REDIS_PASSWORD";
+      else
+        exec redis-server;
+      fi'
     restart: unless-stopped
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping | grep PONG"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG; else redis-cli ping | grep PONG; fi"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,9 +65,9 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
+    env_file: ../../.env
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-smsly_password}
     healthcheck:
       test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
       interval: 10s
@@ -78,11 +92,9 @@ services:
       - DOCKER_HOST=tcp://socket-proxy:2375
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
@@ -115,13 +127,11 @@ services:
       - DOCKER_NETWORK=smsly-net
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       backend:
         condition: service_healthy
       socket-proxy:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
@@ -142,14 +152,22 @@ services:
       - --providers.docker.network=smsly-net
       - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --entrypoints.web.address=:80
+      - --ping=true
       - --log.level=WARN
     ports:
       - "80:80"
     depends_on:
-      - socket-proxy
+      socket-proxy:
+        condition: service_healthy
     networks:
       - smsly-net
       - socket-proxy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   redis_data:

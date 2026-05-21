@@ -8,7 +8,7 @@ Validates:
   - Service update validation
   - Deploy action on service endpoint
 """
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from django.contrib.auth.models import User
 from django.test import override_settings
 from django.utils import timezone
@@ -328,6 +328,30 @@ class ServiceDeployActionTests(APITestCase):
         deploy = Deployment.objects.filter(service=self.service).order_by('-created_at').first()
         self.assertIsNotNone(deploy)
         self.assertEqual(deploy.status, Deployment.Status.FAILED)
+
+    @patch('apps.cloud.docker_client.get_docker_client')
+    def test_status_action_reports_running_container(self, mock_docker_client):
+        """Node runtime status endpoint should expose the local container state."""
+        container = MagicMock()
+        container.id = 'container-id'
+        container.name = self.service.name
+        container.status = 'running'
+        container.attrs = {
+            'State': {
+                'Status': 'running',
+                'Health': {'Status': 'healthy'},
+            }
+        }
+        container.image.tags = ['smsly/test:latest']
+        mock_docker_client.return_value.containers.get.return_value = container
+
+        url = f'/api/v1/services/{self.service.id}/status/'
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'running')
+        self.assertTrue(response.data['running'])
+        self.assertEqual(response.data['container_id'], 'container-id')
 
 
 @override_settings(CACHES=TEST_CACHES)
