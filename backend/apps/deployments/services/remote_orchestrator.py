@@ -44,6 +44,25 @@ def _host_is_ip(host_port: str) -> bool:
         return False
 
 
+def _is_internal_target(url: str) -> bool:
+    """Return True when a remote URL should use mesh/IP transport semantics."""
+    parsed = urlparse(str(url or ""))
+    host = parsed.hostname or ""
+    internal_prefixes = ("10.", "172.16.", "192.168.", "100.64.", "127.")
+    is_internal = (
+        host == "localhost"
+        or host.startswith(internal_prefixes)
+        or _host_is_ip(host)
+    )
+    logger.debug(
+        "is_internal_target url=%s host=%s is_internal=%s",
+        url,
+        host,
+        is_internal,
+    )
+    return is_internal
+
+
 REMOTE_RESPONSE_SNIPPET_CHARS = 1200
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "DELETE"}
 
@@ -606,18 +625,6 @@ class RemoteOrchestrator:
         modes = self._auth_modes()
         base_urls = self._candidate_base_urls()
         
-        # MESH-OPTIMIZATION: Disable SSL verification for internal mesh/IP-based requests.
-        # Since nodes communicate over encrypted mesh VPN (FRP/Tailscale), TLS verification
-        # is redundant and causes self-signed cert errors. HTTP + mesh encryption is sufficient.
-        def _is_internal_target(url: str) -> bool:
-            """Check if URL points to internal mesh/IP (skip SSL verification)."""
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            host = parsed.hostname or ""
-            # Mesh VPN ranges + private IPs + the specific worker IP pattern
-            internal_prefixes = ("10.", "172.16.", "192.168.", "100.64.", "127.")
-            return host.startswith(internal_prefixes) or _host_is_ip(host)
-
         if retry_auth and (not modes or modes == ["none"]):
             # If no auth modes, try auto-auth first
             if self.auto_authenticate():

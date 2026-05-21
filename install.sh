@@ -178,6 +178,11 @@ configure_docker_mirror() {
     # Ensure COMPOSE_FILE is defined for this scope
     local compose_f="${COMPOSE_FILE:-docker-compose.prod.yml}"
 
+    if [ "${MODE_AGENT_LITE:-false}" = "true" ] && [ -f "${INSTALL_DIR:-/opt/smsly-hosting}/.env" ]; then
+        [ -n "${MASTER_IP:-}" ] || MASTER_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_IP" 2>/dev/null || true)"
+        [ -n "${MASTER_MESH_IP:-}" ] || MASTER_MESH_IP="$(env_get_value "${INSTALL_DIR:-/opt/smsly-hosting}/.env" "MASTER_MESH_IP" 2>/dev/null || true)"
+    fi
+
     # Option B: Pull-Through Cache
     if [ -n "${MASTER_IP:-}" ] && [ "$MASTER_IP" != "127.0.0.1" ] && [ "$MASTER_IP" != "$(detect_public_ip)" ]; then
         # This is a Follower node
@@ -208,10 +213,14 @@ EOF
         if [ "$my_ip" != "127.0.0.1" ]; then
             echo -e "${BLUE}  → Configuring Master insecure registry (registry:5000, ${my_ip}:5000)...${NC}"
             mkdir -p /etc/docker
+            local master_trust_list="\"registry:5000\", \"${my_ip}:5000\", \"127.0.0.1:5000\", \"10.0.0.1:5000\", \"10.100.0.1:5000\""
+            if [ -n "${MASTER_MESH_IP:-}" ]; then
+                master_trust_list="${master_trust_list}, \"${MASTER_MESH_IP}:5000\""
+            fi
             # Include loopback, public IP, and common mesh ranges for safety
             cat > /etc/docker/daemon.json <<EOF
 {
-  "insecure-registries": ["registry:5000", "${my_ip}:5000", "127.0.0.1:5000", "10.0.0.1:5000"]
+  "insecure-registries": [${master_trust_list}]
 }
 EOF
             systemctl restart docker || true
@@ -742,7 +751,8 @@ EOF
     env_set_value "$env_file" "REDIS_PASSWORD" "${node_redis_password:-}"
     env_set_value "$env_file" "REDIS_HOST" "redis"
     env_set_value "$env_file" "REDIS_PORT" "6379"
-    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${MASTER_IP}:5000"
+    local registry_host="${MASTER_MESH_IP:-$MASTER_IP}"
+    env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
     fi
@@ -770,6 +780,25 @@ verify_agent_lite_connectivity() {
 
     # 3. Redis and RabbitMQ run locally on agent-lite nodes (no Master dependency)
     echo -e "${BLUE}  → Redis and RabbitMQ will run locally on this node.${NC}"
+
+    # 4. The deploy path pulls master-built images from the master's registry.
+    local registry_check_ip="${MASTER_MESH_IP:-$MASTER_IP}"
+    if ! timeout 2 bash -c "</dev/tcp/${registry_check_ip}/5000" 2>/dev/null; then
+        echo -e "${RED}  ✗ ERROR: Master container registry (port 5000) is unreachable on ${registry_check_ip}.${NC}"
+        echo -e "${YELLOW}    Ensure the Master registry is running and the mesh/firewall allows port 5000 from this node.${NC}"
+        return 1
+    fi
+    if command -v curl >/dev/null 2>&1; then
+        local registry_code
+        registry_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://${registry_check_ip}:5000/v2/" 2>/dev/null || true)"
+        case "$registry_code" in
+            2*|401) ;;
+            *)
+                echo -e "${RED}  ✗ ERROR: Master container registry did not answer correctly on ${registry_check_ip}:5000 (HTTP ${registry_code:-000}).${NC}"
+                return 1
+                ;;
+        esac
+    fi
 
     echo -e "${GREEN}  ✓ Connectivity to Master verified.${NC}"
     return 0

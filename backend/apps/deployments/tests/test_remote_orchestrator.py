@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 # Import the module under test
 from apps.deployments.services.remote_orchestrator import (
     _host_is_ip,
+    _is_internal_target,
     RemoteOrchestrator,
     _REMOTE_VERIFY,
     _ENFORCE_TLS,

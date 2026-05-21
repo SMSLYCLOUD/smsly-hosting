@@ -77,3 +77,38 @@ class DeploymentIntegrityTests(TestCase):
         provider_id = mock_deploy.call_args[1]['provider_id']
         provider = CloudProvider.objects.get(id=provider_id)
         self.assertEqual(provider.provider_type, CloudProvider.ProviderType.REMOTE)
+
+    @patch('apps.deployments.views.enqueue_smart_deploy_task')
+    @patch('apps.deployments.views.ServiceViewSet._is_remote_sync_request', return_value=True)
+    def test_remote_sync_prebuilt_image_refreshes_stale_remote_service_image(
+        self,
+        _mock_remote_sync,
+        mock_enqueue,
+    ):
+        service = Service.objects.create(
+            name='test-prebuilt-refresh',
+            owner=self.user,
+            provider=self.local_provider,
+            deploy_type='GIT',
+            docker_image='10.100.0.1:5000/smsly/test-prebuilt-refresh:old',
+        )
+        new_image = '10.100.0.1:5000/smsly/test-prebuilt-refresh:4bd993c'
+
+        response = self.client.post(
+            f"/api/v1/services/{service.id}/deploy/",
+            {
+                "ref": "4bd993c",
+                "source_node": "controller",
+                "image_name": new_image,
+                "skip_review": True,
+            },
+            format="json",
+            HTTP_X_SMSLY_REMOTE_SYNC="1",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        service.refresh_from_db()
+        self.assertEqual(service.docker_image, new_image)
+        deployment = Deployment.objects.get(id=response.json()["id"])
+        self.assertEqual(deployment.source_node, "controller")
+        mock_enqueue.assert_called_once()

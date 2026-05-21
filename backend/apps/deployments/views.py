@@ -1021,7 +1021,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         is_docker_delegated = source_node and service.deploy_type == 'DOCKER'
         has_prebuilt = bool(source_node and image_name)
 
-        if has_prebuilt and not service.docker_image:
+        if has_prebuilt and service.docker_image != image_name:
             service.docker_image = image_name
             service.save(update_fields=["docker_image"])
 

@@ -2285,10 +2285,13 @@ def _deploy_container(deployment, provider, image_name):
             # registry:5000/smsly/myapp:abc123), Docker may not find it
             # locally even though the build phase tagged it.  Try to
             # retag the original local image as a fallback.
+            image_available_after_pull_failure = False
+            local_cache_error = ""
             try:
                 _client = docker.from_env()
                 try:
                     _client.images.get(image_name)
+                    image_available_after_pull_failure = True
                 except docker.errors.ImageNotFound:
                     registry_prefix = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
                     if registry_prefix and image_name.startswith(registry_prefix):
@@ -2296,6 +2299,7 @@ def _deploy_container(deployment, provider, image_name):
                         try:
                             local_img = _client.images.get(local_tag)
                             local_img.tag(image_name)
+                            image_available_after_pull_failure = True
                             append_log(
                                 deployment,
                                 f"Retagged local {local_tag} -> {image_name}\n",
@@ -2307,6 +2311,7 @@ def _deploy_container(deployment, provider, image_name):
                                 try:
                                     local_img = _client.images.get(fallback)
                                     local_img.tag(image_name)
+                                    image_available_after_pull_failure = True
                                     append_log(
                                         deployment,
                                         f"Retagged local {fallback} -> {image_name}\n",
@@ -2314,15 +2319,36 @@ def _deploy_container(deployment, provider, image_name):
                                 except docker.errors.ImageNotFound:
                                     append_log(
                                         deployment,
-                                        "Local cache unavailable; continuing anyway.\n",
+                                        "Local cache unavailable.\n",
                                     )
                             else:
                                 append_log(
                                     deployment,
-                                    "Local cache unavailable; continuing anyway.\n",
+                                    "Local cache unavailable.\n",
                                 )
+                    else:
+                        append_log(
+                            deployment,
+                            "Local cache unavailable.\n",
+                        )
+                except Exception as _inspect_err:
+                    local_cache_error = str(_inspect_err)
             except Exception as _retag_err:
+                local_cache_error = str(_retag_err)
                 logger.warning("Image retag fallback failed: %s", _retag_err)
+            if not image_available_after_pull_failure:
+                detail = (
+                    f" Local cache check failed: {local_cache_error}"
+                    if local_cache_error
+                    else ""
+                )
+                raise RuntimeError(
+                    "Image pull failed and the image is not present in the "
+                    f"target node's Docker cache: {image_name}. For lite-agent "
+                    "deployments, verify the master registry is reachable from "
+                    "the node and listed in Docker insecure-registries."
+                    f"{detail}"
+                )
 
         env_vars = _build_runtime_env(service, image_name=image_name)
 
