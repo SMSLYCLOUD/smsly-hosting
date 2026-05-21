@@ -1037,7 +1037,21 @@ if os.path.exists(services_dir):
 
         if config.cloudflare_api_token and config.domain:
             try:
-                self._update_cloudflare_dns(config.domain, target_ip, config.cloudflare_api_token)
+                if self.transfer.transfer_type == 'FULL':
+                    self._update_cloudflare_dns(config.domain, target_ip, config.cloudflare_api_token)
+                elif self.transfer.service and self.transfer.service.public_domain:
+                    target_server = self._target_server_record()
+                    is_lite = getattr(target_server, 'is_lite_agent', False) if target_server else False
+                    # For lite agents, create a per-service A record so the domain
+                    # resolves directly to the target (Traefik routes via labels).
+                    # For full platform targets, keep DNS pointing at the master
+                    # and use WireGuard routing through the master's Caddy.
+                    if is_lite:
+                        self._update_service_a_record(
+                            self.transfer.service.public_domain,
+                            target_ip,
+                            config.cloudflare_api_token,
+                        )
             except Exception as e:
                 logger.error(f"Cloudflare update failed: {e}")
 
@@ -1045,18 +1059,11 @@ if os.path.exists(services_dir):
             config.server_ip = target_ip
             config.save()
 
-        # Regenerate Caddyfile to reflect new routing after DNS cutover
-        try:
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
-            content = generate_caddyfile(config)
-            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-            result = apply_caddyfile(content, cloudflare_token=cf_token)
-            if result.get('ok'):
-                self._log("Caddyfile regenerated after DNS cutover.")
-            else:
-                self._log(f"Warning: Caddyfile update after DNS cutover failed: {result.get('message')}")
-        except Exception as exc:
-            self._log(f"Warning: Could not regenerate Caddyfile after DNS cutover: {exc}")
+        # Caddyfile regeneration removed from here — at this point service.server
+        # is still the source (primary), so _remote_upstream_url_for_service()
+        # returns empty, causing routing to local Traefik where the container
+        # may no longer exist.  The correct routing (via WireGuard mesh IP) is
+        # applied in _complete() after service.server is set to the target.
 
     def _interconnect_servers(self):
         """
@@ -1230,18 +1237,18 @@ if os.path.exists(services_dir):
         domain to the remote node via WireGuard mesh instead of the
         local Traefik instance.
         """
-        try:
-            from services.caddy_manager import generate_caddyfile, apply_caddyfile
-            config = PlatformConfig.load()
-            content = generate_caddyfile(config)
-            cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
-            result = apply_caddyfile(content, cloudflare_token=cf_token)
-            if result.get('ok'):
-                self._log("Caddyfile regenerated on master node for remote service routing.")
-            else:
-                self._log(f"Warning: Caddyfile regeneration failed: {result.get('message')}")
-        except Exception as exc:
-            self._log(f"Warning: Could not regenerate Caddyfile: {exc}")
+        from services.caddy_manager import generate_caddyfile, apply_caddyfile
+        config = PlatformConfig.load()
+        content = generate_caddyfile(config)
+        cf_token = (getattr(config, "cloudflare_api_token", "") or "").strip()
+        result = apply_caddyfile(content, cloudflare_token=cf_token)
+        if result.get('ok'):
+            self._log("Caddyfile regenerated on master node for remote service routing.")
+        else:
+            raise RuntimeError(
+                f"Caddyfile regeneration failed after transfer: {result.get('message')}. "
+                "Reverting transfer."
+            )
 
     def _complete(self):
         self.transfer.status = 'COMPLETED'
@@ -1301,7 +1308,16 @@ if os.path.exists(services_dir):
 
         config = PlatformConfig.load()
         if config.cloudflare_api_token and config.domain:
-            self._update_cloudflare_dns(config.domain, self.transfer.source_server_ip, config.cloudflare_api_token)
+            if self.transfer.transfer_type == 'FULL':
+                self._update_cloudflare_dns(config.domain, self.transfer.source_server_ip, config.cloudflare_api_token)
+            elif self.transfer.service and self.transfer.service.public_domain:
+                target_server = self._target_server_record()
+                is_lite = getattr(target_server, 'is_lite_agent', False) if target_server else False
+                if is_lite:
+                    self._delete_service_a_record(
+                        self.transfer.service.public_domain,
+                        config.cloudflare_api_token,
+                    )
 
         if self.transfer.transfer_type == 'FULL':
             config.server_ip = self.transfer.source_server_ip
@@ -1445,3 +1461,75 @@ if os.path.exists(services_dir):
                         'proxied': record['proxied']
                     }
                     requests.put(update_url, headers=headers, json=payload, timeout=30)
+
+    def _update_service_a_record(self, public_domain, target_ip, token):
+        """Create/update a specific A record for the service subdomain, leaving the wildcard intact."""
+        config = PlatformConfig.load()
+        platform_domain = config.domain
+        if not platform_domain:
+            return
+        domain = str(public_domain or '').strip().lower()
+        if not domain.endswith('.' + platform_domain):
+            return
+        name = domain[:-(len(platform_domain) + 1)]
+        if not name:
+            return
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        base_url = "https://api.cloudflare.com/client/v4"
+        resp = requests.get(f"{base_url}/zones", headers=headers, params={'name': platform_domain}, timeout=30)
+        if not resp.ok:
+            return
+        zones = resp.json().get('result')
+        if not zones:
+            return
+        zone_id = zones[0]['id']
+        search = requests.get(
+            f"{base_url}/zones/{zone_id}/dns_records",
+            headers=headers,
+            params={'type': 'A', 'name': domain},
+            timeout=30,
+        )
+        existing = search.json().get('result', []) if search.ok else []
+        payload = {'type': 'A', 'name': name, 'content': target_ip, 'ttl': 1, 'proxied': False}
+        if existing:
+            record_id = existing[0]['id']
+            requests.put(
+                f"{base_url}/zones/{zone_id}/dns_records/{record_id}",
+                headers=headers, json=payload, timeout=30,
+            )
+        else:
+            requests.post(
+                f"{base_url}/zones/{zone_id}/dns_records",
+                headers=headers, json=payload, timeout=30,
+            )
+
+    def _delete_service_a_record(self, public_domain, token):
+        """Delete the specific A record for a service subdomain."""
+        config = PlatformConfig.load()
+        platform_domain = config.domain
+        if not platform_domain:
+            return
+        domain = str(public_domain or '').strip().lower()
+        if not domain.endswith('.' + platform_domain):
+            return
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        base_url = "https://api.cloudflare.com/client/v4"
+        resp = requests.get(f"{base_url}/zones", headers=headers, params={'name': platform_domain}, timeout=30)
+        if not resp.ok:
+            return
+        zones = resp.json().get('result')
+        if not zones:
+            return
+        zone_id = zones[0]['id']
+        search = requests.get(
+            f"{base_url}/zones/{zone_id}/dns_records",
+            headers=headers,
+            params={'type': 'A', 'name': domain},
+            timeout=30,
+        )
+        if search.ok:
+            for record in search.json().get('result', []):
+                requests.delete(
+                    f"{base_url}/zones/{zone_id}/dns_records/{record['id']}",
+                    headers=headers, timeout=30,
+                )
