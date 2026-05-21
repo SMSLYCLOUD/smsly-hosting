@@ -52,6 +52,8 @@ from apps.deployments.utils import (
     build_local_source_bundle,
     update_stage,
 )
+# Imports for AIProviderSettings; jules_fix is imported lazily inside tasks
+from apps.intelligence.models import AIProviderSettings
 from services.addon_provisioner import addon_provisioner
 
 logger = logging.getLogger(__name__)
@@ -2850,6 +2852,21 @@ def _post_deploy_monitor(self, deployment_id, provider_id, container_id,
     # Step 2: No pattern match → escalate to AI models
     _escalate_to_ai(deployment, service, container_logs)
 
+    # Step 3: Jules auto-fix (async) — tries to fix and redeploy
+    try:
+        from apps.intelligence.jules_fix import jules_fix_deployment_failure
+        jules_fix_deployment_failure.delay(
+            deployment_id=str(deployment.id),
+            logs=container_logs,
+            repo_path=None,
+            repo_url=service.repository_url or "",
+        )
+        logger.info("Jules auto-fix triggered for runtime crash on deployment %s", deployment.id)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning("Failed to trigger Jules auto-fix for runtime crash: %s", e)
+
     # Mark deployment as failed
     deployment.status = 'FAILED'
     deployment.build_logs += f"\n--- Runtime Crash Logs ---\n{container_logs[-3000:]}\n"
@@ -2991,6 +3008,44 @@ def _handle_failure(task, deployment, error_msg, reason):
                 pass  # Ignore if module cannot be imported
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Failed to trigger AI failure task: %s", e)
+
+            # Step 3: Jules auto-fix (async) — tries to fix and redeploy
+            try:
+                from apps.intelligence.jules_fix import jules_fix_deployment_failure
+                service = deployment.service
+                # Only trigger if Jules has an API key configured
+                ai_settings = AIProviderSettings.get_solo()
+                if not ai_settings.jules_api_key:
+                    logger.debug("Jules auto-fix skipped: no Jules API key configured")
+                elif not service.repository_url:
+                    logger.debug("Jules auto-fix skipped: service has no repository_url")
+                else:
+                    # Derive repo_path from standard build location
+                    _builds_root = (
+                        os.environ.get("SMSLY_BUILDS_DIR")
+                        or "/opt/smsly-hosting/builds"
+                    )
+                    if not os.path.isdir(_builds_root):
+                        _builds_root = os.path.join(tempfile.gettempdir(), "smsly-builds")
+                    repo_path = os.path.join(_builds_root, f"svc_{service.id}")
+                    if not os.path.isdir(repo_path):
+                        repo_path = ""
+
+                    # Use the full repository URL for git operations
+                    jules_fix_deployment_failure.delay(
+                        deployment_id=str(deployment.id),
+                        logs=deployment.build_logs or error_msg,
+                        repo_path=repo_path,
+                        repo_url=service.repository_url,
+                    )
+                    logger.info(
+                        "Jules auto-fix triggered for deployment %s (repo=%s)",
+                        deployment.id, service.repository_url,
+                    )
+            except ImportError:
+                logger.debug("Jules auto-fix skipped: jules_fix module not available")
+            except Exception as e:
+                logger.warning("Failed to trigger Jules auto-fix: %s", e)
 
     # Never auto-retry failed deployments.
     # Build failures are deterministic and system failures should be

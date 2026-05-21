@@ -38,7 +38,18 @@ import {
     MessageSquare,
     Fingerprint,
     TrendingUp,
-    Brain
+    Brain,
+    Container,
+    Folders,
+    Timer,
+    Wifi,
+    Waypoints,
+    AppWindow,
+    Cable,
+    Clock,
+    Layers,
+    Palette,
+    GanttChartSquare
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -73,11 +84,39 @@ const features = [
         bg: "bg-purple-500/10"
     },
     {
+        icon: Bot,
+        title: "Multi-Provider AI Engine",
+        description: "11 AI providers with Senate Committee deliberation. Auto-diagnose failures, recommend fixes, and apply remediation.",
+        color: "text-violet-500",
+        bg: "bg-violet-500/10"
+    },
+    {
+        icon: Container,
+        title: "Addon Marketplace",
+        description: "35+ managed data services — PostgreSQL, Redis, MongoDB, Kafka, Elasticsearch, MinIO, Qdrant, and more — one-click provision.",
+        color: "text-orange-500",
+        bg: "bg-orange-500/10"
+    },
+    {
         icon: Workflow,
         title: "Blueprints & AI Clusters",
         description: "One-click deployment for GPU-accelerated LLMs like Ollama, DeepSeek, and custom private data stacks.",
-        color: "text-orange-500",
-        bg: "bg-orange-500/10"
+        color: "text-amber-500",
+        bg: "bg-amber-500/10"
+    },
+    {
+        icon: Server,
+        title: "Managed Fleet Servers",
+        description: "Connect, provision, and orchestrate multiple VPS nodes. Auto health-check, token exchange, and cluster management.",
+        color: "text-indigo-500",
+        bg: "bg-indigo-500/10"
+    },
+    {
+        icon: Waypoints,
+        title: "Dev Tunnels & Subdomains",
+        description: "Expose local dev servers via public URLs with request inspection, replay, and persistent subdomain reservations.",
+        color: "text-rose-500",
+        bg: "bg-rose-500/10"
     },
     {
         icon: Globe,
@@ -94,11 +133,25 @@ const features = [
         bg: "bg-cyan-500/10"
     },
     {
-        icon: Bot,
+        icon: BrainCircuit,
         title: "Auto-Remediation",
-        description: "Intelligent log analysis diagnoses crash loops and suggests fixes or auto-reverts bad commits.",
+        description: "Intelligent log analysis diagnoses crash loops, auto-applies fixes, creates PRs, and re-deploys without human intervention.",
         color: "text-emerald-500",
         bg: "bg-emerald-500/10"
+    },
+    {
+        icon: GanttChartSquare,
+        title: "Ecosystem Deployer",
+        description: "Scan all your repos, build a dependency graph, and deploy 30+ connected microservices in dependency-aware waves.",
+        color: "text-pink-500",
+        bg: "bg-pink-500/10"
+    },
+    {
+        icon: Layers,
+        title: "CI/CD Pipeline",
+        description: "Auto-deploy on git push, preview environments per branch, blue-green/canary rollouts, and instant rollback.",
+        color: "text-sky-500",
+        bg: "bg-sky-500/10"
     }
 ];
 
@@ -114,7 +167,7 @@ const battleCards = [
         description: "The Sovereign PaaS",
         price: "$0",
         priceDetail: "Open Source & Free",
-        features: ["Full Ecosystem Deployment", "Connect Your Own VPS", "Multi-Server Control", "100% Open Source"],
+        features: ["Full Ecosystem Deployment", "AI Auto-Remediation Engine", "35+ Managed Addon Services", "100% Open Source"],
         color: "bg-emerald-500",
         textColor: "text-emerald-500",
         borderColor: "border-emerald-500",
@@ -333,7 +386,7 @@ export default function Home() {
                         className="mt-6 text-lg md:text-xl text-slate-600 dark:text-slate-300 max-w-3xl mx-auto leading-relaxed font-light"
                     >
                         Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control. <br />
-                        <strong>Connect your VPS and deploy connected apps, services, databases, workers, and multi-server infrastructure without DevOps pain.</strong>
+                        <strong>Connect your VPS and deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters without DevOps pain.</strong>
                     </motion.p>
 
                     <motion.div
@@ -640,25 +693,25 @@ export default function Home() {
                             Deploy Complete Ecosystems
                         </h2>
                         <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            Grid handles frontends, APIs, databases, workers, queues, SSL, backups, and multi-server nodes all working together as one connected system.
+                            Grid handles frontends, APIs, databases, workers, queues, SSL, backups, AI diagnostics, tunnels, and multi-server nodes — all working together as one connected system.
                         </p>
                     </motion.div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
                         {features.map((feature, i) => (
                             <motion.div
                                 key={feature.title}
                                 initial={{ opacity: 0, y: 20 }}
                                 whileInView={{ opacity: 1, y: 0 }}
                                 viewport={{ once: true }}
-                                transition={{ delay: Math.min(i * 0.05, 0.5) }}
-                                className="group p-6 md:p-8 rounded-2xl md:rounded-3xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300"
+                                transition={{ delay: Math.min(i * 0.03, 0.4) }}
+                                className="group p-5 md:p-6 rounded-2xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/50 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300"
                             >
-                                <div className={`inline-flex p-3 md:p-4 rounded-xl md:rounded-2xl ${feature.bg} mb-4 md:mb-6 group-hover:rotate-6 transition-transform duration-300`}>
-                                    <feature.icon className={`w-5 h-5 md:w-6 md:h-6 ${feature.color}`} />
+                                <div className={`inline-flex p-2.5 md:p-3 rounded-xl ${feature.bg} mb-3 md:mb-4 group-hover:rotate-6 transition-transform duration-300`}>
+                                    <feature.icon className={`w-4 h-4 md:w-5 md:h-5 ${feature.color}`} />
                                 </div>
-                                <h3 className="text-lg md:text-xl font-bold mb-2 md:mb-3 text-slate-900 dark:text-white">{feature.title}</h3>
-                                <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 leading-relaxed">{feature.description}</p>
+                                <h3 className="text-sm md:text-base font-bold mb-1.5 md:mb-2 text-slate-900 dark:text-white">{feature.title}</h3>
+                                <p className="text-xs md:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">{feature.description}</p>
                             </motion.div>
                         ))}
                     </div>
