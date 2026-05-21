@@ -1,8 +1,10 @@
 import logging
 import os
 import secrets
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from .models import Service, Deployment, EnvironmentVariable, PlatformConfig
 from .models_audit import AuditLog
@@ -48,7 +50,109 @@ def audit_service_lifecycle(sender, instance, created, **kwargs):
 
 
 @receiver(post_save, sender=Deployment)
-def audit_deployment_lifecycle(sender, instance, created, **kwargs):
+def sync_service_status_on_deployment_change(sender, instance, created, **kwargs):
+    """Update service status based on deployment changes."""
+    service = instance.service
+    if not service:
+        return
+    
+    # Get the latest deployment for this service
+    latest_deployment = service.deployments.order_by('-created_at').first()
+    
+    # Determine service status based on latest deployment
+    if latest_deployment:
+        if latest_deployment.status == Deployment.Status.ACTIVE:
+            new_status = Service.Status.ACTIVE
+        elif latest_deployment.status == Deployment.Status.FAILED:
+            new_status = Service.Status.ACTIVE  # Service remains active even if deployment fails
+        elif latest_deployment.status in [
+            Deployment.Status.QUEUED,
+            Deployment.Status.BUILDING,
+            Deployment.Status.DEPLOYING,
+            Deployment.Status.REVIEW,
+            Deployment.Status.HEALTH_CHECK,
+            Deployment.Status.TRAFFIC_SHIFTING,
+        ]:
+            new_status = Service.Status.ACTIVE  # Service is active during deployment
+        else:
+            new_status = service.status  # Keep current status
+    else:
+        new_status = Service.Status.ACTIVE  # Service remains active without deployments
+    
+    # Update service status if it changed
+    if service.status != new_status:
+        old_status = service.status
+        service.status = new_status
+        service.save(update_fields=['status'])
+        
+        # Broadcast the status change via WebSocket
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            try:
+                async_to_sync(channel_layer.group_send)(
+                    f"user_services_{service.owner.id}",
+                    {
+                        'type': 'service_status_update',
+                        'service_id': str(service.id),
+                        'service_name': service.name,
+                        'status': new_status,
+                        'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
+                        'updated_at': service.updated_at.isoformat(),
+                    }
+                )
+            except Exception as e:
+                logging.getLogger(__name__).warning(
+                    "Failed to broadcast service status update for %s: %s", service.id, e
+                )
+        
+        # Log the status change
+        log_event(
+            actor=service.owner.get_username() if service.owner else 'system',
+            action='SERVICE_STATUS_CHANGE',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'old_status': old_status,
+                'new_status': new_status,
+                'deployment_id': str(latest_deployment.id) if latest_deployment else None,
+                'deployment_status': latest_deployment.status if latest_deployment else None,
+            },
+        )
+
+
+@receiver(post_save, sender=Service)
+def broadcast_service_status_change(sender, instance, created, **kwargs):
+    """Broadcast service status changes via WebSocket."""
+    if created:
+        return  # Skip creation - handled by other signals
+    
+    # Only broadcast if status actually changed
+    update_fields = kwargs.get('update_fields', [])
+    if 'status' not in update_fields:
+        return
+    
+    # Get the latest deployment for this service
+    latest_deployment = instance.deployments.order_by('-created_at').first()
+    
+    # Broadcast the status change
+    channel_layer = get_channel_layer()
+    if channel_layer and instance.owner:
+        try:
+            async_to_sync(channel_layer.group_send)(
+                f"user_services_{instance.owner.id}",
+                {
+                    'type': 'service_status_update',
+                    'service_id': str(instance.id),
+                    'service_name': instance.name,
+                    'status': instance.status,
+                    'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
+                    'updated_at': instance.updated_at.isoformat(),
+                }
+            )
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "Failed to broadcast service status update for %s: %s", instance.id, e
+            )
     """Log deployment lifecycle events and dispatch user notifications on terminal states."""
     owner = instance.service.owner if instance.service.owner else None
 

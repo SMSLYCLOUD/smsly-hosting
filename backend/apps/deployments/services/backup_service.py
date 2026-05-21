@@ -480,13 +480,32 @@ class BackupService:
                     commit_hash='latest',
                     commit_message=f"Restored from backup {backup.id}",
                 )
+                
+                # Ensure the service is properly marked as active before deployment
+                target_service.status = Service.Status.ACTIVE
+                target_service.save()
+                
                 enqueue_smart_deploy_task(
                     deployment_id=str(deployment.id),
                     provider_id=str(provider.id),
                     skip_review=True
                 )
+                
+                # Force the deployment to become immediately "latest" by clearing any cached status
+                # and ensuring immediate processing
+                from django.core.cache import cache
+                cache.delete(f'service_{target_service.id}_latest_deployment')
+                
+                # Also update the service's active_target metadata to reflect the restored state
+                target_service.active_target_type = 'local'  # Assuming restored services run locally
+                target_service.save()
+                
             else:
                 logger.warning(f"Could not resolve provider to queue deployment for restored service {target_service.id}")
+                # Ensure service is marked as active even if provider resolution fails
+                target_service.status = Service.Status.ACTIVE
+                target_service.save()
+                
             return True
 
         except Exception as e:

@@ -62,32 +62,47 @@ class DashboardOverviewView(GenericAPIView):
         running_services = 0
         failed_services = 0
         stopped_services = 0
+        unknown_services = 0
 
         for service in services:
-            latest = service.deployments.order_by('-created_at').first()
-            if latest is None:
+            # Primary check: Use service status first
+            if service.status == Service.Status.ACTIVE:
+                latest = service.deployments.order_by('-created_at').first()
+                if latest and latest.status in {
+                    Deployment.Status.ACTIVE,
+                    Deployment.Status.STAGED,
+                    Deployment.Status.HEALTH_CHECK,
+                }:
+                    running_services += 1
+                elif latest and latest.status in {
+                    Deployment.Status.BUILDING,
+                    Deployment.Status.DEPLOYING,
+                    Deployment.Status.REVIEW,
+                    Deployment.Status.QUEUED,
+                    Deployment.Status.MIGRATION_RUNNING,
+                    Deployment.Status.TRAFFIC_SHIFTING,
+                }:
+                    running_services += 1
+                elif latest and latest.status == Deployment.Status.FAILED:
+                    failed_services += 1
+                else:
+                    # Service is active but no valid deployment
+                    running_services += 1
+            elif service.status == Service.Status.DELETION_PENDING:
                 stopped_services += 1
-                continue
-            if latest.status in {
-                Deployment.Status.ACTIVE,
-                Deployment.Status.STAGED,
-                Deployment.Status.HEALTH_CHECK,
-                Deployment.Status.DEPLOYING,
-                Deployment.Status.BUILDING,
-                Deployment.Status.REVIEW,
-                Deployment.Status.QUEUED,
-            }:
-                running_services += 1
-            elif latest.status == Deployment.Status.FAILED:
+            elif service.status == Service.Status.DELETION_FAILED:
                 failed_services += 1
-            else:
+            elif service.status == Service.Status.DELETED:
                 stopped_services += 1
+            else:  # UNKNOWN status
+                unknown_services += 1
 
         service_stats = {
             "total": services.count(),
             "running": running_services,
             "failed": failed_services,
             "stopped": stopped_services,
+            "unknown": unknown_services,
         }
 
         # Deployments this month

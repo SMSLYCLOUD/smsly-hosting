@@ -12,6 +12,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
+import { useServiceStatusUpdates, getStatusColor, getStatusIcon } from "@/lib/websocket";
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -35,6 +36,9 @@ export default function DashboardPage() {
   const { toast } = useToast();
   const [showPasswordWarning, setShowPasswordWarning] = useState(false);
   const hasShownLoadError = useRef(false);
+  
+  // WebSocket for real-time service updates
+  const { services: wsServices, connectionStatus: wsConnectionStatus, lastUpdated } = useServiceStatusUpdates(user?.id || '');
 
   useEffect(() => {
     if (!data || typeof window === 'undefined') return;
@@ -72,7 +76,9 @@ export default function DashboardPage() {
       }
     };
     fetchData();
-    const interval = setInterval(fetchData, 30000); // 30s refresh
+    
+    // Reduced polling interval since we have WebSocket updates
+    const interval = setInterval(fetchData, 10000); // 10s refresh instead of 30s
     return () => clearInterval(interval);
   }, [toast]);
 
@@ -103,11 +109,42 @@ export default function DashboardPage() {
     );
   }
 
+  // Calculate real-time service stats from WebSocket data if available
+  const calculateServiceStats = () => {
+    if (wsServices.length > 0) {
+      const running = wsServices.filter(s => 
+        s.status === 'ACTIVE' || s.status === 'building' || s.status === 'deploying' || s.status === 'review'
+      ).length;
+      const failed = wsServices.filter(s => s.status === 'FAILED' || s.status === 'deletion_failed').length;
+      const stopped = wsServices.filter(s => s.status === 'DELETION_PENDING').length;
+      const unknown = wsServices.filter(s => s.status === 'UNKNOWN').length;
+      
+      return {
+        running,
+        failed,
+        stopped,
+        unknown,
+        total: wsServices.length
+      };
+    }
+    
+    // Fallback to API data
+    return {
+      running: data?.services.running || 0,
+      failed: data?.services.failed || 0,
+      stopped: data?.services.stopped || 0,
+      unknown: 0,
+      total: data?.services.total || 0
+    };
+  };
+
+  const serviceStats = calculateServiceStats();
+
   const stats = [
     {
       title: "Services",
-      value: `${data.services.running} / ${data.services.total}`,
-      subtitle: `${data.services.failed} failed`,
+      value: `${serviceStats.running} / ${serviceStats.total}`,
+      subtitle: `${serviceStats.failed} failed`,
       icon: Server,
       color: "text-blue-500",
       bg: "bg-blue-500/10",
@@ -115,7 +152,7 @@ export default function DashboardPage() {
     },
     {
       title: "Deployments",
-      value: data.deployments_this_month,
+      value: data?.deployments_this_month || 0,
       subtitle: "This month",
       icon: Activity,
       color: "text-emerald-500",
@@ -124,8 +161,8 @@ export default function DashboardPage() {
     },
     {
       title: "Active Addons",
-      value: data.addons.active,
-      subtitle: `of ${data.addons.total} total`,
+      value: data?.addons.active || 0,
+      subtitle: `of ${data?.addons.total || 0} total`,
       icon: Database,
       color: "text-purple-500",
       bg: "bg-purple-500/10",
@@ -133,12 +170,12 @@ export default function DashboardPage() {
     },
     {
       title: "Current Cost",
-      value: `$${Number(data.cost_estimate.monthly_usd).toFixed(2)}`,
+      value: `$${Number(data?.cost_estimate?.monthly_usd || 0).toFixed(2)}`,
       subtitle: "Estimated this month",
       icon: DollarSign,
       color: "text-amber-500",
       bg: "bg-amber-500/10",
-      trend: data.cost_estimate.currency
+      trend: data?.cost_estimate?.currency || "USD"
     }
   ];
 
@@ -155,7 +192,23 @@ export default function DashboardPage() {
           <motion.div variants={fadeInUp} className="flex items-center justify-between mt-2 sm:mt-0">
             <div>
               <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-              <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
+              <div className="flex items-center gap-2">
+                <p className="text-muted-foreground">Welcome back, {user?.username}!</p>
+                <div className="flex items-center gap-1">
+                  <div className={`w-2 h-2 rounded-full ${
+                    wsConnectionStatus === 'open' ? 'bg-green-500' : 
+                    wsConnectionStatus === 'connecting' ? 'bg-yellow-500' : 'bg-gray-400'
+                  }`} />
+                  <span className="text-xs text-muted-foreground">
+                    {wsConnectionStatus === 'open' ? 'Live' : 'Offline'}
+                  </span>
+                  {lastUpdated && (
+                    <span className="text-xs text-muted-foreground ml-2">
+                      Updated {lastUpdated.toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
             <Link href="/new">
               <motion.button
@@ -239,34 +292,66 @@ export default function DashboardPage() {
                   <CardTitle>Recent Activity</CardTitle>
                   <CardDescription>Last 10 deployment events</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {data.recent_activity.length === 0 ? (
-                      <div className="text-center text-muted-foreground py-8">No recent activity</div>
-                    ) : (
-                      data.recent_activity.map((activity: any) => (
-                        <div key={activity.id} className="flex items-start gap-3">
-                          <div className={`w-2 h-2 mt-2 rounded-full ${
-                            activity.status === 'ACTIVE' ? 'bg-emerald-500' :
-                            activity.status === 'FAILED' ? 'bg-red-500' : 'bg-blue-500'
-                          }`} />
-                          <div>
-                            <p className="text-sm font-medium">{activity.service__name}</p>
-                            <p className="text-xs text-muted-foreground truncate max-w-[300px]">
-                              {activity.commit_message || 'Deployment'}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {new Date(activity.created_at).toLocaleString()}
-                            </p>
-                          </div>
-                          <Badge variant="outline" className="ml-auto text-[10px]">
-                            {activity.status}
-                          </Badge>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </CardContent>
+                   <CardContent>
+                     <div className="space-y-4">
+                       {wsServices.length > 0 ? (
+                         wsServices.map((service) => (
+                           <div key={service.id} className="flex items-start gap-3">
+                             <div className="flex items-center gap-2">
+                               <span className={getStatusColor(service.status)}>
+                                 {getStatusIcon(service.status)}
+                               </span>
+                               <div className={`w-2 h-2 rounded-full ${
+                                 service.status === 'ACTIVE' ? 'bg-emerald-500' :
+                                 service.status === 'FAILED' ? 'bg-red-500' : 'bg-blue-500'
+                               }`} />
+                             </div>
+                             <div className="flex-1">
+                               <p className="text-sm font-medium">{service.name}</p>
+                               <p className="text-xs text-muted-foreground">
+                                 Service: {service.status} | Deployment: {service.deployment_status}
+                               </p>
+                               <p className="text-[10px] text-muted-foreground">
+                                 Updated: {new Date(service.updated_at).toLocaleTimeString()}
+                               </p>
+                             </div>
+                             <Badge variant="outline" className={`text-[10px] ${
+                               service.status === 'ACTIVE' ? 'border-green-500 text-green-700' :
+                               service.status === 'FAILED' ? 'border-red-500 text-red-700' :
+                               'border-blue-500 text-blue-700'
+                             }`}>
+                               {service.status}
+                             </Badge>
+                           </div>
+                         ))
+                       ) : (
+                         data.recent_activity.length === 0 ? (
+                           <div className="text-center text-muted-foreground py-8">No recent activity</div>
+                         ) : (
+                           data.recent_activity.map((activity: any) => (
+                             <div key={activity.id} className="flex items-start gap-3">
+                               <div className={`w-2 h-2 mt-2 rounded-full ${
+                                 activity.status === 'ACTIVE' ? 'bg-emerald-500' :
+                                 activity.status === 'FAILED' ? 'bg-red-500' : 'bg-blue-500'
+                               }`} />
+                               <div>
+                                 <p className="text-sm font-medium">{activity.service__name}</p>
+                                 <p className="text-xs text-muted-foreground truncate max-w-[300px]">
+                                   {activity.commit_message || 'Deployment'}
+                                 </p>
+                                 <p className="text-[10px] text-muted-foreground">
+                                   {new Date(activity.created_at).toLocaleString()}
+                                 </p>
+                               </div>
+                               <Badge variant="outline" className="ml-auto text-[10px]">
+                                 {activity.status}
+                               </Badge>
+                             </div>
+                           ))
+                         )
+                       )}
+                     </div>
+                   </CardContent>
               </Card>
             </motion.div>
 
