@@ -74,12 +74,18 @@ export function LogsTab({ deployment }: { deployment: Deployment | null }) {
         if (!deployment?.id) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const token = typeof window !== 'undefined'
+            ? (localStorage.getItem('auth_token') || document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1])
+            : null;
         if (!token) return;
+
+        const decodedToken = typeof window !== 'undefined' && document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)
+            ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1])
+            : token;
 
         const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
         const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
-        const wsUrl = `${proto}://${host}/ws/build-logs/${deployment.id}/?token=${encodeURIComponent(token)}`;
+        const wsUrl = `${proto}://${host}/ws/build-logs/${deployment.id}/?token=${encodeURIComponent(decodedToken)}`;
 
         try {
             const ws = new WebSocket(wsUrl);

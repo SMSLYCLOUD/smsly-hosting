@@ -2493,7 +2493,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             from apps.cloud.docker_client import get_docker_client
             client = get_docker_client()
+        except Exception as e:
+            return Response({'error': 'Docker client unavailable', 'details': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
             container = client.containers.get(latest_deploy.container_id)
+        except Exception as e:
+            return Response({'error': 'Container not found', 'details': str(e)}, status=status.HTTP_404_NOT_FOUND)
 
             # ZH-012 FIX: Use a more robust listing command if ls -la behaves unexpectedly.
             # We also try to handle cases where /app might not exist by falling back to /.

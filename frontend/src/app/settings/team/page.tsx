@@ -30,14 +30,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Users, UserPlus, Trash2, Mail } from 'lucide-react';
+import { Users, UserPlus, Trash2, Mail, PlusCircle } from 'lucide-react';
 import { teamsApi, Team, TeamMember } from '@/lib/api';
 import { useAuth } from '@/components/auth-provider';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/use-toast';
 
 export default function TeamPage() {
   const { user } = useAuth();
   const confirm = useConfirm();
+  const { toast } = useToast();
   const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -48,6 +50,11 @@ export default function TeamPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('MEMBER');
   const [inviteLoading, setInviteLoading] = useState(false);
+
+  // Create Team State
+  const [showCreateTeamDialog, setShowCreateTeamDialog] = useState(false);
+  const [newTeamName, setNewTeamName] = useState('');
+  const [createTeamLoading, setCreateTeamLoading] = useState(false);
 
   useEffect(() => {
     // Initial load
@@ -91,19 +98,59 @@ export default function TeamPage() {
   };
 
   const handleInvite = async () => {
-    if (!activeTeamId || !inviteEmail) return;
+    if (!inviteEmail) return;
+    
+    let currentTeamId = activeTeamId;
+    
+    if (!currentTeamId) {
+      try {
+        const newTeam = await teamsApi.create("My Team");
+        currentTeamId = newTeam.id;
+        setActiveTeamId(currentTeamId);
+        localStorage.setItem('smsly_active_team', currentTeamId);
+        window.dispatchEvent(new CustomEvent('smsly:team-changed', { detail: currentTeamId }));
+        await loadTeamData(currentTeamId);
+      } catch (err) {
+        toast({ title: "Error", description: "Failed to create default team.", variant: "destructive" });
+        return;
+      }
+    }
+    
     setInviteLoading(true);
     try {
-      await teamsApi.inviteMember(activeTeamId, inviteEmail, inviteRole);
+      await teamsApi.inviteMember(currentTeamId, inviteEmail, inviteRole);
       setShowInviteDialog(false);
       setInviteEmail('');
-      // Refresh list
-      loadTeamData(activeTeamId);
+      toast({ title: "Success", description: "Invitation sent successfully." });
+      await loadTeamData(currentTeamId);
     } catch (error) {
       console.error("Failed to invite member", error);
-      alert("Failed to invite member. Please try again.");
+      toast({ title: "Error", description: "Failed to invite member. Please try again.", variant: "destructive" });
     } finally {
       setInviteLoading(false);
+    }
+  };
+
+  const handleCreateTeam = async () => {
+    if (!newTeamName.trim()) {
+      toast({ title: "Error", description: "Team name is required.", variant: "destructive" });
+      return;
+    }
+    setCreateTeamLoading(true);
+    try {
+      const newTeam = await teamsApi.create(newTeamName);
+      setActiveTeamId(newTeam.id);
+      localStorage.setItem('smsly_active_team', newTeam.id);
+      window.dispatchEvent(new CustomEvent('smsly:team-changed', { detail: newTeam.id }));
+      setShowCreateTeamDialog(false);
+      setNewTeamName('');
+      toast({ title: "Success", description: `Team "${newTeam.name}" created successfully.` });
+      await loadTeamData(newTeam.id);
+    } catch (error) {
+      console.error("Failed to create team", error);
+      toast({ title: "Error", description: "Failed to create team. Please try again.", variant: "destructive" });
+    } finally {
+      setCreateTeamLoading(false);
     }
   };
 
@@ -113,10 +160,11 @@ export default function TeamPage() {
 
     try {
       await teamsApi.removeMember(activeTeamId, memberId);
-      loadTeamData(activeTeamId); // Refresh
+      toast({ title: "Success", description: "Member removed successfully." });
+      await loadTeamData(activeTeamId);
     } catch (error) {
       console.error("Failed to remove member", error);
-      alert("Failed to remove member.");
+      toast({ title: "Error", description: "Failed to remove member.", variant: "destructive" });
     }
   };
 
@@ -125,8 +173,57 @@ export default function TeamPage() {
       <DashboardShell>
         <div className="container max-w-4xl mx-auto p-6">
           <Card>
-            <CardContent className="py-10 text-center text-muted-foreground">
-              Please select a team from the sidebar to manage members.
+            <CardHeader>
+              <CardTitle>Welcome to Team Management</CardTitle>
+              <CardDescription>
+                Create your first team to start managing members and collaborating.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="py-10 text-center space-y-4">
+              <p className="text-muted-foreground">
+                You don't have any teams yet. Create one to get started.
+              </p>
+              <Dialog open={showCreateTeamDialog} onOpenChange={setShowCreateTeamDialog}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <PlusCircle className="mr-2 h-4 w-4" />
+                    Create Team
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Create Team</DialogTitle>
+                    <DialogDescription>
+                      Add a new team to manage services and members.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-2 pb-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="name">Team Name</Label>
+                      <Input
+                        id="name"
+                        placeholder="Acme Inc."
+                        value={newTeamName}
+                        onChange={(e) => setNewTeamName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleCreateTeam();
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowCreateTeamDialog(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button onClick={handleCreateTeam} disabled={createTeamLoading}>
+                      {createTeamLoading ? "Creating..." : "Create Team"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </CardContent>
           </Card>
         </div>
