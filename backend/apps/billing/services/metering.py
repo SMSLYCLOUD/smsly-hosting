@@ -55,6 +55,29 @@ class UsageMeter:
         summary['cpu_hours'] = Decimal(cpu_sum)
         summary['memory_gb_hours'] = Decimal(ram_mb_sum) / Decimal(1024)
 
+        # 5. Add current unrecorded usage for currently active services
+        from django.utils import timezone
+        now = timezone.now()
+        active_services = Service.objects.filter(owner=user, deployments__status='ACTIVE').distinct()
+        for service in active_services:
+            # Find the most recent usage record for this service
+            last_record = UsageRecord.objects.filter(service=service).order_by('-timestamp').first()
+            
+            # If there's a record, calculate time since then. Otherwise, use service created_at.
+            start_time = last_record.timestamp if last_record else service.created_at
+            
+            # Ensure start_time is within the current billing period
+            start_time = max(start_time, period_start)
+            
+            hours_running = Decimal((now - start_time).total_seconds()) / Decimal(3600)
+            if hours_running > 0:
+                summary['cpu_hours'] += Decimal(service.cpu_cores) * hours_running
+                summary['memory_gb_hours'] += (Decimal(service.memory_mb) / Decimal(1024)) * hours_running
+
+        # Round to 2 decimal places
+        summary['cpu_hours'] = summary['cpu_hours'].quantize(Decimal('0.01'))
+        summary['memory_gb_hours'] = summary['memory_gb_hours'].quantize(Decimal('0.01'))
+
         return summary
 
     def calculate_cost(self, user, period_start, period_end):
