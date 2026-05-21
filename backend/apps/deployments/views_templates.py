@@ -35,7 +35,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             category = request.query_params.get('category')
@@ -49,7 +49,8 @@ class TemplateViewSet(viewsets.GenericViewSet):
                 data = [
                     t for t in data if search in t.get(
                         'name', '').lower() or search in t.get(
-                        'description', '').lower()]
+                        'description', '').lower()
+                ]
 
             return Response(data)
         except Exception as e:
@@ -71,7 +72,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             template = next((t for t in data if t['id'] == pk), None)
@@ -104,7 +105,7 @@ class TemplateViewSet(viewsets.GenericViewSet):
         try:
             path = os.path.join(settings.BASE_DIR,
                                 'apps/deployments/fixtures/templates.json')
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             template = next((t for t in data if t['id'] == pk), None)
