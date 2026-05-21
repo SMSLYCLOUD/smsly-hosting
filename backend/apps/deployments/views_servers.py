@@ -770,6 +770,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Trigger a remote update (git pull + restart) on a managed server.
         """
         server = self.get_object()
+        force = request.data.get("force", False)
 
         blocked_statuses = {
             ManagedServer.ProvisionStatus.PENDING,
@@ -777,16 +778,25 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
             ManagedServer.ProvisionStatus.UPDATING,
         }
         if server.provision_status in blocked_statuses:
-            return Response(
-                {
-                    "error": (
-                        f"Server update cannot start while provision_status="
-                        f"{server.provision_status}."
-                    ),
-                    "provision_status": server.provision_status,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+            if force:
+                logger.warning(
+                    "Force-resetting stuck provision_status=%s for server %s",
+                    server.provision_status,
+                    server.id,
+                )
+                server.provision_status = ManagedServer.ProvisionStatus.READY
+                server.save(update_fields=["provision_status", "updated_at"])
+            else:
+                return Response(
+                    {
+                        "error": (
+                            f"Server update cannot start while provision_status="
+                            f"{server.provision_status}. Use force=true to override."
+                        ),
+                        "provision_status": server.provision_status,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         # We only allow updates on nodes that have been provisioned or have SSH access
         if not (server.ssh_key or server.ssh_password):
