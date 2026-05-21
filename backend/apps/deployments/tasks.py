@@ -1430,6 +1430,22 @@ def _handle_remote_deployment(deployment, server, skip_review=False, image_name=
 
     orchestrator = RemoteOrchestrator(server)
 
+    # Pre-flight: verify remote node API is reachable before delegating.
+    # If the backend is down (Traefik 404), attempt SSH auto-heal of
+    # the entire docker-compose stack on the remote node.
+    preflight = orchestrator.preflight_check_or_heal()
+    if not preflight['ok']:
+        diagnosis = preflight.get('diagnosis', 'unknown')
+        healed_note = ' (SSH auto-heal was attempted)' if preflight.get('healed') else ''
+        _handle_failure(
+            None,
+            deployment,
+            f"Remote node {server.name} ({server.host}) is unreachable "
+            f"[{diagnosis}]{healed_note}: {preflight['error']}",
+            "Remote Node Unhealthy",
+        )
+        return
+
     append_log(deployment, f"Delegating deployment to remote server: {server.name} ({server.host})\n")
     update_stage(deployment, 'Remote Sync', 'running')
 

@@ -146,6 +146,149 @@ class RemoteOrchestrator:
             
         return results
 
+    def preflight_check_or_heal(self) -> dict:
+        """Pre-flight connectivity check with optional SSH auto-healing.
+
+        Call this before delegating a deployment to verify the remote
+        node's API is actually reachable.  When the API is down (e.g.
+        Traefik returns its default 404 because the backend container
+        crashed), the method will attempt to restart the entire
+        docker-compose stack via SSH.
+
+        Returns::
+
+            {
+                'ok':        bool,  # whether the API is reachable now
+                'healed':    bool,  # whether SSH repair was attempted
+                'error':     str,   # human-readable error (empty when ok)
+                'diagnosis': str,   # e.g. 'traefik_no_router'
+            }
+        """
+        result = {
+            'ok': False,
+            'healed': False,
+            'error': '',
+            'diagnosis': '',
+        }
+
+        # Step 1: Quick connectivity check
+        connectivity = self.check_connectivity()
+        if not connectivity['network']:
+            result['error'] = (
+                f"Remote node {self.server.name} ({self.server.host}) is "
+                f"network-unreachable: {connectivity['error']}"
+            )
+            result['diagnosis'] = 'network_unreachable'
+            return result
+
+        if connectivity['auth']:
+            result['ok'] = True
+            return result
+
+        # Step 2: Diagnose what returned the error
+        probe = self._request(
+            'GET', '/api/v1/services/', timeout=10, retry_auth=False,
+        )
+        if probe is not None and probe.status_code == 404:
+            classification = self._classify_404_response(probe)
+            result['diagnosis'] = classification
+            diagnosis_msg = self._404_DIAGNOSIS_MESSAGES.get(classification, '')
+        else:
+            classification = 'auth_or_other'
+            diagnosis_msg = connectivity.get('error', self.describe_last_error())
+            result['diagnosis'] = classification
+
+        # Step 3: Attempt SSH auto-heal for 'traefik_no_router' (backend down)
+        if classification == 'traefik_no_router':
+            logger.warning(
+                "Remote node %s (%s) has Traefik running but backend is "
+                "unreachable. Attempting SSH auto-heal (full stack restart)...",
+                self.server.name, self.server.host,
+            )
+            healed = self._ssh_restart_stack()
+            result['healed'] = True
+            if healed:
+                # Re-check connectivity after heal
+                time.sleep(15)  # Give the entire stack time to start
+                post_heal = self.check_connectivity()
+                if post_heal['auth']:
+                    result['ok'] = True
+                    logger.info(
+                        "SSH auto-heal succeeded for %s (%s) — stack is back online.",
+                        self.server.name, self.server.host,
+                    )
+                    return result
+
+                # Still starting — give more time
+                time.sleep(15)
+                post_heal2 = self.check_connectivity()
+                if post_heal2['auth']:
+                    result['ok'] = True
+                    logger.info(
+                        "SSH auto-heal succeeded for %s (%s) after extended wait.",
+                        self.server.name, self.server.host,
+                    )
+                    return result
+
+                result['error'] = (
+                    f"SSH auto-heal restarted the stack on {self.server.host}, "
+                    f"but the API is still unreachable after 30 seconds. "
+                    f"The node may need manual investigation."
+                )
+            else:
+                result['error'] = (
+                    f"Backend is down on {self.server.host} (Traefik 404) and "
+                    f"SSH auto-heal failed. No SSH credentials or the restart "
+                    f"command failed. Manual fix: ssh into the node and run "
+                    f"'cd /opt/smsly-hosting && docker compose up -d'"
+                )
+        else:
+            result['error'] = (
+                f"Remote node {self.server.name} ({self.server.host}) API check "
+                f"failed: {diagnosis_msg}"
+            )
+
+        return result
+
+    def _ssh_restart_stack(self) -> bool:
+        """Attempt to restart the entire docker-compose stack on the remote node via SSH."""
+        if not self.server.ssh_key and not self.server.ssh_password:
+            logger.warning(
+                "Cannot SSH auto-heal %s: no SSH credentials stored.",
+                self.server.host,
+            )
+            return False
+
+        try:
+            from .ssh_client import SSHClient
+            ssh = SSHClient(
+                ip=self.server.host,
+                key_content=self.server.ssh_key,
+                password=self.server.ssh_password,
+                user=self.server.ssh_user,
+                port=self.server.ssh_port,
+            )
+            ssh.connect()
+            success, output = ssh.restart_stack()
+            ssh.close()
+            if success:
+                logger.info(
+                    "SSH auto-heal: stack restarted on %s. Output: %s",
+                    self.server.host, output[:500],
+                )
+            else:
+                logger.warning(
+                    "SSH auto-heal: stack restart failed on %s. Output: %s",
+                    self.server.host, output[:500],
+                )
+            return success
+        except Exception as exc:
+            logger.error(
+                "SSH auto-heal exception for %s: %s",
+                self.server.host, exc,
+            )
+            return False
+
     def auto_authenticate(self) -> bool:
         """
         Attempt to retrieve API token and Gateway Secret via SSH.
@@ -385,6 +528,11 @@ class RemoteOrchestrator:
         host_port = host_port.split("/", 1)[0].strip()
         
         if _host_is_ip(host_port):
+            if getattr(self.server, 'is_lite_agent', False):
+                # Lite agents: only Traefik on port 80 — skip 8090/443
+                # which don't exist and waste ~10s each on timeout.
+                append(f"http://{host_port}")
+                return urls
             # IP-based mesh nodes: HTTP first, then HTTPS as fallback
             append(f"http://{host_port}")
             append(f"http://{host_port}:8090")
@@ -609,14 +757,11 @@ class RemoteOrchestrator:
                     # For safe methods, a 404 means we hit the wrong port/service —
                     # try the next candidate base URL instead of returning immediately.
                     if method_upper in SAFE_METHODS and status == 404:
-                        self._set_last_error(
-                            f"Remote API returned HTTP {status} for {method_upper} "
-                            f"{request_path} at {base_url}.",
-                            response=response,
-                        )
+                        self._enrich_404_error(response, base_url)
                         logger.warning(
-                            "Trying next base URL after 404 for %s %s at %s",
+                            "Trying next base URL after 404 for %s %s at %s (diagnosis: %s)",
                             method_upper, request_path, base_url,
+                            self._classify_404_response(response),
                         )
                         redirected = True
                         break  # L3 break → L2 break via redirected → next base URL
@@ -653,6 +798,55 @@ class RemoteOrchestrator:
                 f"{_safe_error_snippet(getattr(response, 'text', ''))}"
             ).strip()
         return fallback
+
+    @staticmethod
+    def _classify_404_response(response) -> str:
+        """Classify what service returned a 404 to diagnose the root cause.
+
+        Returns one of:
+          - 'traefik_no_router': Traefik running but no backend router
+          - 'django_not_found': Django endpoint does not exist
+          - 'proxy_html_404': Nginx or similar proxy returned an HTML 404
+          - 'unknown_404': Unrecognised 404 format
+        """
+        body = (getattr(response, 'text', '') or '').strip()
+        body_lower = body.lower()
+        if body_lower == '404 page not found':
+            return 'traefik_no_router'
+        if '"detail"' in body_lower and '"not found' in body_lower:
+            return 'django_not_found'
+        if '<html' in body_lower or '<!doctype' in body_lower:
+            return 'proxy_html_404'
+        return 'unknown_404'
+
+    _404_DIAGNOSIS_MESSAGES = {
+        'traefik_no_router': (
+            'Traefik is running on the remote node but no router matched '
+            '/api/v1/. The backend container is most likely down, not on '
+            'the smsly-net Docker network, or its Traefik labels are missing.'
+        ),
+        'django_not_found': (
+            'The remote Django API is reachable but returned a 404 for this '
+            'endpoint. This may indicate a version mismatch between the '
+            'controller and agent codebases.'
+        ),
+        'proxy_html_404': (
+            'A reverse proxy (Nginx/Caddy) on the remote node returned an '
+            'HTML 404 page. The proxy may be misconfigured or the backend '
+            'upstream is unreachable.'
+        ),
+        'unknown_404': 'The remote node returned an unrecognised 404 response.',
+    }
+
+    def _enrich_404_error(self, response, base_url: str):
+        """Set a detailed last_error for 404 responses with root-cause diagnosis."""
+        classification = self._classify_404_response(response)
+        diagnosis = self._404_DIAGNOSIS_MESSAGES.get(classification, '')
+        self._set_last_error(
+            f"Remote API returned HTTP 404 at {base_url}. "
+            f"Diagnosis ({classification}): {diagnosis}",
+            response=response,
+        )
 
     def _parse_json_response(self, response: requests.Response, context: str):
         try:

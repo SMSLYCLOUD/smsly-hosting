@@ -378,3 +378,72 @@ class SSHClient:
         except Exception:
             pass
         return None
+
+    def restart_stack(self, hosting_path=None):
+        """Restart the entire docker-compose stack on the remote node.
+
+        Returns (success: bool, output: str).
+        """
+        if not hosting_path:
+            hosting_path = self.find_hosting_path()
+        quoted = shlex.quote(hosting_path)
+
+        cmd = (
+            f"cd {quoted} && "
+            "(docker compose up -d 2>&1 "
+            "|| docker-compose up -d 2>&1)"
+        )
+        try:
+            out, err, code = self.exec_command(
+                cmd, timeout=180, raise_on_error=False,
+            )
+            combined = (out or "") + (err or "")
+            return code == 0, combined
+        except Exception as exc:
+            return False, str(exc)
+
+    def restart_backend(self, hosting_path=None):
+        """Restart just the backend container on the remote node.
+
+        Attempts 'docker compose restart backend' first, then falls back to
+        'docker compose up -d backend' if the container is stopped entirely.
+
+        Returns (success: bool, output: str).
+        """
+        if not hosting_path:
+            hosting_path = self.find_hosting_path()
+        quoted = shlex.quote(hosting_path)
+
+        # Attempt 1: restart (works if backend is running or paused)
+        restart_cmd = (
+            f"cd {quoted} && "
+            "(docker compose restart backend 2>&1 "
+            "|| docker-compose restart backend 2>&1)"
+        )
+        try:
+            out, err, code = self.exec_command(
+                restart_cmd, timeout=60, raise_on_error=False,
+            )
+            combined = (out or "") + (err or "")
+            if code == 0:
+                return True, combined
+        except Exception as exc:
+            combined = str(exc)
+
+        # Attempt 2: up -d (works if container is stopped/removed)
+        up_cmd = (
+            f"cd {quoted} && "
+            "(docker compose up -d backend 2>&1 "
+            "|| docker-compose up -d backend 2>&1)"
+        )
+        try:
+            out, err, code = self.exec_command(
+                up_cmd, timeout=120, raise_on_error=False,
+            )
+            combined = (out or "") + (err or "")
+            if code == 0:
+                return True, combined
+        except Exception as exc:
+            combined = str(exc)
+
+        return False, combined
