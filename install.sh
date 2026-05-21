@@ -756,7 +756,7 @@ EOF
     if [ -n "${MASTER_GATEWAY_SECRET:-}" ]; then
         env_set_value "$env_file" "GATEWAY_SECRET" "$MASTER_GATEWAY_SECRET"
     fi
-    env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "true"
+    env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
     env_set_value "$env_file" "SMSLY_RUN_ENTRYPOINT_TASKS" "false"
     env_set_value "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false"
 }

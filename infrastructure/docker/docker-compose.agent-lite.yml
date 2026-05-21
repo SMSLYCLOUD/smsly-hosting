@@ -53,7 +53,7 @@ services:
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-smsly_password}
     healthcheck:
       test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
       interval: 10s
@@ -161,4 +161,3 @@ networks:
   socket-proxy:
     driver: bridge
     internal: true
-

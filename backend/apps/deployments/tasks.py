@@ -108,9 +108,9 @@ def enqueue_smart_deploy_task(
     """
     Enqueue a deployment, using a dedicated node queue on lite agents.
 
-    Full installs have their own broker, so the normal deploy queue is local
-    to that server. Lite agents share the master broker and must route local
-    API-triggered deploys to their per-node queue.
+    Full installs and lite agents both use a broker local to the server that
+    receives the API request. Lite agents still route API-triggered deploys to
+    their per-node queue so only that node's worker consumes them.
     """
     kwargs = {
         "deployment_id": str(deployment_id),
