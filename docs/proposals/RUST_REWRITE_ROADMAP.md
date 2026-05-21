@@ -52,7 +52,7 @@ rust_twin/
 │   ├── api/                    # Axum web server (replaces backend/apps)
 │   ├── worker/                 # Background task runner (replaces Celery)
 │   ├── cli/                    # Management commands (replaces manage.py)
-│   ├── infrastructure/         # External integrations (Docker API, Nixpacks, Caddy/Nginx)
+│   ├── infrastructure/         # External integrations (Docker API, Nixpacks, Caddy)
 │   └── frontend/               # Leptos/Dioxus WASM UI (replaces frontend/src)
 ```
 
@@ -115,7 +115,7 @@ rust_twin/
 **Goal:** Ensure the Rust twin can be deployed exactly like the original.
 
 1.  **CLI Tools:** Replicate `manage.py createsuperuser` and `setup_social_apps` using `clap` in the `cli` crate.
-2.  **Reverse Proxy Sync:** Ensure the Caddy and Nginx logic in the existing `install.sh` and `docker-compose.yml` routes traffic correctly to the compiled Rust binaries (e.g., routing `:8000` to the Axum binary instead of Gunicorn).
+2.  **Reverse Proxy Sync:** Ensure the Caddy routing logic in the existing `install.sh` and `docker-compose.yml` routes traffic correctly to the compiled Rust binaries (e.g., routing `:8000` to the Axum binary instead of Gunicorn).
 3.  **Dockerization:** Write multi-stage `Dockerfile`s for the `api`, `worker`, and `frontend` crates. Ensure the final images are minimal (e.g., using `alpine` or `distroless`).
 4.  **Integration Testing:** Stand up the entire new stack (DB, Redis, Axum API, Rust Worker, WASM Frontend) via `docker-compose.rust.yml` and run end-to-end API tests.
 

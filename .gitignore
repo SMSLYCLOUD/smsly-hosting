@@ -40,3 +40,11 @@ frontend-dev-*.err.log
 
 # Ignoring downloaded svgs to clean up git diff
 *.svg
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~

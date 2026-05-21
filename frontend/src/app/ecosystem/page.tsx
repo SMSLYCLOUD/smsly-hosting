@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Scan, Rocket, CheckCircle2, XCircle, AlertCircle, Loader2,
-    Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles
+    Server, Database, Globe, GitBranch, Zap, ArrowRight, RefreshCw, Sparkles,
+    Code, CheckCircle, AlertTriangle
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
@@ -97,7 +98,7 @@ async function apiGet(path: string) {
 }
 
 export default function EcosystemPage() {
-    const [step, setStep] = useState<'idle' | 'scanning' | 'review' | 'deploying' | 'done'>('idle');
+    const [step, setStep] = useState<'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done'>('idle');
     const [plan, setPlan] = useState<DeployPlan | null>(null);
     const [scanTaskId, setScanTaskId] = useState<string | null>(null);
     const [deployTaskId, setDeployTaskId] = useState<string | null>(null);
@@ -106,9 +107,16 @@ export default function EcosystemPage() {
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
     const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
     const [servers, setServers] = useState<any[]>([]);
+    const [availableRepos, setAvailableRepos] = useState<any[]>([]);
+    const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>('auto');
+
+    // Deep scan states
+    const [isDeepScanning, setIsDeepScanning] = useState(false);
+    const [deepScanProgress, setDeepScanProgress] = useState('');
+    const [deepScanResult, setDeepScanResult] = useState<any>(null);
 
     useEffect(() => {
         apiGet('/api/v1/servers/').then(data => {
@@ -129,9 +137,12 @@ export default function EcosystemPage() {
                     onComplete(data.result);
                 } else if (data.status === 'FAILURE') {
                     setError(data.error || data.result?.error || 'Task failed');
-                    setStep('idle');
+                    setStep('selection'); // Go back to selection on failure
                 } else {
-                    // Still running
+                    // Still running - could update progress based on data if backend provides it
+                    if (data.status === 'PROGRESS' || data.result?.state) {
+                         setScanProgress(data.result?.state || 'Scanning in progress...');
+                    }
                     setTimeout(poll, 2000);
                 }
             } catch {
@@ -141,25 +152,69 @@ export default function EcosystemPage() {
         poll();
     }, []);
 
+    // Poll for deep scan task
+    const pollDeepScanTask = useCallback(async (taskId: string, onComplete: (result: any) => void) => {
+        const poll = async () => {
+            try {
+                const data = await apiGet(`/api/v1/cloud/ecosystem/deep_scan/status/?task_id=${taskId}`);
+                if (data.status === 'SUCCESS' && data.result) {
+                    onComplete(data.result);
+                } else if (data.status === 'FAILURE') {
+                    setError(data.error || data.result?.error || 'Deep scan failed');
+                    setIsDeepScanning(false);
+                } else {
+                    if (data.status === 'PROGRESS' || data.result?.state) {
+                         setDeepScanProgress(data.result?.state || 'Scanning in progress...');
+                    }
+                    setTimeout(poll, 2000);
+                }
+            } catch {
+                setTimeout(poll, 3000);
+            }
+        };
+        poll();
+    }, []);
+
+    // Fetch repos for selection
+    const fetchRepos = async () => {
+        setStep('scanning'); // Temporary state for loading
+        setError(null);
+        setScanProgress('Fetching your GitHub repositories...');
+        
+        try {
+            const data = await apiGet('/api/v1/cloud/integrations/github/repos/?per_page=100');
+            setAvailableRepos(data.repos || []);
+            // Default select all
+            setSelectedRepos((data.repos || []).map((r: any) => r.full_name));
+            setStep('selection');
+        } catch (err: any) {
+            setError(err.message || 'Failed to fetch repositories');
+            setStep('idle');
+        }
+    };
+
     // Start scan
     const startScan = async () => {
         setStep('scanning');
         setError(null);
         setPlan(null);
-        setScanProgress('Connecting to GitHub...');
+        setScanProgress('Initializing batch processing...');
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { ai_provider: selectedProvider });
+            const data = await apiPost('/api/v1/cloud/ecosystem/scan/', { 
+                ai_provider: selectedProvider,
+                selected_repos: selectedRepos
+            });
             setScanTaskId(data.task_id);
-            setScanProgress('Scanning repositories...');
-
-            // Animate progress messages
+            
+            // Note: The UI now polls the task status. The backend can optionally provide 
+            // progress updates by returning custom state, or we just rely on generic messages.
             const messages = [
-                'Fetching repository list...',
-                'Analyzing file structures...',
-                'Detecting tech stacks...',
-                'Building dependency graph...',
-                'Generating deploy plan...',
+                'Chunking repositories into batches...',
+                'Analyzing files and detecting stacks...',
+                'Evaluating dependencies...',
+                'Running AI Synthesis pass...',
+                'Finalizing ecosystem architecture...',
             ];
             let i = 0;
             const interval = setInterval(() => {
@@ -167,13 +222,13 @@ export default function EcosystemPage() {
                     setScanProgress(messages[i]);
                     i++;
                 }
-            }, 4000);
+            }, 5000);
 
             pollTask(data.task_id, (result) => {
                 clearInterval(interval);
                 if (result.error) {
                     setError(result.error);
-                    setStep('idle');
+                    setStep('selection');
                 } else {
                     setPlan(result);
                     setStep('review');
@@ -181,7 +236,39 @@ export default function EcosystemPage() {
             });
         } catch (err: any) {
             setError(err.message || 'Failed to start scan');
-            setStep('idle');
+            setStep('selection');
+        }
+    };
+
+    // Deep codebase scan
+    const startDeepScan = async () => {
+        if (!plan) return;
+        setIsDeepScanning(true);
+        setError(null);
+        setDeepScanResult(null);
+        setDeepScanProgress('Initializing deep codebase scan...');
+        
+        // Convert plan to simplified repos_data structure that deep scan expects
+        const reposData = plan.services.map((s: any) => ({ repo: s.repo, stack: s.stack }));
+
+        try {
+            const data = await apiPost('/api/v1/cloud/ecosystem/deep_scan/', { 
+                ai_provider: selectedProvider,
+                repos_data: reposData,
+                deploy_plan: plan
+            });
+            
+            pollDeepScanTask(data.task_id, (result) => {
+                setIsDeepScanning(false);
+                if (result.error) {
+                    setError(result.error);
+                } else {
+                    setDeepScanResult(result);
+                }
+            });
+        } catch (err: any) {
+            setError(err.message || 'Failed to start deep scan');
+            setIsDeepScanning(false);
         }
     };
 
@@ -429,12 +516,88 @@ export default function EcosystemPage() {
                             <motion.button
                                 whileHover={{ scale: 1.05 }}
                                 whileTap={{ scale: 0.95 }}
-                                onClick={startScan}
+                                onClick={fetchRepos}
                                 className="btn-shimmer px-10 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold shadow-lg shadow-emerald-500/25 flex items-center gap-3 mx-auto text-lg"
                             >
                                 <Scan size={24} />
                                 Begin Ecosystem Discovery
                             </motion.button>
+                        </motion.div>
+                    )}
+
+                    {/* Step: Selection */}
+                    {step === 'selection' && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="space-y-6"
+                        >
+                            <div className="text-center py-6">
+                                <h2 className="text-2xl font-bold mb-2">Select Repositories</h2>
+                                <p className="text-muted-foreground">
+                                    Choose the repositories you want to include in this ecosystem deploy.
+                                </p>
+                            </div>
+
+                            <div className="bg-card border border-border rounded-xl p-4 max-h-[60vh] overflow-y-auto">
+                                <div className="flex justify-between items-center mb-4 pb-2 border-b">
+                                    <span className="font-semibold">{selectedRepos.length} / {availableRepos.length} selected</span>
+                                    <div className="space-x-2">
+                                        <button 
+                                            onClick={() => setSelectedRepos(availableRepos.map(r => r.full_name))}
+                                            className="text-xs px-3 py-1 bg-muted rounded hover:bg-muted/80"
+                                        >
+                                            Select All
+                                        </button>
+                                        <button 
+                                            onClick={() => setSelectedRepos([])}
+                                            className="text-xs px-3 py-1 bg-muted rounded hover:bg-muted/80"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {availableRepos.map((repo) => (
+                                        <label key={repo.full_name} className="flex items-start gap-3 p-3 border rounded-lg hover:bg-muted/30 cursor-pointer">
+                                            <input 
+                                                type="checkbox" 
+                                                className="mt-1"
+                                                checked={selectedRepos.includes(repo.full_name)}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setSelectedRepos([...selectedRepos, repo.full_name]);
+                                                    } else {
+                                                        setSelectedRepos(selectedRepos.filter(r => r !== repo.full_name));
+                                                    }
+                                                }}
+                                            />
+                                            <div className="overflow-hidden">
+                                                <p className="font-medium truncate" title={repo.full_name}>{repo.full_name}</p>
+                                                {repo.description && <p className="text-xs text-muted-foreground truncate">{repo.description}</p>}
+                                                <div className="flex gap-2 mt-1">
+                                                    {repo.language && <span className="text-[10px] px-1.5 rounded bg-muted">{repo.language}</span>}
+                                                    {repo.private ? <span className="text-[10px] px-1.5 rounded bg-yellow-500/10 text-yellow-500">Private</span> : <span className="text-[10px] px-1.5 rounded bg-emerald-500/10 text-emerald-500">Public</span>}
+                                                </div>
+                                            </div>
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex justify-center pt-4">
+                                <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                    onClick={startScan}
+                                    disabled={selectedRepos.length === 0}
+                                    className="btn-shimmer px-10 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold shadow-lg shadow-emerald-500/25 flex items-center gap-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <Scan size={22} />
+                                    Analyze Selected Repos
+                                    <ArrowRight size={18} />
+                                </motion.button>
+                            </div>
                         </motion.div>
                     )}
 
@@ -495,6 +658,71 @@ export default function EcosystemPage() {
                                     <p className="text-[10px] text-muted-foreground truncate mt-0.5">{plan.ai_provider || 'Local Heuristics Only'}</p>
                                     <Sparkles size={40} className="absolute -right-2 -bottom-2 text-primary/5 group-hover:text-primary/10 transition-colors" />
                                 </div>
+                            </div>
+
+                            {/* Deep Scan Section */}
+                            <div className="bg-card border border-border p-5 rounded-xl">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                        <Code size={14} /> Deep Codebase Verification
+                                    </h3>
+                                    {!isDeepScanning && !deepScanResult && (
+                                        <button 
+                                            onClick={startDeepScan}
+                                            className="text-xs px-3 py-1.5 bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/20 font-medium"
+                                        >
+                                            Verify Env Vars vs Actual Code
+                                        </button>
+                                    )}
+                                </div>
+
+                                {isDeepScanning && (
+                                    <div className="flex flex-col items-center justify-center py-6 gap-3">
+                                        <Loader2 className="animate-spin text-primary" size={24} />
+                                        <p className="text-sm font-medium animate-pulse">{deepScanProgress}</p>
+                                    </div>
+                                )}
+
+                                {deepScanResult && (
+                                    <div className="space-y-4">
+                                        <div className={`p-4 rounded-lg border ${deepScanResult.verification?.is_valid ? 'bg-emerald-500/5 border-emerald-500/30' : 'bg-red-500/5 border-red-500/30'}`}>
+                                            <div className="flex items-center gap-2 mb-2">
+                                                {deepScanResult.verification?.is_valid ? (
+                                                    <CheckCircle size={18} className="text-emerald-500" />
+                                                ) : (
+                                                    <AlertTriangle size={18} className="text-red-500" />
+                                                )}
+                                                <h4 className={`font-bold ${deepScanResult.verification?.is_valid ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                    {deepScanResult.verification?.is_valid ? 'Architecture & Env Vars Verified' : 'Discrepancies Detected'}
+                                                </h4>
+                                            </div>
+                                            
+                                            {deepScanResult.verification?.missing_env_vars?.length > 0 && (
+                                                <div className="mt-3">
+                                                    <p className="text-sm font-semibold mb-1">Missing Environment Variables in Plan:</p>
+                                                    <ul className="text-sm space-y-1 text-muted-foreground list-disc list-inside">
+                                                        {deepScanResult.verification.missing_env_vars.map((missing: any, i: number) => (
+                                                            <li key={i}>
+                                                                <span className="font-mono text-xs">{missing.env_key}</span> ({missing.service_name}): {missing.reason}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+
+                                            {deepScanResult.verification?.architectural_warnings?.length > 0 && (
+                                                <div className="mt-3">
+                                                    <p className="text-sm font-semibold mb-1">Architectural Warnings:</p>
+                                                    <ul className="text-sm space-y-1 text-muted-foreground list-disc list-inside">
+                                                        {deepScanResult.verification.architectural_warnings.map((warn: string, i: number) => (
+                                                            <li key={i}>{warn}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             {/* Addons */}

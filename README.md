@@ -137,32 +137,28 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 | **Frontend** | Next.js 15 (TypeScript), Tailwind CSS v4 |
 | **Database** | PostgreSQL 16 |
 | **Orchestration** | Docker Compose |
-| **SSL/Proxy** | Caddy (automatic Let's Encrypt, containerized) |
+| **SSL/Proxy** | Caddy (automatic Let's Encrypt, containerized, routes directly to backend/frontend) |
 | **Builder** | Nixpacks (auto-detect buildpacks) |
-| **Internal Proxy** | Nginx (routes `/api` → backend, `/` → frontend) |
 
 ---
 
 ## 🏗️ Architecture
 
 ```
-                    ┌─────────────────────────┐
-  Internet ───────▶ │  Caddy (:80 / :443)     │
-                    │  (SSL termination)       │
-                    └──────────┬──────────────┘
-                               │
-                    ┌──────────▼──────────────┐
-                    │  Nginx (:8090)           │
-                    │  /api  → backend:8000    │
-                    │  /     → frontend:3000   │
-                    └──────────┬──────────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-     ┌────────▼───────┐ ┌─────▼──────┐ ┌───────▼───────┐
-     │   Backend      │ │  Frontend  │ │  Celery       │
-     │   Django /     │ │  Next.js   │ │  Workers +    │
-     │   Gunicorn     │ │  SSR       │ │  Beat         │
+                    ┌────────────────────────────────────┐
+  Internet ───────▶ │  Caddy (:80 / :443)                │
+                     │  SSL, On-Demand TLS, reverse proxy  │
+                     │  /api/* /ws/* /health /admin       │
+                     │  /static/ /media/ → backend:8000    │
+                     │  /* (catch-all) → frontend:3000     │
+                     └──────────┬─────────────────────────┘
+                                │
+               ┌────────────────┼────────────────┐
+               │                │                │
+      ┌────────▼───────┐ ┌─────▼──────┐ ┌───────▼───────┐
+      │   Backend      │ │  Frontend  │ │  Celery       │
+      │   Django /     │ │  Next.js   │ │  Workers +    │
+      │   Gunicorn     │ │  SSR       │ │  Beat         │
      └────────┬───────┘ └────────────┘ └───────┬───────┘
               │                                │
      ┌────────▼───────┐                ┌───────▼───────┐
@@ -174,7 +170,7 @@ For non-interactive automation, use: `FORCE_WIPE=1 sudo bash install.sh --wipe`
 
                     ┌──────────────────────────────────┐
                     │           MASTER NODE             │
-                    │  (Caddy → Nginx → Django + Celery)│
+                    │  (Caddy → Django + Celery)         │
                     │  PostgreSQL / Redis / RabbitMQ    │
                     └──────────┬───────────────────────┘
                                │
@@ -208,10 +204,12 @@ smsly-hosting/
 │   ├── caddy-health-guard.sh    # Caddy health guard
 │   ├── smsly-autoscaler.py      # VPS autoscaler
 │   └── ...
-├── infrastructure/           # Docker, Nginx, Caddy, Monitoring configs
+├── infrastructure/           # Docker, Caddy, Traefik, Monitoring configs
+│   ├── caddy/                # Caddy configuration
+│   ├── docker/               # Docker compose fragments
+│   └── monitoring/           # Prometheus, Grafana configs
 ├── docker-compose.prod.yml   # Production stack
 ├── install.sh                # Universal installer (SEC-002: IP-mode SSL guard)
-└── nginx.conf                # Nginx reverse proxy config
 ```
 
 ---
@@ -241,7 +239,7 @@ smsly-hosting/
 | 2026-05 | **IP-mode SSL guard (SEC-002)**: `USE_SSL=true` env var forcibly downgraded when `DOMAIN` is a raw IP | `install.sh:1243-1253,3846-3855` |
 | 2026-05 | **DNS fallback via DoH**: DNS check uses Google DNS-over-HTTPS when `host` (dnsutils) unavailable | `install.sh:3490-3517` |
 | 2026-05 | **ACME staging validation**: Caddy HTTPS-ready check before going live | `install.sh:4321-4360` |
-| 2026-05 | **Caddy upstream fixed**: Container Caddy proxies to `nginx:80` instead of `localhost:8090` | `caddy-config/Caddyfile`, `caddy_manager.py` |
+| 2026-05 | **Nginx removed from routing chain**: Caddy now proxies directly to backend:8000 and frontend:3000 instead of via nginx | `caddy-config/Caddyfile`, `caddy_manager.py`, `docker-compose.prod.yml` |
 | 2026-05 | **Caddy redirect excludes localhost**: `:80` HTTPS redirect skips IPs, localhost, `.local` hostnames | `caddy_manager.py:516-531` |
 | 2026-05 | **Token file hardening**: Cloudflare token files created with `0o600`, config dir restricted to `0o700` | `caddy_manager.py:596-616` |
 | 2026-05 | **Unified secret generator**: `scripts/generate_env_secrets.py` is the single source of truth for all secret generation | `scripts/generate_env_secrets.py` |

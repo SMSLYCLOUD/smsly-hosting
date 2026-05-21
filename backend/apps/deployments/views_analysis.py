@@ -490,7 +490,60 @@ class RepoAnalysisView(GenericAPIView):
             return self._build_response('fastapi', 0.6)
         elif 'express' in url_lower or 'node' in url_lower:
             return self._build_response('express', 0.5)
-        elif 'go' in url_lower or 'golang' in url_lower:
-            return self._build_response('go', 0.5)
-
         return self._build_response('unknown', 0.3)
+
+class CodeIntelligenceView(GenericAPIView):
+    """
+    POST /api/v1/cloud/ecosystem/deep_scan/
+    Triggers the deep codebase analysis and verification task.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        ai_provider = request.data.get('ai_provider', 'auto')
+        repos_data = request.data.get('repos_data', [])
+        deploy_plan = request.data.get('deploy_plan', {})
+        
+        if not repos_data or not deploy_plan:
+            return Response({"detail": "repos_data and deploy_plan are required."}, status=400)
+            
+        from apps.deployments.tasks_code_intelligence import deep_scan_and_verify_task
+        
+        task = deep_scan_and_verify_task.delay(
+            user_id=request.user.id,
+            repos_data=repos_data,
+            deploy_plan=deploy_plan,
+            ai_provider=ai_provider
+        )
+        
+        return Response({"task_id": task.id})
+
+class DeepScanTaskStatusView(GenericAPIView):
+    """
+    GET /api/v1/cloud/ecosystem/deep_scan/status/?task_id=...
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response({"error": "task_id required"}, status=400)
+
+        from celery.result import AsyncResult
+        task_result = AsyncResult(task_id)
+
+        response_data = {
+            'task_id': task_id,
+            'status': task_result.status,
+            'result': task_result.result if task_result.ready() else None
+        }
+
+        # Include custom progress state if available
+        if task_result.status == 'PROGRESS' and isinstance(task_result.info, dict):
+            response_data['result'] = task_result.info
+
+        # Handle failure nicely
+        if task_result.status == 'FAILURE':
+            response_data['error'] = str(task_result.result)
+
+        return Response(response_data)

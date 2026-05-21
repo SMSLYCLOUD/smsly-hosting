@@ -46,7 +46,7 @@ When migrating from `docker-compose.prod.yml` to Helm, several architectural shi
   - **Building Images:** To build user images (Nixpacks/Dockerfiles), CloudNeuron should spawn a K8s **Job** using a tool like [Kaniko](https://github.com/GoogleContainerTools/kaniko) which securely builds container images inside a pod without needing a Docker daemon.
 
 ### C. Ingress Routing (Nginx -> Traefik)
-- **Compose:** Used a custom Nginx container (`nginx.conf`) to route `/api` to the backend and `/` to the frontend, with Caddy in front for SSL.
+- **Compose:** Caddy directly routes `/api/*`, `/ws/*`, `/health`, `/admin`, `/static/*`, `/media/*` to the backend, and `/*` (catch-all) to the frontend, with SSL termination handled by Caddy on demand.
 - **Kubernetes:** Drop Caddy and Nginx. Use the native **Traefik Ingress Controller** (which comes pre-installed in k3s).
   - **Solution:** Create an `Ingress` resource in Helm that defines the routing rules directly:
     ```yaml

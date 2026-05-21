@@ -1,7 +1,7 @@
 # Custom Domain SSL Audit & Architecture Report
 
 ## 1. Current architecture discovered from code
-The platform uses **Caddy** running on the host server as the primary reverse proxy and SSL terminator, forwarding traffic to an internal Nginx or Docker container routes. For custom domains, it leverages Caddy's **On-Demand TLS**, which automatically issues Let's Encrypt certificates the first time an HTTPS request hits the server for an unrecognized but allowed domain. Caddy authorizes these incoming domains by sending an HTTP `ask` request to the backend at `/api/v1/services/check-domain/`.
+The platform uses **Caddy** running on the host server as the primary reverse proxy and SSL terminator, forwarding traffic directly to the backend (`backend:8000`) or frontend (`frontend:3000`) containers. For custom domains, it leverages Caddy's **On-Demand TLS**, which automatically issues Let's Encrypt certificates the first time an HTTPS request hits the server for an unrecognized but allowed domain. Caddy authorizes these incoming domains by sending an HTTP `ask` request to the backend at `/api/v1/services/check-domain/`.
 
 Previously, domains were stored in a simple JSONField `custom_domains` list on the `Service` model, and there was no DNS verification prior to pushing them into Caddy.
 

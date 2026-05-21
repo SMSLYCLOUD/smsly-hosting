@@ -19,7 +19,6 @@
 | Frontend | `frontend` |
 | Database | `db` |
 | Redis | `redis` |
-| Nginx | `nginx` |
 | Celery | `celery` |
 
 ---
@@ -66,7 +65,7 @@ docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 docker compose -f docker-compose.prod.yml exec backend python manage.py migrate
 ```
 
-> **Important**: Always use `down` + `up --force-recreate` instead of just `up --build`. This prevents Nginx DNS cache issues where Nginx holds stale container IPs after a rebuild. See [502 Bad Gateway](#502-bad-gateway-after-rebuild) below.
+> **Important**: Always use `down` + `up --force-recreate` instead of just `up --build` to ensure clean state.
 
 ### Database Backup
 
@@ -93,30 +92,18 @@ gunzip -c /opt/smsly-hosting/backups/smsly_hosting_YYYYMMDD.sql.gz | \
 
 **Symptoms**: Frontend loads fine but all `/api/` requests return 502. Backend container shows healthy in `docker ps`.
 
-**Root cause**: Nginx cached the old backend container IP. When the backend was rebuilt, it got a new Docker network IP, but Nginx wasn't restarted and still points at the old (dead) IP.
-
 **Diagnosis**:
 ```bash
-# Check Nginx error logs — look for "Connection refused" or "Connection reset by peer"
-docker logs smsly-hosting-nginx-1 --tail 20 2>&1 | grep error
-
-# You'll see something like:
-# connect() failed (111: Connection refused) while connecting to upstream,
-# upstream: "http://10.0.1.14:8000/..."
-# ← This IP no longer exists
+# Check backend logs — look for "Connection refused" or errors
+docker compose -f docker-compose.prod.yml logs backend --tail 20 2>&1 | grep error
 ```
 
 **Fix**:
 ```bash
-# Option 1: Quick fix — restart just Nginx
-docker compose -f docker-compose.prod.yml restart nginx
-
-# Option 2: Full fix — recreate everything (preferred)
+# Recreate everything
 docker compose -f docker-compose.prod.yml down
 docker compose -f docker-compose.prod.yml up -d --build --force-recreate
 ```
-
-**Prevention**: Always use `down` + `up --force-recreate` when rebuilding services. Never rebuild just the backend without also restarting Nginx.
 
 ### 429 Too Many Requests
 
@@ -144,7 +131,7 @@ docker logs smsly-hosting-backend-1 --tail 50 2>&1 | grep -i "rate limit"
     ```bash
     docker compose -f docker-compose.prod.yml ps
     ```
-    Ensure `nginx` is Up and mapped `0.0.0.0:8090->80/tcp`.
+    Ensure `backend`, `frontend`, and `caddy` containers are all Up.
 
 2.  **Check Firewall**:
     Ensure port 8090 is allowed on your VPS firewall (Security Group).
@@ -156,7 +143,7 @@ docker logs smsly-hosting-backend-1 --tail 50 2>&1 | grep -i "rate limit"
 
 3.  **Check Logs**:
     ```bash
-    docker compose -f docker-compose.prod.yml logs nginx
+    docker compose -f docker-compose.prod.yml logs backend
     ```
 
 ### Database Connection Error
