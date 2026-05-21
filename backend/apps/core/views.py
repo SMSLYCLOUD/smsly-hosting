@@ -136,6 +136,24 @@ class DashboardOverviewView(GenericAPIView):
                     "action_text": "Change Password"
                 })
 
+        import psutil
+        vm = psutil.virtual_memory()
+        try:
+            disk = psutil.disk_usage('/')
+            storage_used_gb = disk.used / (1024**3)
+            storage_total_gb = disk.total / (1024**3)
+        except Exception:
+            storage_used_gb = 0
+            storage_total_gb = 0
+
+        system_usage = {
+            "ram_used_mb": int(vm.used / (1024 * 1024)),
+            "ram_total_mb": int(vm.total / (1024 * 1024)),
+            "storage_used_gb": round(storage_used_gb, 2),
+            "storage_total_gb": round(storage_total_gb, 2),
+            "cpu_percent": psutil.cpu_percent(interval=None)
+        }
+
         return Response({
             "services": service_stats,
             "deployments_this_month": deployments_this_month,
@@ -147,6 +165,7 @@ class DashboardOverviewView(GenericAPIView):
                 "storage_gb": usage_summary['storage_gb'],
                 "bandwidth_gb": usage_summary['bandwidth_gb']
             },
+            "system_usage": system_usage,
             "recent_activity": recent_activity,
             "alerts": alerts
         })

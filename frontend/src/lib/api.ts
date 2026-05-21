@@ -1442,6 +1442,13 @@ export interface DashboardOverview {
     storage_gb: number;
     bandwidth_gb: number;
   };
+  system_usage: {
+    ram_used_mb: number;
+    ram_total_mb: number;
+    storage_used_gb: number;
+    storage_total_gb: number;
+    cpu_percent: number;
+  };
   recent_activity: any[];
   alerts: any[];
 }
