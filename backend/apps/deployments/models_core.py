@@ -137,6 +137,13 @@ class Project(models.Model):
         on_delete=models.CASCADE,
         related_name="projects",
     )
+    team = models.ForeignKey(
+        'teams.Team',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="projects",
+    )
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120)
     description = models.TextField(blank=True, default="")
