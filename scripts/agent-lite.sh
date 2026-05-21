@@ -321,6 +321,59 @@ PY
     fi
 }
 
+wait_for_local_rabbitmq() {
+    local timeout="${1:-120}"
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
+            echo -e "${GREEN}  OK Local RabbitMQ is ready${NC}"
+            return 0
+        fi
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+
+    echo -e "${RED}ERROR: Local RabbitMQ did not become ready after ${timeout}s${NC}"
+    docker compose -f "$COMPOSE_PATH" logs --tail=80 rabbitmq 2>/dev/null || true
+    return 1
+}
+
+sync_local_rabbitmq_password() {
+    local env_file="$INSTALL_DIR/.env"
+    local rabbitmq_user rabbitmq_password
+
+    rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER")"
+    rabbitmq_user="${rabbitmq_user:-smsly_user}"
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
+
+    if [ -z "$rabbitmq_password" ]; then
+        echo -e "${RED}ERROR: RABBITMQ_PASSWORD is still empty after env repair${NC}"
+        exit 1
+    fi
+
+    wait_for_local_rabbitmq 120 || exit 1
+
+    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Local RabbitMQ password already matches .env${NC}"
+        return 0
+    fi
+
+    echo -e "${BLUE}  -> Syncing local RabbitMQ password for ${rabbitmq_user}...${NC}"
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
+    docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+
+    if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Local RabbitMQ password synced${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}ERROR: Local RabbitMQ password sync failed${NC}"
+    exit 1
+}
+
 fix_permissions() {
     local env_file="$INSTALL_DIR/.env"
     [ ! -f "$env_file" ] && return 0
@@ -454,8 +507,9 @@ do_install() {
     # ── Step 4: Start services ──
     step=$((step + 1))
     echo -e "\n${YELLOW}[$step/5] Starting services...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d socket-proxy traefik 2>/dev/null || \
+    docker compose -f "$COMPOSE_FILE" up -d socket-proxy redis rabbitmq traefik 2>/dev/null || \
         echo -e "${YELLOW}  ⚠ Some infra services may have failed (check: docker compose ps)${NC}"
+    sync_local_rabbitmq_password
     docker compose -f "$COMPOSE_FILE" up -d backend
     wait_for_backend 90 3
     docker compose -f "$COMPOSE_FILE" up -d celery-worker
@@ -489,12 +543,13 @@ do_update_full() {
     ensure_networks
     echo -e "${BLUE}  -> Starting local agent dependencies...${NC}"
     docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik
+    sync_local_rabbitmq_password
     echo -e "${BLUE}  → Rebuilding agent image...${NC}"
     docker compose -f "$COMPOSE_PATH" build backend || {
         echo -e "${RED}✗ Build failed${NC}"; exit 1;
     }
     echo -e "${BLUE}  → Restarting services...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d backend celery-worker
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate backend celery-worker
     wait_for_backend 60 3
     run_migrations
     fix_permissions
@@ -512,7 +567,9 @@ do_update_half() {
     configure_docker_registry_trust
     ensure_networks
     echo -e "${BLUE}  -> Applying local agent service configuration...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik backend celery-worker
+    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik
+    sync_local_rabbitmq_password
+    docker compose -f "$COMPOSE_PATH" up -d --force-recreate backend celery-worker
     wait_for_backend 60 3
     run_migrations
     fix_permissions

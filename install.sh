@@ -2601,6 +2601,47 @@ wait_for_container_ready() {
     return 1
 }
 
+sync_agent_lite_rabbitmq_password() {
+    [ "$MODE_AGENT_LITE" = "true" ] || return 0
+
+    local env_file="$INSTALL_DIR/.env"
+    local rabbitmq_user rabbitmq_password
+
+    rabbitmq_user="$(env_get_value "$env_file" "RABBITMQ_DEFAULT_USER" 2>/dev/null || true)"
+    rabbitmq_user="${rabbitmq_user:-smsly_user}"
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD" 2>/dev/null || true)"
+
+    if [ -z "$rabbitmq_password" ]; then
+        echo -e "${RED}  ERROR RABBITMQ_PASSWORD is empty after agent-lite env generation${NC}"
+        exit 1
+    fi
+
+    docker compose -f "$COMPOSE_FILE" up -d rabbitmq >/dev/null 2>&1 || true
+    wait_for_container_ready "smsly-hosting-rabbitmq-1" 120 || {
+        docker compose -f "$COMPOSE_FILE" logs --tail=80 rabbitmq 2>/dev/null || true
+        exit 1
+    }
+
+    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Lite Agent RabbitMQ password already matches .env${NC}"
+        return 0
+    fi
+
+    echo -e "${BLUE}  -> Syncing Lite Agent RabbitMQ password for ${rabbitmq_user}...${NC}"
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl add_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl change_password "$rabbitmq_user" "$rabbitmq_password" >/dev/null
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_user_tags "$rabbitmq_user" administrator >/dev/null
+    docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl set_permissions -p / "$rabbitmq_user" ".*" ".*" ".*" >/dev/null
+
+    if docker compose -f "$COMPOSE_FILE" exec -T rabbitmq rabbitmqctl authenticate_user "$rabbitmq_user" "$rabbitmq_password" >/dev/null 2>&1; then
+        echo -e "${GREEN}  OK Lite Agent RabbitMQ password synced${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}  ERROR Lite Agent RabbitMQ password sync failed${NC}"
+    exit 1
+}
+
 recover_runtime_stack() {
     echo -e "${BLUE}  -> Running runtime recovery (network + core services + edge)...${NC}"
 
@@ -2618,6 +2659,7 @@ recover_runtime_stack() {
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         docker compose -f "$COMPOSE_FILE" up -d redis rabbitmq socket-proxy || true
         wait_for_container_ready "smsly-hosting-redis-1" 120 || true
+        sync_agent_lite_rabbitmq_password
     else
         docker compose -f "$COMPOSE_FILE" up -d db pgcat redis socket-proxy registry || true
         wait_for_container_ready "smsly-hosting-db-1" 120 || true
@@ -3150,10 +3192,15 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps backend
+            fi
 
             echo -e "${BLUE}  → Running migrations...${NC}"
             sleep 10  # Wait for backend to start
@@ -3179,7 +3226,11 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 celery_svcs="celery-worker"
             fi
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $celery_svcs
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps $celery_svcs
+            fi
             ;;
         half)
             echo -e "${BLUE}  → [HALF UPDATE] Rebuilding changed services from cache (no image pulls)${NC}"
@@ -3194,7 +3245,13 @@ PYEOF
 
             # 2. Restart backend (picks up Python code changes from mounted volume)
             echo -e "${BLUE}  → Restarting backend...${NC}"
-            docker compose -f "$COMPOSE_FILE" restart backend
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend
+            else
+                docker compose -f "$COMPOSE_FILE" restart backend
+            fi
             sleep 5
 
             # 3. Run migrations
@@ -3215,7 +3272,11 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
-            docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+            else
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            fi
             set_checkpoint "update_db_migrated"
             ;;
         full)
@@ -3252,7 +3313,13 @@ PYEOF
             # 6. Start everything (addons stay running, core gets fresh containers)
             # This does a graceful zero-downtime replacement instead of an explicit hard stop
             echo -e "${BLUE}    ↳ Starting all services...${NC}"
-            docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans $CORE_SERVICES
+            else
+                docker compose -f "$COMPOSE_FILE" up -d --no-deps --remove-orphans $CORE_SERVICES
+            fi
 
             if [ "$MODE_AGENT_LITE" != "true" ]; then
                 # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
@@ -3270,6 +3337,7 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 verify_agent_lite_connectivity
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans redis rabbitmq socket-proxy
+                sync_agent_lite_rabbitmq_password
             else
                 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans db pgcat redis socket-proxy
             fi
@@ -3291,7 +3359,11 @@ PYEOF
             if [ "$MODE_AGENT_LITE" = "true" ]; then
                 restart_svcs="celery-worker"
             fi
-            docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            if [ "$MODE_AGENT_LITE" = "true" ]; then
+                docker compose -f "$COMPOSE_FILE" up -d --force-recreate $restart_svcs 2>/dev/null || true
+            else
+                docker compose -f "$COMPOSE_FILE" restart $restart_svcs 2>/dev/null || true
+            fi
             set_checkpoint "update_db_migrated"
             ;;
     esac
@@ -4601,6 +4673,10 @@ fi
         docker compose -f "$COMPOSE_FILE" logs --tail=120 2>/dev/null || true
         exit "$DEPLOY_RC"
     fi
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        sync_agent_lite_rabbitmq_password
+        docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend celery-worker
+    fi
     set_checkpoint "stack_deployed"
 fi
 if [ "$STACK_DEPLOYED_FROM_CHECKPOINT" = "true" ]; then
@@ -5103,8 +5179,10 @@ if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "celery-worker" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "traefik" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "socket-proxy" \
-   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|nginx|db|pgcat|redis|rabbitmq)$"; then
-    echo -e "${GREEN}  ✓ Lite Agent profile selected; no frontend/control-plane services included${NC}"
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "redis" \
+   && printf '%s\n' "$AGENT_SERVICES" | grep -qx "rabbitmq" \
+   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|nginx|db|pgcat)$"; then
+    echo -e "${GREEN}  ✓ Lite Agent profile selected; local Redis/RabbitMQ enabled and control-plane services excluded${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
     echo -e "${RED}  ✗ Lite Agent compose profile is wrong. Services: ${AGENT_SERVICES//$'\n'/, }${NC}"
