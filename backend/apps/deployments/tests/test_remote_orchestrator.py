@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 from apps.deployments.services.remote_orchestrator import (
     _host_is_ip,
     RemoteOrchestrator,
-    _is_internal_target,
     _REMOTE_VERIFY,
     _ENFORCE_TLS,
 )
@@ -257,6 +256,163 @@ class TestMeshOptimizationIntegration(unittest.TestCase):
             import apps.deployments.services.remote_orchestrator as ro
             importlib.reload(ro)
             # When enforcement is on, only HTTPS URLs should be returned
+
+
+class TestClassify404Response(unittest.TestCase):
+    """Test the _classify_404_response static method."""
+
+    def test_traefik_default_404(self):
+        """Traefik's default 404 body is exactly '404 page not found'."""
+        resp = Mock()
+        resp.text = "404 page not found"
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "traefik_no_router",
+        )
+
+    def test_traefik_default_404_whitespace(self):
+        """Should handle trailing whitespace/newlines."""
+        resp = Mock()
+        resp.text = "404 page not found\n"
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "traefik_no_router",
+        )
+
+    def test_django_json_404(self):
+        """Django DRF returns JSON with 'detail: Not found.'."""
+        resp = Mock()
+        resp.text = '{"detail": "Not found."}'
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "django_not_found",
+        )
+
+    def test_nginx_html_404(self):
+        """Nginx returns an HTML 404 page."""
+        resp = Mock()
+        resp.text = "<html><body><h1>404 Not Found</h1></body></html>"
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "proxy_html_404",
+        )
+
+    def test_unknown_404(self):
+        """Unknown format should return 'unknown_404'."""
+        resp = Mock()
+        resp.text = "something weird happened"
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "unknown_404",
+        )
+
+    def test_empty_body(self):
+        """Empty response body should return 'unknown_404'."""
+        resp = Mock()
+        resp.text = ""
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "unknown_404",
+        )
+
+    def test_none_text(self):
+        """None text attribute should not crash."""
+        resp = Mock()
+        resp.text = None
+        self.assertEqual(
+            RemoteOrchestrator._classify_404_response(resp),
+            "unknown_404",
+        )
+
+
+class TestPreflightCheckOrHeal(unittest.TestCase):
+    """Test the preflight_check_or_heal method."""
+
+    def setUp(self):
+        self.mock_server = Mock()
+        self.mock_server.name = "test-node"
+        self.mock_server.host = "69.164.244.51"
+        self.mock_server.api_url = None
+        self.mock_server.is_lite_agent = True
+        self.mock_server.api_token = "test_token"
+        self.mock_server.gateway_secret = "test_secret"
+        self.mock_server.ssh_key = ""
+        self.mock_server.ssh_password = ""
+        self.mock_server.ssh_user = "root"
+        self.mock_server.ssh_port = 22
+
+    def test_healthy_node_returns_ok(self):
+        """When check_connectivity returns auth=True, preflight is ok."""
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        with patch.object(orchestrator, 'check_connectivity',
+                          return_value={'network': True, 'auth': True, 'error': ''}):
+            result = orchestrator.preflight_check_or_heal()
+
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['healed'])
+        self.assertEqual(result['error'], '')
+
+    def test_network_unreachable(self):
+        """When network is unreachable, should return diagnosis='network_unreachable'."""
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        with patch.object(orchestrator, 'check_connectivity',
+                          return_value={'network': False, 'auth': False, 'error': 'Connection refused'}):
+            result = orchestrator.preflight_check_or_heal()
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['diagnosis'], 'network_unreachable')
+        self.assertIn('network-unreachable', result['error'])
+
+    def test_traefik_404_no_ssh_credentials(self):
+        """When Traefik 404 but no SSH credentials, heal should fail gracefully."""
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        mock_probe = Mock()
+        mock_probe.status_code = 404
+        mock_probe.text = "404 page not found"
+
+        with patch.object(orchestrator, 'check_connectivity',
+                          return_value={'network': True, 'auth': False, 'error': 'API returned 404'}):
+            with patch.object(orchestrator, '_request', return_value=mock_probe):
+                result = orchestrator.preflight_check_or_heal()
+
+        self.assertFalse(result['ok'])
+        self.assertTrue(result['healed'])
+        self.assertEqual(result['diagnosis'], 'traefik_no_router')
+        self.assertIn('SSH auto-heal failed', result['error'])
+
+
+class TestLiteAgentCandidateURLs(unittest.TestCase):
+    """Test that lite agents only try port 80."""
+
+    def setUp(self):
+        self.mock_server = Mock()
+        self.mock_server.name = "lite-node"
+        self.mock_server.host = "69.164.244.51"
+        self.mock_server.api_url = None
+        self.mock_server.api_token = "test_token"
+        self.mock_server.gateway_secret = "test_secret"
+
+    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
+    def test_lite_agent_only_port_80(self):
+        """Lite agents should only generate http://{host} (port 80)."""
+        self.mock_server.is_lite_agent = True
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        urls = orchestrator._candidate_base_urls()
+
+        self.assertEqual(len(urls), 1, f"Lite agent should have exactly 1 URL, got: {urls}")
+        self.assertEqual(urls[0], "http://69.164.244.51")
+
+    @patch("apps.deployments.services.remote_orchestrator._ENFORCE_TLS", False)
+    def test_full_install_has_multiple_ports(self):
+        """Full install nodes should try multiple ports (80, 8090, 443)."""
+        self.mock_server.is_lite_agent = False
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        urls = orchestrator._candidate_base_urls()
+
+        # Should have at least port 80 and 8090
+        self.assertTrue(len(urls) >= 2, f"Full install should have multiple URLs, got: {urls}")
+        self.assertIn("http://69.164.244.51", urls)
+        self.assertIn("http://69.164.244.51:8090", urls)
 
 
 if __name__ == "__main__":
