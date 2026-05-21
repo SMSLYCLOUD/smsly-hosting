@@ -202,7 +202,6 @@ export default function TunnelsPage() {
 
   return (
     <DashboardShell>
-      <RequiresTier tier="pro">
       <div className="flex-1 p-8 relative z-10">
         <motion.div
           className="max-w-6xl mx-auto space-y-8"
@@ -245,7 +244,7 @@ export default function TunnelsPage() {
               { icon: <Wifi size={18} />, label: 'Active', value: tunnels.filter(t => t.is_active).length, color: 'text-emerald-500 bg-emerald-500/10' },
               { icon: <ArrowUpDown size={18} />, label: 'Total Requests', value: tunnels.reduce((s, t) => s + t.request_count, 0), color: 'text-blue-500 bg-blue-500/10' },
               { icon: <BarChart3 size={18} />, label: 'Bandwidth', value: formatBytes(tunnels.reduce((s, t) => s + (t.bandwidth_used || 0), 0)), color: 'text-amber-500 bg-amber-500/10' },
-              { icon: <Globe2 size={18} />, label: 'Subdomains', value: `${subdomains.length}${subdomainLimit !== -1 ? `/${subdomainLimit}` : ''}`, color: 'text-purple-500 bg-purple-500/10' },
+              { icon: <Globe2 size={18} />, label: 'Subdomains', value: `${subdomains.length}`, color: 'text-purple-500 bg-purple-500/10' },
             ].map((stat, i) => (
               <motion.div
                 key={stat.label}
@@ -446,7 +445,6 @@ export default function TunnelsPage() {
               <h2 className="font-bold text-lg flex items-center gap-2">
                 <Globe2 size={18} className="text-purple-500" />
                 Reserved Subdomains
-                <span className="text-xs text-muted-foreground font-normal">— Pro/Team only</span>
               </h2>
               <button
                 onClick={() => setShowSubdomainForm(!showSubdomainForm)}
@@ -517,7 +515,6 @@ export default function TunnelsPage() {
                 { cmd: 'npx @smsly/tunnel 3000', desc: 'Tunnel port 3000' },
                 { cmd: 'smsly-tunnel 3000 --subdomain myapp', desc: 'Custom subdomain' },
                 { cmd: 'smsly-tunnel 3000 --inspect', desc: 'With request inspector' },
-                { cmd: 'smsly-tunnel login <token>', desc: 'Authenticate for Pro features' },
               ].map(item => (
                 <div key={item.cmd} className="flex items-start gap-2 p-2 rounded bg-muted/30">
                   <code className="text-[11px] font-mono flex-1 text-cyan-400">{item.cmd}</code>
@@ -528,7 +525,6 @@ export default function TunnelsPage() {
           </div>
         </motion.div>
       </div>
-      </RequiresTier>
     </DashboardShell>
   );
 }

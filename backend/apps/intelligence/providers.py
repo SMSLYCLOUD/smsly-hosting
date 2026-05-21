@@ -1328,18 +1328,24 @@ def _parallel_ask(providers: List[AIProvider], prompt: str,
     """Ask multiple providers in parallel. Returns list of (response, name)."""
     results: List[Tuple[str, str]] = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(providers)) as pool:
-        futures = {
-            pool.submit(_ask_single, p, prompt, system_prompt): p
-            for p in providers
-        }
-        for future in concurrent.futures.as_completed(futures, timeout=90):
+    timeout = int(os.environ.get("SENATE_TIMEOUT_SECONDS", "180"))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(providers))
+    futures = {
+        pool.submit(_ask_single, p, prompt, system_prompt): p
+        for p in providers
+    }
+    try:
+        for future in concurrent.futures.as_completed(futures, timeout=timeout):
             provider = futures[future]
             try:
                 response, name = future.result()
                 results.append((response, name))
             except Exception as e: # pylint: disable=broad-exception-caught
                 logger.warning("Provider %s failed: %s", provider.name(), e)
+    except concurrent.futures.TimeoutError:
+        logger.warning("Parallel ask timed out, proceeding with %d results", len(results))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     return results
 

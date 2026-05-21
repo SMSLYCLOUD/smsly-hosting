@@ -254,7 +254,7 @@ export default function CanvasPage() {
     /* ── Load ── */
     const loadData = useCallback(async () => {
         try {
-            const res = await api.get('/topology/');
+            const res = await api.get('/topology/', { params: { project_id: params?.id } });
             const nodesIn = Array.isArray(res?.data?.nodes) ? res.data.nodes : [];
             const edgesIn = Array.isArray(res?.data?.edges) ? res.data.edges : [];
 

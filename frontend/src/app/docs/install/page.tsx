@@ -212,7 +212,7 @@ sudo bash /tmp/install.sh`}</CodeBlock>
   Password: /opt/smsly-hosting/.credentials
 ═══════════════════════════════════════════`}</CodeBlock>
 
-          <p>The <strong>Access URL</strong> is always <code>http://YOUR_SERVER_IP</code> for a fresh install — never HTTPS. See "Accessing the Dashboard" below for why.</p>
+          <p>The <strong>Access URL</strong> is always <code>http://YOUR_SERVER_IP</code> for a fresh install — never HTTPS. See &quot;Accessing the Dashboard&quot; below for why.</p>
 
 
           {/* ──── Deployment Modes ──── */}

@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 
 const DEFAULT_NODE_CODE = '// Write your function here\nexports.handler = async (req, res) => {\n  res.json({ message: "Hello from Edge!" });\n};';
+const DEFAULT_PYTHON_CODE = '# Write your function here\ndef handler(req):\n    return {"message": "Hello from Edge!"}';
 
 export default function FunctionsPage() {
   const { toast } = useToast();
@@ -198,7 +199,16 @@ export default function FunctionsPage() {
                         </div>
                         <div className="grid gap-1">
                             <Label>Runtime</Label>
-                            <Select value={runtime} onValueChange={setRuntime}>
+                            <Select value={runtime} onValueChange={(val) => {
+                                setRuntime(val);
+                                if (!selectedFunction) {
+                                    if (code === DEFAULT_NODE_CODE && val.includes('python')) {
+                                        setCode(DEFAULT_PYTHON_CODE);
+                                    } else if (code === DEFAULT_PYTHON_CODE && val.includes('node')) {
+                                        setCode(DEFAULT_NODE_CODE);
+                                    }
+                                }
+                            }}>
                                 <SelectTrigger className="h-8 w-40">
                                     <SelectValue />
                                 </SelectTrigger>

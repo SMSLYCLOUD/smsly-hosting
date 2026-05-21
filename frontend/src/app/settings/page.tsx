@@ -440,16 +440,32 @@ export default function SettingsPage() {
   };
 
   const handleInvite = async () => {
-      if (!teams.length) return;
+      let activeTeamId = teams.length > 0 ? teams[0].id : null;
+      
+      if (!activeTeamId) {
+          try {
+              const newTeam = await teamsApi.create("My Team");
+              activeTeamId = newTeam.id;
+              setTeams([newTeam]);
+          } catch (err) {
+              toast({ title: "Error", description: "Failed to create default team to invite member.", variant: "destructive" });
+              return;
+          }
+      }
+
       try {
-          await teamsApi.inviteMember(teams[0].id, inviteEmail, inviteRole);
-          toast({ title: "Invitation Sent" });
+          await teamsApi.inviteMember(activeTeamId, inviteEmail, inviteRole);
+          toast({ title: "Invitation Sent", description: `Invited ${inviteEmail}` });
           setInviteEmail("");
           // Refresh members
-          const members = await teamsApi.members(teams[0].id);
+          const members = await teamsApi.members(activeTeamId);
           setTeamMembers(members);
-      } catch (err) {
-          toast({ title: "Error", description: "Failed to invite member", variant: "destructive" });
+      } catch (err: any) {
+          toast({ 
+              title: "Error", 
+              description: err?.response?.data?.error || "Failed to invite member", 
+              variant: "destructive" 
+          });
       }
   };
 
