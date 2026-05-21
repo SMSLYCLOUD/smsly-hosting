@@ -102,6 +102,219 @@ ensure_networks() {
     }
 }
 
+gen_hex_secret() {
+    local bytes="${1:-16}"
+    python3 -c "import secrets; print(secrets.token_hex(${bytes}))" 2>/dev/null || openssl rand -hex "$bytes"
+}
+
+env_get_value() {
+    local env_file="$1"
+    local var_name="$2"
+    [ -f "$env_file" ] || return 0
+    grep -m1 "^${var_name}=" "$env_file" 2>/dev/null | cut -d= -f2- | sed "s/^\"//;s/\"$//;s/^'//;s/'$//" || true
+}
+
+env_set_value() {
+    local env_file="$1"
+    local var_name="$2"
+    local var_value="$3"
+    python3 - "$env_file" "$var_name" "$var_value" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+prefix = f"{key}="
+
+if not env_path.exists():
+    env_path.write_text(f"{key}={value}\n")
+    sys.exit(0)
+
+lines = env_path.read_text().splitlines()
+updated = []
+found = False
+
+for line in lines:
+    if line.startswith(prefix):
+        if not found:
+            updated.append(f"{key}={value}")
+            found = True
+        continue
+    updated.append(line)
+
+if not found:
+    updated.append(f"{key}={value}")
+
+env_path.write_text("\n".join(updated) + "\n")
+PY
+}
+
+normalize_registry_host() {
+    local value="${1:-}"
+    value="${value#http://}"
+    value="${value#https://}"
+    value="${value%%/*}"
+    value="${value%/}"
+    printf '%s' "$value"
+}
+
+ensure_agent_env_defaults() {
+    local env_file="$INSTALL_DIR/.env"
+    local master_ip master_mesh_ip registry_host
+    local rabbitmq_password redis_password
+
+    master_ip="$(env_get_value "$env_file" "MASTER_IP")"
+    master_mesh_ip="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+
+    if [ -n "$master_mesh_ip" ]; then
+        registry_host="$master_mesh_ip"
+    else
+        registry_host="$master_ip"
+    fi
+    if [ -n "$registry_host" ]; then
+        env_set_value "$env_file" "CONTAINER_REGISTRY_URL" "${registry_host}:5000"
+    fi
+
+    rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
+    if [ -z "$rabbitmq_password" ]; then
+        rabbitmq_password="$(gen_hex_secret 16)"
+        echo -e "${BLUE}  -> Generated missing local RABBITMQ_PASSWORD${NC}"
+    fi
+    env_set_value "$env_file" "RABBITMQ_PASSWORD" "$rabbitmq_password"
+    env_set_value "$env_file" "RABBITMQ_DEFAULT_USER" "smsly_user"
+    env_set_value "$env_file" "RABBITMQ_HOST" "rabbitmq"
+    env_set_value "$env_file" "RABBITMQ_PORT" "5672"
+    env_set_value "$env_file" "CELERY_BROKER_URL" "amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
+
+    redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
+    if [ -z "$redis_password" ]; then
+        redis_password="$(gen_hex_secret 16)"
+        echo -e "${BLUE}  -> Generated missing local REDIS_PASSWORD${NC}"
+    fi
+    env_set_value "$env_file" "REDIS_PASSWORD" "$redis_password"
+    env_set_value "$env_file" "REDIS_HOST" "redis"
+    env_set_value "$env_file" "REDIS_PORT" "6379"
+    env_set_value "$env_file" "REDIS_URL" "redis://:${redis_password}@redis:6379/0"
+    env_set_value "$env_file" "MODE" "agent"
+    env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
+}
+
+configure_docker_registry_trust() {
+    local env_file="$INSTALL_DIR/.env"
+    local daemon_json="/etc/docker/daemon.json"
+    local master_ip master_mesh_ip registry_url registry_host
+    local registries=()
+    local mirrors=()
+
+    command -v docker >/dev/null 2>&1 || return 0
+
+    master_ip="$(env_get_value "$env_file" "MASTER_IP")"
+    master_mesh_ip="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+    registry_url="$(env_get_value "$env_file" "CONTAINER_REGISTRY_URL")"
+
+    add_registry() {
+        local raw="${1:-}"
+        raw="$(normalize_registry_host "$raw")"
+        [ -z "$raw" ] && return 0
+        if [[ "$raw" != *:* ]]; then
+            raw="${raw}:5000"
+        fi
+        registries+=("$raw")
+    }
+
+    add_registry "$registry_url"
+    [ -n "$master_mesh_ip" ] && add_registry "${master_mesh_ip}:5000"
+    if [ -n "$master_ip" ]; then
+        add_registry "${master_ip}:5000"
+        add_registry "${master_ip}:5001"
+        mirrors+=("http://${master_ip}:5001")
+    fi
+
+    [ "${#registries[@]}" -eq 0 ] && return 0
+
+    echo -e "${BLUE}  -> Configuring Docker registry trust for agent pulls...${NC}"
+    mkdir -p /etc/docker
+    [ -f "$daemon_json" ] || printf '{}\n' > "$daemon_json"
+
+    local trust_payload mirror_payload status
+    trust_payload="$(printf '%s\n' "${registries[@]}")"
+    mirror_payload="$(printf '%s\n' "${mirrors[@]}")"
+
+    set +e
+    SMSLY_REGISTRY_TRUST="$trust_payload" SMSLY_REGISTRY_MIRRORS="$mirror_payload" python3 - "$daemon_json" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+raw = path.read_text().strip() if path.exists() else ""
+try:
+    data = json.loads(raw) if raw else {}
+except json.JSONDecodeError as exc:
+    print(f"Invalid {path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(data, dict):
+    print(f"Invalid {path}: top-level JSON must be an object", file=sys.stderr)
+    sys.exit(1)
+
+changed = False
+
+def merge_list(key, values):
+    global changed
+    if not values:
+        return
+    current = data.get(key)
+    if not isinstance(current, list):
+        current = []
+        data[key] = current
+        changed = True
+    for value in values:
+        if value and value not in current:
+            current.append(value)
+            changed = True
+
+trust = [item.strip() for item in os.environ.get("SMSLY_REGISTRY_TRUST", "").splitlines() if item.strip()]
+mirrors = [item.strip() for item in os.environ.get("SMSLY_REGISTRY_MIRRORS", "").splitlines() if item.strip()]
+
+merge_list("insecure-registries", trust)
+merge_list("registry-mirrors", mirrors)
+
+if changed:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    sys.exit(10)
+sys.exit(0)
+PY
+    status=$?
+    set -e
+
+    if [ "$status" -eq 10 ]; then
+        echo -e "${BLUE}  -> Docker registry trust changed; restarting Docker...${NC}"
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl restart docker
+        else
+            service docker restart
+        fi
+        for _ in $(seq 1 30); do
+            docker info >/dev/null 2>&1 && {
+                echo -e "${GREEN}  OK Docker restarted with registry trust${NC}"
+                return 0
+            }
+            sleep 2
+        done
+        echo -e "${RED}ERROR: Docker did not become ready after registry trust update${NC}"
+        exit 1
+    elif [ "$status" -eq 0 ]; then
+        registry_host="$(normalize_registry_host "$registry_url")"
+        echo -e "${GREEN}  OK Docker registry trust already configured${registry_host:+ ($registry_host)}${NC}"
+    else
+        echo -e "${RED}ERROR: Failed to update Docker registry trust${NC}"
+        exit 1
+    fi
+}
+
 fix_permissions() {
     local env_file="$INSTALL_DIR/.env"
     [ ! -f "$env_file" ] && return 0
@@ -190,6 +403,8 @@ do_install() {
     step=$((step + 1))
     echo -e "\n${YELLOW}[$step/5] Preparing infrastructure...${NC}"
     cd "$INSTALL_DIR"
+    ensure_agent_env_defaults
+    configure_docker_registry_trust
     ensure_networks
     for _img in tecnativa/docker-socket-proxy:latest traefik:v3.6; do
         if docker image inspect "$_img" &>/dev/null; then
@@ -244,13 +459,17 @@ do_update_full() {
     echo -e "\n${BLUE}  → Full update (rebuild + restart)${NC}"
     pull_latest_code
     cd "$INSTALL_DIR"
+    ensure_agent_env_defaults
+    configure_docker_registry_trust
     ensure_networks
+    echo -e "${BLUE}  -> Starting local agent dependencies...${NC}"
+    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik
     echo -e "${BLUE}  → Rebuilding agent image...${NC}"
     docker compose -f "$COMPOSE_PATH" build backend || {
         echo -e "${RED}✗ Build failed${NC}"; exit 1;
     }
     echo -e "${BLUE}  → Restarting services...${NC}"
-    docker compose -f "$COMPOSE_PATH" up -d --no-deps backend celery-worker 2>/dev/null || true
+    docker compose -f "$COMPOSE_PATH" up -d backend celery-worker
     wait_for_backend 60 3
     run_migrations
     fix_permissions
@@ -264,8 +483,11 @@ do_update_half() {
     echo -e "\n${BLUE}  → Half update (restart only, no build)${NC}"
     pull_latest_code
     cd "$INSTALL_DIR"
-    echo -e "${BLUE}  → Restarting backend...${NC}"
-    docker compose -f "$COMPOSE_PATH" restart backend 2>/dev/null || true
+    ensure_agent_env_defaults
+    configure_docker_registry_trust
+    ensure_networks
+    echo -e "${BLUE}  -> Applying local agent service configuration...${NC}"
+    docker compose -f "$COMPOSE_PATH" up -d socket-proxy redis rabbitmq traefik backend celery-worker
     wait_for_backend 60 3
     run_migrations
     fix_permissions

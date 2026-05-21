@@ -154,14 +154,14 @@ def build_agent_lite_install_env(
     """
     Build the environment needed to install or update a lite agent.
 
-    Lite agents share the master's database, broker, Redis, and HMAC secret.
-    They also need a deterministic node queue so deployments sent to the agent
-    cannot be consumed by the control-plane worker.
+    Lite agents share the master's database and HMAC secret, but run local
+    RabbitMQ and Redis via docker-compose.agent-lite.yml. They also need a
+    deterministic node queue so local agent workers consume local deploys.
 
     IMPORTANT: MASTER_IP is the public IP used for HTTP API calls, but
-    MASTER_MESH_IP is the WireGuard IP used for database, RabbitMQ, and Redis.
-    This separation is required because the public IP is typically firewalled
-    for internal ports (5432, 5672, 6379).
+    MASTER_MESH_IP is the WireGuard IP used for the shared database and
+    registry. This separation is required because the public IP is typically
+    firewalled for internal ports.
     """
     messages: list[str] = []
 
