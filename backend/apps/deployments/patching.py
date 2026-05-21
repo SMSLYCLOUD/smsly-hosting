@@ -27,10 +27,16 @@ def patch_runtime_settings():
     _patching_in_progress = True
     try:
         logger.info("[patch] Attempting to sync settings from PlatformConfig...")
+        import warnings
         from apps.deployments.models import PlatformConfig
         from django.contrib.sites.models import Site
-        
-        pc = PlatformConfig.load()
+
+        # Suppress Django's "Accessing the database during app initialization"
+        # warning — this DB access is intentional and required so ALLOWED_HOSTS
+        # is populated before the first request arrives.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Accessing the database during app initialization")
+            pc = PlatformConfig.load()
         
         # 1. Determine Effective Domain/Protocol
         effective_domain = pc.domain or getattr(settings, 'DOMAIN', 'localhost')
