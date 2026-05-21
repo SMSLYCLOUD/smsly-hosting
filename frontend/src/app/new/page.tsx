@@ -66,6 +66,8 @@ export default function NewServicePage() {
   const [branch, setBranch] = React.useState("main")
   const [buildpack, setBuildpack] = React.useState<BuildpackType>("DOCKER")
   const [region, setRegion] = React.useState("us-east-1")
+  const [cpuCores, setCpuCores] = React.useState<number>(0.5)
+  const [memoryMb, setMemoryMb] = React.useState<number>(512)
   const [envVars, setEnvVars] = React.useState<EnvVar[]>([])
   const [isDeploying, setIsDeploying] = React.useState(false)
 
@@ -177,14 +179,15 @@ export default function NewServicePage() {
 
       // Auto-generate name
       if (!name) {
+        const randomStr = Math.random().toString(36).substring(2, 7)
         if (sourceType === "git") {
           const parts = repoUrl.split("/")
-          setName(parts[parts.length - 1]?.replace(".git", "") || "my-service")
+          setName(`${parts[parts.length - 1]?.replace(".git", "") || "my-service"}-${randomStr}`)
         } else if (sourceType === "template") {
-          setName(`my-${selectedTemplate}-app`)
+          setName(`my-${selectedTemplate}-app-${randomStr}`)
         } else if (sourceType === "docker") {
           const imageName = dockerImage.split("/").pop()?.split(":")[0]
-          setName((imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-"))
+          setName(`${(imageName || "docker-service").replace(/[^a-zA-Z0-9-]/g, "-")}-${randomStr}`)
         }
       }
 
@@ -265,7 +268,7 @@ export default function NewServicePage() {
       // Auto-derive name from repo URL if still empty
       let finalName = name.trim()
       if (!finalName && repoUrl) {
-        finalName = repoUrl.split("/").pop()?.replace(".git", "")?.replace(/[^a-zA-Z0-9-]/g, "-") || "my-service"
+        finalName = (repoUrl.split("/").pop()?.replace(".git", "")?.replace(/[^a-zA-Z0-9-]/g, "-") || "my-service") + "-" + Math.random().toString(36).substring(2, 7)
         setName(finalName)
       }
       if (!finalName) throw new Error("Service name is required")
@@ -283,8 +286,8 @@ export default function NewServicePage() {
           repository_url: sourceType === "docker" ? null : finalRepo,
           docker_image: sourceType === "docker" ? dockerImage : null,
           branch: branch || "main",
-          cpu_cores: 0.5,
-          memory_mb: 512,
+          cpu_cores: cpuCores,
+          memory_mb: memoryMb,
           regions: [],
           ...(selectedProject && selectedProject !== "none" ? { project: selectedProject } : {})
       }, localOnlyRequest)
@@ -888,6 +891,18 @@ export default function NewServicePage() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+
+                  {/* Resource allocation */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="grid gap-2">
+                      <Label>CPU Cores</Label>
+                      <Input type="number" step="0.1" value={cpuCores} onChange={(e) => setCpuCores(parseFloat(e.target.value) || 0.5)} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Memory (MB)</Label>
+                      <Input type="number" step="1" value={memoryMb} onChange={(e) => setMemoryMb(parseInt(e.target.value) || 512)} />
+                    </div>
                   </div>
 
                   {sourceType !== "docker" && (

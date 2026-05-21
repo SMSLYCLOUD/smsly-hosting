@@ -53,6 +53,10 @@ class AIProviderSettings(models.Model):
         blank=True,
         help_text="OpenAI-compatible base URL for Jules provider",
     )
+    jules_auto_deploy_pr = models.BooleanField(
+        default=True,
+        help_text="Automatically redeploy services from the branch of Jules auto-fix PRs",
+    )
 
     # Local LLM (OpenAI-compatible)
     localllm_api_key = EncryptedCharField(max_length=500, blank=True, null=True)

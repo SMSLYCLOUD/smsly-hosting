@@ -1,0 +1,12 @@
+{
+  "name": "test-failing-service",
+  "version": "1.0.0",
+  "description": "A service that intentionally crashes on boot to test Jules auto-fix",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.0"
+  }
+}

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, List
@@ -32,8 +33,11 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.core.auth import APIKeyAuthentication
+from apps.deployments.models import Deployment
+from apps.deployments.tasks import enqueue_smart_deploy_task
 from apps.intelligence.analyzer import LogAnalyzer
 from apps.intelligence.cost import CostAdvisor
+from apps.intelligence.models import AIProviderSettings
 from apps.intelligence.providers import ask_with_fallback, get_configured_providers
 from apps.intelligence.views import _json_safe
 from apps.scripts.github import GitHubClient
@@ -141,17 +145,37 @@ def _parse_jules_response(raw: str) -> Dict[str, Any]:
 
 
 def _apply_fix_to_repo(
-    repo_path: str,
+    repo_path: Optional[str],
     files_to_change: Dict[str, str],
     branch_name: str,
+    repo_url: str = "",
 ) -> bool:
     """Apply Jules‑suggested fixes to the repository safely.
 
-    The function now:
-    * Switches to the repository directory using a context manager.
-    * Captures stdout/stderr from each git command for detailed logging.
-    * Cleans up the temporary branch on any failure to avoid polluting the repo.
+    If ``repo_path`` is ``None``, the repository is cloned from ``repo_url``
+    into a temporary directory.  The function cleans up after itself on
+    failure and switches back to the original working directory.
     """
+    import tempfile
+    _owns_tempdir = False
+
+    if not repo_path:
+        if not repo_url:
+            logger.error("Neither repo_path nor repo_url provided — cannot apply fix")
+            return False
+        repo_path = tempfile.mkdtemp(prefix="jules-fix-")
+        _owns_tempdir = True
+        logger.info("Cloning %s into temp dir %s", repo_url, repo_path)
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, repo_path],
+                check=True, capture_output=True, text=True, timeout=120,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.error("Failed to clone repo %s: %s", repo_url, exc.stderr)
+            shutil.rmtree(repo_path, ignore_errors=True)
+            return False
+
     original_cwd = os.getcwd()
     try:
         os.chdir(repo_path)
@@ -199,11 +223,12 @@ def _apply_fix_to_repo(
             _run_git(["checkout", "main"])
             _run_git(["branch", "-D", branch_name])
         except Exception:
-            # Suppress cleanup errors – we already logged the original failure
             pass
         return False
     finally:
         os.chdir(original_cwd)
+        if _owns_tempdir and os.path.exists(repo_path):
+            shutil.rmtree(repo_path, ignore_errors=True)
 
 
 def _create_pr(
@@ -265,14 +290,15 @@ def jules_fix_deployment_failure(
         fix_payload = _parse_jules_response(jules_response)
 
         fix_description = fix_payload.get("fix_description", "Auto-fix via Jules")
-        files_to_change = fix_payload.get("files_to_change", {})
+        suggested_changes = fix_payload.get("suggested_changes", {})
 
         branch_name = f"jules-fix-{deployment_id[:8]}-{int(time.time())}"
-        if not _apply_fix_to_repo(repo_path, files_to_change, branch_name):
+        if not _apply_fix_to_repo(repo_path, suggested_changes, branch_name, repo_url=repo_url):
             result.error = "Failed to apply fix to repository"
             return _json_safe(result, {})
 
-        github_client = GitHubClient(repo_url)
+        deployment = Deployment.objects.select_related("service", "service__provider", "service__owner").get(id=deployment_id)
+        github_client = GitHubClient(repo_url, owner=deployment.service.owner)
         pr_url = _create_pr(
             github_client,
             repo_url,
@@ -286,7 +312,36 @@ def jules_fix_deployment_failure(
             result.pr_url = pr_url
             result.fix_description = fix_description
             logger.info("PR created: %s", pr_url)
-            logger.info("Fix applied and PR opened. Re-deploy can be triggered via webhook.")
+            
+            # Auto-redeploy from the PR branch if enabled
+            settings_obj = AIProviderSettings.get_solo()
+            if settings_obj.jules_auto_deploy_pr:
+                logger.info("Auto-deploying PR branch %s for deployment %s", branch_name, deployment_id)
+                try:
+                    # Create a new deployment record for the PR branch
+                    new_deployment = Deployment.objects.create(
+                        service=deployment.service,
+                        branch=branch_name,  # Deploy the fix branch
+                        commit_message=f"[auto-fix] Deploying Jules fix from branch {branch_name}",
+                        status=Deployment.Status.QUEUED,
+                    )
+                    
+                    # Enqueue deployment (skip_review=True ensures it bypasses the manual review pause)
+                    provider = deployment.service.provider or getattr(deployment, 'target_server', None)
+                    provider_id = provider.id if provider else None
+                    if provider_id:
+                        enqueue_smart_deploy_task(
+                            deployment_id=str(new_deployment.id),
+                            provider_id=str(provider_id),
+                            skip_review=True,
+                        )
+                        logger.info("Auto-deploy task queued for PR branch %s", branch_name)
+                    else:
+                        logger.error("Could not determine provider to auto-deploy Jules fix")
+                except Exception as e:
+                    logger.error("Failed to auto-redeploy Jules fix: %s", e)
+            else:
+                logger.info("Fix applied and PR opened. Auto-redeploy disabled. Re-deploy can be triggered via webhook.")
         else:
             result.error = "Failed to create Pull Request"
 
