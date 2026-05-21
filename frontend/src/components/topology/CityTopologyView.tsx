@@ -351,7 +351,7 @@ export function CityTopologyView() {
 
   // ─── Three.js setup ──────────────────────
   useEffect(() => {
-    if (!containerRef.current || loading) return;
+    if (!containerRef.current || !data || data.nodes.length === 0) return;
 
     const container = containerRef.current;
     const w = container.clientWidth;
@@ -577,7 +577,7 @@ export function CityTopologyView() {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [loading, layout, data]);
+  }, [data, layout]);
 
   if (loading) {
     return (
