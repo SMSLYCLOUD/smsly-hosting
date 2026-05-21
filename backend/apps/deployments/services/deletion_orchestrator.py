@@ -105,11 +105,31 @@ class DeletionOrchestrator:
             return containers
 
         try:
+            runtime_id = str(getattr(service, 'active_runtime_id', '') or '').strip()
+            if runtime_id:
+                try:
+                    containers.add(self.docker_client.containers.get(runtime_id))
+                except docker.errors.NotFound:
+                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Failed to inspect active runtime %s for service %s: %s",
+                        runtime_id, service.id, e,
+                    )
+
             all_containers = self.docker_client.containers.list(all=True)
             for c in all_containers:
                 # 1. Check labels
                 labels = c.labels
                 if labels.get('smsly.service_id') == str(service.id):
+                    containers.add(c)
+                    continue
+
+                canonical = str(labels.get('smsly.blue_green.canonical_name') or '').lower()
+                if canonical and canonical in {
+                    str(service.name or '').lower(),
+                    str(getattr(service, 'slug', '') or '').lower(),
+                }:
                     containers.add(c)
                     continue
 

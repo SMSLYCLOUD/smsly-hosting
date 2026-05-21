@@ -3895,8 +3895,7 @@ def delete_service_task(self, service_id: str, force: bool = False):
         try:
             logger.info("Decommissioning service %s on remote node %s", service.name, active_server.host)
             remote = RemoteOrchestrator(active_server)
-            # Find the remote service ID (matching by name is the most reliable if ID not stored)
-            success = remote.delete_service(str(service.id))
+            success = remote.delete_service_for_local(service, force=force)
             
             # If force=True, we proceed even if remote call fails (best-effort local cleanup)
             if force:
