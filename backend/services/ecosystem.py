@@ -655,7 +655,12 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                     if other in content.lower():
                         cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path} (Potential URL target)")
 
-        brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links)) if cross_links else ""
+        try:
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links)) if cross_links else ""
+        except TypeError as exc:
+            logger.warning("Unhashable cross_links entry: %s", exc)
+            cross_links_safe = [str(x) for x in cross_links]
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links_safe)) if cross_links_safe else ""
         full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
         full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
 
@@ -731,9 +736,12 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
                 addon_types = _coerce_addons(addon)
                 if addon_types:
                     atype = addon_types[0]
-                    global_addons_map.setdefault(atype, set()).update(
-                        _coerce_depends_on(addon.get("shared_by", []))
-                    )
+                    try:
+                        shared = _coerce_depends_on(addon.get("shared_by", []))
+                    except TypeError as exc:
+                        logger.warning("Unhashable shared_by for addon %r: %s", addon, exc)
+                        shared = []
+                    global_addons_map.setdefault(atype, set()).update(shared)
                     
     # Rebuild preliminary addons
     global_addons = [{"type": k, "shared_by": list(v)} for k, v in global_addons_map.items()]
@@ -878,11 +886,15 @@ def _is_intelligence_service(service: dict) -> bool:
 def _coerce_depends_on(raw_depends: Any) -> List[str]:
     """Normalize depends_on payload to a flat list."""
     tokens: List[str] = []
-    _append_tokens(
-        tokens,
-        raw_depends,
-        ("repo", "service", "service_name", "name", "target", "id", "value"),
-    )
+    try:
+        _append_tokens(
+            tokens,
+            raw_depends,
+            ("repo", "service", "service_name", "name", "target", "id", "value"),
+        )
+    except TypeError as exc:
+        logger.warning("_coerce_depends_on failed for value %r: %s", raw_depends, exc)
+        return []
     return _dedupe_preserving_order(tokens)
 
 
@@ -950,6 +962,10 @@ def _append_tokens(tokens: List[str], raw: Any, preferred_keys: Tuple[str, ...])
                     _append_tokens(tokens, key, preferred_keys)
             elif isinstance(value, (str, int, float)):
                 _append_tokens(tokens, value, preferred_keys)
+            elif isinstance(value, (list, tuple, set)):
+                _append_tokens(tokens, value, preferred_keys)
+            elif isinstance(value, dict):
+                _append_tokens(tokens, value, preferred_keys)
         return
 
     if isinstance(raw, (list, tuple, set)):
@@ -971,6 +987,8 @@ def _dedupe_preserving_order(values: List[str]) -> List[str]:
     seen = set()
     deduped: List[str] = []
     for value in values:
+        if not isinstance(value, str):
+            continue
         if value not in seen:
             seen.add(value)
             deduped.append(value)
@@ -986,7 +1004,11 @@ def _normalize_addon_token(token: str) -> str:
 def _coerce_addons(raw_addons: Any) -> List[str]:
     """Normalize addon declarations to a deduped list of addon type strings."""
     tokens: List[str] = []
-    _append_tokens(tokens, raw_addons, ("type", "addon", "name", "service", "value"))
+    try:
+        _append_tokens(tokens, raw_addons, ("type", "addon", "name", "service", "value"))
+    except TypeError as exc:
+        logger.warning("_coerce_addons failed for value %r: %s", raw_addons, exc)
+        return []
     return _dedupe_preserving_order(
         [addon for addon in (_normalize_addon_token(token) for token in tokens) if addon]
     )
@@ -1054,7 +1076,11 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
             env_map = _env_plan_map(env_map)
         svc_name = str(svc.get("name") or "").lower()
         stack = str(svc.get("stack") or "").lower()
-        addons = set(_coerce_addons(svc.get("addons", []) or []))
+        try:
+            addons = set(_coerce_addons(svc.get("addons", []) or []))
+        except TypeError as exc:
+            logger.warning("Unhashable addons set for svc %r (%s): %s", svc_name, svc.get("repo"), exc)
+            addons = set()
 
         # 1. Stack-based Addon Defaults
         if stack == "django":
@@ -1082,7 +1108,11 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
                     env_map[key] = f"{{{{SERVICE:{core_name}}}}}"
                     
                     # Also add implicit dependency
-                    deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    try:
+                        deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    except TypeError as exc:
+                        logger.warning("Unhashable depends_on set for svc %r (%s): %s", svc_name, svc.get("repo"), exc)
+                        deps = set()
                     deps.add(core_name)
                     svc["depends_on"] = sorted(deps)
 
@@ -1096,7 +1126,11 @@ def _apply_generic_ecosystem_intelligence(services: List[dict]):
                         continue
                     env_map[key] = f"{{{{SERVICE:{auth_name}}}}}"
                     
-                    deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    try:
+                        deps = set(_coerce_depends_on(svc.get("depends_on", []) or []))
+                    except TypeError as exc:
+                        logger.warning("Unhashable depends_on set for auth svc %r (%s): %s", svc_name, svc.get("repo"), exc)
+                        deps = set()
                     deps.add(auth_name)
                     svc["depends_on"] = sorted(deps)
 
@@ -1284,7 +1318,12 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
     
     # Filter by user selection if provided
     if selected_repos is not None:
-        all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
+        if isinstance(selected_repos, list):
+            all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
+        elif isinstance(selected_repos, str):
+            all_repos = [r for r in all_repos if r.get("full_name") == selected_repos]
+        else:
+            logger.warning("selected_repos is unexpected type %s, skipping filter", type(selected_repos).__name__)
         logger.info("Filtered down to %d selected repositories", len(all_repos))
 
     # 2. Analyze each repo
