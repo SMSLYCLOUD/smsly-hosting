@@ -11,10 +11,14 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     serializer_class = PreviewEnvironmentSerializer # Will implement in a sec
 
     def get_queryset(self):
+        from django.db.models import Q
         service_id = self.kwargs.get('service_pk')
+        qs = self.queryset.filter(
+            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+        ).distinct()
         if service_id:
-            return self.queryset.filter(service_id=service_id)
-        return self.queryset
+            return qs.filter(service_id=service_id)
+        return qs
 
     def create(self, request, *args, **kwargs):
         service_id = kwargs.get('service_pk')

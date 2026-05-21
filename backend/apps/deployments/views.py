@@ -2619,7 +2619,8 @@ class DeploymentViewSet(viewsets.ModelViewSet):
         return DeploymentSerializer
 
     def get_queryset(self):
-        """ZH-002 FIX: Only return deployments for services owned by the requesting user."""
+        """Return deployments for services accessible to the requesting user."""
+        from django.db.models import Q
         base_qs = self.queryset.select_related('service')
         if self.action == 'list':
             base_qs = base_qs.defer(
@@ -2633,7 +2634,15 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             )
         if self.request.user.is_superuser:
             return base_qs.all()
-        return base_qs.filter(service__owner=self.request.user)
+        
+        project_id = self.request.query_params.get('project_id')
+        if project_id:
+            base_qs = base_qs.filter(service__project_id=project_id)
+
+        return base_qs.filter(
+            Q(service__owner=self.request.user) | 
+            Q(service__project__team__members__user=self.request.user)
+        ).distinct()
 
     @action(detail=True, methods=['post'])
     def rollback(self, request, pk=None):
@@ -4061,7 +4070,14 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
     def get_queryset(self):
-        return self.queryset.filter(service__owner=self.request.user).order_by('-created_at')
+        from django.db.models import Q
+        qs = self.queryset.filter(
+            Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
+        ).distinct().order_by('-created_at')
+        project_id = self.request.query_params.get('project_id')
+        if project_id:
+            qs = qs.filter(service__project_id=project_id)
+        return qs
 
     def perform_create(self, serializer):
         backup = serializer.save(created_by=self.request.user, status='PENDING')

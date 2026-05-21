@@ -29,11 +29,19 @@ class TopologyViewSet(viewsets.GenericViewSet):
         """
         Build topology graph with rich node/edge data for canvas rendering.
 
-        SECURITY: Zero Trust — only show user's own services.
+        SECURITY: Enforces Hybrid RBAC — strictly linked to project.
         """
+        from django.db.models import Q
+        from rest_framework.exceptions import ValidationError
+
+        project_id = request.query_params.get('project_id')
+        if not project_id:
+            raise ValidationError({"project_id": "project_id query parameter is strictly required."})
+
         user_services = Service.objects.filter(
-            owner=request.user
-        ).prefetch_related(
+            Q(owner=request.user) | Q(project__team__members__user=request.user),
+            project_id=project_id
+        ).distinct().prefetch_related(
             'addons', 'volumes', 'env_vars',
             'cron_jobs',
         )
@@ -234,34 +242,38 @@ class TopologyViewSet(viewsets.GenericViewSet):
                 user=request.user, is_active=True
             )
             for tunnel in tunnels:
-                tunnel_id = f"tunnel-{tunnel.id}"
-                nodes.append({
-                    'id': tunnel_id,
-                    'type': 'tunnel',
-                    'data': {
-                        'name': tunnel.subdomain or f"tunnel-{tunnel.local_port}",
-                        'label': f":{tunnel.local_port} → {tunnel.subdomain or 'auto'}.tunnel",
-                        'kind': 'EXTERNAL',
-                        'subtype': 'TUNNEL',
-                        'status': 'ACTIVE',
-                        'region': '',
-                        'public_url': tunnel.public_url,
-                        'local_port': tunnel.local_port,
-                    }
-                })
                 # Tunnel doesn't directly link to a service in the model,
                 # but we can show it as a standalone external node.
-                # If we can match local_port to a service internal_port:
+                # Only include it in this project's topology if it maps to a service here.
+                matched_service = None
                 for service in user_services:
                     if service.internal_port == tunnel.local_port:
-                        edges.append({
-                            'id': _edge_id(),
-                            'source': tunnel_id,
-                            'target': str(service.id),
-                            'type': 'TUNNEL',
-                            'label': f":{tunnel.local_port}",
-                        })
+                        matched_service = service
                         break
+                
+                if matched_service:
+                    tunnel_id = f"tunnel-{tunnel.id}"
+                    nodes.append({
+                        'id': tunnel_id,
+                        'type': 'tunnel',
+                        'data': {
+                            'name': tunnel.subdomain or f"tunnel-{tunnel.local_port}",
+                            'label': f":{tunnel.local_port} → {tunnel.subdomain or 'auto'}.tunnel",
+                            'kind': 'EXTERNAL',
+                            'subtype': 'TUNNEL',
+                            'status': 'ACTIVE',
+                            'region': '',
+                            'public_url': tunnel.public_url,
+                            'local_port': tunnel.local_port,
+                        }
+                    })
+                    edges.append({
+                        'id': _edge_id(),
+                        'source': tunnel_id,
+                        'target': str(matched_service.id),
+                        'type': 'TUNNEL',
+                        'label': f":{tunnel.local_port}",
+                    })
         except Exception as e:
             logger.debug("Tunnels not available for topology: %s", e)
 

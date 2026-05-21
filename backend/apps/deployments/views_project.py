@@ -110,10 +110,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         POST /api/v1/projects/{id}/move-service/
         Body: { "service_id": "uuid" }
-
-        Moves a service into this project.  The service must belong to the
-        requesting user.
         """
+        from django.db.models import Q
         project = self.get_object()
         service_id = request.data.get('service_id')
         if not service_id:
@@ -123,10 +121,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            service = Service.objects.get(id=service_id, owner=request.user)
+            service = Service.objects.get(
+                Q(owner=request.user) | Q(project__team__members__user=request.user),
+                id=service_id
+            )
         except Service.DoesNotExist:
             return Response(
-                {'error': 'Service not found or not owned by you'},
+                {'error': 'Service not found or access denied'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -148,9 +149,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         POST /api/v1/projects/{id}/remove-service/
         Body: { "service_id": "uuid" }
-
-        Removes a service from this project (sets project=null).
         """
+        from django.db.models import Q
         project = self.get_object()
         service_id = request.data.get('service_id')
         if not service_id:
@@ -161,10 +161,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         try:
             service = Service.objects.get(
-                id=service_id, owner=request.user, project=project)
+                Q(owner=request.user) | Q(project__team__members__user=request.user),
+                id=service_id, project=project
+            )
         except Service.DoesNotExist:
             return Response(
-                {'error': 'Service not found in this project'},
+                {'error': 'Service not found in this project or access denied'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 

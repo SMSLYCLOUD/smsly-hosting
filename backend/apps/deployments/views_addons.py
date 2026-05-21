@@ -48,17 +48,28 @@ class AddonViewSet(viewsets.ModelViewSet):
     # SECURITY: Zero Trust - Only return addons for user's own services
     # ==========================================================================
     def get_queryset(self):
-        """Filter addons to only those belonging to the user's services."""
-        return self.queryset.filter(
-            Q(service__owner=self.request.user) | Q(service__owner__isnull=True)
-        )
+        """Filter addons to only those belonging to the user's accessible services."""
+        qs = self.queryset.filter(
+            Q(service__owner=self.request.user) | 
+            Q(service__project__team__members__user=self.request.user) |
+            Q(service__owner__isnull=True)
+        ).distinct()
+        project_id = self.request.query_params.get('project_id')
+        if project_id:
+            qs = qs.filter(service__project_id=project_id)
+        return qs
 
     def perform_create(self, serializer):
-        # SECURITY: Verify user owns the service before creating addon
+        # SECURITY: Verify user has access to the service before creating addon
         service = serializer.validated_data.get('service')
-        if service and service.owner and service.owner != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Access denied to this service.")
+        if service:
+            has_access = (
+                service.owner == self.request.user or 
+                (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
+            )
+            if not has_access:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Access denied to this service.")
 
         addon = serializer.save()
 
@@ -117,9 +128,14 @@ class AddonViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         # Allow updating properties like public_domain
         service = serializer.instance.service
-        if service and service.owner and service.owner != self.request.user:
-            from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied("Access denied to this service.")
+        if service:
+            has_access = (
+                service.owner == self.request.user or 
+                (service.project and service.project.team and service.project.team.members.filter(user=self.request.user).exists())
+            )
+            if not has_access:
+                from rest_framework.exceptions import PermissionDenied
+                raise PermissionDenied("Access denied to this service.")
 
         addon = serializer.save()
         # If public_domain changed, re-provision to update proxy labels
