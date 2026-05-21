@@ -467,7 +467,7 @@ services:
     healthcheck:
       test:
       - CMD-SHELL
-      - rabbitmq-diagnostics -q ping
+      - rabbitmq-diagnostics -q check_running
       interval: 10s
       timeout: 10s
       retries: 10

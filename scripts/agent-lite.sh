@@ -327,7 +327,7 @@ wait_for_local_rabbitmq() {
     local elapsed=0
 
     while [ "$elapsed" -lt "$timeout" ]; do
-        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
+        if docker compose -f "$COMPOSE_PATH" exec -T rabbitmq rabbitmq-diagnostics -q check_running >/dev/null 2>&1; then
             echo -e "${GREEN}  OK Local RabbitMQ is ready${NC}"
             return 0
         fi

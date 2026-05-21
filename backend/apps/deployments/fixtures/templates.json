@@ -1850,5 +1850,1847 @@
     "post_deploy_notes": null,
     "icon": "/logos/templates/nocodb.svg",
     "repository_url": "https://hub.docker.com/r/nocodb/nocodb"
+  },
+  {
+    "id": "ollama",
+    "name": "Ollama",
+    "description": "Get up and running with large language models locally.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/ollama/ollama",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "min_cpu_cores": 2
+  },
+  {
+    "id": "localai",
+    "name": "LocalAI",
+    "description": "The all-in-one local AI stack. Free, Open source, self-hosted OpenAI-compatible API.",
+    "icon": "https://localai.io/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/localai/localai",
+    "docker_image": "localai/localai:latest",
+    "default_port": 8080,
+    "min_ram_gb": 8,
+    "min_cpu_cores": 4
+  },
+  {
+    "id": "vllm",
+    "name": "vLLM",
+    "description": "A high-throughput and memory-efficient inference and serving engine for LLMs.",
+    "icon": "https://vllm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/vllm/vllm-openai",
+    "docker_image": "vllm/vllm-openai:latest",
+    "default_port": 8000,
+    "min_ram_gb": 16,
+    "min_cpu_cores": 4,
+    "gpu_required": true
+  },
+  {
+    "id": "open-webui",
+    "name": "Open WebUI",
+    "description": "User-friendly WebUI for LLMs (formerly Ollama WebUI).",
+    "icon": "https://openwebui.com/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/open-webui/open-webui",
+    "docker_image": "ghcr.io/open-webui/open-webui:latest",
+    "default_port": 8080,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_BASE_URL",
+        "value": "http://ollama:11434",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "anythingllm",
+    "name": "AnythingLLM",
+    "description": "The all-in-one Desktop & Docker AI application of the future.",
+    "icon": "https://useanything.com/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/mintplexlabs/anythingllm",
+    "docker_image": "mintplexlabs/anythingllm:latest",
+    "default_port": 3001,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "STORAGE_DIR",
+        "value": "/app/storage",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "text-generation-webui",
+    "name": "Text Generation WebUI",
+    "description": "A Gradio web UI for Large Language Models.",
+    "icon": "https://github.com/oobabooga/text-generation-webui/raw/main/images/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/atscale/text-generation-webui",
+    "docker_image": "atinoda/text-generation-webui:latest",
+    "default_port": 7860,
+    "min_ram_gb": 8,
+    "gpu_required": true
+  },
+  {
+    "id": "comfyui",
+    "name": "ComfyUI (Generative Video & Image)",
+    "description": "Professional-grade media generation engine. Perfect for Flux.1 (Images) and Wan/Hunyuan (Video). Requires 24GB+ VRAM.",
+    "icon": "https://comfyui.org/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/yanwk/comfyui-boot",
+    "docker_image": "yanwk/comfyui-boot:latest",
+    "default_port": 8188,
+    "min_ram_gb": 32,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "CLI_ARGS",
+        "value": "--listen 0.0.0.0 --port 8188",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "automatic1111",
+    "name": "Stable Diffusion WebUI",
+    "description": "Stable Diffusion web UI by Automatic1111.",
+    "icon": "https://github.com/AUTOMATIC1111/stable-diffusion-webui/raw/master/favicon.svg",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/siutin/stable-diffusion-webui-docker",
+    "docker_image": "ai-dock/stable-diffusion-webui:latest",
+    "default_port": 7860,
+    "min_ram_gb": 8,
+    "gpu_required": true
+  },
+  {
+    "id": "flowise",
+    "name": "Flowise",
+    "description": "Drag & drop UI to build your customized LLM flow.",
+    "icon": "https://flowiseai.com/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/flowiseai/flowise",
+    "docker_image": "flowiseai/flowise:latest",
+    "default_port": 3000,
+    "min_ram_gb": 2
+  },
+  {
+    "id": "langflow",
+    "name": "LangFlow",
+    "description": "Langflow is a UI for LangChain, designed with react-flow.",
+    "icon": "https://langflow.org/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/langflowai/langflow",
+    "docker_image": "langflowai/langflow:latest",
+    "default_port": 7860,
+    "min_ram_gb": 2
+  },
+  {
+    "id": "librechat",
+    "name": "LibreChat",
+    "description": "Every AI, One Interface. Enhanced ChatGPT Clone.",
+    "icon": "https://librechat.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/danny-avila/librechat",
+    "docker_image": "ghcr.io/danny-avila/librechat:latest",
+    "default_port": 3080,
+    "min_ram_gb": 2,
+    "required_addons": [
+      "MONGODB"
+    ],
+    "env_vars": [
+      {
+        "key": "MONGO_URI",
+        "value": "${MONGODB_URL}",
+        "is_secret": false
+      },
+      {
+        "key": "JWT_SECRET",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "JWT_REFRESH_SECRET",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "CREDS_KEY",
+        "value": "f34be10384ca63896434479e001887e49f82662c1cf74092049c3664d62b6942",
+        "is_secret": true
+      },
+      {
+        "key": "CREDS_IV",
+        "value": "7876a917bd714f3b7facd2d48079fa1e",
+        "is_secret": true
+      },
+      {
+        "key": "MONGO_URL",
+        "value": "${MONGODB_URL}",
+        "is_secret": true
+      }
+    ]
+  },
+  {
+    "id": "privategpt",
+    "name": "PrivateGPT",
+    "description": "Interact with your documents using the power of GPT, 100% privately.",
+    "icon": "https://privategpt.io/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/zylonai/private-gpt",
+    "docker_image": "zylonai/private-gpt:latest",
+    "default_port": 8001,
+    "min_ram_gb": 8
+  },
+  {
+    "id": "tgi",
+    "name": "Text Generation Inference",
+    "description": "A toolkit for deploying and serving Large Language Models (LLMs).",
+    "icon": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/huggingface/text-generation-inference",
+    "docker_image": "ghcr.io/huggingface/text-generation-inference:latest",
+    "default_port": 80,
+    "min_ram_gb": 16,
+    "gpu_required": true
+  },
+  {
+    "id": "litellm",
+    "name": "LiteLLM",
+    "description": "Call all LLM APIs using the OpenAI format.",
+    "icon": "https://litellm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/berriai/litellm",
+    "docker_image": "ghcr.io/berriai/litellm:main-stable",
+    "default_port": 4000,
+    "min_ram_gb": 1
+  },
+  {
+    "id": "dify",
+    "name": "Dify",
+    "description": "The next-gen LLM application development platform.",
+    "icon": "https://dify.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/langgenius/dify-api",
+    "docker_image": "langgenius/dify-api:latest",
+    "default_port": 5001,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "memgpt",
+    "name": "MemGPT",
+    "description": "Teaching LLMs memory management for unbounded context.",
+    "icon": "https://memgpt.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/cpacker/memgpt",
+    "docker_image": "letta/letta:latest",
+    "default_port": 8080,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "khoj",
+    "name": "Khoj",
+    "description": "AI-powered personal search engine.",
+    "icon": "https://khoj.dev/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/khoj-ai/khoj",
+    "docker_image": "ghcr.io/khoj-ai/khoj:latest",
+    "default_port": 8000,
+    "min_ram_gb": 4,
+    "required_addons": [
+      "POSTGRES"
+    ],
+    "custom_addon_overrides": {
+      "POSTGRES": {
+        "image": "pgvector/pgvector:pg16"
+      }
+    },
+    "env_vars": [
+      {
+        "key": "DATABASE_URL",
+        "value": "${DATABASE_URL}",
+        "is_secret": true
+      }
+    ]
+  },
+  {
+    "id": "sd-next",
+    "name": "Stable Diffusion Next",
+    "description": "Advanced web interface for Stable Diffusion.",
+    "icon": "https://vladmandic.github.io/sd-next/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/vladmandic/sd-next",
+    "docker_image": "ghcr.io/vladmandic/automatic:latest",
+    "default_port": 7860,
+    "min_ram_gb": 8,
+    "gpu_required": true
+  },
+  {
+    "id": "invokeai",
+    "name": "InvokeAI",
+    "description": "Professional-grade Stable Diffusion toolset.",
+    "icon": "https://invoke-ai.github.io/InvokeAI/assets/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/invoke-ai/invoke-ai",
+    "docker_image": "ghcr.io/invoke-ai/invokeai:latest",
+    "default_port": 9090,
+    "min_ram_gb": 8,
+    "gpu_required": true
+  },
+  {
+    "id": "localai-cuda",
+    "name": "LocalAI (CUDA)",
+    "description": "LocalAI with NVIDIA CUDA acceleration.",
+    "icon": "https://localai.io/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/localai/localai",
+    "docker_image": "localai/localai:latest-gpu-nvidia-cuda-12",
+    "default_port": 8080,
+    "min_ram_gb": 8,
+    "gpu_required": true
+  },
+  {
+    "id": "ai-router",
+    "name": "AI Router (LiteLLM)",
+    "description": "Centralized AI gateway for routing requests to local Ollama, vLLM, and other backends. Ideal for 16GB RAM systems.",
+    "icon": "https://litellm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/berriai/litellm",
+    "docker_image": "ghcr.io/berriai/litellm:main-v1.45.0",
+    "default_port": 4000,
+    "min_ram_gb": 1,
+    "min_cpu_cores": 1,
+    "required_addons": [],
+    "env_vars": [
+      {
+        "key": "LITELLM_MASTER_KEY",
+        "value": "sk-${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "DISABLE_SCHEMA_UPDATE",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "NUM_WORKERS",
+        "value": "1",
+        "is_secret": false
+      },
+      {
+        "key": "AI_SENATE_ENABLED",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "AI_SENATE_URL",
+        "value": "${AI_SENATE_URL}",
+        "is_secret": false
+      },
+      {
+        "key": "OLLAMA_BASE_URL",
+        "value": "${OLLAMA_BASE_URL}",
+        "is_secret": false
+      },
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "${OLLAMA_MODEL}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_API_BASE",
+        "value": "${AI_ROUTER_API_BASE}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_AUTO_DISCOVER_MODELS",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_SELECTED_SERVICE_IDS",
+        "value": "[]",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_BRAID_ALIAS",
+        "value": "${AI_ROUTER_BRAID_ALIAS}",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_BRAID_ENABLED",
+        "value": "true",
+        "is_secret": false
+      },
+      {
+        "key": "AI_ROUTER_UI_BASE",
+        "value": "${AI_ROUTER_UI_BASE}",
+        "is_secret": false
+      },
+      {
+        "key": "CUSTOM_DOMAINS",
+        "value": "ai.smsly.cloud",
+        "is_secret": false
+      },
+      {
+        "key": "UI_USERNAME",
+        "value": "admin",
+        "is_secret": false
+      },
+      {
+        "key": "UI_PASSWORD",
+        "value": "${RANDOM_PASSWORD}",
+        "is_secret": true
+      },
+      {
+        "key": "STORE_MODEL_IN_DB",
+        "value": "False",
+        "is_secret": false
+      },
+      {
+        "key": "LITELLM_CONFIG_PATH",
+        "value": "/app/proxy_server_config.yaml",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "deepseek-r1",
+    "name": "DeepSeek R1",
+    "description": "DeepSeek's state-of-the-art reasoning model. Performance comparable to OpenAI o1. Running via Ollama.",
+    "icon": "https://deepseek.com/favicon.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/deepseek-r1",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "deepseek-r1",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "llama-3-1",
+    "name": "Meta Llama 3.1",
+    "description": "Meta's most capable open model yet, with 128k context and improved multilingual support.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.1",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.1",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "mixtral-8x7b",
+    "name": "Mistral Mixtral 8x7B",
+    "description": "High-quality Mixture-of-Experts (MoE) model. Outperforms Llama 70B on most benchmarks.",
+    "icon": "https://mistral.ai/images/logo.svg",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/mixtral",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 24,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "mixtral",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-gemma2",
+    "name": "Google Gemma 2",
+    "description": "Google's powerful and efficient open model with a novel architecture.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/gemma2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "gemma2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-phi3",
+    "name": "Microsoft Phi-3",
+    "description": "Microsoft's state-of-the-art small language model (SLM).",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/phi3",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "phi3",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-mistral-nemo",
+    "name": "Mistral Nemo",
+    "description": "A 12B model built by NVIDIA and Mistral AI, outperforming Llama 3 8B.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/mistral-nemo",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "mistral-nemo",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5",
+    "name": "Alibaba Qwen 2.5",
+    "description": "Alibaba's flagship open model with excellent coding and math skills.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-command-r",
+    "name": "Cohere Command R",
+    "description": "Built for RAG and tool use, with long context and high performance.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/command-r",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "command-r",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-codellama",
+    "name": "Code Llama",
+    "description": "Specialized model for code generation and discussion.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/codellama",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "codellama",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-dolphin-mixtral",
+    "name": "Dolphin Mixtral",
+    "description": "Uncensored Mixture of Experts model based on Mixtral.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/dolphin-mixtral",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "dolphin-mixtral",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llava",
+    "name": "LLaVA",
+    "description": "Multi-modal model that can see and talk about images.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llava",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llava",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-starcoder2",
+    "name": "StarCoder 2",
+    "description": "Next generation of open-source LLMs for code.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/starcoder2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "starcoder2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-nomic-embed-text",
+    "name": "Nomic Embed Text",
+    "description": "High-performance text embedding model for RAG.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/nomic-embed-text",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "nomic-embed-text",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-neural-chat",
+    "name": "Neural Chat",
+    "description": "Intel's fine-tuned model for improved chat capabilities.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/neural-chat",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "neural-chat",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-solar",
+    "name": "Upstage Solar",
+    "description": "Compact yet powerful model from Upstage AI.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/solar",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "solar",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-medllama2",
+    "name": "MedLlama 2",
+    "description": "Fine-tuned Llama 2 for medical and healthcare questions.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/medllama2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "medllama2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-wizardlm2",
+    "name": "WizardLM 2",
+    "description": "Microsoft's highly capable model with strong reasoning.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/wizardlm2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "wizardlm2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-orca-mini",
+    "name": "Orca Mini",
+    "description": "A small but powerful model based on Llama 2.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/orca-mini",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "orca-mini",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-tinydolphin",
+    "name": "TinyDolphin",
+    "description": "Very small and fast model for lightweight tasks.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/tinydolphin",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "tinydolphin",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "llama3.1-7b",
+    "name": "Llama 3.1 (7B)",
+    "description": "Meta's 7B parameter version of Llama 3.1, offering a great balance of speed and reasoning for 16GB RAM systems.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.1:7b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.1:7b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "qwen2.5-0.5b",
+    "name": "Alibaba Qwen 2.5 (0.5B)",
+    "description": "A very small and lightweight version of Qwen 2.5, ideal for edge devices and low-RAM environments.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5:0.5b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 1,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5:0.5b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llama3.1-405b",
+    "name": "Llama 3.1 405B",
+    "description": "Meta's flagship foundation model, capable of complex reasoning, coding, and multilingual tasks. Extremely heavy.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.1",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 220,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.1:405b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-deepseek-v3",
+    "name": "DeepSeek V3",
+    "description": "A powerful Mixture-of-Experts model offering elite coding and math capabilities. Super heavy.",
+    "icon": "https://deepseek.com/favicon.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/deepseek-v3",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 350,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "deepseek-v3",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-72b",
+    "name": "Qwen 2.5 72B",
+    "description": "Alibaba's advanced large language model, excelling in coding, math, and instruction following.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5:72b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 64,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5:72b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-mixtral-8x22b",
+    "name": "Mixtral 8x22B",
+    "description": "Mistral's very large sparse MoE model. Excellent performance across many benchmarks.",
+    "icon": "https://mistral.ai/images/logo.svg",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/mixtral:8x22b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 90,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "mixtral:8x22b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-command-r-plus",
+    "name": "Command R+",
+    "description": "Cohere's state-of-the-art model for RAG and tool use tasks.",
+    "icon": "https://cohere.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/command-r-plus",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 64,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "command-r-plus",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-deepseek-coder-v2",
+    "name": "DeepSeek Coder V2",
+    "description": "An open-source Mixture-of-Experts code language model.",
+    "icon": "https://deepseek.com/favicon.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/deepseek-coder-v2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 128,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "deepseek-coder-v2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-falcon-180b",
+    "name": "Falcon 180B",
+    "description": "Technology Innovation Institute's massive parameter model.",
+    "icon": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/falcon:180b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 120,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "falcon:180b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "vllm-llama3.1-70b",
+    "name": "vLLM Llama 3.1 70B",
+    "description": "Serving Llama 3.1 70B via vLLM for high throughput inference.",
+    "icon": "https://vllm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/vllm/vllm-openai",
+    "docker_image": "vllm/vllm-openai:latest",
+    "default_port": 8000,
+    "min_ram_gb": 64,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "MODEL",
+        "value": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-nemotron",
+    "name": "Nemotron",
+    "description": "Nvidia's advanced LLM designed for synthetic data generation.",
+    "icon": "https://developer.nvidia.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/nemotron",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 40,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "nemotron",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llama3.1-70b",
+    "name": "Llama 3.1 70B",
+    "description": "Meta's highly capable 70B model with 128k context.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.1:70b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 40,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.1:70b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-wizardlm2-8x22b",
+    "name": "WizardLM2 8x22B",
+    "description": "Microsoft's state of the art instruction following model based on Mixtral.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/wizardlm2:8x22b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 80,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "wizardlm2:8x22b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2-72b",
+    "name": "Qwen 2 72B",
+    "description": "Alibaba's top-tier multilingual open model.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2:72b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 48,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2:72b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llava-34b",
+    "name": "LLaVA 34B",
+    "description": "Large vision-language model based on Llama.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llava:34b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 32,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llava:34b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-gemma2-27b",
+    "name": "Gemma 2 27B",
+    "description": "Google's high-performing 27B parameter model.",
+    "icon": "https://www.google.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/gemma2:27b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 24,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "gemma2:27b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-yi-34b",
+    "name": "Yi 34B",
+    "description": "A strong bilingual model from 01.AI.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/yi:34b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 24,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "yi:34b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-coder-32b",
+    "name": "Qwen 2.5 Coder 32B",
+    "description": "Alibaba's advanced 32B coding model.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5-coder:32b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 24,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5-coder:32b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-aya",
+    "name": "Aya 23",
+    "description": "Cohere's multilingual model supporting 23 languages.",
+    "icon": "https://cohere.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/aya",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 12,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "aya",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-codeqwen",
+    "name": "CodeQwen",
+    "description": "A highly capable code generation model based on Qwen.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/codeqwen",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "codeqwen",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-starcoder2-15b",
+    "name": "StarCoder2 15B",
+    "description": "BigCode's latest code generation model.",
+    "icon": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/starcoder2:15b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 16,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "starcoder2:15b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-phind-codellama",
+    "name": "Phind CodeLlama",
+    "description": "Phind's fine-tuned CodeLlama model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/phind-codellama",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 24,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "phind-codellama",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llama-pro",
+    "name": "Llama Pro",
+    "description": "An expansion of Llama 2 with enhanced coding and math.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama-pro",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama-pro",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-sqlcoder",
+    "name": "SQLCoder",
+    "description": "A model designed specifically for text-to-SQL tasks.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/sqlcoder",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 12,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "sqlcoder",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-coder-7b",
+    "name": "Qwen 2.5 Coder 7B",
+    "description": "Alibaba's highly capable 7B coding model.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5-coder:7b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5-coder:7b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-coder-1.5b",
+    "name": "Qwen 2.5 Coder 1.5B",
+    "description": "Ultra lightweight coding model.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5-coder:1.5b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5-coder:1.5b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-3b",
+    "name": "Qwen 2.5 3B",
+    "description": "Alibaba's lightweight 3B instruction model.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5:3b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 3,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5:3b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llama-3.2-1b",
+    "name": "Llama 3.2 1B",
+    "description": "Meta's smallest Llama model, optimized for mobile/edge.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llama-3.2-3b",
+    "name": "Llama 3.2 3B",
+    "description": "Meta's lightweight 3B model.",
+    "icon": "https://llama.meta.com/assets/images/llama-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llama3.2:3b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llama3.2:3b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-phi3.5",
+    "name": "Phi-3.5",
+    "description": "Microsoft's highly capable small language model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/phi3.5",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "phi3.5",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-gemma2-2b",
+    "name": "Gemma 2 2B",
+    "description": "Google's ultra-lightweight 2B model.",
+    "icon": "https://www.google.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/gemma2:2b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 3,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "gemma2:2b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-smollm2",
+    "name": "SmolLM2",
+    "description": "Hugging Face's compact model family for local inference.",
+    "icon": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/smollm2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "smollm2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-bge-m3",
+    "name": "BGE-M3",
+    "description": "BAAI's highly effective multilingual embedding model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/bge-m3",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "bge-m3",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-mxbai-embed-large",
+    "name": "mxbai-embed-large",
+    "description": "Mixedbread's state-of-the-art embedding model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/mxbai-embed-large",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "mxbai-embed-large",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-snowflake-arctic-embed",
+    "name": "Snowflake Arctic Embed",
+    "description": "Highly efficient text embedding model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/snowflake-arctic-embed",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 1,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "snowflake-arctic-embed",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-llava-phi3",
+    "name": "LLaVA-Phi3",
+    "description": "Small vision-language model based on Phi-3.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/llava-phi3",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "llava-phi3",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-moondream",
+    "name": "Moondream 2",
+    "description": "Tiny vision language model that runs anywhere.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/moondream",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "moondream",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2-math",
+    "name": "Qwen2 Math",
+    "description": "A series of math-specific LLMs built by Alibaba.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2-math",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2-math",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-deepseek-coder",
+    "name": "DeepSeek Coder",
+    "description": "Original DeepSeek coding model (pre-V2).",
+    "icon": "https://deepseek.com/favicon.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/deepseek-coder",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "deepseek-coder",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-duckdb-nsql",
+    "name": "DuckDB-NSQL",
+    "description": "7B parameter SQL model by Motherduck.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/duckdb-nsql",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "duckdb-nsql",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-openhermes",
+    "name": "OpenHermes 2.5",
+    "description": "Fine-tuned Mistral 7B. Great for coding and general use.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/openhermes",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 6,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "openhermes",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-stable-code",
+    "name": "Stable Code 3B",
+    "description": "Stability AI's 3B coding model.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/stable-code",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 3,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "stable-code",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "qdrant-standalone",
+    "name": "Qdrant",
+    "description": "High-performance vector database.",
+    "icon": "https://qdrant.tech/img/qdrant-logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/qdrant/qdrant",
+    "docker_image": "qdrant/qdrant:latest",
+    "default_port": 6333,
+    "min_ram_gb": 2
+  },
+  {
+    "id": "chromadb-standalone",
+    "name": "ChromaDB",
+    "description": "The AI-native open-source embedding database.",
+    "icon": "https://docs.trychroma.com/img/chroma.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/chromadb/chroma",
+    "docker_image": "chromadb/chroma:latest",
+    "default_port": 8000,
+    "min_ram_gb": 2
+  },
+  {
+    "id": "milvus-standalone",
+    "name": "Milvus",
+    "description": "Cloud-native vector database.",
+    "icon": "https://milvus.io/favicon.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/milvusdb/milvus",
+    "docker_image": "milvusdb/milvus:latest",
+    "default_port": 19530,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "weaviate-standalone",
+    "name": "Weaviate",
+    "description": "Vector search engine.",
+    "icon": "https://weaviate.io/img/site/logo.svg",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/semitechnologies/weaviate",
+    "docker_image": "semitechnologies/weaviate:latest",
+    "default_port": 8080,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED",
+        "value": "true",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "langsmith-server",
+    "name": "LangSmith",
+    "description": "LangChain's platform for debugging and testing LLMs.",
+    "icon": "https://smith.langchain.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/langchain/langsmith-server",
+    "docker_image": "langchain/langsmith-server:latest",
+    "default_port": 1984,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "opendevin",
+    "name": "OpenDevin",
+    "description": "An autonomous AI software engineer.",
+    "icon": "https://github.com/OpenDevin/OpenDevin/raw/main/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/opendevin/opendevin",
+    "docker_image": "ghcr.io/opendevin/opendevin:latest",
+    "default_port": 3000,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "chatwoot",
+    "name": "Chatwoot",
+    "description": "Open-source customer engagement suite with AI integrations.",
+    "icon": "https://www.chatwoot.com/images/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/chatwoot/chatwoot",
+    "docker_image": "chatwoot/chatwoot:latest",
+    "default_port": 3000,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "lobe-chat",
+    "name": "Lobe Chat",
+    "description": "An open-source, modern-design LLMs/AI chat framework.",
+    "icon": "https://lobehub.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/lobehub/lobe-chat",
+    "docker_image": "lobehub/lobe-chat:latest",
+    "default_port": 3210,
+    "min_ram_gb": 1
+  },
+  {
+    "id": "huggingface-tei",
+    "name": "Text Embeddings Inference",
+    "description": "HuggingFace toolkit for deploying embedding models.",
+    "icon": "https://huggingface.co/front/assets/huggingface_logo-noborder.svg",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/huggingface/text-embeddings-inference",
+    "docker_image": "ghcr.io/huggingface/text-embeddings-inference:cpu-latest",
+    "default_port": 80,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "ollama-nemotron-mini",
+    "name": "Nemotron Mini 4B",
+    "description": "Nvidia's small language model highly optimized for Roleplay, RAG, and function calling.",
+    "icon": "https://developer.nvidia.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/nemotron-mini",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 4,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "nemotron-mini",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2.5-coder-72b",
+    "name": "Qwen 2.5 Coder 72B",
+    "description": "Alibaba's massive coding-specific model matching GPT-4o level performance on many benchmarks.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2.5-coder:72b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 64,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2.5-coder:72b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-gemma2-9b",
+    "name": "Gemma 2 9B",
+    "description": "Google's lightweight but extremely performant 9B foundation model.",
+    "icon": "https://www.google.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/gemma2",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 8,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "gemma2",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-mxbai-embed-large-v1",
+    "name": "mxbai-embed-large",
+    "description": "Mixedbread's state-of-the-art embedding model. Excellent for RAG and semantic search.",
+    "icon": "https://ollama.com/public/ollama.png",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/mxbai-embed-large",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 2,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "mxbai-embed-large",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "ollama-qwen2-math-72b",
+    "name": "Qwen2 Math 72B",
+    "description": "Alibaba's massive parameter model specifically tuned for advanced mathematical reasoning.",
+    "icon": "https://avatars.githubusercontent.com/u/143734062?v=4",
+    "category": "intelligence",
+    "repository_url": "https://ollama.com/library/qwen2-math:72b",
+    "docker_image": "ollama/ollama:latest",
+    "default_port": 11434,
+    "min_ram_gb": 64,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "OLLAMA_MODEL",
+        "value": "qwen2-math:72b",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "vllm-mixtral-8x7b",
+    "name": "vLLM Mixtral 8x7B",
+    "description": "Serving Mistral's highly efficient MoE model via vLLM for massive throughput.",
+    "icon": "https://vllm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/vllm/vllm-openai",
+    "docker_image": "vllm/vllm-openai:latest",
+    "default_port": 8000,
+    "min_ram_gb": 48,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "MODEL",
+        "value": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "vllm-llama3-8b",
+    "name": "vLLM Llama 3 8B",
+    "description": "High-throughput serving of Llama 3 8B.",
+    "icon": "https://vllm.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/vllm/vllm-openai",
+    "docker_image": "vllm/vllm-openai:latest",
+    "default_port": 8000,
+    "min_ram_gb": 16,
+    "gpu_required": true,
+    "env_vars": [
+      {
+        "key": "MODEL",
+        "value": "meta-llama/Meta-Llama-3-8B-Instruct",
+        "is_secret": false
+      }
+    ]
+  },
+  {
+    "id": "langfuse",
+    "name": "Langfuse",
+    "description": "Open source observability and analytics for LLM applications.",
+    "icon": "https://langfuse.com/icon256.png",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/langfuse/langfuse",
+    "docker_image": "ghcr.io/langfuse/langfuse:latest",
+    "default_port": 3000,
+    "min_ram_gb": 4,
+    "required_addons": [
+      "POSTGRES"
+    ]
+  },
+  {
+    "id": "autogen-studio",
+    "name": "AutoGen Studio",
+    "description": "Microsoft's framework for creating multi-agent conversation systems.",
+    "icon": "https://microsoft.github.io/autogen/img/ag.svg",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/victordibia/autogenstudio",
+    "docker_image": "victordibia/autogenstudio:latest",
+    "default_port": 8081,
+    "min_ram_gb": 4
+  },
+  {
+    "id": "dify-sandbox",
+    "name": "Dify Sandbox",
+    "description": "A secure execution environment for Dify code nodes.",
+    "icon": "https://dify.ai/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/langgenius/dify-sandbox",
+    "docker_image": "langgenius/dify-sandbox:latest",
+    "default_port": 8194,
+    "min_ram_gb": 1
+  },
+  {
+    "id": "quivr",
+    "name": "Quivr",
+    "description": "Your second brain in the cloud, powered by generative AI.",
+    "icon": "https://github.com/QuivrHQ/quivr/raw/main/public/logo.png",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/quivrhq/quivr",
+    "docker_image": "quivrhq/quivr:latest",
+    "default_port": 3000,
+    "min_ram_gb": 8,
+    "required_addons": [
+      "POSTGRES",
+      "SUPABASE"
+    ]
+  },
+  {
+    "id": "coqui-tts",
+    "name": "Coqui TTS",
+    "description": "A deep learning toolkit for Text-to-Speech, battle-tested in research and production.",
+    "icon": "https://coqui.ai/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/coqui-ai/tts",
+    "docker_image": "ghcr.io/coqui-ai/tts:latest",
+    "default_port": 5002,
+    "min_ram_gb": 8
+  },
+  {
+    "id": "bark-tts",
+    "name": "Bark TTS (Suno)",
+    "description": "Transformer-based text-to-audio model created by Suno. Generates highly realistic, multilingual speech.",
+    "icon": "https://suno.ai/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://hub.docker.com/r/suno/bark",
+    "docker_image": "suno/bark:latest",
+    "default_port": 8000,
+    "min_ram_gb": 16,
+    "gpu_required": true
+  },
+  {
+    "id": "whisper-x",
+    "name": "WhisperX",
+    "description": "Fast automatic speech recognition with word-level timestamps and speaker diarization.",
+    "icon": "https://openai.com/favicon.ico",
+    "category": "intelligence",
+    "repository_url": "https://ghcr.io/m-bain/whisperx",
+    "docker_image": "ghcr.io/m-bain/whisperx:latest",
+    "default_port": 8000,
+    "min_ram_gb": 8,
+    "gpu_required": true
   }
 ]
