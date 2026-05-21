@@ -708,6 +708,20 @@ export const templatesApi = {
 };
 
 export const systemApi = {
+  health: async (): Promise<{ status: string }> => {
+    const response = await api.get('/system/health/');
+    return response.data;
+  },
+  
+  resources: async (): Promise<{ cpu_cores: number; ram_mb: number; swap_mb: number }> => {
+    const response = await api.get('/system/resources/');
+    return response.data;
+  },
+
+  config: async (): Promise<{ ALLOW_REGISTRATION: boolean; require_email_verification: boolean }> => {
+    const response = await api.get('/system/config/');
+    return response.data;
+  },
   getConfig: async (): Promise<any> => {
     const response = await api.get('/system/config/');
     return response.data;
