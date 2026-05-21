@@ -2483,6 +2483,7 @@ def _deploy_container(deployment, provider, image_name):
 
         deployment.status = Deployment.Status.ACTIVE
         deployment.container_id = resource.resource_id
+        deployment.finished_at = timezone.now()
         deployment.save()  # full save() triggers model hook that cancels other ACTIVE deploys
 
         service.active_target_type = "local"
