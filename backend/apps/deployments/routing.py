@@ -8,4 +8,6 @@ websocket_urlpatterns = [
             consumers.TerminalConsumer.as_asgi()),
     re_path(r'ws/build-logs/(?P<deployment_id>[-\w]+)/$',
             consumers.BuildLogConsumer.as_asgi()),
+    re_path(r'ws/service-status/$',
+            consumers.ServiceStatusConsumer.as_asgi()),
 ]

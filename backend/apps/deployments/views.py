@@ -936,6 +936,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.QUEUED,
             commit_hash='latest',
             commit_message='Service restart (full rebuild)',
+            branch=service.branch or '',
         )
 
         smart_deploy_task.delay(deployment_id=str(deployment.id), provider_id=str(provider.id),
@@ -1150,6 +1151,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.QUEUED,
             commit_hash=ref if ref != 'HEAD' else 'latest',
             commit_message=f"Remote Deploy: {ref}" if source_node else f"Manual Trigger: {ref}",
+            branch=service.branch or '',
             source_node=None if is_docker_delegated else source_node,
             target_server=target_server,
             target_is_local=target_is_local,
@@ -1278,6 +1280,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     commit_hash='HEAD',
                     commit_message=f"Preview deploy: {branch}"
                     + (f" (PR #{pr_number})" if pr_number else ""),
+                    branch=branch or '',
                 )
 
                 provider = _resolve_provider_for_service(preview)
@@ -1448,6 +1451,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                             status=Deployment.Status.QUEUED,
                             commit_hash=ref if ref != 'HEAD' else 'latest',
                             commit_message=f"Multi-deploy: {ref}",
+                            branch=service.branch or '',
                             target_is_local=True,
                         )
                         try:
@@ -1505,6 +1509,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     status=Deployment.Status.QUEUED,
                     commit_hash=ref if ref != 'HEAD' else 'latest',
                     commit_message=f"Multi-deploy: {ref}",
+                    branch=service.branch or '',
                     target_server=server,
                     target_is_local=False,
                 )
@@ -1578,6 +1583,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.QUEUED,
             commit_hash=last_good.commit_hash,
             commit_message=rollback_msg,
+            branch=service.branch or '',
             is_rollback=True,
             rollback_from=current,
         )
@@ -2801,6 +2807,7 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             status=Deployment.Status.QUEUED,
             commit_hash=target_deployment.commit_hash,
             commit_message=f"Rollback to {target_deployment.commit_hash[:7]}",
+            branch=service.branch or '',
             is_rollback=True,
             rollback_from=target_deployment,
         )

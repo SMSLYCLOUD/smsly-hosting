@@ -1,0 +1,268 @@
+import { useEffect, useRef, useState } from 'react';
+import { getAuthToken } from './auth-cookies';
+
+export interface ServiceStatusUpdate {
+  type: 'service_status_update';
+  service_id: string;
+  service_name: string;
+  status: string;
+  deployment_status: string;
+  updated_at: string;
+}
+
+export interface DeploymentStatusUpdate {
+  type: 'deployment_status_update';
+  service_id: string;
+  service_name: string;
+  deployment_id: string;
+  status: string;
+  updated_at: string;
+}
+
+export type WebSocketMessage = ServiceStatusUpdate | DeploymentStatusUpdate;
+
+interface UseWebSocketOptions {
+  url: string;
+  onMessage?: (message: WebSocketMessage) => void;
+  onOpen?: () => void;
+  onClose?: (event: CloseEvent) => void;
+  onError?: (event: Event) => void;
+  reconnect?: boolean;
+  reconnectInterval?: number;
+}
+
+export function useWebSocket(options: UseWebSocketOptions) {
+  const {
+    url,
+    onMessage,
+    onOpen,
+    onClose,
+    onError,
+    reconnect = true,
+    reconnectInterval = 5000,
+  } = options;
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'open' | 'closed' | 'error'>('closed');
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttempts = useRef(0);
+  const maxReconnectAttempts = 10;
+
+  const connect = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    setConnectionStatus('connecting');
+    const token = getAuthToken();
+    
+    // Add token to URL query parameters
+    const urlWithToken = `${url}?token=${encodeURIComponent(token || '')}`;
+    
+    try {
+      wsRef.current = new WebSocket(urlWithToken);
+
+      wsRef.current.onopen = () => {
+        setConnectionStatus('open');
+        reconnectAttempts.current = 0;
+        onOpen?.();
+      };
+
+      wsRef.current.onmessage = (event) => {
+        try {
+          const message: WebSocketMessage = JSON.parse(event.data);
+          onMessage?.(message);
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error);
+        }
+      };
+
+      wsRef.current.onclose = (event) => {
+        setConnectionStatus('closed');
+        onClose?.(event);
+        
+        if (reconnect && reconnectAttempts.current < maxReconnectAttempts) {
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectAttempts.current++;
+            connect();
+          }, reconnectInterval);
+        }
+      };
+
+      wsRef.current.onerror = (event) => {
+        setConnectionStatus('error');
+        onError?.(event);
+      };
+    } catch (error) {
+      console.error('WebSocket connection failed:', error);
+      setConnectionStatus('error');
+    }
+  };
+
+  const disconnect = () => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
+    
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    
+    setConnectionStatus('closed');
+  };
+
+  const sendMessage = (message: any) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(message));
+    }
+  };
+
+  useEffect(() => {
+    connect();
+
+    return () => {
+      disconnect();
+    };
+  }, [url]);
+
+  return {
+    connectionStatus,
+    connect,
+    disconnect,
+    sendMessage,
+  };
+}
+
+// Service status hook for dashboard
+export function useServiceStatusUpdates(userId: string) {
+  const [services, setServices] = useState<any[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const { connectionStatus } = useWebSocket({
+    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/ws/service-status/`,
+    reconnect: true,
+    reconnectInterval: 3000,
+    onMessage: (message) => {
+      if (message.type === 'service_status_update') {
+        setServices(prev => {
+          // Update existing service or add new one
+          const existingIndex = prev.findIndex(s => s.id === message.service_id);
+          const service = {
+            id: message.service_id,
+            name: message.service_name,
+            status: message.status,
+            deployment_status: message.deployment_status,
+            updated_at: message.updated_at,
+          };
+          
+          if (existingIndex >= 0) {
+            const updated = [...prev];
+            updated[existingIndex] = service;
+            return updated;
+          } else {
+            return [...prev, service];
+          }
+        });
+        
+        setLastUpdated(new Date());
+      }
+    },
+  });
+
+  return {
+    services,
+    connectionStatus,
+    lastUpdated,
+  };
+}
+
+// Deployment status hook for individual service pages
+export function useDeploymentStatusUpdates(serviceId: string) {
+  const [deployments, setDeployments] = useState<any[]>([]);
+
+  const { connectionStatus } = useWebSocket({
+    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/ws/service-status/`,
+    reconnect: true,
+    reconnectInterval: 3000,
+    onMessage: (message) => {
+      if (message.type === 'deployment_status_update' && message.service_id === serviceId) {
+        setDeployments(prev => {
+          // Update existing deployment or add new one
+          const existingIndex = prev.findIndex(d => d.id === message.deployment_id);
+          const deployment = {
+            id: message.deployment_id,
+            service_id: message.service_id,
+            service_name: message.service_name,
+            status: message.status,
+            updated_at: message.updated_at,
+          };
+          
+          if (existingIndex >= 0) {
+            const updated = [...prev];
+            updated[existingIndex] = deployment;
+            return updated;
+          } else {
+            return [...prev, deployment];
+          }
+        });
+      }
+    },
+  });
+
+  return {
+    deployments,
+    connectionStatus,
+  };
+}
+
+// Utility function to get status color
+export function getStatusColor(status: string): string {
+  switch (status.toLowerCase()) {
+    case 'active':
+      return 'text-green-500';
+    case 'failed':
+      case 'deletion_failed':
+      return 'text-red-500';
+    case 'deletion_pending':
+      return 'text-yellow-500';
+    case 'building':
+    case 'deploying':
+    case 'review':
+    case 'queued':
+    case 'health_check':
+    case 'traffic_shifting':
+      return 'text-blue-500';
+    case 'staged':
+      return 'text-purple-500';
+    default:
+      return 'text-gray-500';
+  }
+}
+
+// Utility function to get status icon
+export function getStatusIcon(status: string): string {
+  switch (status.toLowerCase()) {
+    case 'active':
+      return '✓';
+    case 'failed':
+      return '✗';
+    case 'deletion_pending':
+      return '⏳';
+    case 'building':
+    case 'deploying':
+      return '🏗️';
+    case 'review':
+      return '👀';
+    case 'queued':
+      return '⏰';
+    case 'health_check':
+      return '❤️';
+    case 'traffic_shifting':
+      return '🔄';
+    case 'staged':
+      return '🎭';
+    default:
+      return '❓';
+  }
+}

@@ -761,3 +761,148 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
             }
         except Deployment.DoesNotExist:
             return {'error': 'Deployment not found'}
+
+
+class ServiceStatusConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for real-time service status updates.
+    
+    Connects to channel groups per user and broadcasts service status changes
+    as they happen. Services update their status via channel_layer.
+    
+    Usage:
+        ws://host/ws/service-status/?token=xxx
+    
+    Messages sent to client:
+        {
+            "type": "service_status_update",
+            "service_id": "uuid",
+            "service_name": "name",
+            "status": "ACTIVE|FAILED|DELETION_PENDING...",
+            "deployment_status": "ACTIVE|FAILED|...",
+            "updated_at": "2026-05-21T12:00:00Z"
+        }
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.user = None
+        self.user_group_name = None
+
+    async def connect(self):
+        """Authenticate and join user's service status group."""
+        # Authenticate
+        query_string = self.scope.get('query_string', b'').decode()
+        token_key = None
+        for param in query_string.split('&'):
+            if param.startswith('token='):
+                token_key = param.split('=', 1)[1]
+                break
+
+        if not token_key:
+            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
+            return
+
+        self.user = await self._authenticate_token(token_key)
+        if not self.user:
+            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
+            return
+
+        # Join the user's service status group
+        self.user_group_name = f"user_services_{self.user.id}"
+        await self.channel_layer.group_add(
+            self.user_group_name,
+            self.channel_name
+        )
+        await self.accept()
+
+        # Send initial service statuses
+        await self._send_initial_services()
+
+    async def disconnect(self, code):
+        """Leave group on disconnect."""
+        if self.user_group_name:
+            await self.channel_layer.group_discard(
+                self.user_group_name,
+                self.channel_name
+            )
+
+    async def receive(self, text_data=None, bytes_data=None):
+        """Handle incoming messages (typically pings)."""
+        if text_data:
+            try:
+                data = json.loads(text_data)
+                if data.get('type') == 'ping':
+                    await self.send(text_data=json.dumps({'type': 'pong'}))
+            except json.JSONDecodeError:
+                pass
+
+    async def service_status_update(self, event):
+        """Handle service status update broadcast."""
+        await self.send(text_data=json.dumps({
+            'type': 'service_status_update',
+            'service_id': event['service_id'],
+            'service_name': event['service_name'],
+            'status': event['status'],
+            'deployment_status': event.get('deployment_status', 'unknown'),
+            'updated_at': event.get('updated_at', ''),
+        }))
+
+    async def deployment_status_update(self, event):
+        """Handle deployment status update broadcast."""
+        await self.send(text_data=json.dumps({
+            'type': 'deployment_status_update',
+            'service_id': event['service_id'],
+            'service_name': event['service_name'],
+            'deployment_id': event['deployment_id'],
+            'status': event['status'],
+            'updated_at': event.get('updated_at', ''),
+        }))
+
+    @database_sync_to_async
+    def _authenticate_token(self, token_key):
+        """Validate token and return user."""
+        from rest_framework.authtoken.models import Token
+        try:
+            token = Token.objects.select_related('user').get(key=token_key)
+            return token.user
+        except Token.DoesNotExist:
+            return None
+
+    @database_sync_to_async
+    def _get_user_services(self):
+        """Get all services for the authenticated user."""
+        from apps.deployments.models import Service, Deployment
+        services = Service.objects.filter(owner=self.user).select_related('deployments').prefetch_related(
+            'deployments__service'
+        )
+        
+        # Get the latest deployment for each service
+        services_with_status = []
+        for service in services:
+            latest_deployment = service.deployments.order_by('-created_at').first()
+            services_with_status.append({
+                'id': str(service.id),
+                'name': service.name,
+                'status': service.status,
+                'deployment_status': latest_deployment.status if latest_deployment else 'unknown',
+                'updated_at': service.updated_at.isoformat() if service.updated_at else None,
+            })
+        
+        return services_with_status
+
+    async def _send_initial_services(self):
+        """Send initial service statuses to the client."""
+        try:
+            services = await self._get_user_services()
+            for service in services:
+                await self.send(text_data=json.dumps({
+                    'type': 'service_status_update',
+                    'service_id': service['id'],
+                    'service_name': service['name'],
+                    'status': service['status'],
+                    'deployment_status': service['deployment_status'],
+                    'updated_at': service['updated_at'],
+                }))
+        except Exception as e:
+            logger.error("Error sending initial service statuses: %s", e)

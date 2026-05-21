@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save } from 'lucide-react';
+import { Loader2, Download, RotateCcw, Trash2, Plus, Clock, Save, AlertCircle, CheckCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import api from '@/lib/api';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -24,6 +24,16 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
     const [backups, setBackups] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    
+    // Restore progress tracking
+    const [restoringId, setRestoringId] = useState<string | null>(null);
+    const [restoreStatus, setRestoreStatus] = useState<string>('');
+    const [deploymentStatus, setDeploymentStatus] = useState<string>('');
+    const [deploymentProgress, setDeploymentProgress] = useState<number>(0);
+    const [deploymentLogs, setDeploymentLogs] = useState<string>('');
+    const [isLiveDeploying, setIsLiveDeploying] = useState(false);
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
 
     // Schedule state
     const [schedule, setSchedule] = useState<Schedule | null>(null);
@@ -82,19 +92,180 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
 
     const handleRestore = async (id: string) => {
         if (!await confirm({ title: 'Restore backup?', message: 'Are you sure? This will overwrite the current service state.', variant: 'destructive', confirmText: 'Restore' })) return;
+        
+        setRestoringId(id);
+        setRestoreStatus('RESTORING');
+        setDeploymentStatus('');
+        setDeploymentProgress(0);
+        setDeploymentLogs('');
+        
         try {
             await api.post(`/backups/${id}/restore/`, { confirm: true });
-            toast({ title: "Restore Started", description: "Service will restart once restored." });
+            toast({ title: "Restore Started", description: "Service will restart once restored. Monitoring deployment progress..." });
+            
+            // Start monitoring deployment status
+            monitorDeploymentAfterRestore(id);
+            
+            // Connect WebSocket for real-time updates
+            connectWebSocket(id);
+            
         } catch (err) {
             toast({ title: "Error", description: "Failed to trigger restore.", variant: "destructive" });
+            setRestoringId(null);
+            setRestoreStatus('');
         }
     };
+
+    const monitorDeploymentAfterRestore = async (backupId: string) => {
+        const pollInterval = setInterval(async () => {
+            try {
+                const res = await api.get(`/services/${serviceId}/`);
+                const service = res.data;
+                
+                // Check for active deployment
+                if (service.latest_deployment) {
+                    const deployment = service.latest_deployment;
+                    
+                    if (deployment.status === 'BUILDING' || deployment.status === 'DEPLOYING') {
+                        setDeploymentStatus('DEPLOYING');
+                        setDeploymentProgress(calculateProgress(deployment.status));
+                        setRestoreStatus('RESTORED');
+                        setIsLiveDeploying(true);
+                    } else if (deployment.status === 'ACTIVE') {
+                        setDeploymentStatus('COMPLETED');
+                        setDeploymentProgress(100);
+                        setIsLiveDeploying(false);
+                        clearInterval(pollInterval);
+                        toast({ title: "Restore Completed", description: "Service has been successfully restored and deployed." });
+                        // Refresh backups to show any new status
+                        loadBackups();
+                    } else if (deployment.status === 'FAILED') {
+                        setDeploymentStatus('FAILED');
+                        setIsLiveDeploying(false);
+                        clearInterval(pollInterval);
+                        toast({ title: "Restore Failed", description: "Deployment failed. Check service logs for details.", variant: "destructive" });
+                    }
+                }
+            } catch (err) {
+                console.error('Error monitoring deployment:', err);
+            }
+        }, 3000); // Poll every 3 seconds
+        
+        // Stop monitoring after 5 minutes
+        setTimeout(() => {
+            clearInterval(pollInterval);
+            if (deploymentStatus !== 'COMPLETED' && deploymentStatus !== 'FAILED') {
+                setRestoreStatus('TIMEOUT');
+                setDeploymentStatus('TIMEOUT');
+                setIsLiveDeploying(false);
+                toast({ title: "Restore Monitoring Timeout", description: "Restore process may still be running. Check service status manually.", variant: "destructive" });
+            }
+        }, 300000); // 5 minutes
+    };
+
+    const calculateProgress = (status: string): number => {
+        switch (status) {
+            case 'QUEUED':
+            case 'PENDING':
+                return 10;
+            case 'BUILDING':
+                return 30;
+            case 'DEPLOYING':
+                return 70;
+            case 'ACTIVE':
+                return 100;
+            default:
+                return 0;
+        }
+    };
+
+    const connectWebSocket = (deploymentId: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const token = typeof window !== 'undefined'
+            ? (localStorage.getItem('auth_token') || document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1])
+            : null;
+        if (!token) return;
+
+        const decodedToken = typeof window !== 'undefined' && document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)
+            ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1])
+            : token;
+
+        const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+        const wsUrl = `${proto}://${host}/ws/build-logs/${deploymentId}/?token=${encodeURIComponent(decodedToken)}`;
+
+        try {
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected for deployment monitoring');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'build_log') {
+                        setDeploymentLogs(prev => prev + (data.log || ''));
+                    } else if (data.type === 'status_change') {
+                        setDeploymentStatus(data.status);
+                        if (data.status === 'ACTIVE' || data.status === 'FAILED') {
+                            setIsLiveDeploying(false);
+                        }
+                    }
+                } catch {
+                    // Non-JSON message, ignore
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket connection closed');
+                // Don't reconnect automatically, let the polling handle it
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+
+            wsRef.current = ws;
+        } catch (error) {
+            console.error('WebSocket connection failed:', error);
+        }
+    };
+
+    const cleanupWebSocket = () => {
+        if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+        }
+        if (reconnectTimer.current) {
+            clearTimeout(reconnectTimer.current);
+            reconnectTimer.current = null;
+        }
+    };
+
+    useEffect(() => {
+        // Cleanup WebSocket on unmount
+        return () => {
+            cleanupWebSocket();
+        };
+    }, []);
 
     const handleDeleteBackup = async (id: string) => {
         if (!await confirm({ title: 'Delete backup?', message: 'This backup will be permanently deleted.', variant: 'destructive', confirmText: 'Delete' })) return;
         try {
             await api.delete(`/backups/${id}/`);
             toast({ title: "Backup deleted" });
+            // Clear restore state if deleting the backup being restored
+            if (restoringId === id) {
+                setRestoringId(null);
+                setRestoreStatus('');
+                setDeploymentStatus('');
+                setDeploymentProgress(0);
+                setDeploymentLogs('');
+                setIsLiveDeploying(false);
+                cleanupWebSocket();
+            }
             loadBackups();
         } catch (err) {
             toast({ title: "Error", description: "Failed to delete backup.", variant: "destructive" });
@@ -184,8 +355,18 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                     <TableCell className="text-right space-x-1">
                                         {backup.status === 'COMPLETED' && (
                                             <>
-                                                <Button variant="ghost" size="sm" onClick={() => handleRestore(backup.id)} title="Restore">
-                                                    <RotateCcw className="w-4 h-4" />
+                                                <Button 
+                                                    variant="ghost" 
+                                                    size="sm" 
+                                                    onClick={() => handleRestore(backup.id)} 
+                                                    title="Restore"
+                                                    disabled={restoringId === backup.id}
+                                                >
+                                                    {restoringId === backup.id ? (
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                    ) : (
+                                                        <RotateCcw className="w-4 h-4" />
+                                                    )}
                                                 </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => {
                                                     const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
@@ -215,10 +396,145 @@ export default function BackupsTab({ serviceId }: { serviceId: string }) {
                                     <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">No backups found. Create your first backup to get started.</TableCell>
                                 </TableRow>
                             )}
-                        </TableBody>
-                    </Table>
-                </CardContent>
-            </Card>
+                         </TableBody>
+                     </Table>
+                 </CardContent>
+             </Card>
+
+             {/* Restore Progress Section */}
+             {restoringId && (
+                 <Card>
+                     <CardHeader>
+                         <CardTitle className="flex items-center gap-2">
+                             {restoreStatus === 'RESTORING' && <Loader2 className="w-5 h-5 animate-spin text-blue-500" />}
+                             {restoreStatus === 'RESTORED' && <Clock className="w-5 h-5 text-yellow-500" />}
+                             {deploymentStatus === 'DEPLOYING' && <Loader2 className="w-5 h-5 animate-spin text-yellow-500" />}
+                             {deploymentStatus === 'COMPLETED' && <CheckCircle className="w-5 h-5 text-green-500" />}
+                             {deploymentStatus === 'FAILED' && <AlertCircle className="w-5 h-5 text-red-500" />}
+                             {deploymentStatus === 'TIMEOUT' && <AlertCircle className="w-5 h-5 text-orange-500" />}
+                             Restore Progress
+                         </CardTitle>
+                         <CardDescription>
+                             Monitoring the restore and deployment process for backup {restoringId}
+                         </CardDescription>
+                     </CardHeader>
+                     <CardContent className="space-y-4">
+                         {/* Restore Status */}
+                         <div className="flex items-center justify-between p-3 bg-blue-50/50 rounded-lg">
+                             <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-blue-500" />
+                                <span className="font-medium">Restore Phase</span>
+                             </div>
+                             <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                                 restoreStatus === 'RESTORING' ? 'bg-blue-500/10 text-blue-600' : 
+                                 restoreStatus === 'RESTORED' ? 'bg-green-500/10 text-green-600' :
+                                 restoreStatus === 'TIMEOUT' ? 'bg-orange-500/10 text-orange-600' :
+                                 'bg-gray-500/10 text-gray-600'
+                             }`}>
+                                 {restoreStatus === 'RESTORING' ? 'Restoring backup...' : 
+                                  restoreStatus === 'RESTORED' ? 'Backup restored, deploying...' :
+                                  restoreStatus === 'TIMEOUT' ? 'Restore timeout' : 'Unknown'}
+                             </span>
+                         </div>
+
+                         {/* Deployment Progress */}
+                         {(deploymentStatus === 'DEPLOYING' || deploymentStatus === 'COMPLETED' || deploymentStatus === 'FAILED') && (
+                             <div className="space-y-2">
+                                 <div className="flex items-center justify-between">
+                                     <span className="font-medium">Deployment Phase</span>
+                                     <span className={`text-sm font-semibold ${
+                                         deploymentStatus === 'DEPLOYING' ? 'text-yellow-600' :
+                                         deploymentStatus === 'COMPLETED' ? 'text-green-600' :
+                                         'text-red-600'
+                                     }`}>
+                                         {deploymentStatus === 'DEPLOYING' ? 'Deploying service...' : 
+                                          deploymentStatus === 'COMPLETED' ? 'Completed successfully' : 
+                                          'Failed'}
+                                     </span>
+                                 </div>
+                                 <div className="w-full bg-gray-200 rounded-full h-2">
+                                     <div 
+                                         className={`h-2 rounded-full transition-all duration-300 ${
+                                             deploymentStatus === 'COMPLETED' ? 'bg-green-500' :
+                                             deploymentStatus === 'FAILED' ? 'bg-red-500' :
+                                             'bg-yellow-500'
+                                         }`}
+                                         style={{ width: `${deploymentProgress}%` }}
+                                     ></div>
+                                 </div>
+                                 <div className="text-xs text-gray-500">
+                                     Progress: {deploymentProgress}%
+                                 </div>
+                             </div>
+                         )}
+
+                         {/* Live Status Indicator */}
+                         {isLiveDeploying && (
+                             <div className="flex items-center gap-2 text-yellow-600 bg-yellow-50 px-3 py-2 rounded-lg">
+                                 <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                                 <span className="text-sm font-medium">Live deployment in progress...</span>
+                             </div>
+                         )}
+
+                         {/* Deployment Logs */}
+                         {deploymentLogs && (
+                             <div className="space-y-2">
+                                 <div className="flex items-center justify-between">
+                                     <span className="font-medium">Deployment Logs</span>
+                                     <Button 
+                                         variant="ghost" 
+                                         size="sm" 
+                                         onClick={() => setDeploymentLogs('')}
+                                         className="text-xs"
+                                     >
+                                         Clear
+                                     </Button>
+                                 </div>
+                                 <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 max-h-40 overflow-y-auto font-mono text-xs">
+                                     <pre className="text-green-400 whitespace-pre-wrap">{deploymentLogs}</pre>
+                                 </div>
+                             </div>
+                         )}
+
+                         {/* Action Buttons */}
+                         <div className="flex gap-2 pt-2">
+                             <Button 
+                                 variant="outline" 
+                                 onClick={() => {
+                                     setRestoringId(null);
+                                     setRestoreStatus('');
+                                     setDeploymentStatus('');
+                                     setDeploymentProgress(0);
+                                     setDeploymentLogs('');
+                                     setIsLiveDeploying(false);
+                                     cleanupWebSocket();
+                                 }}
+                             >
+                                 Cancel Monitoring
+                             </Button>
+                             {deploymentStatus === 'FAILED' && (
+                                 <Button 
+                                     variant="destructive" 
+                                     onClick={() => {
+                                         // Try to restart the service
+                                         api.post(`/services/${serviceId}/restart/`)
+                                             .then(() => {
+                                                 toast({ title: "Service restart initiated", description: "Attempting to restore service functionality." });
+                                                 setDeploymentStatus('');
+                                                 setDeploymentProgress(0);
+                                             })
+                                             .catch(err => {
+                                                 toast({ title: "Restart failed", description: "Could not restart service.", variant: "destructive" });
+                                             });
+                                     }}
+                                 >
+                                     Restart Service
+                                 </Button>
+                             )}
+                         </div>
+                     </CardContent>
+                 </Card>
+             )}
 
             <Card>
                 <CardHeader>
