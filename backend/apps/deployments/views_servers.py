@@ -12,6 +12,7 @@ import json as json_mod
 import logging
 import time
 import os
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -336,6 +337,18 @@ def _safe_remote_error_payload(kind: str, reason: str, upstream_status: int | No
     return payload
 
 
+def _proxy_error_response(reason: str, upstream_status: int = 502) -> Response:
+    """Return remote proxy failures in the normal proxy envelope."""
+    return Response({
+        "status_code": upstream_status,
+        "data": {
+            "remote_unreachable": True,
+            "error": str(reason),
+            "upstream_status": upstream_status,
+        },
+    })
+
+
 def _build_remote_headers(server, method="GET", path="/api/v1/services/", body=b"", auth_mode=None):
     """
     Build auth headers for a remote server.
@@ -491,6 +504,54 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
             upstream_status=last_status,
         )
     return None, _safe_remote_error_payload(kind, last_error or "Remote request failed.")
+
+
+def _lite_agent_proxy_response(server, request, method: str, path: str) -> Response | None:
+    """Serve safe lite-agent proxy reads from the shared controller database."""
+    if not getattr(server, "is_lite_agent", False) or method != "GET":
+        return None
+
+    path_only = path.split("?", 1)[0].rstrip("/")
+    if path_only == "/api/v1/services":
+        qs = (
+            Service.objects
+            .filter(server=server)
+            .exclude(status=Service.Status.DELETED)
+            .select_related("project")
+            .order_by("-updated_at")
+        )
+        data = ServiceSerializer(qs, many=True, context={"request": request}).data
+        return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
+
+    if path_only == "/api/v1/deployments":
+        qs = (
+            Deployment.objects
+            .filter(service__server=server)
+            .select_related("service")
+            .order_by("-created_at")[:50]
+        )
+        data = DeploymentSerializer(qs, many=True).data
+        return Response({"status_code": 200, "data": {"results": data, "count": len(data)}})
+
+    service_prefix = "/api/v1/services/"
+    if path_only.startswith(service_prefix):
+        raw_id = path_only[len(service_prefix):].split("/", 1)[0]
+        try:
+            service_id = uuid.UUID(raw_id)
+        except (TypeError, ValueError):
+            return None
+        service = (
+            Service.objects
+            .filter(id=service_id, server=server)
+            .exclude(status=Service.Status.DELETED)
+            .select_related("project")
+            .first()
+        )
+        if service:
+            data = ServiceSerializer(service, context={"request": request}).data
+            return Response({"status_code": 200, "data": data})
+
+    return None
 
 
 # --- Serializers -------------------------------------------------------------
@@ -832,6 +893,10 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        lite_agent_response = _lite_agent_proxy_response(server, request, method, path)
+        if lite_agent_response is not None:
+            return lite_agent_response
+
         # Validate the server URL scheme is HTTP/HTTPS (prevent file://, etc.)
         parsed = urlparse(server.api_url)
         if parsed.scheme not in ("http", "https"):
@@ -861,10 +926,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 "data": data,
             })
         except requests.RequestException as e:
-            return Response(
-                {"error": f"Proxy request failed: {str(e)}"},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
+            return _proxy_error_response(f"Proxy request failed: {str(e)}")
 
     # ── Remote Services (convenience) ────────────────────────────────────
 

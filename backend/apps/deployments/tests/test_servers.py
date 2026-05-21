@@ -8,6 +8,7 @@ import os
 import time
 from unittest.mock import patch, MagicMock
 
+import requests
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -377,6 +378,57 @@ class ManagedServerViewTests(TestCase):
         self.assertTrue(resp.data["remote_unreachable"])
         self.assertEqual(resp.data["kind"], "services")
         self.assertEqual(resp.data["upstream_status"], 502)
+
+    def test_lite_agent_proxy_services_uses_local_shared_db(self):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Lite Agent",
+            host="10.0.0.12",
+            is_lite_agent=True,
+        )
+        service = Service.objects.create(
+            owner=self.user,
+            name="transferred-lite-service",
+            server=server,
+        )
+
+        resp = self.client.post(
+            f"/api/v1/servers/{server.id}/proxy/",
+            {
+                "method": "GET",
+                "path": "/api/v1/services/",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status_code"], 200)
+        self.assertEqual(resp.data["data"]["count"], 1)
+        self.assertEqual(resp.data["data"]["results"][0]["id"], str(service.id))
+
+    @patch("apps.deployments.views_servers.requests.request")
+    def test_proxy_request_exception_returns_proxy_envelope_not_502(self, mock_request):
+        mock_request.side_effect = requests.RequestException("connection refused")
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Remote Down",
+            host="10.0.0.13",
+            api_url="https://remote-down.example.com",
+            api_token="tok",
+        )
+
+        resp = self.client.post(
+            f"/api/v1/servers/{server.id}/proxy/",
+            {
+                "method": "GET",
+                "path": "/api/v1/services/",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["status_code"], 502)
+        self.assertTrue(resp.data["data"]["remote_unreachable"])
 
     @patch("apps.deployments.views_servers.requests.get")
     def test_remote_services_falls_back_to_gateway_secret_when_token_fails(self, mock_get):
