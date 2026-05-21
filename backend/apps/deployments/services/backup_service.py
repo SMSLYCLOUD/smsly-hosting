@@ -468,7 +468,25 @@ class BackupService:
                         finally:
                             helper.remove(force=True)
 
-            logger.info("Restore complete.")
+            logger.info("Restore complete. Queueing deployment.")
+            from apps.deployments.models import Deployment
+            from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
+            
+            provider = _resolve_provider_for_service(target_service, prefer_local=True)
+            if provider:
+                deployment = Deployment.objects.create(
+                    service=target_service,
+                    status=Deployment.Status.QUEUED,
+                    commit_hash='latest',
+                    commit_message=f"Restored from backup {backup.id}",
+                )
+                enqueue_smart_deploy_task(
+                    deployment_id=str(deployment.id),
+                    provider_id=str(provider.id),
+                    skip_review=True
+                )
+            else:
+                logger.warning(f"Could not resolve provider to queue deployment for restored service {target_service.id}")
             return True
 
         except Exception as e:
