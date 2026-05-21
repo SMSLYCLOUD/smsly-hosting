@@ -895,7 +895,12 @@ class SelfHealingOrchestrator:
         }
 
         try:
-            from apps.intelligence.models import AIProviderSettings
+            # Note: AIProviderSettings is not available in agent mode
+            try:
+                from apps.intelligence.models import AIProviderSettings
+            except ImportError:
+                self._log("Intelligence app not available in agent mode — cannot escalate to AI")
+                return {"success": False, "error": "Intelligence app not available in agent mode"}
 
             ai_settings = AIProviderSettings.objects.filter(is_active=True).first()
             if not ai_settings:

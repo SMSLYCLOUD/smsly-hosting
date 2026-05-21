@@ -53,7 +53,11 @@ from apps.deployments.utils import (
     update_stage,
 )
 # Imports for AIProviderSettings; jules_fix is imported lazily inside tasks
-from apps.intelligence.models import AIProviderSettings
+# Note: AIProviderSettings is not available in agent mode
+try:
+    from apps.intelligence.models import AIProviderSettings
+except ImportError:
+    AIProviderSettings = None
 from services.addon_provisioner import addon_provisioner
 
 logger = logging.getLogger(__name__)
@@ -3023,9 +3027,12 @@ def _handle_failure(task, deployment, error_msg, reason):
                 from apps.intelligence.jules_fix import jules_fix_deployment_failure
                 service = deployment.service
                 # Only trigger if Jules has an API key configured
-                ai_settings = AIProviderSettings.get_solo()
-                if not ai_settings.jules_api_key:
-                    logger.debug("Jules auto-fix skipped: no Jules API key configured")
+                if not AIProviderSettings:
+                    logger.debug("Jules auto-fix skipped: intelligence app not available in agent mode")
+                else:
+                    ai_settings = AIProviderSettings.get_solo()
+                    if not ai_settings.jules_api_key:
+                        logger.debug("Jules auto-fix skipped: no Jules API key configured")
                 elif not service.repository_url:
                     logger.debug("Jules auto-fix skipped: service has no repository_url")
                 else:
