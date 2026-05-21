@@ -69,7 +69,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: smsly_user
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running"]
       interval: 10s
       timeout: 10s
       retries: 10

@@ -1170,7 +1170,7 @@ class RemoteOrchestrator:
 
     def delete_service(self, remote_service_id: str) -> bool:
         """Tell the remote server to delete the given service."""
-        path = f"/api/v1/services/{remote_service_id}"
+        path = f"/api/v1/services/{remote_service_id}/"
         
         try:
             resp = self._request("DELETE", path, timeout=20)
