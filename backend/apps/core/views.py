@@ -238,3 +238,27 @@ class AdminUserViewSet(
     permission_classes = [IsAdminUser]
     queryset = User.objects.all().order_by('-date_joined')
     serializer_class = AdminUserSerializer
+
+class SystemResourcesView(GenericAPIView):
+    """Fetch physical host system limits for resource bounding."""
+    serializer_class = EmptySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import psutil
+        vm = psutil.virtual_memory()
+        sm = psutil.swap_memory()
+        
+        # Round up RAM slightly to handle odd manufacturer sizes (e.g., 11.7GB -> 12GB)
+        # But we'll just send exactly what we have in MB
+        ram_mb = int(vm.total / (1024 * 1024))
+        swap_mb = int(sm.total / (1024 * 1024))
+        
+        # CPU cores
+        cpu_cores = psutil.cpu_count(logical=True) or 1
+        
+        return Response({
+            "cpu_cores": cpu_cores,
+            "ram_mb": ram_mb,
+            "swap_mb": swap_mb
+        })
