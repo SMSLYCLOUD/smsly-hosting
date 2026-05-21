@@ -1143,6 +1143,7 @@ ensure_env_runtime_defaults() {
     [ -f "$env_file" ] || return 1
 
     env_ensure_var "$env_file" "REDIS_PASSWORD" "$(gen_hex_secret 16)" "Redis authentication password"
+    env_ensure_var "$env_file" "RABBITMQ_PASSWORD" "$(gen_hex_secret 16)" "RabbitMQ authentication password"
     env_ensure_var "$env_file" "GATEWAY_SECRET" "$(gen_hex_secret 32)" "Inter-service HMAC authentication secret"
     env_ensure_var "$env_file" "GITHUB_WEBHOOK_SECRET" "$(gen_hex_secret 32)" "GitHub webhook signature verification"
     env_ensure_var "$env_file" "AUTOSCALER_API_TOKEN" "$(gen_hex_secret 32)" "Autoscaler API bearer token (shared between autoscaler service and Django backend)"
