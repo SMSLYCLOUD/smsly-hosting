@@ -274,39 +274,52 @@ export default function DashboardPage() {
             <motion.div variants={fadeInUp} className="col-span-3">
               <Card className="card-premium rounded-xl h-full">
                 <CardHeader>
-                  <CardTitle>Resource Usage</CardTitle>
-                  <CardDescription>Aggregated across all services</CardDescription>
+                  <CardTitle>System Resources</CardTitle>
+                  <CardDescription>Current host node usage</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <Activity className="w-4 h-4 text-blue-500" /> CPU Hours
-                      </span>
-                      <span className="font-mono">{data.resource_usage.cpu_hours.toFixed(1)} hrs</span>
-                    </div>
-                    <Progress value={Math.min(100, (data.resource_usage.cpu_hours / 100) * 100)} />
-                  </div>
+                  {data.system_usage && (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-blue-500" /> CPU Usage
+                          </span>
+                          <span className="font-mono">{data.system_usage.cpu_percent.toFixed(1)}%</span>
+                        </div>
+                        <Progress value={data.system_usage.cpu_percent} />
+                      </div>
 
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <Zap className="w-4 h-4 text-yellow-500" /> Memory Hours (GB)
-                      </span>
-                      <span className="font-mono">{data.resource_usage.memory_gb_hours.toFixed(1)} GB-h</span>
-                    </div>
-                    <Progress value={Math.min(100, (data.resource_usage.memory_gb_hours / 200) * 100)} />
-                  </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="flex items-center gap-2">
+                            <Zap className="w-4 h-4 text-yellow-500" /> RAM Usage
+                          </span>
+                          <span className="font-mono">
+                            {(data.system_usage.ram_used_mb / 1024).toFixed(1)} / {(data.system_usage.ram_total_mb / 1024).toFixed(1)} GB
+                          </span>
+                        </div>
+                        <Progress value={Math.min(100, (data.system_usage.ram_used_mb / data.system_usage.ram_total_mb) * 100)} />
+                      </div>
 
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <Database className="w-4 h-4 text-purple-500" /> Storage
-                      </span>
-                      <span className="font-mono">{data.resource_usage.storage_gb} GB</span>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="flex items-center gap-2">
+                            <Database className="w-4 h-4 text-purple-500" /> Storage
+                          </span>
+                          <span className="font-mono">
+                            {data.system_usage.storage_used_gb.toFixed(1)} / {data.system_usage.storage_total_gb.toFixed(1)} GB
+                          </span>
+                        </div>
+                        <Progress value={data.system_usage.storage_total_gb > 0 ? Math.min(100, (data.system_usage.storage_used_gb / data.system_usage.storage_total_gb) * 100) : 0} />
+                      </div>
+                    </>
+                  )}
+                  {!data.system_usage && (
+                    <div className="text-center text-muted-foreground text-sm">
+                      System usage metrics not available.
                     </div>
-                    <Progress value={Math.min(100, (data.resource_usage.storage_gb / 20) * 100)} />
-                  </div>
+                  )}
                 </CardContent>
               </Card>
             </motion.div>

@@ -2459,7 +2459,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
         path = request.query_params.get('path', '/app')
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = getattr(service, 'server', None)
+            target_type = "remote" if active_server and not active_server.is_primary else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='GET',
+                    path=f"/api/v1/services/{service.id}/file-browse/",
+                    params={'path': path},
+                    timeout=15,
+                )
+                if resp and resp.status_code == 200:
+                    return Response(resp.json())
+                return Response({'error': 'Failed to fetch from remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2507,7 +2535,37 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = getattr(service, 'server', None)
+            target_type = "remote" if active_server and not active_server.is_primary else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='GET',
+                    path=f"/api/v1/services/{service.id}/file-download/",
+                    params={'path': path},
+                    timeout=30,
+                    stream=True,
+                )
+                if resp and resp.status_code == 200:
+                    from django.http import StreamingHttpResponse
+                    return StreamingHttpResponse(resp.iter_content(chunk_size=8192), content_type=resp.headers.get('Content-Type', 'application/x-tar'))
+                return Response({'error': 'Failed to download from remote node'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
