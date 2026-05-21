@@ -28,8 +28,10 @@ CADDY_TOKEN_CLEAR_FILE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_clear
 CADDY_TOKEN_CACHE = os.path.join(CADDY_CONFIG_DIR, ".cloudflare_token_cache")
 SERVICE_PROXY_UPSTREAM = os.environ.get("SMSLY_SERVICE_PROXY_UPSTREAM", "traefik:80")
 CONTROL_PLANE_UPSTREAMS = {
-    "nginx:80",
-    "http://nginx:80",
+    "backend:8000",
+    "http://backend:8000",
+    "frontend:3000",
+    "http://frontend:3000",
     "localhost:8090",
     "http://localhost:8090",
     "127.0.0.1:8090",
@@ -286,21 +288,14 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                         )
                     )
 
-            from apps.domains.models import Domain, DomainStatus
-            from django.db.models import Q
-            routed_domains = (
-                Domain.objects
-                .filter(
-                    service=service,
-                    status__in=[
-                        DomainStatus.ACTIVE,
-                        DomainStatus.DNS_VERIFIED,
-                        DomainStatus.SSL_PROVISIONING,
-                    ],
-                )
-                .filter(Q(verified=True) | Q(status=DomainStatus.ACTIVE))
-            )
-            for domain_obj in routed_domains:
+            # Include ALL custom domain blocks in Caddyfile from the moment
+            # they are added, gated by on_demand TLS. The check-domain ask
+            # endpoint returns 200 only when DNS is verified, so Caddy will
+            # not issue certificates for unverified domains. This eliminates
+            # the timing gap between domain add and DNS verification where
+            # a failed Caddy reload could leave the domain block missing.
+            from apps.domains.models import Domain
+            for domain_obj in Domain.objects.filter(service=service):
                 value = domain_obj.domain_name.strip()
                 if not value:
                     continue
@@ -309,9 +304,6 @@ def _get_service_domain_blocks(wildcard_domain: str = "") -> list:
                 except ValueError:
                     continue
                 if value in seen:
-                    continue
-                # Also skip custom domains covered by the wildcard
-                if wildcard_domain and value.endswith(f".{wildcard_domain}"):
                     continue
                 seen.add(value)
                 target_host = public_domain if (public_domain and not isHidden) else value
@@ -651,7 +643,7 @@ def generate_caddyfile(config) -> str:
     # Global options for On-Demand TLS
     sections.append("""{
     on_demand_tls {
-        ask http://nginx:80/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }""")
 
@@ -663,7 +655,6 @@ def generate_caddyfile(config) -> str:
     if cloudflare_token.lower() in _FAKE_TOKENS or cloudflare_token.startswith("your_"):
         cloudflare_token = ""
 
-    import os
     env_domain = os.environ.get("DOMAIN", "").strip()
     
     # 1. Determine Effective Domain/Protocol (Fallback to .env)
@@ -688,10 +679,45 @@ def generate_caddyfile(config) -> str:
         platform_block = [f"{domain} {{"]
         platform_block.extend(
             [
-                "    reverse_proxy nginx:80",
                 "    encode gzip",
                 "    log {",
                 "        output file /var/log/caddy/access.log",
+                "    }",
+                "    handle /api/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /ws/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /health {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /admin/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /accounts/github/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /accounts/google/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /static/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /media/* {",
+                "        reverse_proxy backend:8000",
+                "    }",
+                "    handle /ui {",
+                "        redir / 301",
+                "    }",
+                "    handle /ui/* {",
+                "        redir / 301",
+                "    }",
+                "    handle /accounts/* {",
+                "        reverse_proxy frontend:3000",
+                "    }",
+                "    handle {",
+                "        reverse_proxy frontend:3000",
                 "    }",
                 "}",
             ]
@@ -751,18 +777,54 @@ def generate_caddyfile(config) -> str:
     # Site block for the primary access point (Domain or IP)
     if domain:
         if _is_ip(domain):
-            # Explicitly use http:// for IP to prevent Caddy's auto-HTTPS loop
+            # Explicitly use http:// for IP to prevent Caddy's auto-HTTPS loop.
+            # IP-based access proxies to backend:8000 for control plane API access.
             sections.append(
                 f"""http://{domain} {{
-    reverse_proxy nginx:80
+    reverse_proxy backend:8000
     encode gzip
 }}"""
             )
         elif not use_ssl:
             sections.append(
                 f"""http://{domain} {{
-    reverse_proxy nginx:80
     encode gzip
+    handle /api/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /ws/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /health {{
+        reverse_proxy backend:8000
+    }}
+    handle /admin/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /static/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /media/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /accounts/github/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /accounts/google/* {{
+        reverse_proxy backend:8000
+    }}
+    handle /ui {{
+        redir / 301
+    }}
+    handle /ui/* {{
+        redir / 301
+    }}
+    handle /accounts/* {{
+        reverse_proxy frontend:3000
+    }}
+    handle {{
+        reverse_proxy frontend:3000
+    }}
 }}"""
             )
 
@@ -832,7 +894,7 @@ def generate_caddyfile(config) -> str:
         path /.well-known/acme-challenge/*
     }
     handle @acme {
-        reverse_proxy nginx:80
+        reverse_proxy backend:8000
     }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
@@ -843,17 +905,39 @@ def generate_caddyfile(config) -> str:
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy nginx:80
+        reverse_proxy backend:8000
     }
 }"""
         )
     else:
-        # Check if we already added a block for the domain/IP on :80
-        # If we didn't, add the catch-all.
-        if not domain or (not _is_ip(domain) and not use_ssl):
+        # Only add the generic :80 catch-all when there is no platform domain.
+        # When a domain is configured (SSL or non-SSL), the domain-specific
+        # http://domain block already handles port 80.
+        if not domain:
             sections.append(
                 """:80 {
-    reverse_proxy nginx:80
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+    handle /health {
+        reverse_proxy backend:8000
+    }
+    handle /admin/* {
+        reverse_proxy backend:8000
+    }
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+    handle /media/* {
+        reverse_proxy backend:8000
+    }
+    handle {
+        reverse_proxy frontend:3000
+    }
+    encode gzip
 }"""
             )
 

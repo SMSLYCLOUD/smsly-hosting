@@ -70,7 +70,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile,
         )
         self.assertNotIn(
-            'intelliphoton.com {\n    tls {\n        on_demand\n    }\n    reverse_proxy nginx:80',
+            'intelliphoton.com {\n    tls {\n        on_demand\n    }\n    reverse_proxy backend:8000',
             caddyfile,
         )
 
@@ -95,7 +95,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
             caddyfile,
         )
         self.assertNotIn(
-            'service-domain.cloud.smsly.cloud {\n    reverse_proxy nginx:80',
+            'service-domain.cloud.smsly.cloud {\n    reverse_proxy backend:8000',
             caddyfile,
         )
 
@@ -109,13 +109,14 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy nginx:80', caddyfile)
+        self.assertIn('cloud.smsly.cloud {', caddyfile)
+        self.assertIn('handle /api/* {\n        reverse_proxy backend:8000', caddyfile)
         self.assertIn('*.cloud.smsly.cloud {', caddyfile)
         self.assertEqual(
             caddyfile.count('dns cloudflare token-123'),
             1,
         )
-        self.assertIn('reverse_proxy nginx:80', caddyfile)
+        self.assertIn('reverse_proxy backend:8000', caddyfile)
 
     def test_standard_ssl_routes_unmatched_http_hosts_to_notice(self):
         config = SimpleNamespace(
@@ -127,8 +128,10 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('cloud.smsly.cloud {\n    reverse_proxy nginx:80', caddyfile)
-        self.assertIn('handle {\n        reverse_proxy nginx:80\n    }', caddyfile)
+        self.assertIn('cloud.smsly.cloud {', caddyfile)
+        self.assertIn('handle /api/* {\n        reverse_proxy backend:8000', caddyfile)
+        self.assertIn('handle {\n        reverse_proxy frontend:3000', caddyfile)
+        self.assertIn('handle {\n        reverse_proxy backend:8000\n    }', caddyfile)
 
     def test_ip_mode_keeps_http_catch_all_proxy(self):
         config = SimpleNamespace(
@@ -140,7 +143,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
 
         caddyfile = generate_caddyfile(config)
 
-        self.assertIn('http://163.245.214.62 {\n    reverse_proxy nginx:80', caddyfile)
+        self.assertIn('http://163.245.214.62 {\n    reverse_proxy backend:8000', caddyfile)
 
     def test_wildcard_routes_known_hosts_and_sends_unknown_to_notice(self):
         Service.objects.create(
@@ -197,7 +200,7 @@ class CaddyCustomDomainRoutingTests(TestCase):
             public_domain='guarded.cloud.smsly.cloud',
         )
         unsafe = """guarded.cloud.smsly.cloud {
-    reverse_proxy nginx:80
+    reverse_proxy backend:8000
 }
 """
 
