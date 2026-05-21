@@ -20,6 +20,8 @@ class AuditLogUnitTests(TestCase):
             "prev": "0" * 64,
             "ts": str(log1.timestamp),
             "actor": "test_user",
+            "user_id": log1.user_id,
+            "project_id": log1.project_id,
             "action": "CREATE",
             "target": "Service: test-app",
             "meta": {"version": "1.0"}

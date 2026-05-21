@@ -1,6 +1,8 @@
 """Models Audit module."""
 import hashlib
 import json
+from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -13,6 +15,9 @@ class AuditLog(models.Model):
     """
     id = models.BigAutoField(primary_key=True)
     timestamp = models.DateTimeField(default=timezone.now, editable=False)
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    project = models.ForeignKey('deployments.Project', on_delete=models.SET_NULL, null=True, blank=True)
 
     actor = models.CharField(
         max_length=255,
@@ -47,6 +52,8 @@ class AuditLog(models.Model):
             "prev": self.previous_hash,
             "ts": str(self.timestamp),
             "actor": self.actor,
+            "user_id": self.user_id,
+            "project_id": self.project_id,
             "action": self.action,
             "target": self.target,
             "meta": self.metadata
@@ -56,28 +63,30 @@ class AuditLog(models.Model):
         return hashlib.sha256(payload_str.encode('utf-8')).hexdigest()
 
     def save(self, *args, **kwargs):
-        if not self.pk:  # Only on creation
-            from django.db import transaction
-            with transaction.atomic():
-                # H-4 fix: select_for_update on the last log to prevent
-                # concurrent writes from reading the same previous_hash
-                last_log = (
-                    AuditLog.objects
-                    .select_for_update()
-                    .order_by('-id')
-                    .first()
-                )
-                if last_log:
-                    self.previous_hash = last_log.hash
-                else:
-                    self.previous_hash = "0" * 64  # Genesis block
+        if self.pk:
+            raise ValidationError("Audit logs are immutable and cannot be modified.")
 
-                # 2. Compute Hash
-                self.hash = self.calculate_hash()
-                super().save(*args, **kwargs)
-                return
+        from django.db import transaction
+        with transaction.atomic():
+            # H-4 fix: select_for_update on the last log to prevent
+            # concurrent writes from reading the same previous_hash
+            last_log = (
+                AuditLog.objects
+                .select_for_update()
+                .order_by('-id')
+                .first()
+            )
+            if last_log:
+                self.previous_hash = last_log.hash
+            else:
+                self.previous_hash = "0" * 64  # Genesis block
 
-        super().save(*args, **kwargs)
+            # 2. Compute Hash
+            self.hash = self.calculate_hash()
+            super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Audit logs are undeletable.")
 
     def __str__(self):
         return f"[{self.hash[:8]}] {self.action} by {self.actor}"

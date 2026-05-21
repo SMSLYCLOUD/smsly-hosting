@@ -139,6 +139,7 @@ class MultiServerLocalHarnessTests(TestCase):
         self.assertIn("backup failed", transfer.error_message)
         self.assertEqual(self.service.server_id, self.worker_a.id)
 
+    @patch("apps.deployments.services.transfer_service.ServerTransferService._regenerate_master_caddyfile")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._sync_target_dashboard")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._verify_between_servers")
     @patch("apps.deployments.services.transfer_service.ServerTransferService._interconnect_servers")
@@ -155,6 +156,7 @@ class MultiServerLocalHarnessTests(TestCase):
         _mesh_mock,
         _reachability_mock,
         _sync_mock,
+        _caddy_mock,
     ):
         self.service.docker_image = "registry.local/harness-service:abc123"
         self.service.public_domain = "harness-service.example.test"
@@ -197,6 +199,8 @@ class MultiServerLocalHarnessTests(TestCase):
                     return "container-abc123\n"
                 if "docker inspect -f '{{.State.Running}}'" in command:
                     return "true\n"
+                if "SMSLY_ROUTE_HTTP" in command:
+                    return "SMSLY_ROUTE_HTTP:200\n"
                 return ""
 
             ssh.exec_command.side_effect = exec_side_effect
@@ -214,6 +218,8 @@ class MultiServerLocalHarnessTests(TestCase):
 
             transfer.refresh_from_db()
             self.service.refresh_from_db()
+            print("TRANSFER ERROR MESSAGE:", transfer.error_message)
+            print("TRANSFER LOGS:", transfer.logs)
             self.assertEqual(transfer.status, "COMPLETED")
             self.assertEqual(transfer.progress_percent, 100)
             self.assertEqual(transfer.source_backup_id, backup.id)

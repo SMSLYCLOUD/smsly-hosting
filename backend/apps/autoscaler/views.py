@@ -146,7 +146,7 @@ def _build_services_map(stats: dict) -> dict:
             "app": app,
             "priority": svc_cfg.get("priority", 5),
             "status": "running",
-            "demand_score": min(s["cpu_percent"] + s["memory_percent"], 100),
+            "demand_score": min(s["cpu_percent"] + s["memory_percent"], 100) / 100.0,
             "cpu_percent": s["cpu_percent"],
             "memory_mb": round(s["memory_mb"], 1),
             "memory_limit_mb": round(s["memory_limit_mb"], 1),
@@ -249,23 +249,31 @@ def _decide_scaling(services: dict) -> list[dict]:
         last = last_scale.get(name, 0)
         action_taken = None
         
-        if demand > 70 and cur < max_w:
+        if demand > 0.70 and cur < max_w:
             if (now_ts - last) >= COOLDOWN_UP:
+                target_w = min(cur + 1, max_w)
                 action_taken = {
-                    "ts": now_iso,
-                    "name": name,
+                    "timestamp": now_iso,
+                    "container": name,
                     "action": "scale_up",
-                    "target_workers": min(cur + 1, max_w),
-                    "reason": f"high demand ({demand:.1f}%)",
+                    "current_workers": cur,
+                    "target_workers": target_w,
+                    "current_memory_mb": svc["memory_mb"],
+                    "target_memory_mb": (svc["memory_mb"] / cur) * target_w if cur > 0 else svc["memory_mb"] * 2,
+                    "reason": f"high demand ({demand * 100:.1f}%)",
                 }
-        elif demand < 30 and cur > min_w:
+        elif demand < 0.30 and cur > min_w:
             if (now_ts - last) >= COOLDOWN_DOWN:
+                target_w = max(cur - 1, min_w)
                 action_taken = {
-                    "ts": now_iso,
-                    "name": name,
+                    "timestamp": now_iso,
+                    "container": name,
                     "action": "scale_down",
-                    "target_workers": max(cur - 1, min_w),
-                    "reason": f"low demand ({demand:.1f}%)",
+                    "current_workers": cur,
+                    "target_workers": target_w,
+                    "current_memory_mb": svc["memory_mb"],
+                    "target_memory_mb": (svc["memory_mb"] / cur) * target_w if cur > 0 else svc["memory_mb"] / 2,
+                    "reason": f"low demand ({demand * 100:.1f}%)",
                 }
 
         if action_taken:
@@ -286,7 +294,7 @@ def _apply_scaling(decision: dict):
     """
     Execute a scale_up or scale_down using the Docker SDK.
     """
-    name = decision["name"]
+    name = decision["container"]
     target = decision["target_workers"]
     action = decision["action"]
 

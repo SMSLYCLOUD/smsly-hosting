@@ -35,13 +35,16 @@ class TopologyViewSet(viewsets.GenericViewSet):
         from rest_framework.exceptions import ValidationError
 
         project_id = request.query_params.get('project_id')
-        if not project_id:
-            raise ValidationError({"project_id": "project_id query parameter is strictly required."})
-
-        user_services = Service.objects.filter(
-            Q(owner=request.user) | Q(project__team__members__user=request.user),
-            project_id=project_id
-        ).distinct().prefetch_related(
+        
+        # Build base queryset with RBAC
+        qs = Service.objects.filter(
+            Q(owner=request.user) | Q(project__team__members__user=request.user)
+        )
+        
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+            
+        user_services = qs.distinct().prefetch_related(
             'addons', 'volumes', 'env_vars',
             'cron_jobs',
         )

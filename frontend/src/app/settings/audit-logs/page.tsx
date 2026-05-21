@@ -15,7 +15,9 @@ interface AuditLogEntry {
   target?: string;
   detail?: string;
   ip_address?: string;
-  created_at: string;
+  timestamp: string;
+  user?: string | null;
+  project?: string | null;
 }
 
 export default function AuditLogsPage() {
@@ -116,15 +118,18 @@ export default function AuditLogsPage() {
                       {log.target && (
                         <Badge variant="outline" className="text-[10px]">{log.target}</Badge>
                       )}
+                      {log.project && (
+                        <Badge variant="secondary" className="text-[10px]">Project: {log.project}</Badge>
+                      )}
                     </div>
                     <div className="text-xs text-muted-foreground mt-0.5">
-                      by {log.actor}
+                      by {log.user ? `User ${log.user}` : log.actor}
                       {log.ip_address && ` • ${log.ip_address}`}
                       {log.detail && ` • ${log.detail}`}
                     </div>
                   </div>
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(log.created_at).toLocaleString()}
+                    {new Date(log.timestamp).toLocaleString()}
                   </span>
                 </div>
               ))}
