@@ -37,6 +37,8 @@ def resolve_active_execution_target(service: Service) -> dict:
         server = ManagedServer.objects.filter(host=target["host_ip"]).first()
         if not server:
             server = ManagedServer.objects.filter(private_ip=target["host_ip"]).first()
+        if not server:
+            server = ManagedServer.objects.filter(wg_address=target["host_ip"]).first()
         target["server_obj"] = server
 
     return target
