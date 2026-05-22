@@ -316,6 +316,7 @@ export interface Service {
   internal_port?: number;
   public_domain?: string;
   custom_domains?: string[];
+  domain_instances?: any[];
   domain_verified?: boolean;
   verification_token?: string;
   created_at?: string;

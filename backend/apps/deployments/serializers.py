@@ -71,6 +71,7 @@ class ServiceSerializer(serializers.ModelSerializer):
         source='project.icon_emoji', read_only=True, default=None)
     estimated_cost = serializers.SerializerMethodField()
     node_metadata = serializers.SerializerMethodField()
+    domain_instances = serializers.SerializerMethodField()
 
     class Meta:
         model = Service
@@ -241,6 +242,24 @@ class ServiceSerializer(serializers.ModelSerializer):
             
         return instance
 
+    def get_domain_instances(self, obj):
+        if not hasattr(obj, 'domain_instances'):
+            return []
+        return [
+            {
+                "domain_name": d.domain_name,
+                "status": d.status,
+                "dns_expected": d.dns_expected,
+                "dns_actual": d.dns_actual,
+                "last_error": d.last_error,
+                "verified": d.verified,
+                "ssl_active": d.ssl_active,
+                "issued_at": d.issued_at,
+                "expires_at": d.expires_at,
+            }
+            for d in obj.domain_instances.all()
+        ]
+
 
 class DeploymentSerializer(serializers.ModelSerializer):
     duration_seconds = serializers.FloatField(read_only=True, allow_null=True)
@@ -326,24 +345,6 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
     class Meta:
         model = BackupSchedule
         fields = '__all__'
-
-    def get_domain_instances(self, obj):
-        if not hasattr(obj, 'domain_instances'):
-            return []
-        return [
-            {
-                "domain_name": d.domain_name,
-                "status": d.status,
-                "dns_expected": d.dns_expected,
-                "dns_actual": d.dns_actual,
-                "last_error": d.last_error,
-                "verified": d.verified,
-                "ssl_active": d.ssl_active,
-                "issued_at": d.issued_at,
-                "expires_at": d.expires_at,
-            }
-            for d in obj.domain_instances.all()
-        ]
 
 # --- SafeDeploy Serializers ---
 

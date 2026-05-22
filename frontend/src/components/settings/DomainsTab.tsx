@@ -44,7 +44,15 @@ export function DomainsTab({ service: initialService }: { service: Service }) {
             const domainList = Array.isArray(latest.custom_domains)
                 ? latest.custom_domains.map(d => String(d || '').trim().toLowerCase()).filter(Boolean)
                 : [];
-            setDomains(domainList.map(d => ({ domain: d, verified: null, checking: false })));
+            setDomains(domainList.map(d => {
+                const instance = (latest.domain_instances || []).find((inst: any) => inst.domain_name === d);
+                // If instance exists, we use its verified status. Otherwise it's null (Pending)
+                return { 
+                    domain: d, 
+                    verified: instance && instance.verified !== undefined ? instance.verified : null, 
+                    checking: false 
+                };
+            }));
         } catch (err) {
             console.error(err);
         } finally {

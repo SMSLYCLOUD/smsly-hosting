@@ -32,10 +32,10 @@ class EcosystemDeploymentSenate:
         )
 
         try:
-            response = ask_with_fallback([{"role": "system", "content": prompt}])
-            if response:
+            response_text, provider = ask_with_fallback(prompt)
+            if response_text:
                 import re
-                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if json_match:
                     structured = json.loads(json_match.group(0))
                     if "resolutions" in structured and isinstance(structured["resolutions"], dict):
