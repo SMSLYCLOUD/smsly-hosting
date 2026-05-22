@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 import { ServicesGrid } from '@/components/dashboard/ServicesGrid';
 import { AddonsTab } from '@/components/addons/AddonsTab';
+import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
 import dynamic from 'next/dynamic';
 
 const ServiceCanvas = dynamic(() => import('@/components/canvas/ServiceCanvas').then(mod => mod.ServiceCanvas), {
@@ -190,21 +191,32 @@ export default function ServicesPage() {
               <Plus className="mr-1.5 h-3.5 w-3.5" /> New Service
             </Button>
           </div>
-        </div>
-        {resourceData?.summary && (
-          <div className="mx-auto w-full max-w-[1440px] px-4 pb-3">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
-              <div className="rounded border border-zinc-700 px-2 py-1">Nodes: {resourceData.summary.total_nodes}</div>
-              <div className="rounded border border-zinc-700 px-2 py-1">RAM: {Math.round(resourceData.summary.used_ram_mb)}/{Math.round(resourceData.summary.total_ram_mb)} MB</div>
-              <div className="rounded border border-zinc-700 px-2 py-1">Disk: {Math.round(resourceData.summary.used_disk_gb)}/{Math.round(resourceData.summary.total_disk_gb)} GB</div>
-              <div className="rounded border border-zinc-700 px-2 py-1">Healthy: {resourceData.summary.healthy_nodes}</div>
-              <div className="rounded border border-zinc-700 px-2 py-1">Est. monthly: ${services.reduce((n, s) => n + Number(s.estimated_cost?.monthly || 0), 0).toFixed(2)}</div>
-            </div>
-          </div>
-        )}
-      </div>
+         </div>
+         {resourceData?.summary && (
+           <div className="mx-auto w-full max-w-[1440px] px-4 pb-3">
+             <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+               <div className="rounded border border-zinc-700 px-2 py-1">Nodes: {resourceData.summary.total_nodes}</div>
+               <div className="rounded border border-zinc-700 px-2 py-1">RAM: {Math.round(resourceData.summary.used_ram_mb)}/{Math.round(resourceData.summary.total_ram_mb)} MB</div>
+               <div className="rounded border border-zinc-700 px-2 py-1">Disk: {Math.round(resourceData.summary.used_disk_gb)}/{Math.round(resourceData.summary.total_disk_gb)} GB</div>
+               <div className="rounded border border-zinc-700 px-2 py-1">Healthy: {resourceData.summary.healthy_nodes}</div>
+               <div className="rounded border border-zinc-700 px-2 py-1">Est. monthly: ${services.reduce((n, s) => n + Number(s.estimated_cost?.monthly || 0), 0).toFixed(2)}</div>
+             </div>
+           </div>
+         )}
+       </div>
 
-      <motion.div
+        {/* SMSLY Ecosystem Cross-Sell */}
+        <div className="mx-auto w-full max-w-[1440px] px-4">
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+          >
+            <EnhancedCrossSell variant="compact" dismissible={true} />
+          </motion.div>
+        </div>
+
+       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}

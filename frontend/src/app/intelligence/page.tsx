@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
 import {
   Brain, Cpu, Zap, Shield, Eye, Activity, BarChart3, Sparkles,
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
@@ -205,14 +206,24 @@ export default function IntelligencePage() {
               </p>
             </div>
             <div className="flex gap-2">
-               <Button variant="outline" onClick={() => setConfigOpen(!configOpen)}>
-                 <Settings className="w-4 h-4 mr-2" /> Configure
-               </Button>
-               <Button onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon">
-                 <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
-               </Button>
+              <Button variant="outline" onClick={() => setConfigOpen(!configOpen)}>
+                <Settings className="w-4 h-4 mr-2" /> Configure
+              </Button>
+              <Button onClick={handleRefresh} disabled={refreshing} variant="ghost" size="icon">
+                <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
+              </Button>
             </div>
           </div>
+
+          {/* SMSLY Ecosystem Cross-Sell */}
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="mb-6"
+          >
+            <EnhancedCrossSell variant="banner" dismissible={true} />
+          </motion.div>
 
           {/* ── Configuration Panel ────────────────────────────────── */}
           <AnimatePresence>
