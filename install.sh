@@ -1026,7 +1026,15 @@ elif not _db_already_has_ssl:
     cfg.use_ssl = False
 # else: preserve existing True
 
-cfg.wildcard_subdomains = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
+# Preserve existing DB wildcard_subdomains when the incoming value is
+# false/empty and the DB already has it enabled. Same pattern as use_ssl.
+_incoming_wildcard = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
+_db_already_has_wildcard = bool(cfg.wildcard_subdomains)
+if _incoming_wildcard:
+    cfg.wildcard_subdomains = True
+elif not _db_already_has_wildcard:
+    cfg.wildcard_subdomains = False
+# else: preserve existing True
 cfg.cloudflare_api_token = str(os.environ.get("SMSLY_SYNC_CF_TOKEN", "") or "").strip()
 cfg.server_ip = str(os.environ.get("SMSLY_SYNC_PUBLIC_IP", "") or "").strip() or None
 cfg.save()
@@ -1097,7 +1105,9 @@ print(d.get('domain', '') or '')
 " 2>/dev/null || true)"
     _env_domain="$(env_get_value "$env_file" "DOMAIN")"
     _env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    _env_wildcard="$(env_get_value "$env_file" "WILDCARD_SUBDOMAINS")"
     _db_use_ssl="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)"
+    _db_wildcard="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('wildcard_subdomains') else 'false')" 2>/dev/null)"
     if [ -n "$_effective_domain" ]; then
         _needs_sync=false
         if [ "$_effective_domain" != "$_env_domain" ]; then
@@ -1108,8 +1118,12 @@ print(d.get('domain', '') or '')
             env_set_value "$env_file" "USE_SSL" "$_db_use_ssl"
             _needs_sync=true
         fi
+        if [ "$_db_wildcard" != "$_env_wildcard" ]; then
+            env_set_value "$env_file" "WILDCARD_SUBDOMAINS" "$_db_wildcard"
+            _needs_sync=true
+        fi
         if [ "$_needs_sync" = "true" ]; then
-            echo -e "${GREEN}  ✓ .env synced: DOMAIN=$_effective_domain, USE_SSL=$_db_use_ssl${NC}"
+            echo -e "${GREEN}  ✓ .env synced: DOMAIN=$_effective_domain, USE_SSL=$_db_use_ssl, WILDCARD_SUBDOMAINS=$_db_wildcard${NC}"
         fi
     fi
 }
