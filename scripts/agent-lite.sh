@@ -33,12 +33,25 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: sudo bash scripts/agent-lite.sh [--update|--update-half] [--skip-git]"
             echo "  (no args)      Fresh install"
-            echo "  --update       Full update (rebuild from cache)"
+            echo "  --update       Full update (rebuild with --no-cache)"
             echo "  --update-half  Quick update (restart only, no build)"
             echo "  --skip-git     Skip git pull (use local code as-is)"
             exit 0 ;;
     esac
 done
+
+# ─── Screen session guard ────────────────────────────────────────────────────
+SCREEN_NAME="smsly-agent-lite"
+if [ "${SMSLY_SKIP_SCREEN:-false}" != "true" ] && [ -z "${STY:-}" ] && [ -z "${TMUX:-}" ]; then
+    if command -v screen &>/dev/null; then
+        echo -e "${BLUE}  → Not in a screen session. Launching inside screen '${SCREEN_NAME}'...${NC}"
+        if screen -dmS "$SCREEN_NAME" bash "$0" "$@" 2>/dev/null; then
+            exec screen -r "$SCREEN_NAME"
+        else
+            echo -e "${YELLOW}  ⚠ Could not launch screen, continuing without it${NC}"
+        fi
+    fi
+fi
 
 # ─── Root check ──────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
@@ -47,19 +60,26 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ─── Lock file (prevent concurrent runs) ─────────────────────────────────────
+cleanup_lock() {
+    rm -rf "$LOCK_FILE" 2>/dev/null || true
+}
+trap cleanup_lock EXIT
 if ! mkdir "$LOCK_FILE" 2>/dev/null; then
     if [ "${SMSLY_AGENT_LITE_REEXECED:-false}" = "true" ] && [ -d "$LOCK_FILE" ]; then
-        :
-    else
-        echo -e "${RED}✗ Another instance is already running (lock: $LOCK_FILE)${NC}"
+        echo -e "${YELLOW}  ⚠ Re-executed script reusing existing lock${NC}"
+    elif [ -d "$LOCK_FILE" ] && [ -z "$(find "$LOCK_FILE" -maxdepth 0 -mmin +30 2>/dev/null)" ]; then
+        echo -e "${RED}✗ Another instance is already running (lock: $LOCK_FILE).${NC}"
+        echo -e "${YELLOW}  If no other instance is running, remove it: rm -rf $LOCK_FILE${NC}"
         exit 1
+    else
+        echo -e "${YELLOW}  ⚠ Stale lock found (older than 30m). Removing and re-acquiring...${NC}"
+        rm -rf "$LOCK_FILE" 2>/dev/null || true
+        mkdir "$LOCK_FILE" 2>/dev/null || {
+            echo -e "${RED}✗ Still cannot acquire lock after clearing stale one.${NC}"
+            exit 1
+        }
     fi
 fi
-cleanup() {
-    rm -rf "$LOCK_FILE" 2>/dev/null || true
-    echo -e "\n${BLUE}  → Lock released.${NC}"
-}
-trap cleanup EXIT
 
 # ─── Log setup ───────────────────────────────────────────────────────────────
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -499,7 +519,7 @@ do_install() {
     # ── Step 3: Build backend ──
     step=$((step + 1))
     echo -e "\n${YELLOW}[$step/5] Building agent image...${NC}"
-    if docker compose -f "$COMPOSE_FILE" build backend; then
+    if docker compose -f "$COMPOSE_FILE" build --no-cache backend; then
         echo -e "${GREEN}  ✓ Backend image built${NC}"
     else
         echo -e "${RED}✗ Backend build failed${NC}"
@@ -547,8 +567,8 @@ do_update_full() {
     echo -e "${BLUE}  -> Updating Docker images...${NC}"
     docker compose -f "$COMPOSE_PATH" pull 2>/dev/null || true
     
-    echo -e "${BLUE}  → Rebuilding agent images...${NC}"
-    docker compose -f "$COMPOSE_PATH" build || {
+    echo -e "${BLUE}  → Rebuilding agent images (no cache)...${NC}"
+    docker compose -f "$COMPOSE_PATH" build --no-cache || {
         echo -e "${RED}✗ Build failed${NC}"; exit 1;
     }
     
