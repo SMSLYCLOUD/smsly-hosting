@@ -8,6 +8,8 @@ class DjangoAdapter:
         self.executor = CommandExecutor()
 
     def detect(self, project_path: str) -> bool:
+        if not project_path:
+            return False
         return os.path.exists(os.path.join(project_path, 'manage.py'))
 
     def run_check(self, cwd: str, env: dict) -> tuple[int, str, str]:

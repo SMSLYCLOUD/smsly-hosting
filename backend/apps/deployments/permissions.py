@@ -1,6 +1,5 @@
 from rest_framework import permissions
 from .models_safedeploy import DeploymentApproval, MigrationValidation
-from .models_core import Deployment
 
 class CanApproveDeployment(permissions.BasePermission):
     """
@@ -14,10 +13,17 @@ class CanApproveDeployment(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        deployment_id = view.kwargs.get('pk')
+        approval_id = view.kwargs.get('pk')
+        if approval_id is None:
+            return True
+
         try:
-            deployment = Deployment.objects.get(id=deployment_id)
-        except Deployment.DoesNotExist:
+            approval = DeploymentApproval.objects.get(id=approval_id)
+        except DeploymentApproval.DoesNotExist:
+            return False
+
+        deployment = approval.deployment
+        if deployment is None:
             return False
 
         # If user is superadmin, allow

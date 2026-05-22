@@ -9,8 +9,6 @@ from apps.deployments.services.safedeploy.postgres_snapshot_manager import Postg
 from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
 from apps.deployments.models_core import Service, EnvironmentVariable, Deployment
 from apps.deployments.models_addons import Addon
-from apps.deployments.tasks import enqueue_smart_deploy_task
-
 logger = logging.getLogger(__name__)
 
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str = None) -> str:
@@ -103,9 +101,24 @@ def run_migration_validation_job(preview_id: str):
              cloned_path = checkout_code(repo_url, preview.branch_name, preview.commit_sha, workspace_dir, token)
              if not cloned_path: raise Exception("Failed to clone repository")
 
+        if not repo_url:
+            logger.error(f"Service {preview.service.id} has no repository URL configured")
+            validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
+            validation.status = MigrationValidation.Status.FAILED
+            validation.error_message = "No repository URL configured"
+            validation.save()
+            preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
+            preview.save()
+            return
+
         validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
 
-        if not hasattr(preview, 'database_clone') or not preview.database_clone or preview.database_clone.status != DatabaseClone.Status.READY:
+        try:
+            db_clone = preview.database_clone
+        except DatabaseClone.DoesNotExist:
+            db_clone = None
+
+        if not db_clone or db_clone.status != DatabaseClone.Status.READY:
             validation.status = MigrationValidation.Status.FAILED
             validation.error_message = "No ready database clone available"
             validation.save()
@@ -113,7 +126,7 @@ def run_migration_validation_job(preview_id: str):
             preview.save()
             return
 
-        clone_url = preview.database_clone.clone_database_url_secret_ref
+        clone_url = db_clone.clone_database_url_secret_ref
 
         # Check production DB safety
         prod_db_url = None
@@ -149,7 +162,14 @@ def run_migration_validation_job(preview_id: str):
             return
 
         # Makemigrations --check
-        adapter.run_makemigrations_check(cloned_path, env)
+        rc, mm_out, mm_err = adapter.run_makemigrations_check(cloned_path, env)
+        if rc != 0:
+            validation.status = MigrationValidation.Status.FAILED
+            validation.error_message = f"makemigrations --check failed: {mm_err}"
+            validation.save()
+            preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
+            preview.save()
+            return
 
         # Showmigrations
         rc, plan_out, err = adapter.run_showmigrations(cloned_path, env)
@@ -187,12 +207,14 @@ def run_migration_validation_job(preview_id: str):
         preview.status = PreviewEnvironment.Status.TESTS_RUNNING
         preview.save()
         run_preview_tests_job.delay(preview_id)
-
     except Exception as e:
         if 'preview' in locals():
-            preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
-            preview.error_message = str(e)
-            preview.save()
+            try:
+                preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
+                preview.error_message = str(e)
+                preview.save()
+            except Exception:
+                pass
     finally:
         if workspace_dir:
             shutil.rmtree(workspace_dir, ignore_errors=True)
@@ -212,7 +234,7 @@ def run_preview_tests_job(preview_id: str):
         preview.save()
         run_preview_health_check_job.delay(preview_id)
     except Exception as e:
-        pass
+        logger.error(f"Error in run_preview_tests_job for {preview_id}: {e}", exc_info=True)
 
 @shared_task
 def run_preview_health_check_job(preview_id: str):
@@ -272,10 +294,15 @@ def run_preview_health_check_job(preview_id: str):
                     addon_type=addon.addon_type,
                     status=Addon.Status.PROVISIONING
                 )
-                if addon.addon_type == Addon.Type.POSTGRES and hasattr(preview, 'database_clone'):
+                try:
+                    db_clone = preview.database_clone
+                except DatabaseClone.DoesNotExist:
+                    db_clone = None
+
+                if addon.addon_type == Addon.Type.POSTGRES and db_clone:
                     # Link Postgres to the cloned database instead of provisioning a fresh one
-                    if preview.database_clone and preview.database_clone.status == DatabaseClone.Status.READY:
-                        new_addon.connection_url = preview.database_clone.clone_database_url_secret_ref
+                    if db_clone.status == DatabaseClone.Status.READY:
+                        new_addon.connection_url = db_clone.clone_database_url_secret_ref
                         new_addon.status = Addon.Status.ACTIVE
                         new_addon.save()
                 else:
@@ -290,13 +317,20 @@ def run_preview_health_check_job(preview_id: str):
                 triggered_by='safe_deploy'
             )
             provider_id = str(parent.provider.id) if parent.provider else None
+            from apps.deployments.tasks import enqueue_smart_deploy_task
             enqueue_smart_deploy_task(str(deployment.id), provider_id)
 
         preview.status = PreviewEnvironment.Status.READY
         preview.save()
     except Exception as e:
-        logger.error(f"Failed to provision preview environment {preview_id}: {e}")
-        pass
+        logger.error(f"Failed to provision preview environment {preview_id}: {e}", exc_info=True)
+        try:
+            p = PreviewEnvironment.objects.get(id=preview_id)
+            p.status = PreviewEnvironment.Status.HEALTH_CHECK_FAILED
+            p.error_message = str(e)
+            p.save()
+        except Exception:
+            pass
 
 @shared_task
 def destroy_preview_environment_job(preview_id: str):
@@ -313,11 +347,16 @@ def destroy_preview_environment_job(preview_id: str):
             delete_service_task.delay(str(transient_service.id))
 
         # 2. Destroy Database Clone
-        if hasattr(preview, 'database_clone') and preview.database_clone:
+        try:
+            db_clone = preview.database_clone
+        except DatabaseClone.DoesNotExist:
+            db_clone = None
+
+        if db_clone:
             db_manager = PostgresSnapshotManager()
-            db_manager.destroy_clone(preview.database_clone.clone_database_name)
-            preview.database_clone.status = DatabaseClone.Status.DESTROYED
-            preview.database_clone.save()
+            db_manager.destroy_clone(db_clone.clone_database_name)
+            db_clone.status = DatabaseClone.Status.DESTROYED
+            db_clone.save()
 
         # 3. Destroy PreviewEnvironment record
         preview.status = PreviewEnvironment.Status.DESTROYED
@@ -327,5 +366,12 @@ def destroy_preview_environment_job(preview_id: str):
     except PreviewEnvironment.DoesNotExist:
         pass
     except Exception as e:
-        logger.error(f"Failed to destroy preview environment {preview_id}: {e}")
+        logger.error(f"Failed to destroy preview environment {preview_id}: {e}", exc_info=True)
+        try:
+            p = PreviewEnvironment.objects.get(id=preview_id)
+            p.status = PreviewEnvironment.Status.BUILD_FAILED  # TODO: add DESTROY_FAILED status
+            p.error_message = str(e)
+            p.save()
+        except Exception:
+            pass
 
