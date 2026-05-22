@@ -110,8 +110,8 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
 
     setCreating(true);
     try {
-      await api.post(`/services/${serviceId}/create-preview/`, {
-        branch: branchName,
+      await api.post(`/services/${serviceId}/previews/`, {
+        branch_name: branchName,
         commit_sha: commitSha,
       });
       toast({
@@ -134,9 +134,7 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
 
   const handleDeletePreview = async (previewId: string) => {
     try {
-      await api.delete(`/services/${serviceId}/destroy-preview/`, {
-        data: { preview_id: previewId },
-      });
+      await api.post(`/services/${serviceId}/previews/${previewId}/destroy_preview/`);
       toast({
         title: 'Teardown Initiated',
         description: 'SafeDeploy environment is being removed.',
@@ -146,6 +144,23 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
       toast({
         title: 'Action Failed',
         description: 'Failed to destroy preview environment.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleRebuildPreview = async (previewId: string) => {
+    try {
+      await api.post(`/services/${serviceId}/previews/${previewId}/rebuild/`);
+      toast({
+        title: 'Rebuild Initiated',
+        description: 'SafeDeploy environment is being rebuilt.',
+      });
+      fetchPreviews();
+    } catch (err) {
+      toast({
+        title: 'Action Failed',
+        description: 'Failed to rebuild preview environment.',
         variant: 'destructive',
       });
     }
@@ -306,7 +321,12 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" className="gap-2 font-bold h-9">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="gap-2 font-bold h-9"
+                    onClick={() => handleRebuildPreview(preview.id)}
+                  >
                     <RefreshCcw className="w-3.5 h-3.5" />
                     Rebuild
                   </Button>

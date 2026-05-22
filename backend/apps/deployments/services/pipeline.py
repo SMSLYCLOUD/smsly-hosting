@@ -411,11 +411,16 @@ class PipelineManager:
             except Exception as exc:
                 logger.warning("Error retrieving GitHub token: %s", exc)
 
+            target_commit = getattr(self.deployment, 'commit_hash', None)
+            if target_commit and target_commit.upper() in ('HEAD', 'LATEST', 'TEMPLATE', 'ECOSYSTEM-DEPLOY'):
+                target_commit = None
+
             self._clone_with_github_token(
                 self.service.repository_url,
                 requested_branch,
                 repo_token,
                 self.build_dir,
+                target_commit=target_commit,
             )
             self.source_dir = self.build_dir
 
@@ -442,7 +447,7 @@ class PipelineManager:
         # Auto-inject .env file from repo (if present)
         self._inject_dotenv_from_repo()
 
-    def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str):
+    def _clone_with_github_token(self, repo_url: str, branch: str, token: str | None, target_dir: str, target_commit: str | None = None):
         """Clone repository directly without using repo cache."""
         build_path = Path(target_dir)
         if build_path.exists():
@@ -493,6 +498,17 @@ class PipelineManager:
                 timeout=300,
                 env=env,
             )
+            if target_commit:
+                checkout_cmd = ["git", "checkout", target_commit]
+                subprocess.run(
+                    checkout_cmd,
+                    cwd=str(build_path),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=env,
+                )
         except subprocess.CalledProcessError as exc:
             details = self._format_git_clone_error(exc, token)
             raise RuntimeError(details) from exc

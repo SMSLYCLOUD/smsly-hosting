@@ -10,4 +10,11 @@ websocket_urlpatterns = [
             consumers.BuildLogConsumer.as_asgi()),
     re_path(r'ws/service-status/$',
             consumers.ServiceStatusConsumer.as_asgi()),
+    # Also support paths with /api/v1/ prefix for compatibility
+    re_path(r'api/v1/ws/terminal/(?P<deployment_id>[-\w]+)/$',
+            consumers.TerminalConsumer.as_asgi()),
+    re_path(r'api/v1/ws/build-logs/(?P<deployment_id>[-\w]+)/$',
+            consumers.BuildLogConsumer.as_asgi()),
+    re_path(r'api/v1/ws/service-status/$',
+            consumers.ServiceStatusConsumer.as_asgi()),
 ]
