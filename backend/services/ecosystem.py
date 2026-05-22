@@ -918,21 +918,8 @@ def _validate_ai_response_structure(response_text: str, expected_structure: str 
                 for field in ["env_vars", "addons", "depends_on"]:
                     value = service.get(field)
                     if value is not None:
-                        try:
-                            # Try to convert to list/set to detect unhashable types
-                            if isinstance(value, dict):
-                                # Convert dict values to strings
-                                converted = [str(v) for v in value.values()]
-                            elif isinstance(value, (list, tuple)):
-                                # Ensure all items are strings or convertible
-                                converted = [str(v) for v in value]
-                            else:
-                                converted = [str(value)]
-                            
-                            # Check if we can create a set (this will fail if there are unhashable items)
-                            set(converted)
-                        except TypeError as e:
-                            logger.warning(f"Unhashable data in service {i} field '{field}': {e}")
+                        if not _validate_field_value(field, value):
+                            logger.warning(f"Invalid data in service {i} field '{field}': {value}")
                             return False
         
         logger.info("AI response structure validation passed")
@@ -943,6 +930,56 @@ def _validate_ai_response_structure(response_text: str, expected_structure: str 
         return False
     except Exception as e:
         logger.warning(f"AI response validation failed: {e}")
+        return False
+
+
+def _validate_field_value(field_name: str, value: Any, depth: int = 0) -> bool:
+    """
+    Recursively validate a field value for unhashable types.
+    Returns True if the value is safe for processing, False otherwise.
+    """
+    if depth > 10:  # Prevent infinite recursion
+        logger.warning(f"Validation depth exceeded for field {field_name}")
+        return False
+    
+    if value is None:
+        return True
+    
+    # Safe atomic types
+    if isinstance(value, (str, int, float, bool)):
+        return True
+    
+    # Handle dictionaries - ensure all values are safe
+    if isinstance(value, dict):
+        for key, val in value.items():
+            try:
+                # Ensure keys are strings
+                str_key = str(key)
+                # Recursively validate values
+                if not _validate_field_value(f"{field_name}.{str_key}", val, depth + 1):
+                    return False
+            except Exception as e:
+                logger.warning(f"Error validating dict key {key} in field {field_name}: {e}")
+                return False
+        return True
+    
+    # Handle lists and tuples - ensure all items are safe
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            try:
+                if not _validate_field_value(f"{field_name}[{i}]", item, depth + 1):
+                    return False
+            except Exception as e:
+                logger.warning(f"Error validating list item {i} in field {field_name}: {e}")
+                return False
+        return True
+    
+    # Fallback - if we can't safely convert to string, it's problematic
+    try:
+        str(value)
+        return True
+    except Exception as e:
+        logger.warning(f"Cannot convert value to string in field {field_name}: {e}")
         return False
 
 
@@ -962,41 +999,52 @@ def _sanitize_ai_response_for_processing(response_text: str) -> dict:
         json_str = response_text[start_idx:end_idx+1]
         data = json.loads(json_str)
         
-        # Deep sanitize the response
-        if isinstance(data, dict):
-            sanitized = {}
-            for key, value in data.items():
-                if key == "services" and isinstance(value, list):
-                    sanitized_services = []
-                    for service in value:
-                        if isinstance(service, dict):
-                            sanitized_service = {}
-                            for skey, svalue in service.items():
-                                if skey == "env_vars" and isinstance(svalue, dict):
-                                    # Convert env_vars dict to flat dict with string values
-                                    sanitized_env = {}
-                                    for ekey, evalue in svalue.items():
-                                        sanitized_env[str(ekey)] = str(evalue) if evalue is not None else ""
-                                    sanitized_service[skey] = sanitized_env
-                                elif skey in ["addons", "depends_on"]:
-                                    # Ensure these are lists of strings
-                                    if isinstance(svalue, list):
-                                        sanitized_service[skey] = [str(v) for v in svalue if v is not None]
-                                    else:
-                                        sanitized_service[skey] = [str(svalue)] if svalue is not None else []
-                                else:
-                                    sanitized_service[skey] = str(svalue) if svalue is not None else ""
-                            sanitized_services.append(sanitized_service)
-                    sanitized[key] = sanitized_services
-                else:
-                    sanitized[key] = value
-            return sanitized
-        
-        return data
+        # Deep sanitize the response recursively
+        return _deep_sanitize_data(data)
         
     except Exception as e:
         logger.warning(f"Failed to sanitize AI response: {e}")
         return {"services": [], "addons": [], "deploy_sequence": []}
+
+
+def _deep_sanitize_data(data: Any) -> Any:
+    """
+    Recursively sanitize data to ensure all values are safe for processing.
+    Converts all nested structures to string-based formats.
+    """
+    if data is None:
+        return None
+    
+    # Handle atomic types
+    if isinstance(data, (str, int, float, bool)):
+        return data
+    
+    # Handle dictionaries - convert all keys and values to strings
+    if isinstance(data, dict):
+        sanitized_dict = {}
+        for key, value in data.items():
+            # Ensure keys are strings
+            str_key = str(key)
+            # Recursively sanitize values
+            sanitized_value = _deep_sanitize_data(value)
+            sanitized_dict[str_key] = sanitized_value
+        return sanitized_dict
+    
+    # Handle lists and tuples - sanitize all items
+    if isinstance(data, (list, tuple)):
+        sanitized_list = []
+        for item in data:
+            sanitized_item = _deep_sanitize_data(item)
+            if sanitized_item is not None:  # Skip None values
+                sanitized_list.append(sanitized_item)
+        return sanitized_list
+    
+    # Fallback - convert anything else to string
+    try:
+        return str(data)
+    except Exception:
+        logger.warning(f"Could not convert data to string: {data}")
+        return ""
 
 
 def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_message: str) -> dict:
@@ -1677,21 +1725,26 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
 
 def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: list = None) -> dict:
     """Internal implementation of scan_and_analyze."""
+    logger.info("=== STARTING ECOSYSTEM SCAN ===")
+    
     # 1. Fetch all repos
+    logger.info("Step 1: Fetching repositories...")
     all_repos = fetch_all_repos(token)
-    logger.info("Found %d repositories", len(all_repos))
+    logger.info(f"Found {len(all_repos)} repositories")
     
     # Filter by user selection if provided
     if selected_repos is not None:
+        logger.info(f"Filtering by selected repos: {selected_repos}")
         if isinstance(selected_repos, list):
             all_repos = [r for r in all_repos if r.get("full_name") in selected_repos]
         elif isinstance(selected_repos, str):
             all_repos = [r for r in all_repos if r.get("full_name") == selected_repos]
         else:
             logger.warning("selected_repos is unexpected type %s, skipping filter", type(selected_repos).__name__)
-        logger.info("Filtered down to %d selected repositories", len(all_repos))
+        logger.info(f"Filtered down to {len(all_repos)} selected repositories")
 
     # 2. Analyze each repo
+    logger.info("Step 2: Analyzing repositories...")
     repos_data = []
     scan_warnings = []
     for repo in all_repos:
@@ -1728,6 +1781,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
         })
 
     if not repos_data:
+        logger.info("No deployable repositories found")
         return {
             "services": [],
             "addons": [],
@@ -1736,16 +1790,23 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             "message": "No deployable repositories found.",
         }
 
-    logger.info("Analyzed %d repos, sending to AI for ecosystem plan...", len(repos_data))
+    logger.info(f"Step 3: Analyzing {len(repos_data)} repos with AI...")
 
     # 3. AI ecosystem analysis (CHUNKED)
-    plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider)
+    logger.info("Starting AI ecosystem analysis...")
+    try:
+        plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider)
+        logger.info("AI analysis completed successfully")
+    except Exception as e:
+        logger.error(f"AI ecosystem analysis failed: {e}")
+        return _build_heuristic_plan(repos_data, f"AI analysis failed: {str(e)}")
     
     # 4. AI REVALIDATION: Validate and sanitize AI response before final submission
-    logger.info("Performing AI response revalidation...")
+    logger.info("Step 4: Performing AI response revalidation...")
     try:
         if not _validate_ai_response_structure(json.dumps(plan)):
             logger.warning("AI response validation failed, attempting revalidation...")
+            logger.warning(f"Problematic plan structure: {json.dumps(plan, indent=2)[:500]}...")
             
             # If validation fails, try to get a corrected response from AI
             revalidation_prompt = f"""
@@ -1792,7 +1853,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                     provider_id=ai_provider
                 )
                 
-                # Parse the revalidated response
+                logger.info("Revalidation response received, validating...")
                 if _validate_ai_response_structure(response_text):
                     plan = _sanitize_ai_response_for_processing(response_text)
                     logger.info("AI response revalidation successful")
@@ -1811,6 +1872,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
         plan = _build_heuristic_plan(repos_data, f"AI revalidation process failed: {str(e)}")
     
     # 5. FINAL VALIDATION: Ensure the returned plan is safe for processing
+    logger.info("Step 5: Performing final validation...")
     try:
         final_plan = {
             "ecosystem_name": plan.get("ecosystem_name", "SMSLY Auto-Generated Ecosystem"),
@@ -1827,12 +1889,13 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             final_plan["scan_warnings"] = scan_warnings[:20]
         
         # Safely extract and validate services
-        for service in plan.get("services", []):
+        logger.info(f"Processing {len(plan.get('services', []))} services...")
+        for i, service in enumerate(plan.get("services", [])):
             if isinstance(service, dict):
                 try:
                     # Ensure all critical fields are strings or can be converted to strings
                     safe_service = {
-                        "name": str(service.get("name", "")),
+                        "name": str(service.get("name", f"service-{i}")),
                         "repo": str(service.get("repo", "")),
                         "stack": str(service.get("stack", "unknown")),
                         "env_vars": {str(k): str(v) for k, v in service.get("env_vars", {}).items()},
@@ -1841,35 +1904,53 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                         "deploy_order": _safe_order(service.get("deploy_order"), 50)
                     }
                     final_plan["services"].append(safe_service)
+                    logger.info(f"Successfully processed service: {safe_service['name']}")
                 except Exception as e:
-                    logger.warning("Error processing service in final validation: %s", e)
+                    logger.warning(f"Error processing service {i}: {e}")
+                    logger.warning(f"Problematic service data: {service}")
                     continue
         
         # Safely extract and validate addons
-        for addon in plan.get("addons", []):
+        logger.info(f"Processing {len(plan.get('addons', []))} addons...")
+        for i, addon in enumerate(plan.get("addons", [])):
             if isinstance(addon, dict):
                 try:
                     safe_addon = {
-                        "type": str(addon.get("type", "")),
+                        "type": str(addon.get("type", f"addon-{i}")),
                         "shared_by": [str(s) for s in addon.get("shared_by", [])]
                     }
                     final_plan["addons"].append(safe_addon)
+                    logger.info(f"Successfully processed addon: {safe_addon['type']}")
                 except Exception as e:
-                    logger.warning("Error processing addon in final validation: %s", e)
+                    logger.warning(f"Error processing addon {i}: {e}")
+                    logger.warning(f"Problematic addon data: {addon}")
                     continue
         
         # Build deploy sequence safely
+        logger.info("Building deploy sequence...")
         try:
             final_plan["deploy_sequence"] = _build_deploy_sequence(final_plan["services"])
+            logger.info(f"Deploy sequence built: {final_plan['deploy_sequence']}")
         except Exception as e:
-            logger.warning("Error building deploy sequence: %s", e)
-            final_plan["deploy_sequence"] = ["addons"] + [svc["name"] for svc in final_plan["services"]]
+            logger.warning(f"Error building deploy sequence: {e}")
+            # Fallback: just use service names in order
+            try:
+                fallback_sequence = ["addons"] + [
+                    str(svc.get("name", f"service-{i}")) 
+                    for i, svc in enumerate(final_plan["services"])
+                ]
+                final_plan["deploy_sequence"] = fallback_sequence
+                logger.info(f"Fallback deploy sequence: {fallback_sequence}")
+            except Exception:
+                final_plan["deploy_sequence"] = ["addons"]
+                logger.warning("Using minimal deploy sequence")
         
-        logger.info("Final ecosystem plan validation completed successfully")
+        logger.info("=== ECOSYSTEM SCAN COMPLETED SUCCESSFULLY ===")
         return final_plan
         
     except Exception as e:
-        logger.error("Final validation failed, returning safe fallback: %s", e)
+        logger.error(f"Final validation failed, returning safe fallback: {e}")
+        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         return _build_heuristic_plan(repos_data, f"Final validation failed: {str(e)}")
 
 
