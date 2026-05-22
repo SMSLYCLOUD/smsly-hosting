@@ -1132,6 +1132,23 @@ queue_active_service_redeploys() {
     local reason="${1:-Installer-triggered redeploy}"
     local service_ids="${2:-}"
 
+    # Verify backend is reachable before attempting redeploy
+    local backend_container="smsly-hosting-backend-1"
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        backend_container="smsly-hosting-backend-1"  # same for agent-lite
+    fi
+    local backend_state
+    backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+    if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
+        echo -e "${YELLOW}  ⚠ Backend container ($backend_container) not ready (state=$backend_state). Waiting 15s...${NC}" >&2
+        sleep 15
+        backend_state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$backend_container" 2>/dev/null || echo 'missing')"
+        if [ "$backend_state" != "healthy" ] && [ "$backend_state" != "running" ]; then
+            echo -e "${RED}  ✗ Backend container still not ready after wait. Skipping redeploy.${NC}" >&2
+            return 1
+        fi
+    fi
+
     docker compose -f "$COMPOSE_FILE" exec -T \
         -e SMSLY_DISABLE_STARTUP_TASKS=true \
         -e SMSLY_REDEPLOY_REASON="$reason" \
@@ -1798,6 +1815,7 @@ RECOVER_MODE="false"
 REFRESH_MODE="false"
 DEBUG_MODE="false"
 RUST_TWIN_MODE="${RUST_TWIN_MODE:-false}"
+FORCE_REDEPLOY="false"
 
 # Simple loop to parse multiple arguments like `--update --rust`
 for arg in "$@"; do
@@ -1816,6 +1834,7 @@ for arg in "$@"; do
         --clear)           CLEAR_MODE="true" ;;
         --fix-domain)      FIX_DOMAIN_MODE="true" ;;
         --fix-permissions) FIX_PERMISSIONS_MODE="true" ;;
+        --force-redeploy)  FORCE_REDEPLOY="true" ;;
         --help|-h)
             echo "Usage: sudo bash install.sh [--rust] [--update|--update-half|--update-frontend|--update-backend|--refresh|--recover|--debug|--wipe|--clear|--fix-domain|--fix-permissions]"
             echo ""
@@ -1826,6 +1845,7 @@ for arg in "$@"; do
             echo "  --clear            Wipes stale addons and frees up docker resources"
             echo "  --fix-domain       Fix domain/IP sync between .env, DB PlatformConfig, and Caddy"
             echo "  --fix-permissions  Fix .env and shared directory permissions for container write access"
+            echo "  --force-redeploy   Always redeploy active services after update, even if code hasn't changed"
             exit 0
             ;;
     esac
@@ -3025,6 +3045,9 @@ if ! is_checkpoint_done "update_git_synced"; then
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
     echo -e "${BLUE}  → Checking for local changes...${NC}"
+    # Save pre-update HEAD for reliable redeploy detection after git operations
+    PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+    echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
     if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
         git stash push -m "install-update-$(date +%s)"
@@ -3787,18 +3810,28 @@ if d and d != 'localhost':
     safe_refresh_runtime_services
 
     # ─── Auto-redeploy active services when platform code or domain state changes ──
-    GIT_CHANGES="$(cd "$INSTALL_DIR" && git diff HEAD@{1} --name-only 2>/dev/null | head -5 || true)"
-    if [ -n "$GIT_CHANGES" ]; then
+    PRE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
+    CURRENT_HEAD="$(cd "$INSTALL_DIR" && git rev-parse HEAD 2>/dev/null || true)"
+    CODE_CHANGED=false
+    if [ -n "$PRE_HEAD" ] && [ "$PRE_HEAD" != "$CURRENT_HEAD" ]; then
+        CODE_CHANGED=true
+        echo -e "${BLUE}  → Platform code changed (${PRE_HEAD:0:7} → ${CURRENT_HEAD:0:7})${NC}"
+    fi
+    if [ "$CODE_CHANGED" = "true" ] || [ "$FORCE_REDEPLOY" = "true" ]; then
         echo -e "${BLUE}  → Auto-redeploying active services (platform code changed)...${NC}"
-        queue_active_service_redeploys "Platform update auto-redeploy" "" \
-            2>/dev/null || echo -e "${YELLOW}  ⚠ Auto-redeploy skipped (backend not ready)${NC}"
+        if ! queue_active_service_redeploys "Platform update auto-redeploy" ""; then
+            echo -e "${YELLOW}  ⚠ Auto-redeploy encountered issues (check logs above)${NC}"
+        fi
     elif [ "${DOMAIN_SYNC_REDEPLOY_REQUIRED:-0}" = "1" ]; then
         echo -e "${BLUE}  → Auto-redeploying rewritten services (platform domain changed)...${NC}"
-        queue_active_service_redeploys "Platform domain change auto-redeploy" "${DOMAIN_SYNC_SERVICE_IDS}" \
-            2>/dev/null || echo -e "${YELLOW}  ⚠ Domain-change redeploy skipped (backend not ready)${NC}"
+        if ! queue_active_service_redeploys "Platform domain change auto-redeploy" "${DOMAIN_SYNC_SERVICE_IDS}"; then
+            echo -e "${YELLOW}  ⚠ Domain-change redeploy encountered issues (check logs above)${NC}"
+        fi
     else
         echo -e "${GREEN}  ✓ No platform code or domain-driven redeploys required${NC}"
     fi
+    # Clean up marker
+    rm -f "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
 
     # ─── Endpoint Verification (3 checks) ──────────────────────────────────
     echo -e "\n${BLUE}  → Running endpoint verification (3 checks)...${NC}"
