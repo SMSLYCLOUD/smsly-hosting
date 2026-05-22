@@ -1,0 +1,22 @@
+[Unit]
+Description=SMSLY Domain Verification Timer
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+Requires=smsly-domain-ssl.service
+After=smsly-domain-ssl.service
+
+[Timer]
+# Run every 5 minutes
+OnCalendar=*:0/5
+# Unit to run
+Unit=smsly-domain-ssl.service
+# Persistent timer (runs on boot if missed)
+Persistent=true
+# Randomized delay to avoid thundering herd
+RandomizedDelaySec=60
+# Accuracy
+AccuracySec=1s
+# Wakeup early if needed
+WakeSystem=true
+
+[Install]
+WantedBy=timers.target
