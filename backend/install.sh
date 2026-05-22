@@ -1196,10 +1196,7 @@ ${domain} {
 }
 
 :80 {
-    handle {
-        rewrite * /notice
-        reverse_proxy localhost:8090
-    }
+    reverse_proxy localhost:8090
 }
 
 ${svc_blocks}
@@ -2188,7 +2185,6 @@ ${cf_known_stanza}
         reverse_proxy localhost:8090
     }
     handle {
-        rewrite * /notice
         reverse_proxy localhost:8090
     }
 }
@@ -3276,7 +3272,6 @@ $DOMAIN {
         reverse_proxy localhost:8090
     }
     handle {
-        rewrite * /notice
         reverse_proxy localhost:8090
     }
 }
