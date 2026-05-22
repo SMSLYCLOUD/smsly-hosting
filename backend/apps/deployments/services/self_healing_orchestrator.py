@@ -902,8 +902,16 @@ class SelfHealingOrchestrator:
                 self._log("Intelligence app not available in agent mode — cannot escalate to AI")
                 return {"success": False, "error": "Intelligence app not available in agent mode"}
 
-            ai_settings = AIProviderSettings.objects.filter(is_active=True).first()
-            if not ai_settings:
+            ai_settings = AIProviderSettings.get_solo()
+            has_api_key = bool(
+                ai_settings.openai_api_key or ai_settings.grok_api_key
+                or ai_settings.gemini_api_key or ai_settings.claude_api_key
+                or ai_settings.deepseek_api_key or ai_settings.openrouter_api_key
+                or ai_settings.groq_api_key or ai_settings.alibaba_api_key
+                or ai_settings.jules_api_key or ai_settings.localllm_api_key
+                or ai_settings.smslycloud_api_key
+            )
+            if not has_api_key:
                 self._log("No active AI provider — cannot escalate")
                 return {"success": False, "error": "No active AI provider"}
 
