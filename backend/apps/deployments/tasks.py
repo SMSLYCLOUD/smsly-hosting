@@ -56,7 +56,7 @@ from apps.deployments.utils import (
 # Note: AIProviderSettings is not available in agent mode
 try:
     from apps.intelligence.models import AIProviderSettings
-except ImportError:
+except (ImportError, RuntimeError):
     AIProviderSettings = None
 from services.addon_provisioner import addon_provisioner
 
