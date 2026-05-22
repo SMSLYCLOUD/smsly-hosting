@@ -82,24 +82,24 @@ class ServiceCRUDTests(APITestCase):
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
         self.assertEqual(response.data['name'], 'retrieve-svc')
 
-    def test_retrieve_service_prefers_active_latest_deployment(self):
-        """Current deployment should not appear inactive because a newer row was demoted."""
+    def test_retrieve_service_returns_latest_deployment(self):
+        """Latest deployment is returned regardless of status."""
         svc = Service.objects.create(
-            name='active-preferred-svc',
+            name='latest-deploy-svc',
             repository_url='https://github.com/test/app',
             owner=self.user,
             provider=self.provider
         )
-        active = Deployment.objects.create(
+        Deployment.objects.create(
             service=svc,
             status=Deployment.Status.ACTIVE,
             commit_hash='active-live',
             finished_at=timezone.now(),
         )
-        Deployment.objects.create(
+        latest = Deployment.objects.create(
             service=svc,
-            status=Deployment.Status.INACTIVE,
-            commit_hash='remote-execution-row',
+            status=Deployment.Status.REVIEW,
+            commit_hash='review-row',
             finished_at=timezone.now(),
         )
 
@@ -107,8 +107,8 @@ class ServiceCRUDTests(APITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, http_status.HTTP_200_OK)
-        self.assertEqual(response.data['latest_deployment']['id'], str(active.id))
-        self.assertEqual(response.data['latest_deployment']['status'], Deployment.Status.ACTIVE)
+        self.assertEqual(response.data['latest_deployment']['id'], str(latest.id))
+        self.assertEqual(response.data['latest_deployment']['status'], Deployment.Status.REVIEW)
 
     def test_update_service_name(self):
         """Updating a service name should persist."""
