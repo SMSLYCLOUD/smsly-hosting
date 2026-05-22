@@ -1187,6 +1187,51 @@ class ServiceViewSet(viewsets.ModelViewSet):
             )
         return Response(DeploymentSerializer(deployment).data)
 
+    @action(detail=True, methods=['post'], url_path='trigger-jules-fix')
+    def trigger_jules_fix(self, request, pk=None):
+        service = self.get_object()
+        deployment_id = request.data.get('deployment_id')
+        if deployment_id:
+            try:
+                deployment = Deployment.objects.get(id=deployment_id, service=service)
+            except Deployment.DoesNotExist:
+                return Response(
+                    {'error': 'Deployment not found for this service.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            failed_statuses = [Deployment.Status.FAILED, Deployment.Status.BUILD_FAILED]
+            deployment = Deployment.objects.filter(
+                service=service, status__in=failed_statuses
+            ).order_by('-created_at').first()
+            if not deployment:
+                return Response(
+                    {'error': 'No failed deployment found for this service.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            deployment_id = str(deployment.id)
+        from apps.intelligence.jules_fix.jules_fix import jules_fix_deployment_failure
+        jules_fix_deployment_failure.delay(
+            deployment_id=str(deployment.id),
+            logs=deployment.build_logs or "",
+            repo_path="",
+            repo_url=service.repository_url or "",
+        )
+        logger.info("Manual Jules auto-fix triggered for service=%s deployment=%s", service.id, deployment.id)
+        AuditLog(
+            actor=request.user.get_username(),
+            action='TRIGGER_JULES_FIX',
+            target=f'Service: {service.name}',
+            metadata={
+                'service_id': str(service.id),
+                'deployment_id': str(deployment.id),
+            },
+        ).save()
+        return Response({
+            'deployment_id': str(deployment.id),
+            'message': f'Jules auto-fix triggered for deployment {deployment.id}.',
+        })
+
     # ── Preview Environments ─────────────────────────────────────────────
     @action(detail=True, methods=['post'], url_path='create-preview')
     def create_preview(self, request, pk=None):
