@@ -55,11 +55,22 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
                             <div className="flex items-center gap-3">
                                 <h1 className="text-2xl font-bold tracking-tight">{service.name}</h1>
                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                                    service.latest_deployment?.status === 'ACTIVE'
-                                        ? 'bg-emerald-500/10 text-emerald-500'
-                                        : service.latest_deployment?.status === null
-                                            ? 'bg-blue-500/10 text-blue-500'
-                                            : 'bg-yellow-500/10 text-yellow-500'
+                                    {
+                                        ACTIVE: 'bg-emerald-500/10 text-emerald-500',
+                                        LIVE: 'bg-emerald-500/10 text-emerald-500',
+                                        FAILED: 'bg-red-500/10 text-red-500',
+                                        CANCELLED: 'bg-gray-500/10 text-gray-500',
+                                        REVIEW: 'bg-amber-500/10 text-amber-500',
+                                        QUEUED: 'bg-blue-500/10 text-blue-500',
+                                        BUILDING: 'bg-amber-500/10 text-amber-500',
+                                        DEPLOYING: 'bg-amber-500/10 text-amber-500',
+                                        HEALTH_CHECK: 'bg-cyan-500/10 text-cyan-500',
+                                        TRAFFIC_SHIFTING: 'bg-indigo-500/10 text-indigo-500',
+                                        STAGED: 'bg-teal-500/10 text-teal-500',
+                                        INACTIVE: 'bg-gray-500/10 text-gray-500',
+                                        ROLLING_BACK: 'bg-orange-500/10 text-orange-500',
+                                        ROLLED_BACK: 'bg-orange-500/10 text-orange-500',
+                                    }[service.latest_deployment?.status ?? ''] ?? 'bg-blue-500/10 text-blue-500'
                                 }`}>
                                     {service.latest_deployment?.status || 'Ready to Deploy'}
                                 </span>
