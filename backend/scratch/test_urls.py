@@ -1,21 +1,18 @@
 import os
 import sys
 import django
-from django.urls import resolve, Resolver404
+from django.urls import resolve
 
-sys.path.append(os.getcwd())
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+# Set path to the backend dir so config can be imported
+sys.path.append("c:\\Users\\osaretin\\Documents\\SMSLY\\SMSLY_CORE\\smsly-hosting\\backend")
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-paths_to_test = [
-    '/api/v1/services/check-domain/',
-    '/api/v1/services/check-domain',
-    '/api/v1/services/',
-]
-
-for p in paths_to_test:
-    try:
-        match = resolve(p)
-        print(f"Path '{p}': Matched {match.view_name}")
-    except Resolver404:
-        print(f"Path '{p}': Not Found")
+match = resolve("/api/v1/services/62b37eaf-e305-48cd-91cc-47b3233199e1/previews/")
+print("Match:", match.url_name, match.func.__name__)
+try:
+    print("Class:", match.func.view_class.__name__)
+except:
+    pass
+print("Args:", match.args, "Kwargs:", match.kwargs)

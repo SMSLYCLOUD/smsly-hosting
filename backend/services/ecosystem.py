@@ -1193,6 +1193,8 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
     for i, rd in enumerate(repos_data):
         logger.info(f"Repo {i+1}: {rd.get('repo', 'unknown')} - {rd.get('description', 'No description')}")
     
+    import json
+    
     try:
         revalidation_prompt = f"""
         CRITICAL: Your previous ecosystem plan was rejected due to: {error_message}

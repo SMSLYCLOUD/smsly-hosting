@@ -3,6 +3,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 from apps.cloud.views import CloudProviderViewSet, CloudResourceViewSet, IntelligenceViewSet
 from apps.cloud.views_code_analysis import CodeAnalysisViewSet
+from apps.deployments.views_analysis import CodeIntelligenceView, DeepScanTaskStatusView
 
 router = DefaultRouter()
 router.register(r'providers', CloudProviderViewSet, basename='providers')
@@ -50,6 +51,16 @@ urlpatterns = [
         'ecosystem/bulk-env/',
         IntelligenceViewSet.as_view({'post': 'ecosystem_bulk_env'}),
         name='ecosystem-bulk-env',
+    ),
+    path(
+        'ecosystem/deep_scan/',
+        CodeIntelligenceView.as_view(),
+        name='cloud-ecosystem-deep-scan',
+    ),
+    path(
+        'ecosystem/deep_scan/status/',
+        DeepScanTaskStatusView.as_view(),
+        name='cloud-ecosystem-deep-scan-status',
     ),
     # Backward-compatible github integrations path for cached frontends.
     path(
