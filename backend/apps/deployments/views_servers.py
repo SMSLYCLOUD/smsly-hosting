@@ -1029,55 +1029,6 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                         "verified": svc.domain_verified,
                         "verification_token": svc.verification_token or "",
                     })
-            return Response({"domains": domains, "count": len(domains)})
-
-        # ── Full remote server: proxy ──
-        if not server.api_url:
-            return Response(_safe_remote_error_payload("domains", "Server has no API URL yet."))
-
-        all_services = []
-        seen_paths = set()
-        next_path = "/api/v1/services/"
-        max_pages = 50
-
-        for _ in range(max_pages):
-            normalized_path = _normalize_remote_api_path(next_path)
-            if not normalized_path or normalized_path in seen_paths:
-                break
-            seen_paths.add(normalized_path)
-
-            payload, error_payload = _fetch_remote_json_with_fallback(
-                server, "domains", normalized_path, timeout=15
-            )
-            if error_payload:
-                if not all_services:
-                    return Response(error_payload)
-                break
-
-            services_page, next_link = _extract_page_results_and_next(payload)
-            all_services.extend(services_page)
-            if not next_link:
-                break
-            next_path = _normalize_remote_api_path(next_link)
-
-        domains = []
-        for svc in all_services:
-            svc_id = svc.get("id", "")
-            svc_name = svc.get("name", "")
-            public_domain = svc.get("public_domain", "")
-            custom_domains = svc.get("custom_domains", [])
-            if not isinstance(custom_domains, list):
-                custom_domains = []
-            for domain in custom_domains:
-                domains.append({
-                    "domain": domain,
-                    "service_id": svc_id,
-                    "service_name": svc_name,
-                    "public_domain": public_domain,
-                    "verified": svc.get("domain_verified", False),
-                    "verification_token": svc.get("verification_token", ""),
-                })
-
         return Response({"domains": domains, "count": len(domains)})
 
     # ── Self-Healing ─────────────────────────────────────────────────────
@@ -1271,3 +1222,52 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 {"error": f"Healing failed: {str(exc)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        # ── Full remote server: proxy ──
+        if not server.api_url:
+            return Response(_safe_remote_error_payload("domains", "Server has no API URL yet."))
+
+        all_services = []
+        seen_paths = set()
+        next_path = "/api/v1/services/"
+        max_pages = 50
+
+        for _ in range(max_pages):
+            normalized_path = _normalize_remote_api_path(next_path)
+            if not normalized_path or normalized_path in seen_paths:
+                break
+            seen_paths.add(normalized_path)
+
+            payload, error_payload = _fetch_remote_json_with_fallback(
+                server, "domains", normalized_path, timeout=15
+            )
+            if error_payload:
+                if not all_services:
+                    return Response(error_payload)
+                break
+
+            services_page, next_link = _extract_page_results_and_next(payload)
+            all_services.extend(services_page)
+            if not next_link:
+                break
+            next_path = _normalize_remote_api_path(next_link)
+
+        domains = []
+        for svc in all_services:
+            svc_id = svc.get("id", "")
+            svc_name = svc.get("name", "")
+            public_domain = svc.get("public_domain", "")
+            custom_domains = svc.get("custom_domains", [])
+            if not isinstance(custom_domains, list):
+                custom_domains = []
+            for domain in custom_domains:
+                domains.append({
+                    "domain": domain,
+                    "service_id": svc_id,
+                    "service_name": svc_name,
+                    "public_domain": public_domain,
+                    "verified": svc.get("domain_verified", False),
+                    "verification_token": svc.get("verification_token", ""),
+                })
+
+        return Response({"domains": domains, "count": len(domains)})
