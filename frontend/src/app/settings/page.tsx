@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
+import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell";
 import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi, aiApi, coreApi, teamsApi } from "@/lib/api";
@@ -1487,34 +1488,41 @@ export default function SettingsPage() {
                       className="w-full sm:w-auto"
                     >
                       {renderMaintenanceButtonContent("refresh", "Sync Proxy")}
-                    </Button>
+                     </Button>
+                   </div>
+                   <div className="flex flex-col justify-between gap-4 border-t pt-4 sm:flex-row sm:items-center">
+                     <div className="space-y-1">
+                       <h4 className="text-sm font-medium">Update Platform</h4>
+                       <p className="text-xs text-muted-foreground">This asks the host updater to pull the latest code and rebuild services. The dashboard may briefly disconnect.</p>
+                       {maintenanceTasks.update.message && (
+                         <p className={cn("text-xs", maintenanceTasks.update.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+                           {maintenanceTasks.update.message}
+                         </p>
+                       )}
+                     </div>
+                     <Button
+                       variant="default"
+                       disabled={maintenanceTasks.update.status === "queued" || maintenanceTasks.update.status === "running"}
+                       onClick={() => handleMaintenanceAction("update")}
+                       className="w-full sm:w-auto"
+                     >
+                       {renderMaintenanceButtonContent("update", "Update Platform")}
+                     </Button>
+                   </div>
+                 </div>
+                 
+                 {/* Cancel button */}
+                 <div className="flex justify-end mt-4">
+                   <Link href="/dashboard">
+                     <Button variant="outline">Cancel</Button>
+                   </Link>
                   </div>
-                  <div className="flex flex-col justify-between gap-4 border-t pt-4 sm:flex-row sm:items-center">
-                    <div className="space-y-1">
-                      <h4 className="text-sm font-medium">Update Platform</h4>
-                      <p className="text-xs text-muted-foreground">Pull the latest code from GitHub and restart the backend. (Warning: Causes a few seconds of downtime).</p>
-                      {maintenanceTasks.update.message && (
-                        <p className={cn("text-xs", maintenanceTasks.update.status === "error" ? "text-destructive" : "text-muted-foreground")}>
-                          {maintenanceTasks.update.message}
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      variant="default"
-                      disabled={maintenanceTasks.update.status === "queued" || maintenanceTasks.update.status === "running"}
-                      onClick={() => handleMaintenanceAction("update")}
-                      className="w-full sm:w-auto"
-                    >
-                      {renderMaintenanceButtonContent("update", "Update Platform")}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
     </DashboardShell>
   );
 }

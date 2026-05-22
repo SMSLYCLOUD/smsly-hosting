@@ -10,6 +10,8 @@ import api, { licensingApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { useTier } from '@/context/TierContext';
 import { Input } from '@/components/ui/input';
+import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
+import { motion } from 'framer-motion';
 
 type PlanCode = 'HOBBY' | 'PRO' | 'ENTERPRISE';
 
@@ -244,28 +246,38 @@ export default function BillingPage() {
 
   return (
     <DashboardShell>
-      <div className="container max-w-6xl mx-auto p-6 space-y-10">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold mb-1">Billing & License</h1>
-            <p className="text-muted-foreground">Manage your platform license and billing.</p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={handleOpenPortal}
-              disabled={openingPortal || loading || !summary?.stripe_configured}
-              title={!summary?.stripe_configured ? 'Stripe is not configured' : undefined}
-            >
-              {openingPortal ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ExternalLink className="mr-2 h-4 w-4" />
-              )}
-              Manage Billing
-            </Button>
-          </div>
-        </div>
+       <div className="container max-w-6xl mx-auto p-6 space-y-10">
+         {/* SMSLY Ecosystem Cross-Sell */}
+         <motion.div
+           initial={{ opacity: 0, y: -6 }}
+           animate={{ opacity: 1, y: 0 }}
+           transition={{ duration: 0.4 }}
+           className="mb-6"
+         >
+           <EnhancedCrossSell variant="compact" dismissible={true} />
+         </motion.div>
+         
+         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+           <div>
+             <h1 className="text-3xl font-bold mb-1">Billing & License</h1>
+             <p className="text-muted-foreground">Manage your platform license and billing.</p>
+           </div>
+           <div className="flex gap-2">
+             <Button
+               variant="outline"
+               onClick={handleOpenPortal}
+               disabled={openingPortal || loading || !summary?.stripe_configured}
+               title={!summary?.stripe_configured ? 'Stripe is not configured' : undefined}
+             >
+               {openingPortal ? (
+                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+               ) : (
+                 <ExternalLink className="mr-2 h-4 w-4" />
+               )}
+               Manage Billing
+             </Button>
+           </div>
+         </div>
 
         <Card className="border-primary/20 bg-primary/5">
           <CardHeader>

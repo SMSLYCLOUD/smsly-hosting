@@ -13,28 +13,7 @@ import { cn } from "@/lib/utils"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { RequiresTier } from "@/components/licensing/RequiresTier"
-
-// Types
-interface Service {
-    id: string
-    name: string
-}
-
-interface Addon {
-    id: string
-    name: string
-    addon_type: 'POSTGRES' | 'REDIS' | 'MYSQL' | 'MONGODB'
-    status: 'PROVISIONING' | 'ACTIVE' | 'FAILED' | 'DELETED'
-    connection_url?: string
-    service: string // service id
-}
-
-interface Backup {
-    id: string
-    status: 'PENDING' | 'COMPLETED' | 'FAILED'
-    size_bytes: number
-    created_at: string
-}
+import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell"
 
 import { ADDON_REGISTRY, getAddonMetadata, AddonRegistryItem } from "@/lib/addonRegistry"
 
@@ -235,14 +214,19 @@ export default function MarketplacePage() {
 
     if (isLoading) return <div className="p-8 text-center text-muted-foreground">Loading marketplace...</div>
 
-    return (
-        <DashboardShell>
-        <RequiresTier tier="pro">
-        <div className="container py-8 space-y-8">
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">Marketplace</h1>
-                <p className="text-muted-foreground">One-click databases and services.</p>
-            </div>
+     return (
+         <DashboardShell>
+         <RequiresTier tier="pro">
+         <div className="container py-8 space-y-8">
+             <div>
+                 <h1 className="text-3xl font-bold tracking-tight">Marketplace</h1>
+                 <p className="text-muted-foreground">One-click databases and services.</p>
+             </div>
+             
+             {/* SMSLY Ecosystem Cross-Sell */}
+             <div className="mb-6">
+                 <EnhancedCrossSell variant="compact" dismissible={true} />
+             </div>
 
             {/* Catalog */}
             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
