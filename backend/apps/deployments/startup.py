@@ -56,9 +56,57 @@ def _sync_caddy_once(delay: float = 3.0):
         logger.warning("Startup background tasks failed: %s", exc)
 
 
+def _store_ssh_from_env():
+    """Read NODE_SSH_PASSWORD / NODE_SSH_KEY from env and save to ManagedServer.
+
+    Lite agents can define these in .env so SSH credentials persist across
+    container restarts and the self-healing system can SSH into the node.
+    Credentials are encrypted at rest via EncryptedCharField/EncryptedTextField.
+    """
+    ssh_password = str(os.environ.get("NODE_SSH_PASSWORD", "")).strip()
+    ssh_key = str(os.environ.get("NODE_SSH_KEY", "")).strip()
+    node_host = str(os.environ.get("NODE_HOST", "") or os.environ.get("HOST_IP", "")).strip()
+
+    if not ssh_password and not ssh_key:
+        return
+
+    try:
+        from apps.deployments.models_core import ManagedServer
+
+        server = None
+        if node_host:
+            server = ManagedServer.objects.filter(host=node_host).first()
+        if not server:
+            # Fallback: find a server with empty SSH credentials
+            server = ManagedServer.objects.filter(ssh_password="", ssh_key="").first()
+        if not server:
+            server = ManagedServer.objects.first()
+
+        if server:
+            changed = False
+            if ssh_password and server.ssh_password != ssh_password:
+                server.ssh_password = ssh_password
+                changed = True
+            if ssh_key and server.ssh_key != ssh_key:
+                server.ssh_key = ssh_key
+                changed = True
+            if changed:
+                server.save(update_fields=["ssh_password", "ssh_key", "updated_at"])
+                logger.info(
+                    "Stored SSH credentials from env for %s (%s)",
+                    server.name, server.host,
+                )
+        else:
+            logger.debug("No ManagedServer found to store SSH credentials")
+    except Exception as exc:
+        logger.warning("Failed to store SSH credentials from env: %s", exc)
+
+
 def schedule_startup_caddy_sync():
     """Fire a one-time background sync."""
-    import os
+    # Always try to store SSH credentials from env vars on startup
+    _store_ssh_from_env()
+
     if str(os.environ.get("MODE", "")).strip().lower() == "agent":
         logger.debug("Agent-lite mode: skipping startup caddy sync")
         return
