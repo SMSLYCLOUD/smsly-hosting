@@ -540,3 +540,58 @@ def build_local_source_bundle() -> str:
                     continue
 
     return archive_path
+
+
+def resolve_running_container(service, deployment=None):
+    """
+    Resolve a running Docker container for a service.
+
+    Priority:
+    1. Try the deployment's stored container_id (fast path).
+    2. Fall back to searching running containers by ``smsly.service_id`` label.
+    3. Fall back to searching running containers by name matching service name.
+
+    Returns a docker Container object, or None if no running container is found.
+    """
+    from apps.cloud.docker_client import get_docker_client
+    from apps.deployments.models import Deployment
+
+    if deployment is None:
+        deployment = service.deployments.filter(status='ACTIVE').order_by('-created_at').first()
+    if not deployment:
+        return None
+
+    client = get_docker_client()
+    container_id = (deployment.container_id or "").strip()
+    service_id = str(service.pk)
+
+    # Priority 1: Try deployment's stored container_id
+    if container_id:
+        try:
+            container = client.containers.get(container_id)
+            if container.status == 'running':
+                return container
+        except Exception:
+            pass
+
+    # Priority 2: Search by smsly.service_id label
+    try:
+        containers = client.containers.list(
+            filters={'label': f'smsly.service_id={service_id}', 'status': 'running'},
+        )
+        if containers:
+            return containers[0]
+    except Exception:
+        pass
+
+    # Priority 3: Search by container name matching the service name
+    try:
+        containers = client.containers.list(
+            filters={'name': service.name, 'status': 'running'},
+        )
+        if containers:
+            return containers[0]
+    except Exception:
+        pass
+
+    return None
