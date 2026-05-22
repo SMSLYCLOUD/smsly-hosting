@@ -490,6 +490,12 @@ export const servicesApi = {
     const response = await api.post(`/services/${id}/restart/`, { force_rebuild: forceRebuild });
     return response.data;
   },
+  triggerJulesFix: async (serviceId: string, deploymentId?: string): Promise<any> => {
+    const body: Record<string, unknown> = {};
+    if (deploymentId) body.deployment_id = deploymentId;
+    const response = await api.post(`/services/${serviceId}/trigger-jules-fix/`, body);
+    return response.data;
+  },
   forceRebuild: async (id: string): Promise<any> => {
     const response = await api.post(`/services/${id}/restart/`, { force_rebuild: true });
     return response.data;

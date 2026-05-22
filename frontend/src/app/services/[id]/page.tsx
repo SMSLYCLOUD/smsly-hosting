@@ -4,7 +4,7 @@ import { servicesApi, serversApi, Service, Deployment, EnvVar, ManagedServer } f
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ServiceLayout } from '@/components/layout/ServiceLayout';
-import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server } from 'lucide-react';
+import { Activity, Shield, Terminal, Zap, DollarSign, Globe, Rocket, Loader2 as Spinner, Server, Wrench } from 'lucide-react';
 import Editor from "@monaco-editor/react";
 import dynamic from 'next/dynamic';
 import { LogsTab } from '@/components/logs/LogsTab';
@@ -53,6 +53,7 @@ export default function ServiceDetailPage() {
     const [activeTab, setActiveTab] = useState('overview');
     const [aiKey, setAiKey] = useState('');
     const [redeploying, setRedeploying] = useState(false);
+    const [julesFixing, setJulesFixing] = useState(false);
     const [watchConfigLoading, setWatchConfigLoading] = useState(false);
     const [watchConfigSaving, setWatchConfigSaving] = useState(false);
     const [serviceEnvMap, setServiceEnvMap] = useState<ServiceEnvMap>({});
@@ -216,6 +217,29 @@ export default function ServiceDetailPage() {
             console.error(err);
             toast({ title: 'Restart failed', description: 'Could not trigger restart.', variant: 'destructive' });
             setRedeploying(false);
+        }
+    };
+
+    const handleTriggerJulesFix = async () => {
+        if (!service) return;
+        if (!await confirm({
+            title: 'Trigger Jules Auto-Fix?',
+            message: 'This will analyze the last failed deployment and attempt to generate a fix automatically. A PR will be created on your repository.',
+            confirmText: 'Run Fix'
+        })) return;
+        try {
+            setJulesFixing(true);
+            const result = await servicesApi.triggerJulesFix(service.id);
+            toast({
+                title: 'Jules auto-fix triggered',
+                description: result.message || 'Fix analysis has been queued.',
+            });
+        } catch (err: any) {
+            console.error(err);
+            const msg = err?.response?.data?.error || err?.message || 'Could not trigger Jules auto-fix.';
+            toast({ title: 'Failed to trigger fix', description: msg, variant: 'destructive' });
+        } finally {
+            setJulesFixing(false);
         }
     };
 
@@ -538,7 +562,7 @@ export default function ServiceDetailPage() {
                                     <span className={`font-bold px-2 py-1 rounded text-xs uppercase ${deployment.status === 'ACTIVE' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-500'
                                         }`}>{deployment.status}</span>
                                 </div>
-                                <div className="pt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div className="pt-2 grid grid-cols-1 sm:grid-cols-4 gap-2">
                                     <button
                                         className="border border-border hover:border-foreground/20 hover:bg-muted text-foreground font-bold py-2 rounded-lg transition-all text-sm"
                                         onClick={() => setActiveTab('logs')}
@@ -553,6 +577,16 @@ export default function ServiceDetailPage() {
                                         {redeploying ? <Spinner className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                                         Restart
                                     </button>
+                                    {service?.repository_url && (
+                                        <button
+                                            className="bg-purple-500/20 border border-purple-500/30 text-purple-400 hover:bg-purple-500/30 font-bold py-2 rounded-lg transition-all text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                                            onClick={handleTriggerJulesFix}
+                                            disabled={julesFixing || redeploying}
+                                        >
+                                            {julesFixing ? <Spinner className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                                            {julesFixing ? 'Fixing...' : 'Jules Fix'}
+                                        </button>
+                                    )}
                                     <div className="flex gap-2">
                                         <select
                                             value={targetServerId}
