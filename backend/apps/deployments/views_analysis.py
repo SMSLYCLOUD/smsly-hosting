@@ -529,13 +529,32 @@ class DeepScanTaskStatusView(GenericAPIView):
         if not task_id:
             return Response({"error": "task_id required"}, status=400)
 
+        import json
         from celery.result import AsyncResult
         task_result = AsyncResult(task_id)
+
+        result_value = None
+        if task_result.ready():
+            result_value = task_result.result
+            if isinstance(result_value, Exception):
+                exception_type = result_value.__class__.__name__
+                message = str(result_value) or exception_type
+                if exception_type == "SoftTimeLimitExceeded":
+                    message = "Background task timed out before it could finish. Retry with a smaller batch or try again later."
+                result_value = {
+                    'error': message,
+                    'exception_type': exception_type,
+                }
+            else:
+                try:
+                    json.dumps(result_value)
+                except TypeError:
+                    result_value = str(result_value)
 
         response_data = {
             'task_id': task_id,
             'status': task_result.status,
-            'result': task_result.result if task_result.ready() else None
+            'result': result_value,
         }
 
         # Include custom progress state if available
@@ -544,6 +563,9 @@ class DeepScanTaskStatusView(GenericAPIView):
 
         # Handle failure nicely
         if task_result.status == 'FAILURE':
-            response_data['error'] = str(task_result.result)
+            if isinstance(result_value, dict) and 'error' in result_value:
+                response_data['error'] = result_value['error']
+            else:
+                response_data['error'] = str(task_result.result)
 
         return Response(response_data)
