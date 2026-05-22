@@ -47,6 +47,7 @@ services:
     depends_on:
       - redis
       - db
+      - rabbitmq
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q fast --concurrency=8
     restart: always
@@ -72,6 +73,7 @@ services:
     depends_on:
       - redis
       - db
+      - rabbitmq
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q deploy --concurrency=8
     restart: always
@@ -94,6 +96,7 @@ services:
     depends_on:
       - redis
       - db
+      - rabbitmq
       - socket-proxy
     command: celery -A config worker --loglevel=info -Q celery --concurrency=8
     restart: always
@@ -140,6 +143,28 @@ services:
       - smsly-net
 
   # ============================================================
+  # RabbitMQ (Message broker for Celery workers)
+  # ============================================================
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+    environment:
+      RABBITMQ_DEFAULT_USER: smsly_user
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - smsly-net
+
+  # ============================================================
   # Backend API
   # ============================================================
   backend:
@@ -169,6 +194,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       socket-proxy:
         condition: service_started
@@ -206,6 +233,8 @@ services:
       - REDIS_PORT=6379
     depends_on:
       backend:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -280,6 +309,24 @@ services:
     networks:
       - smsly-net
 
+  # ============================================================
+  # Prometheus (Metrics collection for the metrics adapter)
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - smsly-net
+
 networks:
   smsly-net:
     external: true
@@ -291,4 +338,6 @@ networks:
 volumes:
   postgres_data:
   registry_data:
+  prometheus_data:
+  rabbitmq_data:
   backups_data:

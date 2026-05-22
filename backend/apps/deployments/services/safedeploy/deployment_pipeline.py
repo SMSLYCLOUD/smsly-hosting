@@ -62,20 +62,29 @@ class ProductionDeploymentPipeline:
             adapter = DjangoAdapter()
             workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
             repo_url = deployment.service.repository_url
+            cloned_path = workspace_dir
             if repo_url:
                 try:
-                    subprocess.run(["git", "clone", "--branch", deployment.service.branch, repo_url, workspace_dir], check=True, capture_output=True)
-                    subprocess.run(["git", "checkout", deployment.commit_hash], cwd=workspace_dir, check=True, capture_output=True)
-                except Exception:
-                    pass
+                    from apps.deployments.services.git_manager import GitManager
+                    from apps.deployments.utils import get_github_oauth_token_for_user
+                    token = get_github_oauth_token_for_user(deployment.service.owner)
+                    cloned_path = GitManager.clone_repo(
+                        repo_url=repo_url,
+                        branch=deployment.service.branch or 'main',
+                        destination=workspace_dir,
+                        token=token,
+                        commit_hash=deployment.commit_hash
+                    )
+                except Exception as e:
+                    logger.error(f"Migration clone failed for deployment {deployment.id}: {e}")
             prod_db_url = None
             for env_var in deployment.service.env_vars.all():
                 if env_var.key == 'DATABASE_URL':
                     prod_db_url = env_var.value
 
-            if prod_db_url and adapter.detect(workspace_dir):
+            if prod_db_url and adapter.detect(cloned_path):
                 env = {"DATABASE_URL": prod_db_url}
-                rc, out, err = adapter.run_migrate(workspace_dir, env)
+                rc, out, err = adapter.run_migrate(cloned_path, env)
                 DeploymentArtifact.objects.create(service=deployment.service, deployment=deployment, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
                 if rc != 0: raise Exception("Production Migration apply failed.")
             shutil.rmtree(workspace_dir, ignore_errors=True)

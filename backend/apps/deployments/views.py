@@ -2468,7 +2468,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def file_browse(self, request, pk=None):
         """List files inside the running container (Docker, K8s, or remote node)."""
         service = self.get_object()
-        path = request.query_params.get('path', '/app')
+        path = request.query_params.get('path', '/')
 
         # Validate and sanitize path to prevent directory traversal attacks
         try:
@@ -2503,15 +2503,28 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            actual_path = path
             try:
                 resp = orchestrator._request(
                     method='GET',
                     path=f"/api/v1/services/{service.id}/file-browse/",
-                    params={'path': path},
+                    params={'path': actual_path},
                     timeout=15,
                 )
                 if resp and resp.status_code == 200:
                     return Response(resp.json())
+                if actual_path in ('/app', '/'):
+                    fallback_path = '/' if actual_path == '/app' else '/app'
+                    resp = orchestrator._request(
+                        method='GET',
+                        path=f"/api/v1/services/{service.id}/file-browse/",
+                        params={'path': fallback_path},
+                        timeout=15,
+                    )
+                    if resp and resp.status_code == 200:
+                        data = resp.json()
+                        data['path'] = fallback_path
+                        return Response(data)
                 return Response({'error': 'Failed to fetch from remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -2553,8 +2566,9 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if isinstance(output, bytes):
                 output = output.decode('utf-8', errors='replace')
             if 'No such file' in output or 'cannot access' in output:
-                if path == '/app':
-                    path = '/'
+                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
+                if fallback_path:
+                    path = fallback_path
                     resp = core_v1.connect_get_namespaced_pod_exec(
                         pod_name, namespace,
                         command=['ls', '-la', path],
@@ -2577,9 +2591,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         """List files via Docker exec."""
         try:
             exit_code, output = container.exec_run(["ls", "-la", path])
-            if exit_code != 0 and path == '/app':
-                path = '/'
-                exit_code, output = container.exec_run(["ls", "-la", path])
+            if exit_code != 0:
+                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
+                if fallback_path:
+                    path = fallback_path
+                    exit_code, output = container.exec_run(["ls", "-la", path])
             if exit_code != 0:
                 return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
             files = self._parse_ls_output(output.decode('utf-8', errors='replace'))

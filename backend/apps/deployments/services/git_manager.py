@@ -17,7 +17,7 @@ class GitManager:
 
     @staticmethod
     def clone_repo(repo_url: str, branch: str = 'main',
-                   destination: str = '/tmp/builds', token: str = None) -> str:
+                   destination: str = '/tmp/builds', token: str = None, commit_hash: str = None) -> str:
         """
         Clones a repository to a destination.
         Returns the path to the cloned directory.
@@ -87,7 +87,12 @@ class GitManager:
                 env["SMSLY_GIT_PASSWORD"] = token
                 env["GIT_TERMINAL_PROMPT"] = "0"
 
-            git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env)
+            if commit_hash:
+                git.Repo.clone_from(clone_url, repo_dir, branch=branch, env=env)
+                repo = git.Repo(repo_dir)
+                repo.git.checkout(commit_hash)
+            else:
+                git.Repo.clone_from(clone_url, repo_dir, branch=branch, depth=1, env=env)
             return repo_dir
 
         except git.GitCommandError as e:
@@ -113,13 +118,23 @@ class GitManager:
                     fallback_env["GIT_TERMINAL_PROMPT"] = "0"
                     fallback_env.pop("GIT_ASKPASS", None)
                     fallback_env.pop("SMSLY_GIT_PASSWORD", None)
-                    git.Repo.clone_from(
-                        repo_url,
-                        repo_dir,
-                        branch=branch,
-                        depth=1,
-                        env=fallback_env,
-                    )
+                    if commit_hash:
+                        git.Repo.clone_from(
+                            repo_url,
+                            repo_dir,
+                            branch=branch,
+                            env=fallback_env,
+                        )
+                        repo = git.Repo(repo_dir)
+                        repo.git.checkout(commit_hash)
+                    else:
+                        git.Repo.clone_from(
+                            repo_url,
+                            repo_dir,
+                            branch=branch,
+                            depth=1,
+                            env=fallback_env,
+                        )
                     logger.info(
                         "Anonymous clone fallback succeeded for %s",
                         _sanitize_url(repo_url),

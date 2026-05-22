@@ -135,12 +135,27 @@ export function useWebSocket(options: UseWebSocketOptions) {
 }
 
 // Service status hook for dashboard
+function getWsUrl(path: string): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  // If relative URL (e.g. '/api/v1'), derive WebSocket URL from current page origin
+  if (apiUrl && apiUrl.startsWith('/')) {
+    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8000';
+    return `${proto}://${host}${path}`;
+  }
+  const resolved = apiUrl || 'http://localhost:8001/api/v1';
+  const baseUrl = resolved.replace(/\/api\/v1\/?$/, '');
+  const wsScheme = baseUrl.startsWith('https') ? 'wss' : 'ws';
+  const hostPart = baseUrl.replace(/^https?:\/\//, '');
+  return `${wsScheme}://${hostPart}${path}`;
+}
+
 export function useServiceStatusUpdates(userId: string) {
   const [services, setServices] = useState<any[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const { connectionStatus } = useWebSocket({
-    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/ws/service-status/`,
+    url: getWsUrl('/ws/service-status/'),
     reconnect: true,
     reconnectInterval: 3000,
     onMessage: (message) => {
@@ -182,7 +197,7 @@ export function useDeploymentStatusUpdates(serviceId: string) {
   const [deployments, setDeployments] = useState<any[]>([]);
 
   const { connectionStatus } = useWebSocket({
-    url: `${process.env.NEXT_PUBLIC_API_URL || ''}/ws/service-status/`,
+    url: getWsUrl('/ws/service-status/'),
     reconnect: true,
     reconnectInterval: 3000,
     onMessage: (message) => {
