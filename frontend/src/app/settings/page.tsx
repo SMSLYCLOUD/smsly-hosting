@@ -274,6 +274,63 @@ export default function SettingsPage() {
     });
   }, [toast, updateMaintenanceTask]);
 
+  const startPlatformUpdatePolling = useCallback((updateId: string) => {
+    stopMaintenancePolling("update");
+
+    const poll = async () => {
+      try {
+        const response = await systemApi.getPlatformUpdate(updateId);
+        const status = response?.status || "";
+
+        if (status === "COMPLETED") {
+          stopMaintenancePolling("update");
+          updateMaintenanceTask("update", {
+            status: "success",
+            taskId: updateId,
+            message: "Platform update completed successfully.",
+          });
+          toast({
+            title: "Update completed",
+            description: "Platform update completed successfully.",
+            variant: "success",
+          });
+          return;
+        }
+
+        if (status === "FAILED" || status === "ROLLED_BACK") {
+          stopMaintenancePolling("update");
+          const errorMsg = response?.error_message || "Platform update failed.";
+          updateMaintenanceTask("update", {
+            status: "error",
+            taskId: updateId,
+            message: errorMsg,
+          });
+          toast({
+            title: "Update failed",
+            description: errorMsg,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        updateMaintenanceTask("update", {
+          status: "running",
+          taskId: updateId,
+          message: response?.current_step || `Update is ${status.toLowerCase()}...`,
+        });
+      } catch {
+        updateMaintenanceTask("update", {
+          status: "running",
+          taskId: updateId,
+          message: "Waiting for the backend to reconnect...",
+        });
+      }
+    };
+
+    void poll();
+    maintenancePollers.current["update"] = setInterval(poll, 5000);
+  }, [stopMaintenancePolling, updateMaintenanceTask, toast]);
+
   const startMaintenancePolling = useCallback((action: MaintenanceAction, taskId: string) => {
     stopMaintenancePolling(action);
 
@@ -285,6 +342,19 @@ export default function SettingsPage() {
 
         if (state === "SUCCESS" || state === "FAILURE" || statusValue === "success" || statusValue === "error") {
           stopMaintenancePolling(action);
+          if (action === "update" && state === "SUCCESS") {
+            const result = response?.result && typeof response.result === "object" ? response.result : null;
+            const platformUpdateId = result?.task_id;
+            if (platformUpdateId) {
+              updateMaintenanceTask(action, {
+                status: "queued",
+                taskId: platformUpdateId,
+                message: "Platform update initiated, tracking progress...",
+              });
+              startPlatformUpdatePolling(platformUpdateId);
+              return;
+            }
+          }
           finishMaintenanceTask(action, response);
           return;
         }
@@ -305,7 +375,7 @@ export default function SettingsPage() {
 
     void poll();
     maintenancePollers.current[action] = setInterval(poll, 3000);
-  }, [finishMaintenanceTask, stopMaintenancePolling, updateMaintenanceTask]);
+  }, [finishMaintenanceTask, startPlatformUpdatePolling, stopMaintenancePolling, updateMaintenanceTask]);
 
   useEffect(() => () => {
     Object.values(maintenancePollers.current).forEach((poller) => {
@@ -333,6 +403,19 @@ export default function SettingsPage() {
       const response = await systemApi.runMaintenance(action);
       const taskId = response?.task_id || response?.taskId;
       if (response?.result || response?.status === "success" || response?.status === "error") {
+        if (action === "update") {
+          const result = response?.result && typeof response.result === "object" ? response.result : response;
+          const platformUpdateId = result?.task_id;
+          if (platformUpdateId) {
+            updateMaintenanceTask(action, {
+              status: "queued",
+              taskId: platformUpdateId,
+              message: "Platform update initiated, tracking progress...",
+            });
+            startPlatformUpdatePolling(platformUpdateId);
+            return;
+          }
+        }
         finishMaintenanceTask(action, response);
         return;
       }
@@ -367,7 +450,7 @@ export default function SettingsPage() {
       });
       toast({ title: "Error", description: getMaintenanceErrorMessage(err), variant: "destructive" });
     }
-  }, [confirm, finishMaintenanceTask, getMaintenanceErrorMessage, startMaintenancePolling, toast, updateMaintenanceTask]);
+  }, [confirm, finishMaintenanceTask, getMaintenanceErrorMessage, startMaintenancePolling, startPlatformUpdatePolling, toast, updateMaintenanceTask]);
 
   const renderMaintenanceButtonContent = (action: MaintenanceAction, label: string) => {
     const task = maintenanceTasks[action];
