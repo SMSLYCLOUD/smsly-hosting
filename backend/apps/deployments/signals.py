@@ -127,8 +127,8 @@ def broadcast_service_status_change(sender, instance, created, **kwargs):
         return  # Skip creation - handled by other signals
     
     # Only broadcast if status actually changed
-    update_fields = kwargs.get('update_fields', [])
-    if 'status' not in update_fields:
+    update_fields = kwargs.get('update_fields')
+    if update_fields is not None and 'status' not in update_fields:
         return
     
     # Get the latest deployment for this service
