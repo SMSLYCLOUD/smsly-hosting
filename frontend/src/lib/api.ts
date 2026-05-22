@@ -269,6 +269,7 @@ function isProtectedPath(path: string): boolean {
     '/tunnels',
     '/intelligence',
     '/backups',
+    '/restore',
     '/transfers',
     '/admin-dashboard',
     '/topology',

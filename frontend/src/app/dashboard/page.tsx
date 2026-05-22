@@ -38,7 +38,7 @@ export default function DashboardPage() {
   const hasShownLoadError = useRef(false);
   
   // WebSocket for real-time service updates
-  const { services: wsServices, connectionStatus: wsConnectionStatus, lastUpdated } = useServiceStatusUpdates(user?.id || '');
+  const { services: wsServices, connectionStatus: wsConnectionStatus, lastUpdated } = useServiceStatusUpdates(user?.pk != null ? String(user.pk) : '');
 
   useEffect(() => {
     if (!data || typeof window === 'undefined') return;
