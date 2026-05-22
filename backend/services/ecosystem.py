@@ -496,6 +496,87 @@ def _detect_env_vars(files: List[str], stack: str, port: int,
 # AI-Powered Ecosystem Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
+def get_ecosystem_prompts() -> dict:
+    """
+    Return all prompts used in ecosystem analysis for debugging and transparency.
+    This function can be called to see exactly what prompts are being sent to the AI.
+    """
+    return {
+        "ecosystem_system_prompt": ECOSYSTEM_PROMPT,
+        "analysis_prompt_structure": "### ECOSYSTEM ARCHITECTURAL BRIEF\n{cross_links_header}\n\n### REPOSITORY DETAILS\n{repo_summaries}",
+        "synthesis_prompt_structure": """You are the Senate Architect performing a FINAL SYNTHESIS pass.
+        We have processed a massive ecosystem in batches. Here is the combined JSON plan of all services and addons.
+        
+        YOUR JOB:
+        1. Resolve any cross-repo dependencies. If Service A needs the URL of Service B, ensure Service A's env vars use {{SERVICE:service-b}}.
+        2. Consolidate addons (e.g. ensure only one POSTGRES if they should share).
+        3. Ensure 100% env var coverage.
+        4. FULL DEPLOY ORDER AUTHORITY: You have complete power to restructure the "deploy_order" and "deploy_sequence" from scratch to ensure a successful deployment (e.g., Auth/Identity -> Core API -> Gateways -> Frontends).
+        
+        CURRENT COMBINED PLAN:
+        ```json
+        {combined_plan_json}
+        ```
+        
+        CRITICAL TYPE RULES — violation will crash the system:
+        - ALL array fields ("depends_on", "shared_by", service-level "addons", "deploy_sequence") must contain ONLY strings, NEVER objects.
+        - "env_vars" values must be strings ONLY, never objects or arrays.
+        - Every service in "services" must be a flat object; no arrays within arrays.
+        
+        Return ONLY valid JSON matching this exact structure:
+        {{
+          "ecosystem_name": "Synthesized Ecosystem",
+          "services": [...],
+          "addons": [...]
+        }}""",
+        "revalidation_prompt_structure": """CRITICAL: Your previous ecosystem plan was rejected due to: {error_message}
+        
+        REPOSITORY DATA:
+        {repositories_json}
+        
+        REQUIREMENTS:
+        1. Return ONLY valid JSON with this exact structure:
+        {{
+          "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
+          "services": [
+            {{
+              "name": "service-name",
+              "repo": "owner/repo",
+              "stack": "python",
+              "env_vars": {{"KEY": "value"}},
+              "addons": ["POSTGRES", "REDIS"],
+              "depends_on": ["other-service"],
+              "deploy_order": 50
+            }}
+          ],
+          "addons": [
+            {{
+              "type": "POSTGRES",
+              "shared_by": ["service-1", "service-2"]
+            }}
+          ],
+          "deploy_sequence": ["addons", "service-1", "service-2"],
+          "ai_provider": "auto"
+        }}
+        
+        2. CRITICAL TYPE RULES:
+           - ALL array fields ("depends_on", "shared_by", "addons", "deploy_sequence") must contain ONLY strings
+           - "env_vars" must be a dict with string keys and string values ONLY  
+           - No nested objects in any array fields
+           - No unhashable types (dicts, lists) in any string fields
+           
+        3. Ensure all services have proper names and repo references"""
+    }
+
+
+def _log_ecosystem_prompt():
+    """Log the ECOSYSTEM_PROMPT for debugging purposes."""
+    logger.info("=== ECOSYSTEM_PROMPT (SYSTEM PROMPT) ===")
+    logger.info("This is the system prompt sent to the AI:")
+    logger.info(ECOSYSTEM_PROMPT)
+    logger.info("=== END ECOSYSTEM_PROMPT ===")
+
+
 ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI Senate. Your mission is to architect a 100% stable, zero-config, high-performance ecosystem of microservices from multiple repositories.
     
     ### ADVANCED CONNECTIVITY REASONING:
@@ -688,7 +769,35 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
 
         # 6. Call AI Senate
+        logger.info("=== SENDING INITIAL ANALYSIS PROMPT TO AI ===")
+        logger.info(f"Provider: {ai_provider}")
+        logger.info(f"Repository count: {len(repos_data)}")
+        
+        # Log the system prompt
+        _log_ecosystem_prompt()
+        
+        full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
+        full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
+        
+        logger.info("=== INITIAL ANALYSIS PROMPT ===")
+        logger.info(f"Prompt length: {len(full_prompt)} characters")
+        logger.info("Prompt preview:")
+        # Show first part of prompt
+        prompt_preview = full_prompt[:1000] if len(full_prompt) > 1000 else full_prompt
+        logger.info(prompt_preview)
+        if len(full_prompt) > 1000:
+            logger.info("... [prompt truncated] ...")
+        
         response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+        
+        logger.info("=== INITIAL AI RESPONSE RECEIVED ===")
+        logger.info(f"Response provider: {provider}")
+        logger.info(f"Response length: {len(response_text)} characters")
+        logger.info("Response preview:")
+        response_preview = response_text[:1000] if len(response_text) > 1000 else response_text
+        logger.info(response_preview)
+        if len(response_text) > 1000:
+            logger.info("... [response truncated] ...")
 
         # 7. Parse and structure the plan (Workspace is now deleted)
         try:
@@ -805,7 +914,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         
         CURRENT COMBINED PLAN:
         ```json
-        {json.dumps({{"services": global_services, "addons": global_addons}}, indent=2)}
+        {json.dumps({"services": global_services, "addons": global_addons}, indent=2)}
         ```
         
         CRITICAL TYPE RULES — violation will crash the system:
@@ -820,9 +929,30 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
           "addons": [...]
         }}
         """
+        
+        logger.info("=== SYNTHESIS PROMPT SENT TO AI ===")
+        logger.info(f"Chunks processed: {len(chunks)}")
+        logger.info(f"Global services count: {len(global_services)}")
+        logger.info(f"Global addons count: {len(global_addons)}")
+        logger.info("Synthesis prompt preview:")
+        synthesis_preview = synthesis_prompt[:1000] if len(synthesis_prompt) > 1000 else synthesis_prompt
+        logger.info(synthesis_preview)
+        if len(synthesis_prompt) > 1000:
+            logger.info("... [synthesis prompt truncated] ...")
+        
         try:
             from apps.intelligence.providers import ask_with_fallback
             response_text, provider = ask_with_fallback(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+            
+            logger.info("=== SYNTHESIS AI RESPONSE RECEIVED ===")
+            logger.info(f"Response provider: {provider}")
+            logger.info(f"Response length: {len(response_text)} characters")
+            logger.info("Synthesis response preview:")
+            synth_preview = response_text[:1000] if len(response_text) > 1000 else response_text
+            logger.info(synth_preview)
+            if len(response_text) > 1000:
+                logger.info("... [synthesis response truncated] ...")
+            
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}')
             if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
@@ -835,7 +965,9 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
                 if isinstance(raw_addons, list):
                     global_addons = [a for a in raw_addons if isinstance(a, dict)]
         except Exception as e:
-            logger.warning(f"Synthesis pass failed, using raw merged plan: {e}")
+            logger.warning(f"=== SYNTHESIS PASS FAILED ===")
+            logger.warning(f"Error: {e}")
+            logger.info("Synthesis pass failed, using raw merged plan")
 
     # Strictly sanitize services: strip non-dicts, normalize each, build a clean list
     sanitized_services = []
@@ -1051,7 +1183,13 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
     """
     Attempt to revalidate and correct AI response when validation fails.
     """
-    logger.info("Attempting AI revalidation due to: %s", error_message)
+    logger.info("=== ATTEMPTING AI REVALIDATION ===")
+    logger.info(f"Error message: {error_message}")
+    logger.info(f"Repository data count: {len(repos_data)}")
+    
+    # Log repository details for debugging
+    for i, rd in enumerate(repos_data):
+        logger.info(f"Repo {i+1}: {rd.get('repo', 'unknown')} - {rd.get('description', 'No description')}")
     
     try:
         revalidation_prompt = f"""
@@ -1094,6 +1232,18 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
         3. Ensure all services have proper names and repo references
         """
         
+        logger.info("=== REVALIDATION PROMPT SENT TO AI ===")
+        logger.info(f"Provider: {ai_provider}")
+        logger.info(f"Prompt length: {len(revalidation_prompt)} characters")
+        logger.info("Prompt preview:")
+        # Show first and last parts of the prompt to avoid flooding logs
+        preview_start = revalidation_prompt[:500]
+        preview_end = revalidation_prompt[-500:] if len(revalidation_prompt) > 1000 else ""
+        logger.info(preview_start)
+        if preview_end:
+            logger.info("... [truncated] ...")
+            logger.info(preview_end)
+        
         from apps.intelligence.providers import ask_with_fallback
         response_text, provider = ask_with_fallback(
             revalidation_prompt, 
@@ -1101,17 +1251,37 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
             provider_id=ai_provider
         )
         
+        logger.info("=== AI REVALIDATION RESPONSE RECEIVED ===")
+        logger.info(f"Response provider: {provider}")
+        logger.info(f"Response length: {len(response_text)} characters")
+        logger.info("Response preview:")
+        # Show first part of response
+        response_preview = response_text[:1000] if len(response_text) > 1000 else response_text
+        logger.info(response_preview)
+        if len(response_text) > 1000:
+            logger.info("... [response truncated] ...")
+        
         # Validate the revalidated response
-        if _validate_ai_response_structure(response_text):
+        logger.info("=== VALIDATING REVALIDATED RESPONSE ===")
+        is_valid = _validate_ai_response_structure(response_text)
+        logger.info(f"Revalidation validation result: {is_valid}")
+        
+        if is_valid:
             plan = _sanitize_ai_response_for_processing(response_text)
-            logger.info("AI revalidation successful")
+            logger.info("=== AI REVALIDATION SUCCESSFUL ===")
+            logger.info(f"Plan contains {len(plan.get('services', []))} services")
+            logger.info(f"Plan contains {len(plan.get('addons', []))} addons")
             return plan
         else:
-            logger.error("AI revalidation also failed, falling back to heuristic plan")
+            logger.error("=== AI REVALIDATION FAILED ===")
+            logger.error("Revalidation response validation failed after AI correction")
             return _build_heuristic_plan(repos_data, "AI response structure validation failed after revalidation")
             
     except Exception as e:
-        logger.error(f"AI revalidation process failed: {e}")
+        logger.error(f"=== AI REVALIDATION PROCESS FAILED ===")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error(f"Error details: {e}")
         return _build_heuristic_plan(repos_data, f"AI revalidation failed: {str(e)}")
 
 

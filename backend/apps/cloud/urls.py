@@ -24,6 +24,12 @@ urlpatterns = [
         IntelligenceViewSet.as_view({'post': 'chat'}),
         name='intelligence-ask-no-slash',
     ),
+    # Debug endpoint for ecosystem prompts
+    path(
+        'intelligence/ecosystem-prompts/',
+        IntelligenceViewSet.as_view({'get': 'ecosystem_prompts'}),
+        name='ecosystem-prompts',
+    ),
     # Backward-compatible ecosystem paths used by the frontend.
     path(
         'ecosystem/scan/',

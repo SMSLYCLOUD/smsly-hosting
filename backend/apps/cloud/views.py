@@ -545,6 +545,49 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
 
         return Response({'code': iac_code, 'language': 'hcl', 'provider': provider})
 
+    @action(detail=False, methods=['get'])
+    def ecosystem_prompts(self, request):
+        """
+        Debug endpoint to show all prompts used in ecosystem analysis.
+        This helps with transparency and debugging AI behavior.
+        """
+        try:
+            from services.ecosystem import get_ecosystem_prompts
+            
+            prompts = get_ecosystem_prompts()
+            
+            # Add current timestamp and context
+            response_data = {
+                'timestamp': timezone.now().isoformat(),
+                'user_id': request.user.id if request.user.is_authenticated else None,
+                'prompts': prompts,
+                'ai_providers_available': ['openai', 'anthropic', 'google', 'local'],  # Add your actual providers
+                'ecosystem_prompt_rules': {
+                    'strict_type_constraints': [
+                        'All array fields must contain ONLY strings, NEVER objects/dicts',
+                        '"depends_on" must be array of strings: ["service-1", "service-2"]',
+                        '"shared_by" must be array of strings: ["repo-a", "repo-b"]',
+                        'Service-level "addons" must be array of strings: ["POSTGRES", "REDIS"]',
+                        '"deploy_sequence" must be array of strings: ["addons", "service-a"]',
+                        '"env_vars" values must be strings only: {"KEY": "{{PLACEHOLDER}}"}'
+                    ],
+                    'critical_error_prevention': [
+                        'No nested objects inside arrays',
+                        'No unhashable types in string fields',
+                        'All service names must be strings',
+                        'All repo references must be strings'
+                    ]
+                }
+            }
+            
+            return Response(response_data)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retrieve prompts: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=False, methods=['post'])
     def ecosystem_scan(self, request):
         """
