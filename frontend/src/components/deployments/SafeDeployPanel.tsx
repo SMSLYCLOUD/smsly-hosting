@@ -112,6 +112,7 @@ export const SafeDeployPanel: React.FC<SafeDeployPanelProps> = ({ serviceId, pre
     try {
       await api.post(`/services/${serviceId}/create-preview/`, {
         branch: branchName,
+        commit_sha: commitSha,
       });
       toast({
         title: 'SafeDeploy Initiated',

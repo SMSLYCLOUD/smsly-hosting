@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MessageSquare, Fingerprint, TrendingUp, X, ArrowUpRight } from 'lucide-react';
+import { MessageSquare, Fingerprint, TrendingUp, ArrowUpRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const products = [
@@ -37,25 +37,17 @@ const products = [
     }
 ];
 
-const DISMISS_KEY = 'smsly_crosssell_dismissed';
 const ROTATE_INTERVAL = 8000;
 
 export function SmslyCrossSell() {
-    const [dismissed, setDismissed] = useState(false);
     const [currentIndex, setCurrentIndex] = useState(0);
 
     useEffect(() => {
-        if (localStorage.getItem(DISMISS_KEY)) {
-            setDismissed(true);
-            return;
-        }
         const interval = setInterval(() => {
             setCurrentIndex(prev => (prev + 1) % products.length);
         }, ROTATE_INTERVAL);
         return () => clearInterval(interval);
     }, []);
-
-    if (dismissed) return null;
 
     const product = products[currentIndex];
     const Icon = product.icon;
@@ -84,16 +76,6 @@ export function SmslyCrossSell() {
                 >
                     {product.cta} <ArrowUpRight className="w-3 h-3" />
                 </a>
-                <button
-                    onClick={() => {
-                        setDismissed(true);
-                        localStorage.setItem(DISMISS_KEY, 'true');
-                    }}
-                    className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded transition-colors"
-                    aria-label="Dismiss"
-                >
-                    <X className="w-4 h-4 text-slate-400" />
-                </button>
             </motion.div>
         </AnimatePresence>
     );
