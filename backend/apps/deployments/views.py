@@ -3128,9 +3128,9 @@ class DeploymentViewSet(viewsets.ModelViewSet):
             # Prune all stopped containers to be sure
             client.containers.prune()
 
-            # Prune dangling images to free disk space
-            image_prune_res = client.images.prune(filters={'dangling': True})
-            images_pruned = image_prune_res.get('SpaceReclaimed', 0)
+            # Prune all unused images (not just dangling) to reclaim disk space
+            image_prune_res = client.images.prune(filters={"dangling": ["false"]})
+            images_pruned = image_prune_res.get("SpaceReclaimed", 0)
 
             # ── 2b. VPS: Temp backup cleanup ──
             # Clean up stale files in /tmp/backups (older than 1h)
