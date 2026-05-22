@@ -751,6 +751,10 @@ export const systemApi = {
     });
     return response.data;
   },
+  getPlatformUpdate: async (updateId: string): Promise<any> => {
+    const response = await api.get(`/platform-updates/${updateId}/`);
+    return response.data;
+  },
   getDomainConfig: async (): Promise<any> => {
     const response = await api.get('/system/domain-config/');
     return response.data;
