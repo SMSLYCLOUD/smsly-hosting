@@ -27,8 +27,6 @@ urlpatterns = [
 
     # Auth
     path('api/v1/auth/', include('dj_rest_auth.urls')),
-    # Direct OpenAI-compatible alias
-    path('api/v1/', include('apps.intelligence.urls_openai')),
     path(
         'api/v1/auth/registration/',
         include('dj_rest_auth.registration.urls')),
@@ -51,6 +49,7 @@ if 'apps.licensing' in settings.INSTALLED_APPS:
 
 if 'apps.intelligence' in settings.INSTALLED_APPS:
     urlpatterns.append(path('api/v1/ai/', include('apps.intelligence.urls')))
+    urlpatterns.append(path('api/v1/', include('apps.intelligence.urls_openai')))
 
 # ─── Server Identity Attestation (Zero-Trust challenge-response) ──────────
 try:
