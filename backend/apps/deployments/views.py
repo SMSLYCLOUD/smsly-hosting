@@ -2460,7 +2460,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='file-browse')
     def file_browse(self, request, pk=None):
-        """List files in a directory inside the running container."""
+        """List files in a directory inside the running container (Docker or K8s)."""
         service = self.get_object()
         path = request.query_params.get('path', '/app')
 
@@ -2493,7 +2493,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
+        container_id = latest_deploy.container_id
+
+        # K8s path: container_id is "k8s://namespace/podname"
+        if container_id and container_id.startswith('k8s://'):
+            return self._k8s_file_browse(container_id, path)
+
+        if not container_id:
             return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2503,40 +2509,86 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Docker client unavailable', 'details': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            container = client.containers.get(latest_deploy.container_id)
+            container = client.containers.get(container_id)
         except Exception as e:
             return Response({'error': 'Container not found', 'details': str(e)}, status=status.HTTP_404_NOT_FOUND)
 
-            # ZH-012 FIX: Use a more robust listing command if ls -la behaves unexpectedly.
-            # We also try to handle cases where /app might not exist by falling back to /.
+        return self._exec_file_list(container, path)
+
+    def _k8s_file_browse(self, container_id: str, path: str):
+        """List files via K8s exec into the pod."""
+        try:
+            from kubernetes import client as k8s_client, config as k8s_config
+            try:
+                k8s_config.load_incluster_config()
+            except BaseException:
+                k8s_config.load_kube_config()
+            parts = container_id.replace('k8s://', '').split('/', 1)
+            namespace = parts[0] if len(parts) > 1 else 'default'
+            pod_name = parts[-1]
+            core_v1 = k8s_client.CoreV1Api()
+            exec_command = ['ls', '-la', path]
+            resp = core_v1.connect_get_namespaced_pod_exec(
+                pod_name, namespace,
+                command=exec_command,
+                stderr=True, stdin=False,
+                stdout=True, tty=False,
+            )
+            output = resp
+            if isinstance(output, bytes):
+                output = output.decode('utf-8', errors='replace')
+            if 'No such file' in output or 'cannot access' in output:
+                if path == '/app':
+                    path = '/'
+                    resp = core_v1.connect_get_namespaced_pod_exec(
+                        pod_name, namespace,
+                        command=['ls', '-la', path],
+                        stderr=True, stdin=False,
+                        stdout=True, tty=False,
+                    )
+                    output = resp
+                    if isinstance(output, bytes):
+                        output = output.decode('utf-8', errors='replace')
+                else:
+                    return Response({'error': 'Path not found'}, status=status.HTTP_400_BAD_REQUEST)
+            files = self._parse_ls_output(output)
+            return Response({'path': path, 'files': files})
+        except ImportError:
+            return Response({'error': 'Kubernetes client not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _exec_file_list(self, container, path: str):
+        """List files via Docker exec."""
+        try:
             exit_code, output = container.exec_run(["ls", "-la", path])
             if exit_code != 0 and path == '/app':
-                # Fallback to root if /app fails
                 path = '/'
                 exit_code, output = container.exec_run(["ls", "-la", path])
-
             if exit_code != 0:
                 return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
-
-            files = []
-            lines = output.decode('utf-8', errors='replace').splitlines()
-            if lines and lines[0].startswith('total'):
-                lines = lines[1:]
-
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 9:
-                    files.append({
-                        'permissions': parts[0],
-                        'user': parts[2],
-                        'size': parts[4],
-                        'date': f"{parts[5]} {parts[6]} {parts[7]}",
-                        'name': " ".join(parts[8:])
-                    })
-
+            files = self._parse_ls_output(output.decode('utf-8', errors='replace'))
             return Response({'path': path, 'files': files})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _parse_ls_output(self, output: str) -> list:
+        """Parse `ls -la` output into file dicts."""
+        files = []
+        lines = output.splitlines()
+        if lines and lines[0].startswith('total'):
+            lines = lines[1:]
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 9:
+                files.append({
+                    'permissions': parts[0],
+                    'user': parts[2],
+                    'size': parts[4],
+                    'date': f"{parts[5]} {parts[6]} {parts[7]}",
+                    'name': " ".join(parts[8:]),
+                })
+        return files
 
     @action(detail=True, methods=['get'], url_path='file-download')
     def file_download(self, request, pk=None):
