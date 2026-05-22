@@ -192,9 +192,6 @@ def _deployment_effective_server(deployment):
             srv = ManagedServer.objects.filter(private_ip=host_ip).first()
             if srv:
                 return srv
-            srv = ManagedServer.objects.filter(wg_address=host_ip).first()
-            if srv:
-                return srv
 
     return None
 
@@ -1718,7 +1715,7 @@ def _poll_remote_deployment(
 
                         # Promote to Active Service
                         service = deployment.service
-                        service.server = deployment.target_server or orchestrator.server
+                        service.server = deployment.target_server
                         service.active_target_type = target_type
                         service.active_host_ip = deployment.verified_host_ip
                         service.active_runtime_id = remote_container_id
