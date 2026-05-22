@@ -172,7 +172,28 @@ def _deployment_effective_server(deployment):
     """Return the server this deployment should use, honoring explicit local."""
     if bool(getattr(deployment, "target_is_local", False)):
         return None
-    return getattr(deployment, "target_server", None) or getattr(deployment.service, "server", None)
+
+    server = getattr(deployment, "target_server", None) or getattr(deployment.service, "server", None)
+    if server:
+        return server
+
+    # Fallback: if the service has active runtime metadata pointing to a remote
+    # node (e.g. after a prior successful remote deploy), resolve the
+    # ManagedServer from the verified host IP so redeploy stays on that node.
+    service = deployment.service
+    active_type = getattr(service, "active_target_type", None) or ""
+    if active_type.lower() in ("remote", "lite_agent"):
+        host_ip = getattr(service, "active_host_ip", None)
+        if host_ip:
+            from apps.deployments.models_core import ManagedServer
+            srv = ManagedServer.objects.filter(host=host_ip).first()
+            if srv:
+                return srv
+            srv = ManagedServer.objects.filter(private_ip=host_ip).first()
+            if srv:
+                return srv
+
+    return None
 
 
 def _is_local_deployment_server(server, config) -> bool:

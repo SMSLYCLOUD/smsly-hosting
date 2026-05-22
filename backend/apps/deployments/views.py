@@ -1203,6 +1203,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         pr_number = request.data.get('pr_number')
 
         if not branch:
+            logger.warning("create_preview: missing branch, service=%s", parent.id)
             return Response(
                 {'error': 'branch is required'},
                 status=status.HTTP_400_BAD_REQUEST)
@@ -1212,6 +1213,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             parent_service=parent, branch=branch, is_preview=True
         ).first()
         if existing:
+            logger.info("create_preview: preview already exists for service=%s branch=%s preview_id=%s", parent.id, branch, existing.id)
             return Response({
                 'error': f'Preview already exists for branch "{branch}"',
                 'preview_id': str(existing.id),
@@ -1221,15 +1223,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
         # Build preview name: pr-42-myservice or preview-feature-login-myservice
         slug_branch = re.sub(r'[^a-z0-9]+', '-', branch.lower()).strip('-')[:30]
         if pr_number:
-            preview_name = f"pr-{pr_number}-{parent.name}"[:255]
+            preview_name_base = f"pr-{pr_number}-{parent.name}"
         else:
-            preview_name = f"preview-{slug_branch}-{parent.name}"[:255]
+            preview_name_base = f"preview-{slug_branch}-{parent.name}"
 
-        # Ensure unique name
-        base_name = preview_name
+        # Leave room for counter suffix to avoid infinite loop when base is 255 chars
+        preview_name_base = preview_name_base[:240]
+        preview_name = preview_name_base
         counter = 1
         while Service.objects.filter(name=preview_name).exists():
-            preview_name = f"{base_name}-{counter}"[:255]
+            preview_name = f"{preview_name_base[:250]}-{counter}"
             counter += 1
 
         try:
@@ -1263,14 +1266,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     pr_number=pr_number,
                 )
 
-                # Copy env vars from parent
+                # Copy env vars from parent (skip any already created by signals e.g. SMSLY_API_KEY)
                 for env in parent.env_vars.all():
-                    EnvironmentVariable.objects.create(
+                    EnvironmentVariable.objects.get_or_create(
                         service=preview,
                         key=env.key,
-                        value=env.value,
-                        is_secret=env.is_secret,
-                        source=env.source,
+                        defaults={
+                            'value': env.value,
+                            'is_secret': env.is_secret,
+                            'source': env.source,
+                        }
                     )
 
                 # Create and trigger deployment
@@ -1289,6 +1294,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                         deployment_id=str(deployment.id), provider_id=str(provider.id))
 
         except (IntegrityError, ValidationError) as exc:
+            logger.error("create_preview failed for service=%s branch=%s: %s", parent.id, branch, exc)
             return Response(
                 {'error': f'Failed to create preview: {str(exc)}'},
                 status=status.HTTP_400_BAD_REQUEST)
@@ -2460,7 +2466,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='file-browse')
     def file_browse(self, request, pk=None):
-        """List files in a directory inside the running container (Docker or K8s)."""
+        """List files inside the running container (Docker, K8s, or remote node)."""
         service = self.get_object()
         path = request.query_params.get('path', '/app')
 
@@ -2474,8 +2480,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             active_server = target.get("server_obj")
             target_type = target.get("target_type")
         except Exception:
-            active_server = getattr(service, 'server', None)
-            target_type = "remote" if active_server and not active_server.is_primary else "local"
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
 
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
@@ -2572,6 +2578,31 @@ class ServiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def _resolve_remote_server(self, service, latest_deploy):
+        """
+        Fallback: resolve remote server when active_target_type is not set.
+        Checks deployment's target_server, service.server, then provider.
+        """
+        from apps.deployments.models_core import ManagedServer
+        # 1. Check deployment's target_server FK
+        if latest_deploy and latest_deploy.target_server_id:
+            target = latest_deploy.target_server
+            if not target.is_primary:
+                return target
+        # 2. Check service.server FK
+        server = getattr(service, 'server', None)
+        if server and not server.is_primary:
+            return server
+        # 3. Check if service has a remote provider
+        provider = getattr(service, 'provider', None)
+        if provider and provider.provider_type in ('REMOTE', 'LITE_AGENT'):
+            host = provider.host or getattr(provider, 'api_url', None)
+            if host:
+                return ManagedServer.objects.filter(
+                    Q(host=host) | Q(private_ip=host)
+                ).first()
+        return None
+
     def _parse_ls_output(self, output: str) -> list:
         """Parse `ls -la` output into file dicts."""
         files = []
@@ -2608,8 +2639,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
             active_server = target.get("server_obj")
             target_type = target.get("target_type")
         except Exception:
-            active_server = getattr(service, 'server', None)
-            target_type = "remote" if active_server and not active_server.is_primary else "local"
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
 
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
@@ -2620,7 +2651,6 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     path=f"/api/v1/services/{service.id}/file-download/",
                     params={'path': path},
                     timeout=30,
-                    stream=True,
                 )
                 if resp and resp.status_code == 200:
                     from django.http import StreamingHttpResponse
@@ -2655,7 +2685,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='POST',
+                    path=f"/api/v1/services/{service.id}/file-delete/",
+                    payload={'path': path},
+                    timeout=15,
+                )
+                if resp and resp.status_code == 200:
+                    return Response(resp.json())
+                return Response({'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2678,7 +2736,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='POST',
+                    path=f"/api/v1/services/{service.id}/file-mkdir/",
+                    payload={'path': path},
+                    timeout=15,
+                )
+                if resp and resp.status_code == 200:
+                    return Response(resp.json())
+                return Response({'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2702,7 +2788,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='GET',
+                    path=f"/api/v1/services/{service.id}/file-read/",
+                    params={'path': path},
+                    timeout=15,
+                )
+                if resp and resp.status_code == 200:
+                    return Response(resp.json())
+                return Response({'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -2729,7 +2843,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
-        if not latest_deploy or not latest_deploy.container_id:
+        if not latest_deploy:
+            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            try:
+                resp = orchestrator._request(
+                    method='POST',
+                    path=f"/api/v1/services/{service.id}/file-write/",
+                    payload={'path': path, 'content': content},
+                    timeout=30,
+                )
+                if resp and resp.status_code == 200:
+                    return Response(resp.json())
+                return Response({'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        if not latest_deploy.container_id:
             return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
