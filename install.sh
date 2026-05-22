@@ -5520,6 +5520,31 @@ echo -e "   Install Log: $LOG_FILE"
 echo -e "   Location:    $INSTALL_DIR"
 echo -e "   Memory:      $(free -m | awk '/^Mem:/{print $7}')MB available"
 echo -e "   Swap:        $(free -m | awk '/^Swap:/{print $2}')MB total"
+
+# ─── Custom Domain SSL Integration ───────────────────────────────────────────
+if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
+    echo -e "\n${YELLOW}[9/9] Setting up Custom Domain SSL Services...${NC}"
+    
+    # Check if custom domain SSL manager script exists
+    if [ -f "install-custom-domain-ssl.sh" ]; then
+        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+        bash install-custom-domain-ssl.sh install
+        
+        # Start the services
+        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+        
+        # Enable auto-start on boot
+        echo -e "${BLUE}  → Enabling auto-start on boot...${NC}"
+        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+        
+        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+    fi
+fi
+
+echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 if [ "$MODE_AGENT_LITE" != "true" ]; then
     echo -e "   CLI:         'smsly services list'${NC}"
 fi

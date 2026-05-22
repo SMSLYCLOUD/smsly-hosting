@@ -1,0 +1,55 @@
+[Unit]
+Description=SMSLY Custom Domain SSL Services
+Documentation=https://github.com/SMSLYCLOUD/smsly-hosting
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+# Type of service - use simple for long-running processes
+Type=simple
+# Working directory
+WorkingDirectory=/opt/smsly-hosting
+# User and group to run as
+User=root
+Group=root
+# Environment variables
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=COMPOSE_FILE=docker-compose.prod.yml
+# Restart policy - restart on failure, with exponential backoff
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+# Timeouts
+TimeoutStartSec=300
+TimeoutStopSec=60
+# Command to start the service
+ExecStart=/bin/bash /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+# Command to stop the service
+ExecStop=/bin/bash /opt/smsly-hosting/smsly-domain-ssl-manager.sh stop
+# Health check command
+ExecHealthCheck=/bin/bash -c 'docker compose -f /opt/smsly-hosting/docker-compose.prod.yml ps -q celery | xargs -r docker inspect -f "{{.State.Health.Status}}" | grep -q "healthy"'
+# Health check interval
+HealthCheckInterval=30s
+# Health check timeout
+HealthCheckTimeout=10s
+# Health check start period
+HealthCheckStartPeriod=10s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+# Log rate limiting
+LogRateLimitInterval=30s
+LogRateLimitBurst=100
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/smsly-hosting /var/log/smsly-domain-ssl.log
+ReadOnlyPaths=/usr/local/bin /usr/bin /bin
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service
