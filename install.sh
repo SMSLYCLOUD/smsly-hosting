@@ -3212,34 +3212,33 @@ PYEOF
     # Cache bust only if disk is low (already runs in the disk check above when needed).
     # Moved into case blocks below to avoid redundant double bust.
 
-    case "$UPDATE_MODE" in
-        frontend)
-            echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
-            docker compose -f "$COMPOSE_FILE" build frontend
+     case "$UPDATE_MODE" in
+         frontend)
+             echo -e "${BLUE}  → Rebuilding frontend container (cached)...${NC}"
+             docker compose -f "$COMPOSE_FILE" build frontend
              docker compose -f "$COMPOSE_FILE" up -d --no-deps frontend
-             ;;
              
-         # Custom Domain SSL Setup for Frontend Update
-         if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
-             echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-             if [ -f "install-custom-domain-ssl.sh" ]; then
-                 echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-                 bash install-custom-domain-ssl.sh install
-                 
-                 # Start the services
-                 echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-                 /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-                 
-                 # Enable auto-start on boot (if not already enabled)
-                 echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-                 /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-                 
-                 echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-             else
-                 echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+             # Custom Domain SSL Setup for Frontend Update
+             if [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode
+                 echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
+                 if [ -f "install-custom-domain-ssl.sh" ]; then
+                     echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
+                     bash install-custom-domain-ssl.sh install
+                     
+                     # Start the services
+                     echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
+                     
+                     # Enable auto-start on boot (if not already enabled)
+                     echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
+                     /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
+                     
+                     echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
+                 else
+                     echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
+                 fi
              fi
-         fi
-         ;;
+             ;;
          backend)
             echo -e "${BLUE}  → Rebuilding backend containers (cached)...${NC}"
             build_svcs="backend celery"
@@ -3470,29 +3469,6 @@ PYEOF
             ;;
     esac
      set_checkpoint "update_containers_rebuilt"
-fi
-
-# ─── Custom Domain SSL Setup for Update Mode ──────────────────────────────────
-if [ -n "$UPDATE_MODE" ] && [ "$MODE_AGENT_LITE" != "true" ]; then  # Only for master mode updates
-    echo -e "\n${YELLOW}[UPDATE] Setting up Custom Domain SSL Services...${NC}"
-    
-    # Check if custom domain SSL manager script exists
-    if [ -f "install-custom-domain-ssl.sh" ]; then
-        echo -e "${BLUE}  → Installing custom domain SSL services...${NC}"
-        bash install-custom-domain-ssl.sh install
-        
-        # Start the services
-        echo -e "${BLUE}  → Starting custom domain SSL services...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh start
-        
-        # Enable auto-start on boot (if not already enabled)
-        echo -e "${BLUE}  → Ensuring auto-start on boot...${NC}"
-        /opt/smsly-hosting/smsly-domain-ssl-manager.sh enable
-        
-        echo -e "${GREEN}  ✓ Custom domain SSL services configured${NC}"
-    else
-        echo -e "${YELLOW}  ⚠ Custom domain SSL manager not found, skipping setup${NC}"
-    fi
 fi
 
     # ─── Ensure Local Docker cloud provider exists ──────────────────────────
