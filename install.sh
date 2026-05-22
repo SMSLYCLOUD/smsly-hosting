@@ -3723,7 +3723,6 @@ ${cf_known_stanza}
         reverse_proxy nginx:80
     }
     handle {
-        rewrite * /notice
         reverse_proxy nginx:80
     }
 }
