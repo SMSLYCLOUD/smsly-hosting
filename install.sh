@@ -1516,7 +1516,8 @@ reconcile_compose_stack_after_resume() {
     reconcile_rc=$?
     if [ "$reconcile_rc" -ne 0 ]; then
         echo -e "${YELLOW}  -> Compose reconciliation needs a rebuild; rebuilding stack...${NC}"
-        docker compose -f "$COMPOSE_FILE" build
+        echo -e "${YELLOW}    ↳ Rebuilding with --no-cache to ensure clean state...${NC}"
+        docker compose -f "$COMPOSE_FILE" build --no-cache
         reconcile_rc=$?
         if [ "$reconcile_rc" -eq 0 ]; then
             docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
@@ -4665,7 +4666,7 @@ fi
     ( while true; do sleep 30; echo -e "${BLUE}      ↳ Progress: Deployment in progress... $(date +%H:%M:%S)${NC}"; done ) &
     HEARTBEAT_PID=$!
     set +e
-    docker compose -f "$COMPOSE_FILE" build
+    docker compose -f "$COMPOSE_FILE" build --no-cache
     DEPLOY_RC=$?
     if [ "$DEPLOY_RC" -eq 0 ]; then
         docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
@@ -4908,7 +4909,7 @@ EOF
 
     # Build and start Caddy container
     echo -e "${BLUE}  → Building and starting Caddy container...${NC}"
-    if ! docker compose -f "$COMPOSE_FILE" build caddy; then
+    if ! docker compose -f "$COMPOSE_FILE" build --no-cache caddy; then
         echo -e "${RED}ERROR: Caddy image build failed.${NC}"
         echo -e "${YELLOW}This may be due to a Go version mismatch, missing module, or Dockerfile error.${NC}"
         echo -e "${YELLOW}Check the build logs above for the exact failing stage.${NC}"
