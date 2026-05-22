@@ -1,4 +1,5 @@
 """Views module."""
+import logging
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,6 +8,8 @@ from .models import Team, TeamMember
 from .serializers import TeamSerializer, InviteMemberSerializer, TeamMemberSerializer
 from django.core.mail import send_mail
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -40,6 +43,7 @@ class TeamViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], serializer_class=InviteMemberSerializer)
     def invite_member(self, request, pk=None):
+        logger.info("invite_member called: user=%s team_pk=%s", request.user, pk)
         team = self.get_object()
         # M-4 fix: only team admins can invite members
         if not TeamMember.objects.filter(

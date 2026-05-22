@@ -19,6 +19,7 @@ export const metadata: Metadata = {
 };
 
 import { FloatingAI } from "@/components/ai/FloatingAI";
+import { ThreeCompat } from "@/components/three-compat";
 import { SpaceOpsBackground } from "@/components/effects/SpaceOpsBackground";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
@@ -50,6 +51,7 @@ export default function RootLayout({
                     <Footer />
                   </main>
                   <FloatingAI />
+                  <ThreeCompat />
                   <PoweredByBadge />
                   <Toaster />
                   </SpaceOpsProvider>
