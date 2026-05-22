@@ -4585,7 +4585,7 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
         # Trigger async restore
         from apps.deployments.tasks import restore_server_backup_task
-        restore_server_backup_task.delay(backup_id=str(backup.id))
+        restore_server_backup_task.delay(backup_id=str(backup.id), requesting_user_id=request.user.id)
 
         return Response({
             'status': 'Restore started from uploaded backup.',

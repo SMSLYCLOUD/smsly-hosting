@@ -688,7 +688,7 @@ class BackupService:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
-    def restore_server(self, backup_id):
+    def restore_server(self, backup_id, requesting_user_id=None):
         """
         Restore full server from backup.
         NOTE: This typically runs on a fresh server or replaces current state.
@@ -706,6 +706,15 @@ class BackupService:
         temp_dir = os.path.join(os.path.dirname(archive_path), f"restore_srv_{uuid.uuid4().hex}")
         os.makedirs(temp_dir, exist_ok=True)
 
+        # Resolve owner for single-service backup restores
+        owner = None
+        if requesting_user_id is not None:
+            from django.contrib.auth import get_user_model
+            try:
+                owner = get_user_model().objects.get(id=requesting_user_id)
+            except get_user_model().DoesNotExist:
+                pass
+
         try:
             with tarfile.open(archive_path, "r:gz") as tar:
                 for member in tar.getmembers():
@@ -719,14 +728,18 @@ class BackupService:
             # OR we only restore data tables.
             # For the requirements, "Implement server restore path" likely implies restoring services.
 
-            # Restore Services
+            # Check if this is a full server backup (services/ dir) or a single service backup
             services_dir = os.path.join(temp_dir, "services")
+            metadata_path = os.path.join(temp_dir, "metadata.json")
             if os.path.exists(services_dir):
                 for filename in os.listdir(services_dir):
                     if filename.endswith(".tar.gz"):
-                        # We need to "fake" a ServiceBackup object or just use the logic directly
-                        # Helper to restore from file
-                        self._restore_service_from_file(os.path.join(services_dir, filename))
+                        self._restore_service_from_file(os.path.join(services_dir, filename), owner=owner)
+            elif os.path.exists(metadata_path):
+                logger.info("Detected single-service backup archive. Restoring directly.")
+                self._restore_service_from_file(archive_path, owner=owner)
+            else:
+                logger.warning("Server backup archive contains neither a services/ directory nor a metadata.json — nothing to restore.")
 
         finally:
             if temp_dir and os.path.exists(temp_dir):

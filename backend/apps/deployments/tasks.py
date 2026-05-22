@@ -3722,9 +3722,9 @@ def restore_service_backup_task(self, backup_id, target_service_id=None, request
     )
 
 @shared_task(bind=True, soft_time_limit=7200, time_limit=7500)
-def restore_server_backup_task(self, backup_id):
+def restore_server_backup_task(self, backup_id, requesting_user_id=None):
     backup_service = BackupService()
-    backup_service.restore_server(backup_id=backup_id)
+    backup_service.restore_server(backup_id=backup_id, requesting_user_id=requesting_user_id)
 
 @shared_task
 def cleanup_old_backups_task():
