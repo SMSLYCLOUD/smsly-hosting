@@ -2470,9 +2470,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
         service = self.get_object()
         path = request.query_params.get('path', '/app')
 
+        # Validate and sanitize path to prevent directory traversal attacks
+        try:
+            normalized_path = self._validate_and_sanitize_path(path)
+            if normalized_path is None:
+                return Response({
+                    'error': 'Invalid path',
+                    'details': 'Path contains potentially dangerous characters or sequences'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({
+                'error': 'Path validation failed',
+                'details': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
-            return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'error': 'No active deployment',
+                'details': f'Deployment {service.id} has no active deployments'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             from apps.deployments.utils_target import resolve_active_execution_target
@@ -4755,3 +4772,73 @@ class RemoteTriggerView(GenericAPIView):
         except Exception as e:
             logger.exception("Remote trigger failed")
             return Response({"error": str(e)}, status=500)
+
+
+    def _validate_and_sanitize_path(self, path: str) -> str:
+        """
+        Validate and sanitize file system paths to prevent directory traversal attacks.
+        
+        Args:
+            path: The file path to validate
+            
+        Returns:
+            str: Sanitized path if valid, None if invalid
+            
+        Raises:
+            ValueError: If path contains dangerous characters or sequences
+        """
+        import os.path
+        import re
+        
+        if not path or not isinstance(path, str):
+            raise ValueError("Path must be a non-empty string")
+        
+        # Check for path traversal attempts
+        dangerous_patterns = [
+            r'\.\./',  # Parent directory traversal
+            r'\.\.\\',  # Windows-style parent directory traversal
+            r'[/\\]\.\.[/\\]',  # Any parent directory traversal
+            r'^\.\./',  # Starting with parent directory
+            r'/\.\.$',  # Ending with parent directory
+            r'[/\\]\.\.$',  # Ending with parent directory (Windows)
+        ]
+        
+        for pattern in dangerous_patterns:
+            if re.search(pattern, path):
+                raise ValueError(f"Path contains potentially dangerous sequence: {pattern}")
+        
+        # Check for null bytes or other control characters
+        if '\x00' in path:
+            raise ValueError("Path contains null bytes")
+        
+        # Normalize path separators
+        normalized_path = path.replace('\\', '/')
+        
+        # Ensure absolute path
+        if not normalized_path.startswith('/'):
+            normalized_path = '/' + normalized_path
+        
+        # Remove duplicate slashes
+        normalized_path = re.sub(r'/+', '/', normalized_path)
+        
+        # Check if path is within reasonable bounds
+        if len(normalized_path) > 4096:  # Max path length
+            raise ValueError("Path is too long")
+        
+        # Check for potentially dangerous characters
+        dangerous_chars = ['<', '>', '|', '?', '*', '"']
+        for char in dangerous_chars:
+            if char in normalized_path:
+                raise ValueError(f"Path contains dangerous character: {char}")
+        
+        # Validate that the path doesn't contain environment variables
+        if '$' in normalized_path and '{' in normalized_path and '}' in normalized_path:
+            raise ValueError("Path contains environment variables")
+        
+        # Additional security check: ensure path doesn't attempt to access system files
+        system_directories = ['/etc', '/usr', '/bin', '/sbin', '/var', '/sys', '/proc', '/dev']
+        for sys_dir in system_directories:
+            if normalized_path.startswith(sys_dir):
+                raise ValueError(f"Access to system directory '{sys_dir}' is not allowed")
+        
+        return normalized_path

@@ -594,12 +594,56 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _authenticate_token(self, token_key):
-        """Validate token and return user."""
+        """Validate token and return user with enhanced error handling."""
         from rest_framework.authtoken.models import Token
+        from django.core.cache import cache
+        import hashlib
+        
+        if not token_key or not isinstance(token_key, str):
+            logger.warning("Invalid token format: %s", type(token_key))
+            return None
+        
+        # Basic token format validation (should be 40 chars hex)
+        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
+            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
+            return None
+        
+        # Check for common invalid token patterns
+        if token_key.startswith('0') * 40 or token_key == '0' * 40:
+            logger.warning("Invalid token pattern detected")
+            return None
+        
+        # Use cache to reduce database load for invalid tokens
+        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+        if cache.get(cache_key):
+            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
+            return None
+        
         try:
             token = Token.objects.select_related('user').get(key=token_key)
+            
+            # Additional validation: check if user is active
+            if not token.user.is_active:
+                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            # Check if user has required permissions
+            if not token.user.has_perm('deployments.view_deployment'):
+                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
+            
         except Token.DoesNotExist:
+            logger.warning("Token not found: %s", token_key[:10] + '...')
+            # Cache the invalid token to prevent repeated database hits
+            cache.set(cache_key, True, 300)  # Cache for 5 minutes
+            return None
+        except Exception as e:
+            logger.error("Error during token authentication: %s", e, exc_info=True)
             return None
 
     @database_sync_to_async
@@ -724,11 +768,56 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _authenticate_token(self, token_key):
+        """Validate token and return user with enhanced error handling."""
         from rest_framework.authtoken.models import Token
+        from django.core.cache import cache
+        import hashlib
+        
+        if not token_key or not isinstance(token_key, str):
+            logger.warning("Invalid token format: %s", type(token_key))
+            return None
+        
+        # Basic token format validation (should be 40 chars hex)
+        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
+            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
+            return None
+        
+        # Check for common invalid token patterns
+        if token_key.startswith('0') * 40 or token_key == '0' * 40:
+            logger.warning("Invalid token pattern detected")
+            return None
+        
+        # Use cache to reduce database load for invalid tokens
+        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+        if cache.get(cache_key):
+            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
+            return None
+        
         try:
             token = Token.objects.select_related('user').get(key=token_key)
+            
+            # Additional validation: check if user is active
+            if not token.user.is_active:
+                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            # Check if user has required permissions
+            if not token.user.has_perm('deployments.view_deployment'):
+                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
+            
         except Token.DoesNotExist:
+            logger.warning("Token not found: %s", token_key[:10] + '...')
+            # Cache the invalid token to prevent repeated database hits
+            cache.set(cache_key, True, 300)  # Cache for 5 minutes
+            return None
+        except Exception as e:
+            logger.error("Error during token authentication: %s", e, exc_info=True)
             return None
 
     @database_sync_to_async
@@ -861,12 +950,56 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _authenticate_token(self, token_key):
-        """Validate token and return user."""
+        """Validate token and return user with enhanced error handling."""
         from rest_framework.authtoken.models import Token
+        from django.core.cache import cache
+        import hashlib
+        
+        if not token_key or not isinstance(token_key, str):
+            logger.warning("Invalid token format: %s", type(token_key))
+            return None
+        
+        # Basic token format validation (should be 40 chars hex)
+        if len(token_key) != 40 or not all(c in '0123456789abcdef' for c in token_key):
+            logger.warning("Token format validation failed: %s", token_key[:10] + '...')
+            return None
+        
+        # Check for common invalid token patterns
+        if token_key.startswith('0') * 40 or token_key == '0' * 40:
+            logger.warning("Invalid token pattern detected")
+            return None
+        
+        # Use cache to reduce database load for invalid tokens
+        cache_key = f'invalid_token:{hashlib.sha256(token_key.encode()).hexdigest()}'
+        if cache.get(cache_key):
+            logger.info("Token found in invalid cache: %s", token_key[:10] + '...')
+            return None
+        
         try:
             token = Token.objects.select_related('user').get(key=token_key)
+            
+            # Additional validation: check if user is active
+            if not token.user.is_active:
+                logger.warning("User account inactive for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            # Check if user has required permissions
+            if not token.user.has_perm('deployments.view_deployment'):
+                logger.warning("User lacks required permissions for token: %s", token_key[:10] + '...')
+                cache.set(cache_key, True, 300)  # Cache for 5 minutes
+                return None
+            
+            logger.debug("Token validated successfully for user: %s", token.user.username)
             return token.user
+            
         except Token.DoesNotExist:
+            logger.warning("Token not found: %s", token_key[:10] + '...')
+            # Cache the invalid token to prevent repeated database hits
+            cache.set(cache_key, True, 300)  # Cache for 5 minutes
+            return None
+        except Exception as e:
+            logger.error("Error during token authentication: %s", e, exc_info=True)
             return None
 
     @database_sync_to_async
