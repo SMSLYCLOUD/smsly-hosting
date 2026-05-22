@@ -737,7 +737,10 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": "GitHub not connected. Please link your GitHub account first."}
 
     try:
-        return scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos)
+        logger.info(f"Starting ecosystem scan for user {user_id} with selected_repos: {selected_repos}")
+        result = scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos)
+        logger.info(f"Ecosystem scan completed successfully for user {user_id}")
+        return result
     except SoftTimeLimitExceeded:
         logger.warning("Ecosystem scan timed out for user %s", user_id, exc_info=True)
         return {
@@ -746,10 +749,13 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
                 "Retry the scan; large accounts may take several minutes."
             ),
             "code": "ecosystem_scan_timeout",
-            "retryable": True,
+            "services": [],
+            "addons": [],
+            "deploy_sequence": [],
+            "ai_provider": "None",
         }
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.exception("Ecosystem scan failed for user %s: %s", user_id, exc)
+    except Exception as exc:
+        logger.exception("Ecosystem scan failed unexpectedly for user %s: %s", user_id, exc)
         return {"error": f"Scan failed: {str(exc)}"}
 
 
