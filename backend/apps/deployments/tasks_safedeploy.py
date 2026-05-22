@@ -35,7 +35,13 @@ def create_preview_environment_job(preview_id: str):
         preview.save()
         create_database_clone_job.delay(preview_id)
     except Exception as e:
-        pass
+        logger.error(f"Error in create_preview_environment_job: {e}", exc_info=True)
+        try:
+            p = PreviewEnvironment.objects.get(id=preview_id)
+            p.status = PreviewEnvironment.Status.BUILD_FAILED
+            p.save()
+        except:
+            pass
 
 @shared_task
 def create_database_clone_job(preview_id: str):
@@ -73,7 +79,13 @@ def create_database_clone_job(preview_id: str):
             preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
             preview.save()
     except Exception as e:
-        pass
+        logger.error(f"Error in create_database_clone_job: {e}", exc_info=True)
+        try:
+            p = PreviewEnvironment.objects.get(id=preview_id)
+            p.status = PreviewEnvironment.Status.DB_CLONE_FAILED
+            p.save()
+        except:
+            pass
 
 @shared_task
 def run_migration_validation_job(preview_id: str):
@@ -266,6 +278,9 @@ def run_preview_health_check_job(preview_id: str):
                         new_addon.connection_url = preview.database_clone.clone_database_url_secret_ref
                         new_addon.status = Addon.Status.ACTIVE
                         new_addon.save()
+                else:
+                    from apps.deployments.tasks import provision_addon_task
+                    provision_addon_task.delay(str(new_addon.id))
 
             # 4. Trigger Deployment
             deployment = Deployment.objects.create(
@@ -274,7 +289,8 @@ def run_preview_health_check_job(preview_id: str):
                 commit_message=f"SafeDeploy preview for {preview.branch_name}",
                 triggered_by='safe_deploy'
             )
-            enqueue_smart_deploy_task(str(deployment.id), str(parent.provider.id))
+            provider_id = str(parent.provider.id) if parent.provider else None
+            enqueue_smart_deploy_task(str(deployment.id), provider_id)
 
         preview.status = PreviewEnvironment.Status.READY
         preview.save()
