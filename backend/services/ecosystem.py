@@ -9,7 +9,7 @@ can be executed with zero manual configuration.
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 
 import requests
 import tempfile
@@ -25,6 +25,17 @@ logger = logging.getLogger(__name__)
 # Remaining calls are checked before each paginated fetch.
 _GITHUB_API_BASE = "https://api.github.com"
 _RATE_LIMIT_WARN_THRESHOLD = 100  # Warn below this many remaining calls
+
+
+def _safe_set(items: Iterable) -> set:
+    """Build a set from an iterable, converting unhashable items to their str representation."""
+    result: set = set()
+    for item in items:
+        try:
+            result.add(item)
+        except TypeError:
+            result.add(str(item))
+    return result
 
 
 def _check_github_rate_limit(headers: dict) -> tuple[int, int]:
@@ -280,8 +291,8 @@ def _detect_addons_from_imports(clone_dir: str) -> dict:
 
     return {
         "addons": addons,
-        "api_calls": list(set(api_calls))[:20],  # Dedupe + cap
-        "frameworks": list(set(frameworks)),
+        "api_calls": list(_safe_set(api_calls))[:20],  # Dedupe + cap
+        "frameworks": list(_safe_set(frameworks)),
     }
 
 
@@ -640,10 +651,10 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             if not cd: continue
             
             # Look for environment variable overlaps
-            current_vars = set(rd.get('env_vars_context', {}).keys())
+            current_vars = _safe_set(rd.get('env_vars_context', {}).keys())
             for other_rd in repos_data:
                 if other_rd['repo'] == rd['repo']: continue
-                other_vars = set(other_rd.get('env_vars_context', {}).keys())
+                other_vars = _safe_set(other_rd.get('env_vars_context', {}).keys())
                 common = current_vars.intersection(other_vars)
                 if common:
                     cross_links.append(f"SHARED STATE: {rd['repo']} and {other_rd['repo']} share env keys: {list(common)}")
@@ -656,11 +667,13 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
                         cross_links.append(f"DEPENDENCY HINT: {rd['repo']} mentions {other} in {path} (Potential URL target)")
 
         try:
-            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links)) if cross_links else ""
+            cross_links_deduped = _safe_set(cross_links)
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(cross_links_deduped) if cross_links_deduped else ""
         except TypeError as exc:
             logger.warning("Unhashable cross_links entry: %s", exc)
             cross_links_safe = [str(x) for x in cross_links]
-            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(set(cross_links_safe)) if cross_links_safe else ""
+            cross_links_deduped = _safe_set(cross_links_safe)
+            brief_header = "ECOSYSTEM DISCOVERY HINTS:\n" + "\n".join(cross_links_deduped) if cross_links_deduped else ""
         full_prompt = f"### ECOSYSTEM ARCHITECTURAL BRIEF\n{brief_header}\n\n"
         full_prompt += "### REPOSITORY DETAILS\n" + "\n".join(repo_summaries)
 
@@ -679,10 +692,14 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         json_str = response_text[start_idx:end_idx+1]
         plan = json.loads(json_str)
         if isinstance(plan, dict) and isinstance(plan.get("services"), list):
-            # 5. Apply the Senate's environment resolutions
+            # Ensure each service is a dict with sanitized list fields
+            sanitized_services = []
             for svc in plan["services"]:
-                if isinstance(svc, dict):
-                    _normalize_service_plan_fields(svc)
+                if not isinstance(svc, dict):
+                    continue
+                _normalize_service_plan_fields(svc)
+                sanitized_services.append(svc)
+            plan["services"] = sanitized_services
             
             _apply_plan_repo_defaults(plan["services"], repos_data)
             _apply_generic_ecosystem_intelligence(plan["services"])
@@ -729,7 +746,12 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         plan = analyze_ecosystem(chunk, github_token, ai_provider)
         
         services = plan.get("services", [])
-        global_services.extend(services)
+        if not isinstance(services, list):
+            services = []
+        # Defensive: skip non-dict entries from AI responses
+        for svc in services:
+            if isinstance(svc, dict):
+                global_services.append(svc)
         
         for addon in plan.get("addons", []):
             if isinstance(addon, dict):
@@ -778,23 +800,41 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
             if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
                 json_str = response_text[start_idx:end_idx+1]
                 synth_plan = json.loads(json_str)
-                if isinstance(synth_plan.get("services"), list):
-                    global_services = synth_plan["services"]
-                if isinstance(synth_plan.get("addons"), list):
-                    global_addons = synth_plan["addons"]
+                raw_svcs = synth_plan.get("services")
+                if isinstance(raw_svcs, list):
+                    global_services = [s for s in raw_svcs if isinstance(s, dict)]
+                raw_addons = synth_plan.get("addons")
+                if isinstance(raw_addons, list):
+                    global_addons = [a for a in raw_addons if isinstance(a, dict)]
         except Exception as e:
             logger.warning(f"Synthesis pass failed, using raw merged plan: {e}")
 
-    # Re-apply strict generic normalization so the backend doesn't crash on bad JSON formats
+    # Strictly sanitize services: strip non-dicts, normalize each, build a clean list
+    sanitized_services = []
     for svc in global_services:
-        if isinstance(svc, dict):
+        if not isinstance(svc, dict):
+            continue
+        try:
             _normalize_service_plan_fields(svc)
-            
+            sanitized_services.append(svc)
+        except Exception as exc:
+            logger.warning("Skipping unprocessable service %r: %s", svc.get("repo", "?"), exc)
+    global_services = sanitized_services
+    
     _apply_plan_repo_defaults(global_services, repos_data)
     _apply_generic_ecosystem_intelligence(global_services)
     
-    final_addons = _rebuild_addons_manifest(global_services, global_addons)
-    deploy_sequence = _build_deploy_sequence(global_services)
+    try:
+        final_addons = _rebuild_addons_manifest(global_services, global_addons)
+    except Exception as exc:
+        logger.warning("Addon manifest rebuild failed: %s", exc)
+        final_addons = []
+    
+    try:
+        deploy_sequence = _build_deploy_sequence(global_services)
+    except Exception as exc:
+        logger.warning("Deploy sequence build failed: %s", exc)
+        deploy_sequence = ["addons"]
     
     return {
         "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
@@ -1039,7 +1079,10 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
             for svc_name in _coerce_depends_on(addon.get("shared_by", []) or []):
                 svc_text = str(svc_name or "").strip()
                 if svc_text:
-                    addon_map[addon_type].add(svc_text)
+                    try:
+                        addon_map[addon_type].add(svc_text)
+                    except TypeError:
+                        logger.warning("Unhashable svc_text for addon %r: %r", addon_type, svc_text)
 
     for service in services:
         if not isinstance(service, dict) or service.get("skip"):
@@ -1052,12 +1095,19 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
         for addon_type in normalized_addons:
             if not addon_type:
                 continue
-            addon_map.setdefault(addon_type, set()).add(service_name)
+            try:
+                addon_map.setdefault(addon_type, set()).add(service_name)
+            except TypeError:
+                logger.warning("Unhashable addon_type or service_name: %r / %r", addon_type, service_name)
 
-    return [
-        {"type": addon_type, "shared_by": sorted(shared_by)}
-        for addon_type, shared_by in sorted(addon_map.items())
-    ]
+    try:
+        return [
+            {"type": addon_type, "shared_by": sorted(shared_by)}
+            for addon_type, shared_by in sorted(addon_map.items())
+        ]
+    except TypeError as exc:
+        logger.warning("Unhashable key in addon_map: %s", exc)
+        return []
 
 
 def _apply_generic_ecosystem_intelligence(services: List[dict]):
@@ -1311,7 +1361,30 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
     Returns the deploy plan dict ready for the frontend.
     """
     logger.info("Starting ecosystem scan...")
+    try:
+        return _scan_and_analyze_impl(token, ai_provider=ai_provider, selected_repos=selected_repos)
+    except TypeError as exc:
+        logger.exception("Ecosystem scan failed with unhashable type error: %s", exc)
+        return {
+            "error": f"Scan failed: {str(exc)}. This is usually caused by unexpected AI response data.",
+            "services": [],
+            "addons": [],
+            "deploy_sequence": [],
+            "ai_provider": "None",
+        }
+    except Exception as exc:
+        logger.exception("Ecosystem scan failed unexpectedly: %s", exc)
+        return {
+            "error": f"Scan failed: {str(exc)}",
+            "services": [],
+            "addons": [],
+            "deploy_sequence": [],
+            "ai_provider": "None",
+        }
 
+
+def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: list = None) -> dict:
+    """Internal implementation of scan_and_analyze."""
     # 1. Fetch all repos
     all_repos = fetch_all_repos(token)
     logger.info("Found %d repositories", len(all_repos))
