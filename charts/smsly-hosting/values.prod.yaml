@@ -1,0 +1,101 @@
+# Production values for smsly-hosting Helm chart.
+# Usage: helm upgrade --install smsly-hosting ./charts/smsly-hosting -f values.prod.yaml
+global:
+  domain: "smsly.cloud"
+  environment: "production"
+
+backend:
+  replicaCount: 2
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 384Mi
+
+frontend:
+  replicaCount: 2
+  nextPublicApiUrl: "https://smsly.cloud/api/v1"
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+celery:
+  enabled: true
+  workers:
+    default:
+      concurrency: 8
+      queues: "celery"
+      replicaCount: 2
+    fast:
+      concurrency: 8
+      queues: "fast"
+      replicaCount: 1
+    deploy:
+      concurrency: 8
+      queues: "deploy"
+      replicaCount: 1
+
+postgresql:
+  primary:
+    persistence:
+      size: 100Gi
+
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+  hosts:
+    - host: smsly.cloud
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: backend
+        - path: /admin
+          pathType: Prefix
+          backend: backend
+        - path: /ws
+          pathType: Prefix
+          backend: backend
+        - path: /health
+          pathType: Prefix
+          backend: backend
+        - path: /static
+          pathType: Prefix
+          backend: backend
+        - path: /media
+          pathType: Prefix
+          backend: backend
+        - path: /
+          pathType: Prefix
+          backend: frontend
+  tls:
+    enabled: true
+
+observability:
+  enabled: true
+  prometheus:
+    retention: 30d
+  grafana:
+    enabled: true
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  persistence:
+    size: 100Gi

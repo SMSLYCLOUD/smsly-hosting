@@ -3,27 +3,74 @@ kind: Deployment
 metadata:
   name: {{ include "smsly-hosting.fullname" . }}-frontend
   labels:
-    app: {{ include "smsly-hosting.name" . }}-frontend
+    app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-frontend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: frontend
 spec:
   replicas: {{ .Values.frontend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
-      app: {{ include "smsly-hosting.name" . }}-frontend
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-frontend
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: {{ include "smsly-hosting.name" . }}-frontend
+        app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-frontend
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: frontend
     spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-backend
+          image: "{{ .Values.global.imageRegistry }}busybox:1.36"
+          command:
+            - sh
+            - -c
+            - |
+              until wget -q --spider http://{{ include "smsly-hosting.fullname" . }}-backend:{{ .Values.backend.service.port }}/health; do
+                echo "Waiting for backend..."
+                sleep 2
+              done
       containers:
         - name: frontend
-          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 3000
+              containerPort: {{ .Values.frontend.service.port }}
               protocol: TCP
           env:
             - name: NEXT_PUBLIC_API_URL
-              value: "https://{{ .Values.global.domain }}/api/v1"
+              value: "{{ .Values.frontend.nextPublicApiUrl }}"
+            - name: INTERNAL_API_URL
+              value: "http://{{ include "smsly-hosting.fullname" . }}-backend:{{ .Values.backend.service.port }}"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: "{{ .Values.frontend.service.port }}"
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.frontend.healthcheck.path }}
+              port: {{ .Values.frontend.service.port }}
+            initialDelaySeconds: {{ .Values.frontend.healthcheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.frontend.healthcheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.frontend.healthcheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.frontend.healthcheck.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.frontend.healthcheck.path }}
+              port: {{ .Values.frontend.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            successThreshold: 1
           resources:
             {{- toYaml .Values.frontend.resources | nindent 12 }}

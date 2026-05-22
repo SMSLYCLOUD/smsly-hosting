@@ -1,0 +1,68 @@
+name: Deploy Helm Chart
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
+      helm_values_file:
+        description: "Helm values file (relative to repo root)"
+        required: false
+        default: "charts/smsly-hosting/values.prod.yaml"
+      image_tag:
+        description: "Image tag to deploy"
+        required: false
+        default: "latest"
+  push:
+    branches: [ "main" ]
+    paths:
+      - "charts/smsly-hosting/**"
+      - ".github/workflows/deploy-helm.yml"
+
+jobs:
+  helm-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy via deploy-agent
+        uses: appleboy/ssh-action@v1.2.1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          timeout: 900s
+          script: |
+            set -e
+            cd /opt/smsly-hosting
+
+            echo "=== Pulling latest code ==="
+            git pull origin main
+
+            echo "=== Building images ==="
+            docker compose build backend frontend
+
+            echo "=== Deploying via deploy-agent ==="
+            python scripts/deploy-agent.py install \
+              --set backend.image.tag=${{ github.sha }} \
+              --set frontend.image.tag=${{ github.sha }}
+
+            echo "=== Running health check ==="
+            sleep 10
+            kubectl wait --for=condition=available --timeout=120s \
+              -n smsly-system deployment -l app.kubernetes.io/instance=smsly-hosting
+
+            echo "=== Deploy complete ==="

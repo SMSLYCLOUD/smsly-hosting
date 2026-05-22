@@ -1,6 +1,9 @@
 """
 Inline autoscaler views — serves status, history, config, trigger,
 scale-out/in decisions, and health checks.
+
+Supports both Docker Compose and K3s/Kubernetes modes.
+Auto-detects the runtime and uses the appropriate scaling API.
 """
 import json
 import logging
@@ -13,6 +16,22 @@ from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
+
+# K8s support
+try:
+    from kubernetes import client as k8s_client, config as k8s_config
+    K8S_AVAILABLE = False
+    try:
+        k8s_config.load_incluster_config()
+        K8S_AVAILABLE = True
+    except BaseException:
+        try:
+            k8s_config.load_kube_config()
+            K8S_AVAILABLE = True
+        except BaseException:
+            pass
+except ImportError:
+    K8S_AVAILABLE = False
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
@@ -36,7 +55,64 @@ START_TIME = time.time()
 
 # ── Docker helpers ───────────────────────────────────────────────────────────
 def _docker_stats():
-    """Collect container metrics via `docker stats --no-stream`."""
+    """Collect container metrics. Uses K8s metrics API when on K3s, falls back to docker stats."""
+    if K8S_AVAILABLE:
+        return _k8s_stats()
+    return _docker_stats_legacy()
+
+def _k8s_stats():
+    """Collect pod metrics from the Kubernetes Metrics API."""
+    try:
+        metrics_api = k8s_client.CustomObjectsApi()
+        pod_metrics = metrics_api.list_cluster_custom_object(
+            group="metrics.k8s.io", version="v1beta1", plural="pods"
+        )
+        containers = {}
+        for pod in pod_metrics.get("items", []):
+            name = pod["metadata"]["name"]
+            total_cpu = 0
+            total_mem = 0
+            for container in pod.get("containers", []):
+                cpu_raw = container["usage"].get("cpu", "0")
+                mem_raw = container["usage"].get("memory", "0")
+                total_cpu += _parse_k8s_cpu(cpu_raw)
+                total_mem += _parse_k8s_memory(mem_raw)
+            containers[name] = {
+                "cpu_percent": round(total_cpu, 1),
+                "memory_mb": round(total_mem, 1),
+                "memory_limit_mb": 0,
+                "memory_percent": 0,
+                "net_rx_mb": 0,
+                "net_tx_mb": 0,
+                "pids": 0,
+            }
+        return containers
+    except Exception as exc:
+        logger.warning("K8s metrics API unavailable, falling back to docker stats: %s", exc)
+        return _docker_stats_legacy()
+
+def _parse_k8s_cpu(cpu_str: str) -> float:
+    """Parse K8s CPU string (e.g. '100m', '1') to millicores float."""
+    cpu_str = cpu_str.strip()
+    if cpu_str.endswith("m"):
+        return float(cpu_str[:-1])
+    return float(cpu_str) * 1000
+
+def _parse_k8s_memory(mem_str: str) -> float:
+    """Parse K8s memory string (e.g. '128Mi', '1Gi', '512Ki') to MiB."""
+    mem_str = mem_str.strip()
+    if mem_str.endswith("Ki"):
+        return float(mem_str[:-2]) / 1024
+    if mem_str.endswith("Mi"):
+        return float(mem_str[:-2])
+    if mem_str.endswith("Gi"):
+        return float(mem_str[:-2]) * 1024
+    if mem_str.endswith("Ti"):
+        return float(mem_str[:-2]) * 1024 * 1024
+    return float(mem_str) / (1024 * 1024)
+
+def _docker_stats_legacy():
+    """Collect container metrics via `docker stats --no-stream` (legacy Docker Compose mode)."""
     try:
         result = subprocess.run(
             ["docker", "stats", "--no-stream", "--format",
@@ -289,14 +365,27 @@ def _decide_scaling(services: dict) -> list[dict]:
     return actions
 
 
-# ── Apply scaling via Docker SDK ─────────────────────────────────────────────
+# ── Apply scaling via Docker SDK or K8s API ───────────────────────────────────
 def _apply_scaling(decision: dict):
     """
-    Execute a scale_up or scale_down using the Docker SDK.
+    Execute a scale_up or scale_down.
+    Uses K8s API when on K3s cluster, falls back to Docker SDK.
     """
     name = decision["container"]
     target = decision["target_workers"]
     action = decision["action"]
+
+    if K8S_AVAILABLE:
+        try:
+            apps_v1 = k8s_client.AppsV1Api()
+            namespace = "default"
+            deployment = apps_v1.read_namespaced_deployment(name, namespace)
+            deployment.spec.replicas = target
+            apps_v1.patch_namespaced_deployment(name, namespace, deployment)
+            logger.info("Autoscaler: Scaled K8s deployment %s/%s to %d", namespace, name, target)
+        except Exception as exc:
+            logger.error("Autoscaler K8s scaling failed for %s: %s", name, exc)
+        return
 
     try:
         import docker
@@ -308,10 +397,6 @@ def _apply_scaling(decision: dict):
             service.scale(target)
             logger.info("Autoscaler: Scaled Swarm service %s to %d", name, target)
         except Exception:
-            # If not a swarm service, maybe it's a standalone container?
-            # Standalone containers don't have 'scale' in the same way.
-            # We would usually need docker-compose or similar to orchestrate multiple replicas.
-            # For now, we log the intent.
             logger.warning("Autoscaler: Scaling for non-swarm container %s requested, but not fully implemented.", name)
             
         logger.info(

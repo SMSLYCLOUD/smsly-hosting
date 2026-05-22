@@ -1,15 +1,7 @@
-{{/*
-Expand the name of the chart.
-*/}}
 {{- define "smsly-hosting.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
-*/}}
 {{- define "smsly-hosting.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
@@ -21,4 +13,18 @@ If release name contains chart name it will be used as a full name.
 {{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{- define "smsly-hosting.labels" -}}
+helm.sh/chart: {{ include "smsly-hosting.name" . }}-{{ .Chart.Version | replace "+" "_" }}
+{{ include "smsly-hosting.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- define "smsly-hosting.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
