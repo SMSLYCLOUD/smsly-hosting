@@ -789,6 +789,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             logger.info("... [prompt truncated] ...")
         
         response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+        response_text = response_text or ""
         
         logger.info("=== INITIAL AI RESPONSE RECEIVED ===")
         logger.info(f"Response provider: {provider}")
@@ -943,6 +944,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         try:
             from apps.intelligence.providers import ask_with_fallback
             response_text, provider = ask_with_fallback(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+            response_text = response_text or ""
             
             logger.info("=== SYNTHESIS AI RESPONSE RECEIVED ===")
             logger.info(f"Response provider: {provider}")
@@ -1250,6 +1252,7 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
             system_prompt=ECOSYSTEM_PROMPT, 
             provider_id=ai_provider
         )
+        response_text = response_text or ""
         
         logger.info("=== AI REVALIDATION RESPONSE RECEIVED ===")
         logger.info(f"Response provider: {provider}")
