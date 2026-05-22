@@ -3979,10 +3979,10 @@ def _clear_orphaned_runtime_resources() -> dict:
 
     image_prune = {}
     try:
-        image_prune = client.images.prune(filters={"dangling": True}) or {}
+        image_prune = client.images.prune(filters={"dangling": ["false"]}) or {}
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Failed to prune dangling images: %s", exc)
-        errors.append({"name": "dangling-images", "error": str(exc)})
+        logger.warning("Failed to prune unused images: %s", exc)
+        errors.append({"name": "unused-images", "error": str(exc)})
 
     cache_results = [
         _clear_directory_contents("/opt/smsly-cache"),
