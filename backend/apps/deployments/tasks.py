@@ -4055,7 +4055,6 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
 
         elif command_flag in ['--update', '--update-frontend']:
             from .models_updates import PlatformUpdate
-            from .tasks import platform_update_task
 
             # Check if an update is already in progress
             in_progress = PlatformUpdate.objects.filter(

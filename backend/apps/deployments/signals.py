@@ -153,6 +153,10 @@ def broadcast_service_status_change(sender, instance, created, **kwargs):
             logging.getLogger(__name__).warning(
                 "Failed to broadcast service status update for %s: %s", instance.id, e
             )
+
+
+@receiver(post_save, sender=Deployment)
+def notify_deployment_lifecycle(sender, instance, created, **kwargs):
     """Log deployment lifecycle events and dispatch user notifications on terminal states."""
     owner = instance.service.owner if instance.service.owner else None
 
