@@ -45,15 +45,18 @@ export function DeploymentsTab({ serviceId }: { serviceId: string }) {
     }, [loadDeployments]);
 
     useEffect(() => {
-        const fetchServers = async () => {
+        const init = async () => {
             try {
-                const data = await serversApi.list();
-                setServers(data);
-                setTargetServerId(LOCAL_DEPLOY_TARGET);
+                const [srv, sList] = await Promise.all([
+                    servicesApi.get(serviceId),
+                    serversApi.list(),
+                ]);
+                setServers(sList);
+                setTargetServerId((srv.node_metadata?.id) || srv.server_id || LOCAL_DEPLOY_TARGET);
             } catch (err) { console.error(err); }
         };
-        fetchServers();
-    }, []);
+        init();
+    }, [serviceId]);
 
     const handleRedeploy = async () => {
         try {

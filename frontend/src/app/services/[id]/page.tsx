@@ -225,7 +225,24 @@ export default function ServiceDetailPage() {
     }, []);
 
     useEffect(() => {
-        const fetchData = async () => {
+        const load = async () => {
+            try {
+                const s = await servicesApi.get(id);
+                setService(s);
+                if (s.node_metadata) {
+                    setTargetServerId(s.node_metadata.id);
+                }
+                if (s.latest_deployment) {
+                    const d = await servicesApi.getDeployment(s.latest_deployment.id);
+                    setDeployment(d);
+                }
+            } catch (err) { console.error(err); }
+        };
+        load();
+    }, [id]);
+
+    useEffect(() => {
+        const refresh = async () => {
             try {
                 const s = await servicesApi.get(id);
                 setService(s);
@@ -235,9 +252,7 @@ export default function ServiceDetailPage() {
                 }
             } catch (err) { console.error(err); }
         };
-        fetchData();
-        // Auto-refresh every 5 seconds
-        const interval = setInterval(fetchData, 5000);
+        const interval = setInterval(refresh, 5000);
         return () => clearInterval(interval);
     }, [id]);
 
