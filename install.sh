@@ -1015,7 +1015,17 @@ if db_has_real_domain and incoming_is_ip_or_empty:
 else:
     cfg.domain = incoming_domain
 
-cfg.use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
+# Preserve existing DB use_ssl when the incoming value is false/empty
+# and the DB already has SSL enabled. This prevents --update from
+# accidentally disabling HTTPS when .env USE_SSL is stale or missing.
+_incoming_use_ssl = parse_bool(os.environ.get("SMSLY_SYNC_USE_SSL", "false"))
+_db_already_has_ssl = bool(cfg.use_ssl)
+if _incoming_use_ssl:
+    cfg.use_ssl = True
+elif not _db_already_has_ssl:
+    cfg.use_ssl = False
+# else: preserve existing True
+
 cfg.wildcard_subdomains = parse_bool(os.environ.get("SMSLY_SYNC_WILDCARD", "false"))
 cfg.cloudflare_api_token = str(os.environ.get("SMSLY_SYNC_CF_TOKEN", "") or "").strip()
 cfg.server_ip = str(os.environ.get("SMSLY_SYNC_PUBLIC_IP", "") or "").strip() or None
@@ -1086,13 +1096,21 @@ d = json.load(sys.stdin)
 print(d.get('domain', '') or '')
 " 2>/dev/null || true)"
     _env_domain="$(env_get_value "$env_file" "DOMAIN")"
-    if [ -n "$_effective_domain" ] && [ "$_effective_domain" != "$_env_domain" ]; then
-        echo -e "${BLUE}  → Syncing effective DB domain '$_effective_domain' back to .env...${NC}"
-        env_set_value "$env_file" "DOMAIN" "$_effective_domain"
-        if [ "$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)" = "true" ]; then
-            env_set_value "$env_file" "USE_SSL" "true"
+    _env_use_ssl="$(env_get_value "$env_file" "USE_SSL")"
+    _db_use_ssl="$(printf '%s' "$sync_json" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('use_ssl') else 'false')" 2>/dev/null)"
+    if [ -n "$_effective_domain" ]; then
+        _needs_sync=false
+        if [ "$_effective_domain" != "$_env_domain" ]; then
+            env_set_value "$env_file" "DOMAIN" "$_effective_domain"
+            _needs_sync=true
         fi
-        echo -e "${GREEN}  ✓ .env updated with DB domain '$_effective_domain'${NC}"
+        if [ "$_db_use_ssl" != "$_env_use_ssl" ]; then
+            env_set_value "$env_file" "USE_SSL" "$_db_use_ssl"
+            _needs_sync=true
+        fi
+        if [ "$_needs_sync" = "true" ]; then
+            echo -e "${GREEN}  ✓ .env synced: DOMAIN=$_effective_domain, USE_SSL=$_db_use_ssl${NC}"
+        fi
     fi
 }
 
