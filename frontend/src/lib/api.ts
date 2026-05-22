@@ -663,10 +663,19 @@ export const servicesApi = {
   createVolumeFolder: async (serviceId: string, volumeId: string, path: string): Promise<void> => {
       await api.post(`/services/${serviceId}/volumes/${volumeId}/mkdir/`, { path });
   },
-  downloadVolumeFile: (serviceId: string, volumeId: string, path: string) => {
-      const token = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie()) : null;
-      const url = `${getApiUrl()}/services/${serviceId}/volumes/${volumeId}/download-file/?path=${encodeURIComponent(path)}&token=${token}`;
-      window.open(url, '_blank');
+  downloadVolumeFile: async (serviceId: string, volumeId: string, path: string) => {
+      const response = await api.get(`/services/${serviceId}/volumes/${volumeId}/download-file/`, {
+          params: { path },
+          responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', path.split('/').pop() || 'file');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
   },
   browseFiles: async (serviceId: string, path: string = '/app'): Promise<{ path: string; files: any[] }> => {
       const response = await api.get(`/services/${serviceId}/file-browse/`, { params: { path } });
@@ -686,10 +695,19 @@ export const servicesApi = {
   createFolder: async (serviceId: string, path: string): Promise<void> => {
       await api.post(`/services/${serviceId}/file-mkdir/`, { path });
   },
-  downloadFile: (serviceId: string, path: string) => {
-      const token = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || getAuthTokenFromCookie()) : null;
-      const url = `${getApiUrl()}/services/${serviceId}/file-download/?path=${encodeURIComponent(path)}&token=${token}`;
-      window.open(url, '_blank');
+  downloadFile: async (serviceId: string, path: string) => {
+      const response = await api.get(`/services/${serviceId}/file-download/`, {
+          params: { path },
+          responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', path.split('/').pop() || 'file');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
   }
 };
 

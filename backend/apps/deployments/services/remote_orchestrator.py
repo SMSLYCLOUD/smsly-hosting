@@ -99,7 +99,6 @@ class RemoteOrchestrator:
             self.server = server
         self.base_url = (self.server.api_url or f"http://{self.server.host}").rstrip('/')
         self.last_error = ""
-        token_preview = "***" if self.server.api_token else "(empty)"
         logger.info(
             "RemoteOrchestrator initialized for %s (%s)",
             self.server.name, self.server.host,

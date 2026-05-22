@@ -81,13 +81,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
 
         # C-1 fix: use argument-list form to prevent shell injection
         exit_code, output = container.exec_run(
-            ["ls", "-la", path], user="root")
+            ["ls", "-la", "--time-style=long-iso", path], user="root")
 
         if exit_code != 0:
             return Response({'error': 'Failed to list directory', 'details': output.decode(
             )}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Parse ls -la output into JSON
+        # Parse ls -la --time-style=long-iso output into JSON
         files = []
         lines = output.decode('utf-8').splitlines()
         # Skip total line
@@ -96,13 +96,13 @@ class VolumeViewSet(viewsets.ModelViewSet):
 
         for line in lines:
             parts = line.split()
-            if len(parts) >= 9:
+            if len(parts) >= 8:
                 files.append({
                     'permissions': parts[0],
                     'user': parts[2],
                     'size': parts[4],
-                    'date': f"{parts[5]} {parts[6]} {parts[7]}",
-                    'name': " ".join(parts[8:])
+                    'date': f"{parts[5]} {parts[6]}",
+                    'name': " ".join(parts[7:])
                 })
 
         return Response({'path': path, 'files': files})
@@ -118,7 +118,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
         # Security normalization
         path = posixpath.normpath(path)
         mount = posixpath.normpath(volume.mount_path)
-        if not path.startswith(mount + "/"):
+        if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
 
         container = resolve_running_container(volume.service)
@@ -144,7 +144,7 @@ class VolumeViewSet(viewsets.ModelViewSet):
         # Security normalization
         path = posixpath.normpath(path)
         mount = posixpath.normpath(volume.mount_path)
-        if not path.startswith(mount + "/"):
+        if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
 
         container = resolve_running_container(volume.service)
