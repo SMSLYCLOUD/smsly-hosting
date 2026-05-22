@@ -2499,25 +2499,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        container_id = latest_deploy.container_id
-
         # K8s path: container_id is "k8s://namespace/podname"
-        if container_id and container_id.startswith('k8s://'):
+        container_id = (latest_deploy.container_id or "")
+        if container_id.startswith('k8s://'):
             return self._k8s_file_browse(container_id, path)
 
-        if not container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-        except Exception as e:
-            return Response({'error': 'Docker client unavailable', 'details': str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        try:
-            container = client.containers.get(container_id)
-        except Exception as e:
-            return Response({'error': 'Container not found', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        # Try the deployment's stored container_id first; if stale,
+        # resolve_running_container falls back to label/name search.
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_400_BAD_REQUEST)
 
         return self._exec_file_list(container, path)
 
@@ -2659,13 +2651,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
             bits, stat = container.get_archive(path)
             
             from django.http import StreamingHttpResponse
@@ -2713,13 +2704,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
             exit_code, output = container.exec_run(["rm", "-rf", path])
             if exit_code != 0:
                 return Response({'error': 'Delete failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
@@ -2764,13 +2754,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
-            return Response({'error': 'No active container'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
             exit_code, output = container.exec_run(["mkdir", "-p", path])
             if exit_code != 0:
                 return Response({'error': 'Mkdir failed', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
@@ -2816,14 +2805,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            from apps.cloud.docker_client import get_docker_client
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
-
             exit_code, output = container.exec_run(["cat", path])
             if exit_code != 0:
                 return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
@@ -2871,17 +2858,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        if not latest_deploy.container_id:
-            return Response({'error': 'No active container running'}, status=status.HTTP_400_BAD_REQUEST)
+        from apps.deployments.utils import resolve_running_container
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         try:
-            from apps.cloud.docker_client import get_docker_client
             import tarfile
             import io
             import time
-
-            client = get_docker_client()
-            container = client.containers.get(latest_deploy.container_id)
 
             # Create a tar archive in memory containing the file
             tar_stream = io.BytesIO()
