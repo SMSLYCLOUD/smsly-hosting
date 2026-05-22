@@ -47,6 +47,7 @@ def classify(name: str):
 def _builtin_classify(name: str):
     """
     Default classification logic used when no custom classifier matches.
+    Handles both Docker container names and K8s pod names.
 
     Returns:
         tuple: (svc_type, app_name) or None if the container is infrastructure.
@@ -60,10 +61,28 @@ def _builtin_classify(name: str):
         "smsly-hosting-registry",
         "smsly-hosting-socket-proxy",
         "smsly-hosting-route-fallback",
+        "smsly-hosting-postgresql",
+        "smsly-hosting-celery",
+        "smsly-hosting-caddy",
+        "smsly-system",
     )
 
     if any(name.startswith(p) for p in INFRA_PREFIXES):
         return None
+
+    # K8s pod naming: <deployment>-<replicaset>-<hash>
+    # Strip the trailing hash to get the deployment name
+    k8s_parts = name.rsplit("-", 2)
+    if len(k8s_parts) == 3 and len(k8s_parts[-1]) >= 5:
+        base = k8s_parts[0]
+        if "celery-beat" in base:
+            return "celery", "platform"
+        if "celery" in base:
+            return "celery", "platform"
+        if "backend" in base:
+            return "gunicorn", "platform"
+        if "frontend" in base:
+            return "gunicorn", "platform"
 
     if "celery-beat" in name:
         return "celery", "platform"

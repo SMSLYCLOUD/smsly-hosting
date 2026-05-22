@@ -3,34 +3,160 @@ kind: Deployment
 metadata:
   name: {{ include "smsly-hosting.fullname" . }}-backend
   labels:
-    app: {{ include "smsly-hosting.name" . }}-backend
+    app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-backend
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: backend
 spec:
   replicas: {{ .Values.backend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
-      app: {{ include "smsly-hosting.name" . }}-backend
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-backend
+      app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app: {{ include "smsly-hosting.name" . }}-backend
+        app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-backend
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: backend
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret-env.yaml") . | sha256sum }}
     spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-db
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "smsly-hosting.fullname" . }}-postgresql -U {{ .Values.postgresql.auth.username }} -d {{ .Values.postgresql.auth.database }}; do
+                echo "Waiting for database..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.fullname" . }}-env
+                  key: dbPassword
+        - name: wait-for-redis
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h {{ include "smsly-hosting.fullname" . }}-redis-master ping; do
+                echo "Waiting for redis..."
+                sleep 2
+              done
       containers:
         - name: backend
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
-          command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+          command:
+            - gunicorn
+            - config.wsgi:application
+            - --bind
+            - "0.0.0.0:{{ .Values.backend.service.port }}"
+            - --workers
+            - "4"
+            - --worker-class
+            - "sync"
+            - --timeout
+            - "120"
+            - --max-requests
+            - "1000"
+            - --max-requests-jitter
+            - "50"
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: {{ .Values.backend.service.port }}
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ include "smsly-hosting.fullname" . }}-env
           env:
             - name: DEBUG
               value: "{{ .Values.backend.env.debug }}"
-            - name: SECRET_KEY
-              value: "{{ .Values.backend.env.secretKey }}"
+            - name: DOMAIN
+              value: "{{ .Values.global.domain }}"
             - name: DATABASE_URL
-              value: "postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
-            - name: REDIS_URL
-              value: "redis://{{ .Release.Name }}-redis-master:6379/0"
+              value: "postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "smsly-hosting.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+            - name: REDIS_HOST
+              value: {{ include "smsly-hosting.fullname" . }}-redis-master
+            - name: REDIS_PORT
+              value: "6379"
+            {{- if .Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.fullname" . }}-env
+                  key: redisPassword
+            {{- end }}
+            - name: INTERNAL_API_URL
+              value: "{{ .Values.backend.env.internalApiUrl }}"
+            - name: ALLOWED_HOSTS
+              value: "{{ .Values.backend.env.allowedHosts }}"
+            {{- if .Values.backend.env.csrfTrustedOrigins }}
+            - name: CSRF_TRUSTED_ORIGINS
+              value: "{{ .Values.backend.env.csrfTrustedOrigins }}"
+            {{- end }}
+            {{- if .Values.backend.env.corsAllowedOrigins }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: "{{ .Values.backend.env.corsAllowedOrigins }}"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.healthcheck.path }}
+              port: {{ .Values.backend.service.port }}
+            initialDelaySeconds: {{ .Values.backend.healthcheck.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.healthcheck.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.healthcheck.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.healthcheck.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.readinessProbe.path }}
+              port: {{ .Values.backend.service.port }}
+            initialDelaySeconds: {{ .Values.backend.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.backend.readinessProbe.successThreshold }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            - name: staticfiles
+              mountPath: /app/staticfiles
+            - name: media
+              mountPath: /app/media
+            - name: caddy-config
+              mountPath: /caddy-config
+      volumes:
+        - name: staticfiles
+          emptyDir: {}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ include "smsly-hosting.fullname" . }}-media
+        - name: caddy-config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "smsly-hosting.fullname" . }}-media
+  labels:
+    app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-media
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

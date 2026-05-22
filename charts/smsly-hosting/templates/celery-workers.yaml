@@ -1,0 +1,127 @@
+{{- if .Values.celery.enabled }}
+{{- range $name, $worker := .Values.celery.workers }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "smsly-hosting.fullname" $ }}-celery-{{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "smsly-hosting.name" $ }}-celery-{{ $name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: celery-{{ $name }}
+spec:
+  replicas: {{ $worker.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" $ }}-celery-{{ $name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "smsly-hosting.name" $ }}-celery-{{ $name }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: celery-{{ $name }}
+    spec:
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: celery-{{ $name }}
+          image: "{{ $.Values.global.imageRegistry }}{{ $.Values.celery.image.repository }}:{{ $.Values.celery.image.tag }}"
+          imagePullPolicy: {{ $.Values.celery.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - config
+            - worker
+            - --loglevel=info
+            - -Q
+            - {{ $worker.queues }}
+            - --concurrency={{ $worker.concurrency }}
+          envFrom:
+            - secretRef:
+                name: {{ include "smsly-hosting.fullname" $ }}-env
+          env:
+            - name: DEBUG
+              value: "{{ $.Values.backend.env.debug }}"
+            - name: DATABASE_URL
+              value: "postgres://{{ $.Values.postgresql.auth.username }}:{{ $.Values.postgresql.auth.password }}@{{ include "smsly-hosting.fullname" $ }}-postgresql:5432/{{ $.Values.postgresql.auth.database }}"
+            - name: REDIS_HOST
+              value: {{ include "smsly-hosting.fullname" $ }}-redis-master
+            - name: REDIS_PORT
+              value: "6379"
+            {{- if $.Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.fullname" $ }}-env
+                  key: redisPassword
+            {{- end }}
+          resources:
+            {{- toYaml $.Values.celery.resources | nindent 12 }}
+{{- end }}
+
+{{- if .Values.celery.beat.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "smsly-hosting.fullname" . }}-celery-beat
+  labels:
+    app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-celery-beat
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: celery-beat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-celery-beat
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "smsly-hosting.name" . }}-celery-beat
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: celery-beat
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: celery-beat
+          image: "{{ .Values.global.imageRegistry }}{{ .Values.celery.image.repository }}:{{ .Values.celery.image.tag }}"
+          imagePullPolicy: {{ .Values.celery.image.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - config
+            - beat
+            - -l
+            - info
+            - --pidfile=/tmp/celerybeat.pid
+            - --schedule=/tmp/celerybeat-schedule
+          envFrom:
+            - secretRef:
+                name: {{ include "smsly-hosting.fullname" . }}-env
+          env:
+            - name: DEBUG
+              value: "{{ .Values.backend.env.debug }}"
+            - name: DATABASE_URL
+              value: "postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "smsly-hosting.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+            - name: REDIS_HOST
+              value: {{ include "smsly-hosting.fullname" . }}-redis-master
+            - name: REDIS_PORT
+              value: "6379"
+            {{- if .Values.redis.auth.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "smsly-hosting.fullname" . }}-env
+                  key: redisPassword
+            {{- end }}
+          resources:
+            {{- toYaml .Values.celery.resources | nindent 12 }}
+{{- end }}
+{{- end }}
