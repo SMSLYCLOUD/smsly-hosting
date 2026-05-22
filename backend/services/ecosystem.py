@@ -690,39 +690,52 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         # 6. Call AI Senate
         response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
 
-    # 7. Parse and structure the plan (Workspace is now deleted)
-    try:
-        # Intelligently extract JSON block by finding the outermost braces
-        start_idx = response_text.find('{')
-        end_idx = response_text.rfind('}')
-        
-        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-            raise ValueError("No JSON found in Senate response")
+        # 7. Parse and structure the plan (Workspace is now deleted)
+        try:
+            # Intelligently extract JSON block by finding the outermost braces
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}')
             
-        json_str = response_text[start_idx:end_idx+1]
-        plan = json.loads(json_str)
-        if isinstance(plan, dict) and isinstance(plan.get("services"), list):
-            # Ensure each service is a dict with sanitized list fields
-            sanitized_services = []
-            for svc in plan["services"]:
-                if not isinstance(svc, dict):
-                    continue
-                _normalize_service_plan_fields(svc)
-                sanitized_services.append(svc)
-            plan["services"] = sanitized_services
+            if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+                raise ValueError("No JSON found in Senate response")
+                
+            json_str = response_text[start_idx:end_idx+1]
+            plan = json.loads(json_str)
             
-            _apply_plan_repo_defaults(plan["services"], repos_data)
-            _apply_generic_ecosystem_intelligence(plan["services"])
-            plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
-            plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
-        
-        plan["ai_provider"] = provider
-        return plan
-        
-    except Exception as e:
-        logger.error("Failed to parse AI ecosystem response: %s", e)
-        # Fall back to heuristic-only plan
-        return _build_heuristic_plan(repos_data, str(e))
+            # Validate AI response before processing
+            if not _validate_ai_response_structure(response_text):
+                logger.warning("AI response validation failed, attempting revalidation...")
+                raise ValueError("AI response structure validation failed")
+            
+            # Sanitize the response for safe processing
+            plan = _sanitize_ai_response_for_processing(response_text)
+            
+            if isinstance(plan, dict) and isinstance(plan.get("services"), list):
+                # Ensure each service is a dict with sanitized list fields
+                sanitized_services = []
+                for svc in plan["services"]:
+                    if not isinstance(svc, dict):
+                        continue
+                    _normalize_service_plan_fields(svc)
+                    sanitized_services.append(svc)
+                plan["services"] = sanitized_services
+                
+                _apply_plan_repo_defaults(plan["services"], repos_data)
+                _apply_generic_ecosystem_intelligence(plan["services"])
+                plan["addons"] = _rebuild_addons_manifest(plan["services"], plan.get("addons", []))
+                plan["deploy_sequence"] = _build_deploy_sequence(plan["services"])
+            
+            plan["ai_provider"] = provider
+            return plan
+            
+        except ValueError as e:
+            logger.warning(f"AI response validation failed: {e}")
+            # Try to revalidate with AI
+            return _attempt_ai_revalidation(repos_data, ai_provider, str(e))
+        except Exception as e:
+            logger.error("Failed to parse AI ecosystem response: %s", e)
+            # Fall back to heuristic-only plan
+            return _build_heuristic_plan(repos_data, str(e))
 
 
 def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, ai_provider: str = None, chunk_size: int = 4) -> dict:
@@ -862,6 +875,242 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         "addons": final_addons,
         "deploy_sequence": deploy_sequence,
         "ai_provider": ai_provider or "auto"
+    }
+
+
+def _validate_ai_response_structure(response_text: str, expected_structure: str = "ecosystem_plan") -> bool:
+    """
+    Validate AI response structure before parsing to prevent unhashable type errors.
+    Returns True if structure is valid, False otherwise.
+    """
+    import json
+    
+    # Basic text validation
+    if not response_text or len(response_text.strip()) < 10:
+        logger.warning("AI response is too short or empty")
+        return False
+    
+    # Extract JSON from response
+    try:
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+            logger.warning("No valid JSON structure found in AI response")
+            return False
+        
+        json_str = response_text[start_idx:end_idx+1]
+        data = json.loads(json_str)
+        
+        # Validate based on expected structure
+        if expected_structure == "ecosystem_plan":
+            # Must have services and addons as arrays
+            if not isinstance(data.get("services"), list):
+                logger.warning("AI response missing 'services' array")
+                return False
+            
+            # Validate each service has required string fields
+            for i, service in enumerate(data["services"]):
+                if not isinstance(service, dict):
+                    logger.warning(f"Service {i} is not a dict")
+                    return False
+                
+                # Check for unhashable nested structures in critical fields
+                for field in ["env_vars", "addons", "depends_on"]:
+                    value = service.get(field)
+                    if value is not None:
+                        try:
+                            # Try to convert to list/set to detect unhashable types
+                            if isinstance(value, dict):
+                                # Convert dict values to strings
+                                converted = [str(v) for v in value.values()]
+                            elif isinstance(value, (list, tuple)):
+                                # Ensure all items are strings or convertible
+                                converted = [str(v) for v in value]
+                            else:
+                                converted = [str(value)]
+                            
+                            # Check if we can create a set (this will fail if there are unhashable items)
+                            set(converted)
+                        except TypeError as e:
+                            logger.warning(f"Unhashable data in service {i} field '{field}': {e}")
+                            return False
+        
+        logger.info("AI response structure validation passed")
+        return True
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse AI response JSON: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"AI response validation failed: {e}")
+        return False
+
+
+def _sanitize_ai_response_for_processing(response_text: str) -> dict:
+    """
+    Sanitize AI response to ensure it's safe for processing by removing 
+    unhashable structures and converting to safe formats.
+    """
+    import json
+    
+    try:
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+            raise ValueError("No JSON found")
+        
+        json_str = response_text[start_idx:end_idx+1]
+        data = json.loads(json_str)
+        
+        # Deep sanitize the response
+        if isinstance(data, dict):
+            sanitized = {}
+            for key, value in data.items():
+                if key == "services" and isinstance(value, list):
+                    sanitized_services = []
+                    for service in value:
+                        if isinstance(service, dict):
+                            sanitized_service = {}
+                            for skey, svalue in service.items():
+                                if skey == "env_vars" and isinstance(svalue, dict):
+                                    # Convert env_vars dict to flat dict with string values
+                                    sanitized_env = {}
+                                    for ekey, evalue in svalue.items():
+                                        sanitized_env[str(ekey)] = str(evalue) if evalue is not None else ""
+                                    sanitized_service[skey] = sanitized_env
+                                elif skey in ["addons", "depends_on"]:
+                                    # Ensure these are lists of strings
+                                    if isinstance(svalue, list):
+                                        sanitized_service[skey] = [str(v) for v in svalue if v is not None]
+                                    else:
+                                        sanitized_service[skey] = [str(svalue)] if svalue is not None else []
+                                else:
+                                    sanitized_service[skey] = str(svalue) if svalue is not None else ""
+                            sanitized_services.append(sanitized_service)
+                    sanitized[key] = sanitized_services
+                else:
+                    sanitized[key] = value
+            return sanitized
+        
+        return data
+        
+    except Exception as e:
+        logger.warning(f"Failed to sanitize AI response: {e}")
+        return {"services": [], "addons": [], "deploy_sequence": []}
+
+
+def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_message: str) -> dict:
+    """
+    Attempt to revalidate and correct AI response when validation fails.
+    """
+    logger.info("Attempting AI revalidation due to: %s", error_message)
+    
+    try:
+        revalidation_prompt = f"""
+        CRITICAL: Your previous ecosystem plan was rejected due to: {error_message}
+        
+        REPOSITORY DATA:
+        {json.dumps([{"repo": rd.get("repo"), "description": rd.get("description"), "stack": rd.get("stack")} for rd in repos_data], indent=2)}
+        
+        REQUIREMENTS:
+        1. Return ONLY valid JSON with this exact structure:
+        {{
+          "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
+          "services": [
+            {{
+              "name": "service-name",
+              "repo": "owner/repo",
+              "stack": "python",
+              "env_vars": {{"KEY": "value"}},
+              "addons": ["POSTGRES", "REDIS"],
+              "depends_on": ["other-service"],
+              "deploy_order": 50
+            }}
+          ],
+          "addons": [
+            {{
+              "type": "POSTGRES", 
+              "shared_by": ["service-1", "service-2"]
+            }}
+          ],
+          "deploy_sequence": ["addons", "service-1", "service-2"],
+          "ai_provider": "auto"
+        }}
+        
+        2. CRITICAL TYPE RULES:
+           - ALL array fields ("depends_on", "shared_by", "addons", "deploy_sequence") must contain ONLY strings
+           - "env_vars" must be a dict with string keys and string values ONLY  
+           - No nested objects in any array fields
+           - No unhashable types (dicts, lists) in any string fields
+           
+        3. Ensure all services have proper names and repo references
+        """
+        
+        from apps.intelligence.providers import ask_with_fallback
+        response_text, provider = ask_with_fallback(
+            revalidation_prompt, 
+            system_prompt=ECOSYSTEM_PROMPT, 
+            provider_id=ai_provider
+        )
+        
+        # Validate the revalidated response
+        if _validate_ai_response_structure(response_text):
+            plan = _sanitize_ai_response_for_processing(response_text)
+            logger.info("AI revalidation successful")
+            return plan
+        else:
+            logger.error("AI revalidation also failed, falling back to heuristic plan")
+            return _build_heuristic_plan(repos_data, "AI response structure validation failed after revalidation")
+            
+    except Exception as e:
+        logger.error(f"AI revalidation process failed: {e}")
+        return _build_heuristic_plan(repos_data, f"AI revalidation failed: {str(e)}")
+
+
+def _build_heuristic_plan(repos_data: List[dict], error_message: str = None) -> dict:
+    """
+    Build a fallback heuristic-based ecosystem plan when AI fails.
+    """
+    if error_message:
+        logger.warning("Building heuristic plan due to: %s", error_message)
+    
+    services = []
+    for rd in repos_data:
+        repo = rd.get('repo', 'unknown')
+        stack = rd.get('stack', 'unknown')
+        
+        # Create a basic service entry
+        service = {
+            "name": repo.split('/')[-1],
+            "repo": repo,
+            "stack": stack,
+            "env_vars": {
+                "DATABASE_URL": "{{POSTGRES_URL}}" if "postgres" in stack.lower() or "database" in stack.lower() else "",
+                "REDIS_URL": "{{REDIS_URL}}" if "redis" in stack.lower() else "",
+                "AI_PROVIDER": "auto"
+            },
+            "addons": [],
+            "depends_on": [],
+            "deploy_order": 50
+        }
+        
+        # Basic addon detection
+        if "postgres" in stack.lower() or "database" in stack.lower():
+            service["addons"].append("POSTGRES")
+        if "redis" in stack.lower() or "cache" in stack.lower():
+            service["addons"].append("REDIS")
+        if "vector" in stack.lower() or "ai" in stack.lower():
+            service["addons"].append("QDRANT")
+            
+        services.append(service)
+    
+    return {
+        "ecosystem_name": "SMSLY Heuristic Ecosystem",
+        "services": services,
+        "addons": [],
+        "deploy_sequence": ["addons"] + [svc["name"] for svc in services],
+        "ai_provider": "auto",
+        "message": error_message or "Built heuristic plan when AI analysis failed"
     }
 
 
@@ -1076,11 +1325,34 @@ def _coerce_addons(raw_addons: Any) -> List[str]:
 
 def _build_deploy_sequence(services: List[dict]) -> List[str]:
     """Build deploy sequence names from ordered, non-skipped services."""
-    ordered = sorted(
-        [svc for svc in services if isinstance(svc, dict) and not svc.get("skip")],
-        key=lambda svc: (_safe_order(svc.get("deploy_order"), 99), str(svc.get("name") or _repo_short_name(svc))),
-    )
-    return ["addons"] + [str(svc.get("name") or _repo_short_name(svc)) for svc in ordered]
+    try:
+        ordered = []
+        for svc in services:
+            if isinstance(svc, dict) and not svc.get("skip"):
+                try:
+                    order = _safe_order(svc.get("deploy_order"), 99)
+                    name = str(svc.get("name") or _repo_short_name(svc))
+                    ordered.append((order, name))
+                except Exception as e:
+                    logger.warning("Error processing service for deploy sequence: %s", e)
+                    continue
+        
+        # Sort by order, then by name (both are now strings, so no unhashable issues)
+        ordered.sort(key=lambda x: (x[0], x[1]))
+        
+        return ["addons"] + [name for order, name in ordered]
+        
+    except Exception as e:
+        logger.warning("Deploy sequence build failed: %s", e)
+        # Fallback: just use service names in order
+        try:
+            return ["addons"] + [
+                str(svc.get("name") or _repo_short_name(svc)) 
+                for svc in services 
+                if isinstance(svc, dict) and not svc.get("skip")
+            ]
+        except Exception:
+            return ["addons"]
 
 
 def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List[dict]:
@@ -1469,25 +1741,136 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
     # 3. AI ecosystem analysis (CHUNKED)
     plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider)
     
-    # Propagate AI preference to individual services
-    actual_provider = plan.get("ai_provider")
-    services = plan.get("services", [])
-    for svc in services:
-        if isinstance(svc, dict):
-            # Ensure runtime environment has the provider selection
-            env = svc.get("env_vars", {})
-            if "AI_PROVIDER" not in env:
-                # If user selected a specific provider, force it. Otherwise use the Senate's choice.
-                env["AI_PROVIDER"] = ai_provider if (ai_provider and ai_provider != "auto") else actual_provider
-            svc["env_vars"] = env
-
-    plan["total_repos_scanned"] = len(all_repos)
-    plan["deployable_repos"] = len(repos_data)
-    plan["scan_warning_count"] = len(scan_warnings)
-    if scan_warnings:
-        plan["scan_warnings"] = scan_warnings[:20]
-
-    return plan
+    # 4. AI REVALIDATION: Validate and sanitize AI response before final submission
+    logger.info("Performing AI response revalidation...")
+    try:
+        if not _validate_ai_response_structure(json.dumps(plan)):
+            logger.warning("AI response validation failed, attempting revalidation...")
+            
+            # If validation fails, try to get a corrected response from AI
+            revalidation_prompt = f"""
+            CRITICAL: Your previous ecosystem plan was rejected due to invalid data structure.
+            The plan must contain ONLY:
+            - "services": Array of objects with string fields only (no nested objects in env_vars, addons, depends_on)
+            - "addons": Array of objects with string fields only
+            - "deploy_sequence": Array of strings
+            - "ai_provider": String
+            
+            PREVIOUS PLAN (invalid):
+            {json.dumps(plan, indent=2)}
+            
+            Return ONLY a valid JSON ecosystem plan with the correct structure:
+            {{
+              "ecosystem_name": "SMSLY Auto-Generated Ecosystem",
+              "services": [
+                {{
+                  "name": "service-name",
+                  "repo": "owner/repo",
+                  "stack": "python",
+                  "env_vars": {{"KEY": "value"}},
+                  "addons": ["POSTGRES", "REDIS"],
+                  "depends_on": ["other-service"],
+                  "deploy_order": 50
+                }}
+              ],
+              "addons": [
+                {{
+                  "type": "POSTGRES",
+                  "shared_by": ["service-1", "service-2"]
+                }}
+              ],
+              "deploy_sequence": ["addons", "service-1", "service-2"],
+              "ai_provider": "auto"
+            }}
+            """
+            
+            try:
+                from apps.intelligence.providers import ask_with_fallback
+                response_text, provider = ask_with_fallback(
+                    revalidation_prompt, 
+                    system_prompt=ECOSYSTEM_PROMPT, 
+                    provider_id=ai_provider
+                )
+                
+                # Parse the revalidated response
+                if _validate_ai_response_structure(response_text):
+                    plan = _sanitize_ai_response_for_processing(response_text)
+                    logger.info("AI response revalidation successful")
+                else:
+                    logger.error("AI revalidation also failed, falling back to heuristic plan")
+                    plan = _build_heuristic_plan(repos_data, "AI response structure validation failed after revalidation")
+            except Exception as e:
+                logger.error(f"AI revalidation failed: {e}")
+                plan = _build_heuristic_plan(repos_data, f"AI revalidation failed: {str(e)}")
+        
+        else:
+            logger.info("AI response validation passed on first attempt")
+            
+    except Exception as e:
+        logger.error(f"AI revalidation process failed: {e}")
+        plan = _build_heuristic_plan(repos_data, f"AI revalidation process failed: {str(e)}")
+    
+    # 5. FINAL VALIDATION: Ensure the returned plan is safe for processing
+    try:
+        final_plan = {
+            "ecosystem_name": plan.get("ecosystem_name", "SMSLY Auto-Generated Ecosystem"),
+            "services": [],
+            "addons": [],
+            "deploy_sequence": [],
+            "ai_provider": plan.get("ai_provider", "auto"),
+            "total_repos_scanned": len(all_repos),
+            "deployable_repos": len(repos_data),
+            "scan_warning_count": len(scan_warnings),
+        }
+        
+        if scan_warnings:
+            final_plan["scan_warnings"] = scan_warnings[:20]
+        
+        # Safely extract and validate services
+        for service in plan.get("services", []):
+            if isinstance(service, dict):
+                try:
+                    # Ensure all critical fields are strings or can be converted to strings
+                    safe_service = {
+                        "name": str(service.get("name", "")),
+                        "repo": str(service.get("repo", "")),
+                        "stack": str(service.get("stack", "unknown")),
+                        "env_vars": {str(k): str(v) for k, v in service.get("env_vars", {}).items()},
+                        "addons": [str(a) for a in service.get("addons", [])],
+                        "depends_on": [str(d) for d in service.get("depends_on", [])],
+                        "deploy_order": _safe_order(service.get("deploy_order"), 50)
+                    }
+                    final_plan["services"].append(safe_service)
+                except Exception as e:
+                    logger.warning("Error processing service in final validation: %s", e)
+                    continue
+        
+        # Safely extract and validate addons
+        for addon in plan.get("addons", []):
+            if isinstance(addon, dict):
+                try:
+                    safe_addon = {
+                        "type": str(addon.get("type", "")),
+                        "shared_by": [str(s) for s in addon.get("shared_by", [])]
+                    }
+                    final_plan["addons"].append(safe_addon)
+                except Exception as e:
+                    logger.warning("Error processing addon in final validation: %s", e)
+                    continue
+        
+        # Build deploy sequence safely
+        try:
+            final_plan["deploy_sequence"] = _build_deploy_sequence(final_plan["services"])
+        except Exception as e:
+            logger.warning("Error building deploy sequence: %s", e)
+            final_plan["deploy_sequence"] = ["addons"] + [svc["name"] for svc in final_plan["services"]]
+        
+        logger.info("Final ecosystem plan validation completed successfully")
+        return final_plan
+        
+    except Exception as e:
+        logger.error("Final validation failed, returning safe fallback: %s", e)
+        return _build_heuristic_plan(repos_data, f"Final validation failed: {str(e)}")
 
 
 def sync_ecosystem_envs(project_id: str) -> dict:
