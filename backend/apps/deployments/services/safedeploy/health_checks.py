@@ -17,6 +17,7 @@ def perform_health_check(url: str) -> Tuple[bool, HealthCheckResult]:
             response_time_ms=elapsed_ms,
             status=status
         )
+        result.save()
         return status == HealthCheckResult.Status.SUCCESS, result
     except requests.RequestException as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -26,4 +27,5 @@ def perform_health_check(url: str) -> Tuple[bool, HealthCheckResult]:
             status=HealthCheckResult.Status.FAILED,
             error_message=str(e)
         )
+        result.save()
         return False, result

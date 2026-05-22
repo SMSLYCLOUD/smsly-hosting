@@ -1,17 +1,18 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.deployments.models_core import Service
-from apps.deployments.models_safedeploy import PreviewEnvironment
+from django.db.models import Q
+from apps.deployments.models_core import Service, Deployment
+from apps.deployments.models_safedeploy import PreviewEnvironment, DeploymentApproval
 from apps.deployments.serializers import PreviewEnvironmentSerializer, DeploymentApprovalSerializer
 from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+from apps.deployments.permissions import CanApproveDeployment
 
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     queryset = PreviewEnvironment.objects.all()
     serializer_class = PreviewEnvironmentSerializer # Will implement in a sec
 
     def get_queryset(self):
-        from django.db.models import Q
         service_id = self.kwargs.get('service_pk')
         qs = self.queryset.filter(
             Q(service__owner=self.request.user) | Q(service__project__team__members__user=self.request.user)
@@ -26,6 +27,9 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
             service = Service.objects.get(id=service_id)
         except Service.DoesNotExist:
             return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not service.preview_environments_enabled:
+            return Response({"error": "Preview environments are not enabled for this service"}, status=status.HTTP_400_BAD_REQUEST)
 
         branch_name = request.data.get('branch_name')
         commit_sha = request.data.get('commit_sha')
@@ -57,7 +61,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(updated_preview)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='destroy')
     def destroy_preview(self, request, pk=None, service_pk=None):
         preview = self.get_object()
 
@@ -74,18 +78,24 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     """
     API for approving/rejecting production deployments.
     """
+    queryset = DeploymentApproval.objects.all()
     serializer_class = DeploymentApprovalSerializer
-    from apps.deployments.permissions import CanApproveDeployment
     permission_classes = [CanApproveDeployment]
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None, service_pk=None):
-        from apps.deployments.models_core import Deployment
         from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
         try:
-            deployment = Deployment.objects.get(id=pk, service_id=service_pk)
-        except Deployment.DoesNotExist:
-            return Response({"error": "Deployment not found"}, status=status.HTTP_404_NOT_FOUND)
+            approval = DeploymentApproval.objects.get(id=pk)
+        except DeploymentApproval.DoesNotExist:
+            return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        deployment = approval.deployment
+        if deployment is None:
+            return Response({"error": "No deployment associated with this approval"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if deployment.status != Deployment.Status.AWAITING_APPROVAL:
+            return Response({"error": "Deployment is not awaiting approval"}, status=status.HTTP_400_BAD_REQUEST)
 
         pipeline = ProductionDeploymentPipeline()
         approval = pipeline.approve_deployment(deployment, request.user)
@@ -94,12 +104,18 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None, service_pk=None):
-        from apps.deployments.models_core import Deployment
         from apps.deployments.services.safedeploy.deployment_pipeline import ProductionDeploymentPipeline
         try:
-            deployment = Deployment.objects.get(id=pk, service_id=service_pk)
-        except Deployment.DoesNotExist:
-            return Response({"error": "Deployment not found"}, status=status.HTTP_404_NOT_FOUND)
+            approval = DeploymentApproval.objects.get(id=pk)
+        except DeploymentApproval.DoesNotExist:
+            return Response({"error": "Approval not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        deployment = approval.deployment
+        if deployment is None:
+            return Response({"error": "No deployment associated with this approval"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if deployment.status != Deployment.Status.AWAITING_APPROVAL:
+            return Response({"error": "Deployment is not awaiting approval"}, status=status.HTTP_400_BAD_REQUEST)
 
         notes = request.data.get("notes", "")
         pipeline = ProductionDeploymentPipeline()

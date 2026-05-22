@@ -27,7 +27,7 @@ class PreviewEnvironment(TimeStampedModel):
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='preview_environments')
     project_id = models.UUIDField(null=True, blank=True)
     branch_name = models.CharField(max_length=255)
-    commit_sha = models.CharField(max_length=64)
+    commit_sha = models.CharField(max_length=64, db_index=True)
     preview_url = models.URLField(blank=True, null=True)
     image_tag = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.PENDING)

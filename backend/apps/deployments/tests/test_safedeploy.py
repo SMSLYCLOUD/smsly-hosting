@@ -50,7 +50,7 @@ from apps.deployments.services.safedeploy.postgres_snapshot_manager import Postg
 class PostgresSnapshotManagerTestCase(unittest.TestCase):
     @patch('subprocess.run')
     def test_guardrails_on_destroy(self, mock_run):
-        manager = PostgresSnapshotManager()
+        manager = PostgresSnapshotManager(admin_db_url="postgres://user:pass@localhost:5432/postgres")
 
         # Should be allowed
         res = manager.destroy_clone("preview_1234_myapp")

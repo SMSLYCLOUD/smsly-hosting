@@ -49,9 +49,8 @@ class ProductionDeploymentPipeline:
         return MigrationValidation.objects.filter(preview_environment__service_id=service_id, preview_environment__commit_sha=commit_hash).order_by('-created_at').first()
 
     def _run_backup_phase(self, deployment: Deployment) -> None:
-        deployment.status = Deployment.Status.BACKUP_RUNNING
-        deployment.save()
-        logger.info(f"Triggered production backup for deployment {deployment.id}")
+        # TODO: Implement actual backup logic
+        logger.info(f"Backup phase not yet implemented for deployment {deployment.id}")
 
     def _run_migration_phase(self, deployment: Deployment) -> None:
         deployment.status = Deployment.Status.MIGRATION_RUNNING
@@ -77,12 +76,13 @@ class ProductionDeploymentPipeline:
                     )
                 except Exception as e:
                     logger.error(f"Migration clone failed for deployment {deployment.id}: {e}")
+                    cloned_path = None
             prod_db_url = None
             for env_var in deployment.service.env_vars.all():
                 if env_var.key == 'DATABASE_URL':
                     prod_db_url = env_var.value
 
-            if prod_db_url and adapter.detect(cloned_path):
+            if cloned_path and prod_db_url and adapter.detect(cloned_path):
                 env = {"DATABASE_URL": prod_db_url}
                 rc, out, err = adapter.run_migrate(cloned_path, env)
                 DeploymentArtifact.objects.create(service=deployment.service, deployment=deployment, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
@@ -106,7 +106,7 @@ class ProductionDeploymentPipeline:
     def reject_deployment(self, deployment: Deployment, user, notes: str = "") -> DeploymentApproval:
         approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
         approval.status = DeploymentApproval.Status.REJECTED
-        approval.approved_by = user
+        approval.approved_by = None  # Note: a rejected_by field should be added to track who rejected
         approval.rejected_at = timezone.now()
         approval.approval_notes = notes
         approval.save()

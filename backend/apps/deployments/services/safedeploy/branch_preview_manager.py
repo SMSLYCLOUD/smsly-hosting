@@ -29,7 +29,9 @@ class BranchPreviewManager:
         """
         preview.commit_sha = commit_sha
         preview.status = PreviewEnvironment.Status.BUILDING
+        preview.error_message = ""
         preview.save()
+        preview.artifacts.all().delete()
         return preview
 
     def destroy_preview(self, preview: PreviewEnvironment) -> bool:
@@ -45,20 +47,23 @@ class BranchPreviewManager:
         Generates and returns isolated environment variables for the preview environment.
         These are NOT saved permanently to the Service model, but passed to the container runtime.
         """
-        env_vars = {}
-        for ev in preview.service.env_vars.all():
-            env_vars[ev.key] = ev.value
-
-        env_vars['REDIS_PREFIX'] = f"preview:{preview.id}:"
-        env_vars['QUEUE_PREFIX'] = f"preview_{preview.id}_"
-        env_vars['STORAGE_PREFIX'] = f"previews/{preview.id}/"
+        env_vars = {
+            'REDIS_PREFIX': f"preview:{preview.id}:",
+            'QUEUE_PREFIX': f"preview_{preview.id}_",
+            'STORAGE_PREFIX': f"previews/{preview.id}/",
+        }
 
         if preview.preview_url:
             domain = preview.preview_url.replace("https://", "").replace("http://", "")
             env_vars['ALLOWED_HOSTS'] = domain
             env_vars['CSRF_TRUSTED_ORIGINS'] = preview.preview_url
 
-        if hasattr(preview, 'database_clone') and preview.database_clone:
+        try:
+            has_clone = hasattr(preview, 'database_clone') and preview.database_clone
+        except Exception:
+            has_clone = False
+
+        if has_clone:
             if preview.database_clone.status == DatabaseClone.Status.READY:
                 env_vars['DATABASE_URL'] = preview.database_clone.clone_database_url_secret_ref
 
@@ -74,7 +79,7 @@ class BranchPreviewManager:
 
         try:
             base_domain = service.default_public_base_domain()
-        except:
+        except Exception:
             base_domain = "cloud.smsly.cloud"
 
         return f"https://{safe_branch}--{safe_app}.preview.{base_domain}"
