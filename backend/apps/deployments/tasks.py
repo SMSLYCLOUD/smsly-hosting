@@ -3029,10 +3029,8 @@ def _handle_failure(task, deployment, error_msg, reason):
                 # Only trigger if Jules has an API key configured
                 if not AIProviderSettings:
                     logger.debug("Jules auto-fix skipped: intelligence app not available in agent mode")
-                else:
-                    ai_settings = AIProviderSettings.get_solo()
-                    if not ai_settings.jules_api_key:
-                        logger.debug("Jules auto-fix skipped: no Jules API key configured")
+                elif not AIProviderSettings.get_solo().jules_api_key:
+                    logger.debug("Jules auto-fix skipped: no Jules API key configured")
                 elif not service.repository_url:
                     logger.debug("Jules auto-fix skipped: service has no repository_url")
                 else:
