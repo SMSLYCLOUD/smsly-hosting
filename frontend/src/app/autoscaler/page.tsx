@@ -10,8 +10,9 @@ import {
 } from 'lucide-react';
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend
+  Tooltip, Legend
 } from 'recharts';
+import { ChartContainer } from '@/components/ui/chart-container';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { autoscalerApi, type AutoscalerStatus, type AutoscalerHistory, type AutoscalerService } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -472,36 +473,34 @@ export default function AutoscalerPage() {
                  ))}
                </div>
              </div>
-             <div className="h-[250px] w-full min-w-0" style={{ minHeight: 250 }}>
-               <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                 <AreaChart data={chartData}>
-                   <defs>
-                     <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
-                       <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                       <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-                     </linearGradient>
-                   </defs>
-                   <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                   <XAxis dataKey="timestamp" stroke="#666" fontSize={10} tickLine={false} axisLine={false} />
-                   <YAxis stroke="#666" fontSize={10} tickLine={false} axisLine={false} unit="MB" />
-                   <Tooltip
-                     contentStyle={{ backgroundColor: '#18181b', border: '1px solid #333', borderRadius: '8px', fontSize: '12px' }}
-                     itemStyle={{ padding: 0 }}
-                   />
-                   {Object.keys(history?.services || {}).slice(0, 5).map((svc, i) => (
-                      <Area
-                        key={svc}
-                        type="monotone"
-                        dataKey={`${svc}_mem`}
-                        stackId="1"
-                        stroke={`hsl(${i * 60}, 70%, 50%)`}
-                        fill={`hsl(${i * 60}, 70%, 50%)`}
-                        fillOpacity={0.6}
-                      />
-                   ))}
-                 </AreaChart>
-               </ResponsiveContainer>
-             </div>
+             <ChartContainer className="h-[250px] w-full" minHeight={250}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="colorMem" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                  <XAxis dataKey="timestamp" stroke="#666" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#666" fontSize={10} tickLine={false} axisLine={false} unit="MB" />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181b', border: '1px solid #333', borderRadius: '8px', fontSize: '12px' }}
+                    itemStyle={{ padding: 0 }}
+                  />
+                  {Object.keys(history?.services || {}).slice(0, 5).map((svc, i) => (
+                     <Area
+                       key={svc}
+                       type="monotone"
+                       dataKey={`${svc}_mem`}
+                       stackId="1"
+                       stroke={`hsl(${i * 60}, 70%, 50%)`}
+                       fill={`hsl(${i * 60}, 70%, 50%)`}
+                       fillOpacity={0.6}
+                     />
+                  ))}
+                </AreaChart>
+             </ChartContainer>
           </Card>
 
           <Card className="p-6 border-border/50">
@@ -510,28 +509,26 @@ export default function AutoscalerPage() {
                  <Activity size={16} className="text-emerald-500" /> Demand Scores
                </h3>
              </div>
-             <div className="h-[250px] w-full min-w-0" style={{ minHeight: 250 }}>
-               <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                 <LineChart data={chartData}>
-                   <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                   <XAxis dataKey="timestamp" stroke="#666" fontSize={10} tickLine={false} axisLine={false} />
-                   <YAxis stroke="#666" fontSize={10} tickLine={false} axisLine={false} domain={[0, 1]} />
-                   <Tooltip
-                     contentStyle={{ backgroundColor: '#18181b', border: '1px solid #333', borderRadius: '8px', fontSize: '12px' }}
-                   />
-                   {Object.keys(history?.services || {}).slice(0, 5).map((svc, i) => (
-                      <Line
-                        key={svc}
-                        type="monotone"
-                        dataKey={`${svc}_demand`}
-                        stroke={`hsl(${i * 60}, 70%, 50%)`}
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                   ))}
-                 </LineChart>
-               </ResponsiveContainer>
-             </div>
+             <ChartContainer className="h-[250px] w-full" minHeight={250}>
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                  <XAxis dataKey="timestamp" stroke="#666" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#666" fontSize={10} tickLine={false} axisLine={false} domain={[0, 1]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#18181b', border: '1px solid #333', borderRadius: '8px', fontSize: '12px' }}
+                  />
+                  {Object.keys(history?.services || {}).slice(0, 5).map((svc, i) => (
+                     <Line
+                       key={svc}
+                       type="monotone"
+                       dataKey={`${svc}_demand`}
+                       stroke={`hsl(${i * 60}, 70%, 50%)`}
+                       strokeWidth={2}
+                       dot={false}
+                     />
+                  ))}
+                </LineChart>
+             </ChartContainer>
           </Card>
         </div>
 

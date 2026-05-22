@@ -4,7 +4,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { servicesApi } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Activity, Cpu, HardDrive, Network, Database, RefreshCw } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { XAxis, YAxis, CartesianGrid, Tooltip, Area, AreaChart } from 'recharts';
+import { ChartContainer } from '@/components/ui/chart-container';
 
 interface MetricPoint {
     timestamp: string;
@@ -217,25 +218,23 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <Cpu className="w-5 h-5 text-blue-500" />
                     <h3 className="font-bold">CPU Usage (%)</h3>
                 </div>
-                <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                        <AreaChart data={data.cpu}>
-                            <defs>
-                                <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
-                            <XAxis dataKey="timestamp" tickFormatter={formatTime}
-                                style={{ fontSize: '11px' }} stroke="#555" />
-                            <YAxis style={{ fontSize: '11px' }} stroke="#555" domain={[0, 100]} />
-                            <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
-                            <Area type="monotone" dataKey="value" stroke="#3b82f6"
-                                strokeWidth={2} fill="url(#cpuGrad)" dot={false} />
-                        </AreaChart>
-                    </ResponsiveContainer>
-                </div>
+                <ChartContainer className="h-[200px] w-full">
+                    <AreaChart data={data.cpu}>
+                        <defs>
+                            <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                            </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
+                        <XAxis dataKey="timestamp" tickFormatter={formatTime}
+                            style={{ fontSize: '11px' }} stroke="#555" />
+                        <YAxis style={{ fontSize: '11px' }} stroke="#555" domain={[0, 100]} />
+                        <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
+                        <Area type="monotone" dataKey="value" stroke="#3b82f6"
+                            strokeWidth={2} fill="url(#cpuGrad)" dot={false} />
+                    </AreaChart>
+                </ChartContainer>
             </Card>
 
             {/* Memory Chart */}
@@ -244,25 +243,23 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                     <HardDrive className="w-5 h-5 text-purple-500" />
                     <h3 className="font-bold">Memory Usage (MB)</h3>
                 </div>
-                <div className="h-[200px] w-full">
-                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                        <AreaChart data={data.memory}>
-                            <defs>
-                                <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
-                            <XAxis dataKey="timestamp" tickFormatter={formatTime}
-                                style={{ fontSize: '11px' }} stroke="#555" />
-                            <YAxis style={{ fontSize: '11px' }} stroke="#555" />
-                            <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
-                            <Area type="monotone" dataKey="value" stroke="#a855f7"
-                                strokeWidth={2} fill="url(#memGrad)" dot={false} />
-                        </AreaChart>
-                    </ResponsiveContainer>
-                </div>
+                <ChartContainer className="h-[200px] w-full">
+                    <AreaChart data={data.memory}>
+                        <defs>
+                            <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                            </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
+                        <XAxis dataKey="timestamp" tickFormatter={formatTime}
+                            style={{ fontSize: '11px' }} stroke="#555" />
+                        <YAxis style={{ fontSize: '11px' }} stroke="#555" />
+                        <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
+                        <Area type="monotone" dataKey="value" stroke="#a855f7"
+                            strokeWidth={2} fill="url(#memGrad)" dot={false} />
+                    </AreaChart>
+                </ChartContainer>
             </Card>
 
             {/* Network + Disk I/O — side by side on desktop */}
@@ -273,25 +270,23 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                         <Network className="w-5 h-5 text-emerald-500" />
                         <h3 className="font-bold">Network I/O (KB/s)</h3>
                     </div>
-                    <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                            <AreaChart data={data.network}>
-                                <defs>
-                                    <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
-                                <XAxis dataKey="timestamp" tickFormatter={formatTime}
-                                    style={{ fontSize: '11px' }} stroke="#555" />
-                                <YAxis style={{ fontSize: '11px' }} stroke="#555" />
-                                <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
-                                <Area type="monotone" dataKey="value" stroke="#10b981"
-                                    strokeWidth={2} fill="url(#netGrad)" dot={false} />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
+                    <ChartContainer className="h-[200px] w-full">
+                        <AreaChart data={data.network}>
+                            <defs>
+                                <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
+                            <XAxis dataKey="timestamp" tickFormatter={formatTime}
+                                style={{ fontSize: '11px' }} stroke="#555" />
+                            <YAxis style={{ fontSize: '11px' }} stroke="#555" />
+                            <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
+                            <Area type="monotone" dataKey="value" stroke="#10b981"
+                                strokeWidth={2} fill="url(#netGrad)" dot={false} />
+                        </AreaChart>
+                    </ChartContainer>
                 </Card>
 
                 {/* Disk I/O Chart */}
@@ -300,25 +295,23 @@ export function MetricsTab({ serviceId }: { serviceId: string }) {
                         <Database className="w-5 h-5 text-amber-500" />
                         <h3 className="font-bold">Disk I/O (KB/s)</h3>
                     </div>
-                    <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                            <AreaChart data={data.disk}>
-                                <defs>
-                                    <linearGradient id="diskGrad" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
-                                <XAxis dataKey="timestamp" tickFormatter={formatTime}
-                                    style={{ fontSize: '11px' }} stroke="#555" />
-                                <YAxis style={{ fontSize: '11px' }} stroke="#555" />
-                                <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
-                                <Area type="monotone" dataKey="value" stroke="#f59e0b"
-                                    strokeWidth={2} fill="url(#diskGrad)" dot={false} />
-                            </AreaChart>
-                        </ResponsiveContainer>
-                    </div>
+                    <ChartContainer className="h-[200px] w-full">
+                        <AreaChart data={data.disk}>
+                            <defs>
+                                <linearGradient id="diskGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#333" opacity={0.15} />
+                            <XAxis dataKey="timestamp" tickFormatter={formatTime}
+                                style={{ fontSize: '11px' }} stroke="#555" />
+                            <YAxis style={{ fontSize: '11px' }} stroke="#555" />
+                            <Tooltip labelFormatter={(label) => formatTime(String(label))} contentStyle={tooltipStyle} />
+                            <Area type="monotone" dataKey="value" stroke="#f59e0b"
+                                strokeWidth={2} fill="url(#diskGrad)" dot={false} />
+                        </AreaChart>
+                    </ChartContainer>
                 </Card>
             </div>
         </div>

@@ -508,8 +508,18 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     1. EXHAUSTIVE RESOLUTION: Never leave an environment variable empty. 
     2. DETERMINISTIC LINKING: Use {{SERVICE:repo-name}} for service URLs, {{POSTGRES_URL}} for databases, and {{GENERATE}} for unique secrets.
     3. DEPLOY ORDER: Rank services by dependency depth. Infrastructure -> Core APIs -> Background Workers -> Frontends.
+    4. STRICT TYPE CONSTRAINTS — ALL array fields must contain ONLY strings, NEVER objects/dicts. Violating this will crash the deployment system.
     
-    Return ONLY valid JSON matching this structure:
+    ### STRICT TYPE RULES — VIOLATIONS WILL CRASH THE SYSTEM:
+    - "depends_on" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"name": "svc-a"}] RIGHT: ["svc-a"]
+    - "shared_by" MUST be an array of strings ONLY. NEVER objects. WRONG: [{"service": "svc-a"}] RIGHT: ["svc-a"]
+    - Service-level "addons" (inside each service object) MUST be an array of strings ONLY. WRONG: [{"type": "POSTGRES"}] RIGHT: ["POSTGRES"]
+    - "deploy_sequence" MUST be an array of strings ONLY. NEVER objects.
+    - "env_vars" values MUST be strings ONLY. NEVER objects, arrays, or numbers. WRONG: {"KEY": {"value": "v"}} RIGHT: {"KEY": "{{PLACEHOLDER}}"}
+    - Each top-level addon entry in the "addons" array must have "type" as a string and "shared_by" as an array of strings.
+    - NEVER nest objects inside arrays. Every element of every array must be a primitive (string, number, boolean) or the specific object shape shown below.
+    
+    Return ONLY valid JSON matching this EXACT structure — every field and type must be followed precisely:
     {
       "ecosystem_name": "string",
       "services": [
@@ -785,6 +795,11 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         {json.dumps({{"services": global_services, "addons": global_addons}}, indent=2)}
         ```
         
+        CRITICAL TYPE RULES — violation will crash the system:
+        - ALL array fields ("depends_on", "shared_by", service-level "addons", "deploy_sequence") must contain ONLY strings, NEVER objects.
+        - "env_vars" values must be strings ONLY, never objects or arrays.
+        - Every service in "services" must be a flat object; no arrays within arrays.
+        
         Return ONLY valid JSON matching this exact structure:
         {{
           "ecosystem_name": "Synthesized Ecosystem",
@@ -821,8 +836,13 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
             logger.warning("Skipping unprocessable service %r: %s", svc.get("repo", "?"), exc)
     global_services = sanitized_services
     
-    _apply_plan_repo_defaults(global_services, repos_data)
-    _apply_generic_ecosystem_intelligence(global_services)
+    try:
+        _apply_plan_repo_defaults(global_services, repos_data)
+        _apply_generic_ecosystem_intelligence(global_services)
+    except TypeError as exc:
+        logger.warning("TypeError during ecosystem intelligence processing: %s", exc)
+    except Exception as exc:
+        logger.warning("Unexpected error during ecosystem intelligence processing: %s", exc)
     
     try:
         final_addons = _rebuild_addons_manifest(global_services, global_addons)
