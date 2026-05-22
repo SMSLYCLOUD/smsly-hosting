@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 """Views module."""
 import os
+import posixpath
 from rest_framework import viewsets, permissions, status, parsers, serializers, authentication
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
@@ -17,6 +18,7 @@ from django.core.exceptions import ValidationError
 from django.db import DataError, IntegrityError, transaction
 from django.db.models import Q, Count, Avg, F, ExpressionWrapper, DurationField
 from django.utils.http import content_disposition_header
+from django.core import signing
 from apps.deployments.services.github_webhooks import setup_github_webhook
 import threading
 from .ai_router import (
@@ -179,6 +181,27 @@ def _backup_download_headers(response, file_size: int, filename: str):
     if file_size is not None:
         response['Content-Length'] = str(file_size)
     return response
+
+
+def _verify_signed_download(signed_value: str, expected_pk: str, max_age: int = 300) -> bool:
+    """Verify a signed download token. Returns True if valid and not expired."""
+    try:
+        payload = signing.Signer().unsign_object(signed_value, max_age=max_age)
+        return str(payload.get('pk')) == str(expected_pk)
+    except (signing.BadSignature, signing.SignatureExpired):
+        return False
+
+
+def _generate_signed_download_url(request, obj_pk: str, url_name: str, path_params: dict | None = None) -> str:
+    """Generate a signed download URL valid for 5 minutes."""
+    import time
+    payload = {'pk': str(obj_pk), 'ts': int(time.time())}
+    signed = signing.Signer().sign_object(payload)
+    from urllib.parse import urlencode
+    params = {'signed': signed}
+    if path_params:
+        params.update(path_params)
+    return request.build_absolute_uri(f"/api/v1/{url_name}/?{urlencode(params)}")
 
 
 def _parse_single_range(range_header: str, file_size: int):
@@ -2564,6 +2587,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     return Response(resp.json())
                 if actual_path in ('/app', '/'):
                     fallback_path = '/' if actual_path == '/app' else '/app'
+                    logger.warning(f"Remote file_browse failed for path {actual_path}, trying fallback: {fallback_path}. Error: {resp.status_code if resp else 'Timeout'}")
                     resp = orchestrator._request(
                         method='GET',
                         path=f"/api/v1/services/{service.id}/file-browse/",
@@ -2604,12 +2628,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
             namespace = parts[0] if len(parts) > 1 else 'default'
             pod_name = parts[-1]
             core_v1 = k8s_client.CoreV1Api()
-            exec_command = ['ls', '-la', path]
+            exec_command = ['ls', '-la', '--time-style=long-iso', path]
             resp = core_v1.connect_get_namespaced_pod_exec(
                 pod_name, namespace,
                 command=exec_command,
                 stderr=True, stdin=False,
                 stdout=True, tty=False,
+                _request_timeout=30,
             )
             output = resp
             if isinstance(output, bytes):
@@ -2620,9 +2645,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     path = fallback_path
                     resp = core_v1.connect_get_namespaced_pod_exec(
                         pod_name, namespace,
-                        command=['ls', '-la', path],
+                        command=['ls', '-la', '--time-style=long-iso', path],
                         stderr=True, stdin=False,
                         stdout=True, tty=False,
+                        _request_timeout=30,
                     )
                     output = resp
                     if isinstance(output, bytes):
@@ -2639,12 +2665,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def _exec_file_list(self, container, path: str):
         """List files via Docker exec."""
         try:
-            exit_code, output = container.exec_run(["ls", "-la", path])
+            exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
             if exit_code != 0:
                 fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
                 if fallback_path:
                     path = fallback_path
-                    exit_code, output = container.exec_run(["ls", "-la", path])
+                    exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
             if exit_code != 0:
                 return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
             files = self._parse_ls_output(output.decode('utf-8', errors='replace'))
@@ -2678,20 +2704,24 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return None
 
     def _parse_ls_output(self, output: str) -> list:
-        """Parse `ls -la` output into file dicts."""
+        """Parse `ls -la --time-style=long-iso` output into file dicts.
+        Output format: permissions, links, owner, group, size, date(Y-M-D), time(H:M), filename...
+        """
         files = []
         lines = output.splitlines()
         if lines and lines[0].startswith('total'):
             lines = lines[1:]
         for line in lines:
             parts = line.split()
-            if len(parts) >= 9:
+            if len(parts) >= 8:
+                date = f"{parts[5]} {parts[6]}"
+                name = " ".join(parts[7:])
                 files.append({
                     'permissions': parts[0],
                     'user': parts[2],
                     'size': parts[4],
-                    'date': f"{parts[5]} {parts[6]} {parts[7]}",
-                    'name': " ".join(parts[8:]),
+                    'date': date,
+                    'name': name,
                 })
         return files
 
@@ -2702,6 +2732,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         path = request.query_params.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
@@ -2757,6 +2792,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
@@ -2806,6 +2846,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         path = request.data.get('path')
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
@@ -2858,6 +2903,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not path:
             return Response({'error': 'Path parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
@@ -2897,6 +2947,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if exit_code != 0:
                 return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
 
+            MAX_READ_SIZE = 10 * 1024 * 1024
+            if len(output) > MAX_READ_SIZE:
+                return Response({'error': 'File too large to read. Use download instead.'}, status=413)
+
             return Response({'path': path, 'content': output.decode('utf-8')})
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -2910,6 +2964,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         if not path or content is None:
             return Response({'error': 'Path and content parameters are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            path = _validate_and_sanitize_path(path)
+        except Exception as e:
+            return Response({'error': 'Path validation failed', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
@@ -4515,17 +4574,24 @@ class ServiceBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
-        # Allow token via query param for direct browser downloads
-        token_key = request.query_params.get('token')
-        if token_key:
-            from rest_framework.authtoken.models import Token
-            try:
-                token = Token.objects.select_related('user').get(key=token_key)
-                request.user = token.user
-            except Token.DoesNotExist:
-                return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
-        elif not request.user.is_authenticated:
-            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+        # Try signed token first (short-lived, avoids exposing auth token in URLs)
+        signed_value = request.query_params.get('signed')
+        if signed_value:
+            if not _verify_signed_download(signed_value, str(pk)):
+                return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            # Fallback: allow raw auth token via query param (legacy)
+            token_key = request.query_params.get('token')
+            if token_key:
+                logger.warning("Download using raw token param - consider migrating to signed URLs")
+                from rest_framework.authtoken.models import Token
+                try:
+                    token = Token.objects.select_related('user').get(key=token_key)
+                    request.user = token.user
+                except Token.DoesNotExist:
+                    return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
+            elif not request.user.is_authenticated:
+                return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         backup = self.get_object()
         file_path = backup.file_path
@@ -4587,19 +4653,26 @@ class ServerBackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], permission_classes=[permissions.AllowAny], authentication_classes=[])
     def download(self, request, pk=None):
-        # Allow token via query param for direct browser downloads
-        token_key = request.query_params.get('token')
-        if token_key:
-            from rest_framework.authtoken.models import Token
-            try:
-                token = Token.objects.select_related('user').get(key=token_key)
-                request.user = token.user
-                if not request.user.is_superuser and not request.user.is_staff:
-                    return Response({'error': 'Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
-            except Token.DoesNotExist:
-                return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
-        elif not request.user.is_authenticated:
-            return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
+        # Try signed token first (short-lived, avoids exposing auth token in URLs)
+        signed_value = request.query_params.get('signed')
+        if signed_value:
+            if not _verify_signed_download(signed_value, str(pk)):
+                return Response({'error': 'Invalid or expired download link'}, status=status.HTTP_401_UNAUTHORIZED)
+        else:
+            # Fallback: allow raw auth token via query param (legacy)
+            token_key = request.query_params.get('token')
+            if token_key:
+                logger.warning("Server backup download using raw token param - consider migrating to signed URLs")
+                from rest_framework.authtoken.models import Token
+                try:
+                    token = Token.objects.select_related('user').get(key=token_key)
+                    request.user = token.user
+                    if not request.user.is_superuser and not request.user.is_staff:
+                        return Response({'error': 'Admin privileges required.'}, status=status.HTTP_403_FORBIDDEN)
+                except Token.DoesNotExist:
+                    return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
+            elif not request.user.is_authenticated:
+                return Response({'error': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
         backup = self.get_object()
         file_path = backup.file_path
@@ -4852,7 +4925,6 @@ def _validate_and_sanitize_path(path: str) -> str:
         Raises:
             ValueError: If path contains dangerous characters or sequences
         """
-        import os.path
         import re
         
         if not path or not isinstance(path, str):
@@ -4879,12 +4951,19 @@ def _validate_and_sanitize_path(path: str) -> str:
         # Normalize path separators
         normalized_path = path.replace('\\', '/')
         
+        # Resolve any remaining path traversal components (e.g., /app/foo/../../etc/passwd)
+        normalized_path = posixpath.normpath(normalized_path)
+        
         # Ensure absolute path
         if not normalized_path.startswith('/'):
             normalized_path = '/' + normalized_path
         
         # Remove duplicate slashes
         normalized_path = re.sub(r'/+', '/', normalized_path)
+        
+        # NOTE: Symlinks within the container (e.g., /app/link-to-etc -> /etc) can
+        # bypass this blacklist-based validation. Full symlink resolution requires
+        # container exec which is not performed here.
         
         # Check if path is within reasonable bounds
         if len(normalized_path) > 4096:  # Max path length
