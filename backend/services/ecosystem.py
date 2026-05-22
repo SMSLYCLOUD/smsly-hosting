@@ -1436,9 +1436,14 @@ def _rebuild_addons_manifest(services: List[dict], existing_addons: Any) -> List
             if not addon_type:
                 continue
             try:
-                addon_map.setdefault(addon_type, set()).add(service_name)
-            except TypeError:
-                logger.warning("Unhashable addon_type or service_name: %r / %r", addon_type, service_name)
+                # Ensure both addon_type and service_name are strings
+                str_addon_type = str(addon_type)
+                str_service_name = str(service_name)
+                addon_map.setdefault(str_addon_type, set()).add(str_service_name)
+            except TypeError as e:
+                logger.warning("Unhashable addon_type or service_name: %r / %r - %s", addon_type, service_name, e)
+            except Exception as e:
+                logger.warning("Unexpected error processing addon {0} for service {1}: {2}", addon_type, service_name, e)
 
     try:
         return [

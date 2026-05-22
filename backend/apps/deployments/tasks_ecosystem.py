@@ -475,11 +475,30 @@ def _build_dependency_waves(
     indegree: Dict[str, int] = {}
 
     for key in entries_by_key:
-        deps = set(dep for dep in dependencies.get(key, set()) if dep in entries_by_key)
-        dependencies[key] = deps
-        indegree[key] = len(deps)
-        for dep in deps:
-            dependents[dep].add(key)
+        try:
+            raw_deps = dependencies.get(key, set())
+            # Ensure all dependencies are hashable (strings)
+            safe_deps = []
+            for dep in raw_deps:
+                if dep in entries_by_key:
+                    try:
+                        # Ensure dependency is a string
+                        str_dep = str(dep)
+                        safe_deps.append(str_dep)
+                    except Exception:
+                        logger.warning(f"Cannot convert dependency {dep} to string for service {key}")
+                        continue
+            
+            deps = set(safe_deps)
+            dependencies[key] = deps
+            indegree[key] = len(deps)
+            for dep in deps:
+                dependents[dep].add(key)
+        except Exception as e:
+            logger.error(f"Error processing dependencies for {key}: {e}")
+            # Skip this entry to prevent the entire scan from failing
+            dependencies[key] = set()
+            indegree[key] = 0
 
     def _entry_order(repo_key: str) -> int:
         return int(entries_by_key[repo_key].get("deploy_order", 99))
