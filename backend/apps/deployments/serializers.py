@@ -139,6 +139,14 @@ class ServiceSerializer(serializers.ModelSerializer):
                 or getattr(server, 'host', None)
             )
 
+        if not server and active_host:
+            from apps.deployments.models_core import ManagedServer
+            server = ManagedServer.objects.filter(host=active_host).first()
+            if not server:
+                server = ManagedServer.objects.filter(private_ip=active_host).first()
+            if not server:
+                server = ManagedServer.objects.filter(wg_address=active_host).first()
+
         if active_target_type:
             target_type_label = active_target_type.replace('_', ' ').title()
             if target_type_label == "Remote":
