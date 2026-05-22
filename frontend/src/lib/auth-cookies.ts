@@ -30,6 +30,21 @@ export function setAuthTokenCookie(token: string): void {
 }
 
 /**
+ * Get the auth token from localStorage or cookie.
+ */
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const fromStorage = localStorage.getItem('auth_token');
+  if (fromStorage) {
+    return fromStorage;
+  }
+  const match = document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
  * Clear all authentication cookies.
  */
 export function clearAuthCookies(): void {
