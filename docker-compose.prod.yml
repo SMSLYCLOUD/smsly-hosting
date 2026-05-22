@@ -231,7 +231,7 @@ services:
     - smsly-net
     labels:
     - traefik.enable=true
-    - traefik.http.routers.frontend.rule=PathPrefix(`/`)
+    - traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`${PUBLIC_IP}`) || Host(`localhost`) || Host(`127.0.0.1`)
     - traefik.http.routers.frontend.entrypoints=web
     - traefik.http.routers.frontend.priority=5
     - traefik.http.services.frontend.loadbalancer.server.port=3000
