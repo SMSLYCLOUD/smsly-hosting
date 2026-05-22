@@ -2511,7 +2511,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             container = client.containers.get(container_id)
         except Exception as e:
-            return Response({'error': 'Container not found', 'details': str(e)}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Container not found', 'details': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         return self._exec_file_list(container, path)
 
