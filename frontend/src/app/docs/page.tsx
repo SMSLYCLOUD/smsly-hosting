@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight } from 'lucide-react';
+import { BookOpen, Download, Rocket, Terminal, Code2, Puzzle, ChevronRight, ArrowRight, Server } from 'lucide-react';
 
 const docSections = [
   {
@@ -19,6 +19,15 @@ const docSections = [
     color: 'text-blue-600 dark:text-blue-400',
     bg: 'bg-blue-50 dark:bg-blue-950/40',
     border: 'border-blue-200 dark:border-blue-800',
+  },
+  {
+    href: '/docs/migration',
+    title: 'Migration Guides',
+    desc: 'Move your apps from Vercel, Railway, Heroku, or Render to Grid. Step-by-step guides with data migration, config changes, and cost comparisons.',
+    icon: ArrowRight,
+    color: 'text-amber-600 dark:text-amber-400',
+    bg: 'bg-amber-50 dark:bg-amber-950/40',
+    border: 'border-amber-200 dark:border-amber-800',
   },
   {
     href: '/docs/cli',
