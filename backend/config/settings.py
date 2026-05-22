@@ -5,7 +5,9 @@ import sys
 from pathlib import Path
 from decouple import config, Csv
 import dj_database_url
+import warnings
 
+warnings.filterwarnings("ignore", category=UserWarning, module="dj_rest_auth.registration.serializers")
 BASE_DIR = Path(__file__).resolve().parent.parent
 IS_TESTING = bool(os.environ.get('TESTING')) or any(
     (arg_text := str(arg).lower()) == 'test'

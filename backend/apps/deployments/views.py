@@ -602,22 +602,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         from .models_core import ManagedServer
-        server = serializer.validated_data.get('server')
         
-        # Seamless: If no server is assigned during update, default to primary
-        if not server:
-            server = ManagedServer.get_primary()
-            if not server:
-                server = ManagedServer.objects.filter(
-                    status='ONLINE'
-                ).order_by('?').first()
-            if server:
-                logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
-        
-        ServerGuard.assert_user_workload_allowed(server)
-
         old_repo_url = serializer.instance.repository_url if serializer.instance else None
-        service = serializer.save(server=server)
+        
+        if 'server' in serializer.validated_data:
+            server = serializer.validated_data.get('server')
+            
+            # Seamless: If no server is assigned during update, default to primary
+            if not server:
+                server = ManagedServer.get_primary()
+                if not server:
+                    server = ManagedServer.objects.filter(
+                        status='ONLINE'
+                    ).order_by('?').first()
+                if server:
+                    logger.info("Auto-assigning server %s to service %s during update", server.name, serializer.instance.name)
+            
+            ServerGuard.assert_user_workload_allowed(server)
+            service = serializer.save(server=server)
+        else:
+            service = serializer.save()
 
         # Setup GitHub Webhook if repo URL changed or was newly set
         new_repo_url = service.repository_url
@@ -1350,7 +1354,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'preview_url': preview.service_url,
         }, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['get'], url_path='previews')
+    @action(detail=True, methods=['get'], url_path='legacy-previews')
     def list_previews(self, request, pk=None):
         """
         List all preview environments for a service.
@@ -2517,7 +2521,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         # Validate and sanitize path to prevent directory traversal attacks
         try:
-            normalized_path = self._validate_and_sanitize_path(path)
+            normalized_path = _validate_and_sanitize_path(path)
             if normalized_path is None:
                 return Response({
                     'error': 'Invalid path',
@@ -4835,7 +4839,7 @@ class RemoteTriggerView(GenericAPIView):
             return Response({"error": str(e)}, status=500)
 
 
-    def _validate_and_sanitize_path(self, path: str) -> str:
+def _validate_and_sanitize_path(path: str) -> str:
         """
         Validate and sanitize file system paths to prevent directory traversal attacks.
         
