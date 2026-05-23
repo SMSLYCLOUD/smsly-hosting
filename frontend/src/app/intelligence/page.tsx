@@ -251,7 +251,12 @@ export default function IntelligencePage() {
                          { id: "deepseek", label: "DeepSeek" },
                          { id: "jules", label: "Jules", hasUrl: true },
                          { id: "localllm", label: "Local LLM", hasUrl: true },
-                         { id: "smslycloud", label: "SMSLY Cloud" }
+                         { id: "smslycloud", label: "SMSLY Cloud" },
+                         { id: "freemodel", label: "FreeModel.dev", hasUrl: true },
+                         { id: "opencode", label: "OpenCode", hasUrl: true },
+                         { id: "mistral", label: "Mistral", hasUrl: true },
+                         { id: "nvidia", label: "NVIDIA NIM", hasUrl: true },
+                         { id: "cloudflare", label: "Cloudflare AI", hasUrl: true }
                        ].map(p => (
                          <div key={p.id} className="space-y-3 p-4 rounded-xl bg-muted/30 border border-border/50">
                            <div className="flex items-center justify-between">

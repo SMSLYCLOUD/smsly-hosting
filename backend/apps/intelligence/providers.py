@@ -947,6 +947,309 @@ class SMSLYCloudProvider(AIProvider):
 
 
 # ---------------------------------------------------------------------------
+# FreeModel.dev Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class FreeModelProvider(AIProvider):
+    """
+    FreeModel.dev provider — free AI model gateway.
+
+    Uses an OpenAI-compatible `/chat/completions` endpoint.
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("FREEMODEL_API_KEY", ""))
+        default_model = os.environ.get("FREEMODEL_MODEL", "gpt-4o-mini")
+        self.model = model_override or _normalize_model(default_model, "gpt-4o-mini")
+        self.base_url = os.environ.get(
+            "FREEMODEL_BASE_URL",
+            "https://api.freemodel.dev/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"FreeModel ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[FreeModel] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("FreeModel ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {"balance": "Active (Free)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# OpenCode API Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class OpenCodeProvider(AIProvider):
+    """
+    OpenCode AI provider — configurable gateway.
+
+    Uses an OpenAI-compatible `/chat/completions` endpoint.
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("OPENCODE_API_KEY", ""))
+        default_model = os.environ.get("OPENCODE_MODEL", "opencode-latest")
+        self.model = model_override or _normalize_model(default_model, "opencode-latest")
+        self.base_url = os.environ.get(
+            "OPENCODE_BASE_URL",
+            "https://api.opencode.ai/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"OpenCode ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[OpenCode] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("OpenCode ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {"balance": "Active (OpenCode)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# Mistral Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class MistralProvider(AIProvider):
+    """
+    Mistral AI provider — La Plateforme.
+
+    Uses an OpenAI-compatible `/chat/completions` endpoint.
+    Free tier requires phone verification and training opt-in.
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("MISTRAL_API_KEY", ""))
+        default_model = os.environ.get("MISTRAL_MODEL", "mistral-small-latest")
+        self.model = model_override or _normalize_model(default_model, "mistral-small-latest")
+        self.base_url = os.environ.get(
+            "MISTRAL_BASE_URL",
+            "https://api.mistral.ai/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"Mistral ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[Mistral] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Mistral ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {"balance": "Active (Free Tier)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA NIM Provider (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+class NvidiaNimProvider(AIProvider):
+    """
+    NVIDIA NIM provider — free tier with phone verification.
+
+    Uses an OpenAI-compatible `/chat/completions` endpoint.
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("NVIDIA_API_KEY", ""))
+        default_model = os.environ.get("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+        self.model = model_override or _normalize_model(default_model, "nvidia/llama-3.1-nemotron-70b-instruct")
+        self.base_url = os.environ.get(
+            "NVIDIA_BASE_URL",
+            "https://integrate.api.nvidia.com/v1",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"NVIDIA NIM ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[NVIDIA NIM] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("NVIDIA NIM ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {"balance": "Active (Free Tier)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare Workers AI Provider (OpenAI-compatible via AI Gateway)
+# ---------------------------------------------------------------------------
+
+class CloudflareProvider(AIProvider):
+    """
+    Cloudflare Workers AI provider — accessed via AI Gateway.
+
+    Uses an OpenAI-compatible `/chat/completions` endpoint through
+    Cloudflare AI Gateway. Requires a Cloudflare account and AI Gateway setup.
+    Base URL format: https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway}/workers-ai
+    """
+
+    def __init__(self, model_override: Optional[str] = None):
+        self.api_key = _sanitize_api_key(os.environ.get("CLOUDFLARE_API_KEY", ""))
+        default_model = os.environ.get("CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct")
+        self.model = model_override or _normalize_model(default_model, "@cf/meta/llama-3.1-8b-instruct")
+        self.base_url = os.environ.get(
+            "CLOUDFLARE_BASE_URL",
+            "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+        ).rstrip("/")
+
+    def name(self) -> str:
+        return f"Cloudflare AI ({self.model})"
+
+    @retry_429()
+    def ask(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        if not self.api_key:
+            raise ValueError("[Cloudflare] API key not configured.")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            with httpx.Client(timeout=60) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("Cloudflare ask failed: %s", exc)
+            raise
+
+    def get_balance(self) -> dict:
+        if not self.api_key:
+            return {"balance": "Not configured", "currency": "", "raw": {}}
+        return {"balance": "Active (Free Tier)", "currency": "N/A", "raw": {}}
+
+
+# ---------------------------------------------------------------------------
 # Mock Provider (fallback when no API keys configured)
 # ---------------------------------------------------------------------------
 
@@ -993,6 +1296,11 @@ PROVIDERS = {
     "jules": JulesProvider,
     "localllm": LocalLLMProvider,
     "smslycloud": SMSLYCloudProvider,
+    "freemodel": FreeModelProvider,
+    "opencode": OpenCodeProvider,
+    "mistral": MistralProvider,
+    "nvidia": NvidiaNimProvider,
+    "cloudflare": CloudflareProvider,
     "mock": MockProvider,
 }
 
@@ -1008,6 +1316,11 @@ ENV_KEY_MAP = {
     "jules": "JULES_API_KEY",
     "localllm": "LOCALLM_API_KEY",
     "smslycloud": "SMSLYCLOUD_API_KEY",
+    "freemodel": "FREEMODEL_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+    "cloudflare": "CLOUDFLARE_API_KEY",
 }
 
 SYSTEM_PROMPT = (
@@ -1065,6 +1378,11 @@ def _get_db_settings():
                     "jules_api_key", "jules_model",
                     "localllm_api_key", "localllm_model", "localllm_base_url",
                     "smslycloud_api_key", "smslycloud_model",
+                    "freemodel_api_key", "freemodel_model", "freemodel_base_url",
+                    "opencode_api_key", "opencode_model", "opencode_base_url",
+                    "mistral_api_key", "mistral_model", "mistral_base_url",
+                    "nvidia_api_key", "nvidia_model", "nvidia_base_url",
+                    "cloudflare_api_key", "cloudflare_model", "cloudflare_base_url",
                     "senate_enabled", "senate_max_members",
                 ]
                 available = [f for f in known_fields if f in columns]
@@ -1141,6 +1459,21 @@ def _sync_db_to_env():
         ("localllm_base_url", "LOCALLM_BASE_URL", "http://localhost:11434/v1"),
         ("smslycloud_api_key", "SMSLYCLOUD_API_KEY", ""),
         ("smslycloud_model", "SMSLYCLOUD_MODEL", "smsly-latest"),
+        ("freemodel_api_key", "FREEMODEL_API_KEY", ""),
+        ("freemodel_model", "FREEMODEL_MODEL", "gpt-4o-mini"),
+        ("freemodel_base_url", "FREEMODEL_BASE_URL", "https://api.freemodel.dev/v1"),
+        ("opencode_api_key", "OPENCODE_API_KEY", ""),
+        ("opencode_model", "OPENCODE_MODEL", "opencode-latest"),
+        ("opencode_base_url", "OPENCODE_BASE_URL", "https://api.opencode.ai/v1"),
+        ("mistral_api_key", "MISTRAL_API_KEY", ""),
+        ("mistral_model", "MISTRAL_MODEL", "mistral-small-latest"),
+        ("mistral_base_url", "MISTRAL_BASE_URL", "https://api.mistral.ai/v1"),
+        ("nvidia_api_key", "NVIDIA_API_KEY", ""),
+        ("nvidia_model", "NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct"),
+        ("nvidia_base_url", "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        ("cloudflare_api_key", "CLOUDFLARE_API_KEY", ""),
+        ("cloudflare_model", "CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct"),
+        ("cloudflare_base_url", "CLOUDFLARE_BASE_URL", "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai"),
         ("senate_enabled", "SENATE_ENABLED", "True"),
         ("senate_max_members", "SENATE_MAX_MEMBERS", "5"),
     ]

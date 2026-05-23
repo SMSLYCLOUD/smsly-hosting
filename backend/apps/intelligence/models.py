@@ -72,6 +72,56 @@ class AIProviderSettings(models.Model):
     smslycloud_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
     smslycloud_model = models.CharField(max_length=100, default="smsly-latest", blank=True)
 
+    # FreeModel.dev
+    freemodel_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    freemodel_model = models.CharField(max_length=100, default="gpt-4o-mini", blank=True)
+    freemodel_base_url = models.CharField(
+        max_length=255,
+        default="https://api.freemodel.dev/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for FreeModel.dev provider",
+    )
+
+    # OpenCode API
+    opencode_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    opencode_model = models.CharField(max_length=100, default="opencode-latest", blank=True)
+    opencode_base_url = models.CharField(
+        max_length=255,
+        default="https://api.opencode.ai/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for OpenCode API provider",
+    )
+
+    # Mistral AI (La Plateforme)
+    mistral_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    mistral_model = models.CharField(max_length=100, default="mistral-small-latest", blank=True)
+    mistral_base_url = models.CharField(
+        max_length=255,
+        default="https://api.mistral.ai/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for Mistral provider",
+    )
+
+    # NVIDIA NIM
+    nvidia_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    nvidia_model = models.CharField(max_length=100, default="nvidia/llama-3.1-nemotron-70b-instruct", blank=True)
+    nvidia_base_url = models.CharField(
+        max_length=255,
+        default="https://integrate.api.nvidia.com/v1",
+        blank=True,
+        help_text="OpenAI-compatible base URL for NVIDIA NIM provider",
+    )
+
+    # Cloudflare Workers AI (via AI Gateway)
+    cloudflare_api_key = EncryptedCharField(max_length=500, blank=True, null=True)
+    cloudflare_model = models.CharField(max_length=100, default="@cf/meta/llama-3.1-8b-instruct", blank=True)
+    cloudflare_base_url = models.CharField(
+        max_length=255,
+        default="https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/default/workers-ai",
+        blank=True,
+        help_text="Cloudflare AI Gateway URL. Replace YOUR_ACCOUNT_ID with your Cloudflare account ID.",
+    )
+
     ecosystem_wave_size = models.PositiveSmallIntegerField(
         default=10,
         help_text="Maximum services deployed concurrently per dependency wave",
