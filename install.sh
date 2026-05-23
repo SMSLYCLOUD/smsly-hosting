@@ -3847,8 +3847,6 @@ if d and d != 'localhost':
             break
             ;;
         esac
-        if [ "$attempt" -eq 1 ] && [ "$MODE_AGENT_LITE" != "true" ]; then
-        fi
         sleep 3
     done
     if [ "$BACKEND_OK" = "true" ]; then
