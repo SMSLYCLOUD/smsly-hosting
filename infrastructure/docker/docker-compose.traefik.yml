@@ -60,7 +60,6 @@ services:
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=smsly-proxy"
       - "--providers.docker.endpoint=tcp://socket-proxy:2375"
-      - "--providers.docker.pollInterval=30s"
       
       # Entrypoints
       - "--entrypoints.web.address=:80"

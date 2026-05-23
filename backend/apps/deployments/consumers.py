@@ -1006,8 +1006,8 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
     def _get_user_services(self):
         """Get all services for the authenticated user."""
         from apps.deployments.models import Service, Deployment
-        services = Service.objects.filter(owner=self.user).select_related('deployments').prefetch_related(
-            'deployments__service'
+        services = Service.objects.filter(owner=self.user).prefetch_related(
+            'deployments', 'deployments__service'
         )
         
         # Get the latest deployment for each service
