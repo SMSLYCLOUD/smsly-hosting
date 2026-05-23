@@ -622,6 +622,25 @@ APP_TEMPLATES: Dict[str, AppTemplate] = {
         docs_url='https://hub.docker.com/r/mattermost/focalboard',
     ),
 
+    # ===== SHARED AI INFRASTRUCTURE =====
+    'ollama-cpp': AppTemplate(
+        id='ollama-cpp',
+        name='Ollama CPP (Shared LLM Server)',
+        description='Optimised Ollama C++ runtime shared across all LLM models. Auto-managed — deploys once per project and serves all LLM services. Saves VPS resources by running a single inference engine instead of one per model.',
+        category='ai-infra',
+        docker_image='ollama/ollama:latest',
+        default_port=11434,
+        env_vars={
+            'OLLAMA_HOST': '0.0.0.0',
+            'OLLAMA_KEEP_ALIVE': '24h',
+        },
+        volumes=['/root/.ollama'],
+        health_check='curl -f http://localhost:11434/api/tags || exit 1',
+        supports_public_url=True,
+        supports_dashboard=False,
+        post_deploy_notes='Shared Ollama runtime. All LLM models will pull into this single instance. Do NOT delete manually — it is auto-managed.',
+    ),
+
     # ===== BACKEND PLATFORMS =====
     'appwrite': AppTemplate(
         id='appwrite',

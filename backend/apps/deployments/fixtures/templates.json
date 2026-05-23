@@ -1974,6 +1974,52 @@
         "repository_url":  "https://hub.docker.com/r/mattermost/focalboard"
     },
     {
+        "id":  "ollama-cpp",
+        "name":  "Ollama CPP (Shared LLM Server)",
+        "description":  "Optimised Ollama C++ runtime shared across all LLM models. Auto-managed \u2014 deploys once per project and serves all LLM services. Saves VPS resources by running a single inference engine instead of one per model.",
+        "category":  "ai-infra",
+        "docker_image":  "ollama/ollama:latest",
+        "default_port":  11434,
+        "env_vars":  [
+                         {
+                             "key":  "OLLAMA_HOST",
+                             "value":  "0.0.0.0",
+                             "is_secret":  false
+                         },
+                         {
+                             "key":  "OLLAMA_KEEP_ALIVE",
+                             "value":  "24h",
+                             "is_secret":  false
+                         }
+                     ],
+        "volumes":  [
+                        "/root/.ollama"
+                    ],
+        "health_check":  "curl -f http://localhost:11434/api/tags || exit 1",
+        "docs_url":  "https://ollama.com",
+        "required_addons":  [
+
+                             ],
+        "logo_url":  "/logos/templates/ollama.svg",
+        "website_url":  null,
+        "source_url":  null,
+        "docker_url":  null,
+        "tags":  [
+                     "ollama",
+                     "llm",
+                     "ai",
+                     "shared-infra"
+                 ],
+        "dashboard_port":  null,
+        "supports_dashboard":  false,
+        "supports_public_url":  true,
+        "supports_private_url":  true,
+        "requires_persistence":  true,
+        "post_deploy_notes":  "Shared Ollama runtime. All LLM models will pull into this single instance. Do NOT delete manually \u2014 it is auto-managed.",
+        "icon":  "/logos/templates/ollama.svg",
+        "repository_url":  "https://ollama.com"
+    },
+    {
         "id":  "appwrite",
         "name":  "Appwrite",
         "description":  "Secure backend platform for web, mobile, and Flutter apps.",

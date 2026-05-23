@@ -3224,6 +3224,243 @@ def self_heal_remote_deployment(self, deployment_id: str, server_id: str):
         broadcast_status(deployment)
 
 
+SHARED_OLLAMA_NAME_PREFIX = "ollama-cpp-shared"
+SHARED_OLLAMA_PORT = 11434
+
+# Conservative RAM caps — shared Ollama gets a fraction of total host RAM
+# to leave breathing room for the OS + other services.
+SHARED_OLLAMA_MIN_RAM_MB = 2048    # 2 GB — minimum viable for any LLM
+SHARED_OLLAMA_MAX_RAM_MB = 8192    # 8 GB — practical ceiling on most VPS
+SHARED_OLLAMA_RAM_FRACTION = 0.25  # 25% of total host RAM
+SHARED_OLLAMA_MIN_CPU_CORES = 1.0
+SHARED_OLLAMA_MAX_CPU_CORES = 4.0
+
+
+def _detect_safe_ollama_ram_mb() -> int:
+    """
+    Determine a safe RAM allocation for the shared Ollama CPP based on
+    the host's total system memory.  Never allocates more than 25% of
+    total RAM, clamped between the configured min/max.
+    """
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        total_mb = vm.total // (1024 * 1024)
+        # Available is what's actually free + reclaimable (cache/buffers)
+        available_mb = vm.available // (1024 * 1024)
+
+        fraction_mb = int(total_mb * SHARED_OLLAMA_RAM_FRACTION)
+        safe_mb = max(SHARED_OLLAMA_MIN_RAM_MB, min(fraction_mb, SHARED_OLLAMA_MAX_RAM_MB))
+
+        # On a tight VPS where even 25% of total exceeds what's actually
+        # available, dial back to 50% of available so the OS doesn't OOM.
+        if safe_mb > available_mb * 0.5 and available_mb > 0:
+            safe_mb = max(SHARED_OLLAMA_MIN_RAM_MB, int(available_mb * 0.5))
+
+        logger.info(
+            "Shared Ollama RAM: host=%dMB available=%dMB → allocated=%dMB",
+            total_mb, available_mb, safe_mb,
+        )
+        return safe_mb
+    except Exception:
+        # psutil unavailable — use 4 GB as a safe middle-ground
+        return 4096
+
+
+def _detect_safe_ollama_cpu() -> float:
+    """Detect safe CPU allocation for shared Ollama."""
+    try:
+        import psutil
+        logical = psutil.cpu_count(logical=True) or 1
+        # Give Ollama up to half the logical cores, clamped
+        allocated = max(SHARED_OLLAMA_MIN_CPU_CORES,
+                        min(float(logical) * 0.5, SHARED_OLLAMA_MAX_CPU_CORES))
+        return round(allocated, 1)
+    except Exception:
+        return 2.0
+
+
+def _ensure_shared_ollama_cpp(service, provider) -> str | None:
+    """
+    Find or create a shared Ollama CPP service for the project.
+    Returns the shared service ID (str) or None if creation fails.
+    Only one shared Ollama CPP is maintained per project to save VPS resources.
+    """
+    from apps.deployments.models import Service, Deployment
+
+    project = getattr(service, 'project', None)
+    owner = getattr(service, 'owner', None)
+
+    # 1. Look for an existing shared Ollama in the same project
+    existing = Service.objects.filter(
+        project=project,
+        deploy_type='DOCKER',
+        docker_image__contains='ollama',
+    ).order_by('-created_at').first()
+
+    # If one exists and looks active/resourced, reuse it
+    if existing and existing.docker_image and 'ollama' in existing.docker_image.lower():
+        if existing.status not in {'DELETION_PENDING', 'DELETING'}:
+            # Ensure it has a project association
+            if not existing.project and project:
+                existing.project = project
+                existing.save(update_fields=['project'])
+            return str(existing.id)
+
+    # 2. Auto-detect safe resource allocation from VPS
+    ram_mb = _detect_safe_ollama_ram_mb()
+    cpu = _detect_safe_ollama_cpu()
+
+    # 3. Create a new shared Ollama CPP service
+    try:
+        import re
+        project_id = str(project.id)[:8] if project else 'global'
+        name = f"{SHARED_OLLAMA_NAME_PREFIX}-{project_id}"
+        name = re.sub(r'[^a-z0-9-]+', '-', name.lower()).strip('-')[:63]
+
+        # Avoid duplicates with race-condition safety
+        existing = Service.objects.filter(name=name).first()
+        if existing:
+            return str(existing.id)
+
+        shared = Service.objects.create(
+            name=name,
+            deploy_type='DOCKER',
+            docker_image='ollama/ollama:latest',
+            internal_port=SHARED_OLLAMA_PORT,
+            owner=owner,
+            provider=provider,
+            project=project,
+            memory_mb=ram_mb,
+            cpu_cores=cpu,
+            deploy_mode='SINGLE',
+        )
+        EnvironmentVariable.objects.update_or_create(
+            service=shared, key='OLLAMA_HOST',
+            defaults={'value': '0.0.0.0', 'is_secret': False}
+        )
+        EnvironmentVariable.objects.update_or_create(
+            service=shared, key='OLLAMA_KEEP_ALIVE',
+            defaults={'value': '24h', 'is_secret': False}
+        )
+        EnvironmentVariable.objects.update_or_create(
+            service=shared, key='PORT',
+            defaults={'value': str(SHARED_OLLAMA_PORT), 'is_secret': False}
+        )
+        EnvironmentVariable.objects.update_or_create(
+            service=shared, key='PUBLIC_DOMAIN',
+            defaults={'value': shared.public_domain or '', 'is_secret': False}
+        )
+
+        # Trigger deployment
+        deployment = Deployment.objects.create(
+            service=shared,
+            status='QUEUED',
+            commit_hash='template',
+            commit_message='Shared Ollama CPP (auto-deployed)'
+        )
+        smart_deploy_task.delay(
+            deployment_id=str(deployment.id),
+            provider_id=str(provider.id)
+        )
+        logger.info(
+            "Shared Ollama CPP created: %s (project %s, %dMB RAM, %.1f CPU)",
+            name, project_id, ram_mb, cpu,
+        )
+        return str(shared.id)
+
+    except Exception as exc:
+        logger.error("Failed to create shared Ollama CPP: %s", exc)
+        return None
+
+
+def _pull_ollama_models_into_shared(shared_ollama_id: str, models: list):
+    """
+    Pull Ollama models into the shared Ollama CPP container.
+    Runs as a fire-and-forget background subprocess.
+    """
+    import shlex
+    try:
+        shared = Service.objects.get(id=shared_ollama_id)
+        container_name = shared.name
+        for model in models:
+            if not model:
+                continue
+            model = str(model).strip()
+            logger.info("Pulling Ollama model '%s' into shared container %s", model, container_name)
+            subprocess.Popen(
+                ["docker", "exec", container_name, "sh", "-lc",
+                 f"ollama pull {shlex.quote(model)}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as exc:
+        logger.warning("Failed to pull models into shared Ollama %s: %s", shared_ollama_id, exc)
+
+
+# ── Shared Ollama cleanup (called from delete_service_task) ───────────
+def _cleanup_shared_ollama_if_unused(project):
+    """
+    After deleting a service, check if the shared Ollama CPP is still needed.
+    If no remaining services in the project reference Ollama, delete it
+    to free VPS resources.
+    """
+    if not project:
+        return
+    try:
+        from apps.deployments.models import Service
+
+        # Find the shared Ollama in this project
+        shared = Service.objects.filter(
+            project=project,
+            deploy_type='DOCKER',
+            docker_image__startswith='ollama/',
+        ).order_by('-created_at').first()
+
+        if not shared:
+            return
+
+        # Check: are there any OTHER services in the project that need Ollama?
+        remaining = Service.objects.filter(
+            project=project,
+        ).exclude(
+            id=shared.id
+        ).exclude(
+            status__in=['DELETION_PENDING', 'DELETING']
+        ).exclude(
+            deploy_type='DOCKER',
+            docker_image__startswith='ollama/',  # skip other Ollama-only services
+        )
+
+        # Look for any service that references Ollama via env vars or docker image
+        needs_ollama = False
+        for svc in remaining:
+            img = str(svc.docker_image or '').lower()
+            if img.startswith('ollama/'):
+                needs_ollama = True
+                break
+            # Check if env vars reference OLLAMA_BASE_URL
+            if svc.env_vars.filter(key='OLLAMA_BASE_URL').exists():
+                needs_ollama = True
+                break
+            if svc.env_vars.filter(key='OLLAMA_MODEL').exists():
+                needs_ollama = True
+                break
+
+        if not needs_ollama:
+            logger.info(
+                "No remaining services need shared Ollama in project %s. "
+                "Cleaning up %s to free VPS resources.",
+                project.id, shared.name
+            )
+            # Mark for deletion
+            shared.status = 'DELETION_PENDING'
+            shared.save(update_fields=['status'])
+            delete_service_task.delay(str(shared.id), force=True)
+    except Exception as exc:
+        logger.warning("Shared Ollama cleanup check failed: %s", exc)
+
+
 @shared_task(bind=True, max_retries=0)
 def one_click_deploy_template_task(self, service_id: str, template_id: str):
     """
@@ -3366,12 +3603,24 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                 return # Stop deploy
         
         addon_urls[addon_type] = addon.connection_url
-        
+
+        # Parse connection URL to get host:port for template DB_HOST vars
+        addon_hostname = ""
+        addon_port = ""
+        try:
+            parsed_addon = urlparse(addon.connection_url)
+            if parsed_addon.hostname:
+                addon_hostname = parsed_addon.hostname
+                addon_port = str(parsed_addon.port or "")
+        except Exception:
+            pass
+
         # Inject Env (legacy/direct injection)
         key_map = {
             'POSTGRES': 'DATABASE_URL',
             'REDIS': 'REDIS_URL',
             'MONGODB': 'MONGODB_URI',
+            'MYSQL': 'MYSQL_URL',
             'ELASTICSEARCH': 'ELASTICSEARCH_URL',
         }
         key = key_map.get(addon_type, f"{addon_type}_URL")
@@ -3379,6 +3628,32 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
             service=service, key=key,
             defaults={'value': addon.connection_url, 'is_secret': True}
         )
+
+        # Update template-specific DB_HOST vars so apps find the addon
+        # (e.g. WordPress expects WORDPRESS_DB_HOST, not MYSQL_URL)
+        host_port = f"{addon_hostname}:{addon_port}" if addon_hostname and addon_port else addon_hostname
+        if host_port and addon_type == 'MYSQL':
+            db_host_keys = ['WORDPRESS_DB_HOST', 'DB_HOST']
+            for db_host_key in db_host_keys:
+                existing = EnvironmentVariable.objects.filter(
+                    service=service, key=db_host_key
+                ).first()
+                if existing:
+                    # Only overwrite if it looks like a placeholder
+                    val = str(existing.value or "")
+                    if not val or val == 'db:3306' or 'localhost' in val:
+                        existing.value = host_port
+                        existing.save(update_fields=['value'])
+        if host_port and addon_type in ('POSTGRES', 'MYSQL', 'MONGODB'):
+            # Generic DB_HOST for any app that needs it
+            generic = EnvironmentVariable.objects.filter(
+                service=service, key='DB_HOST'
+            ).first()
+            if not generic and host_port:
+                EnvironmentVariable.objects.create(
+                    service=service, key='DB_HOST',
+                    value=host_port, is_secret=False
+                )
 
     # Render and store template environment variables
     def render_value(raw: str) -> str:
@@ -3393,11 +3668,22 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
         v = v.replace('${REDIS_URL}', addon_urls.get('REDIS', os.environ.get('REDIS_URL', '')))
         v = v.replace('${MYSQL_URL}', addon_urls.get('MYSQL', os.environ.get('MYSQL_URL', '')))
         v = v.replace('${ELASTICSEARCH_URL}', addon_urls.get('ELASTICSEARCH', os.environ.get('ELASTICSEARCH_URL', '')))
+
+        # Shared Ollama URL — use the freshly injected service env var if available,
+        # fall back to OS environment, then default.
+        injected_ollama = (
+            EnvironmentVariable.objects
+            .filter(service=service, key='OLLAMA_BASE_URL')
+            .values_list('value', flat=True)
+            .first()
+        )
+        ollama_base_default = injected_ollama or os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434')
+
         # System Environment Overrides & Defaults
         default_ai_senate = os.environ.get('AI_SENATE_URL') or 'http://ollama:11434'
         v = v.replace('${AI_SENATE_URL}', default_ai_senate)
         v = v.replace('${LITELLM_MASTER_KEY}', os.environ.get('LITELLM_MASTER_KEY', ''))
-        v = v.replace('${OLLAMA_BASE_URL}', os.environ.get('OLLAMA_BASE_URL', 'http://ollama:11434'))
+        v = v.replace('${OLLAMA_BASE_URL}', ollama_base_default)
         v = v.replace('${OLLAMA_MODEL}', os.environ.get('OLLAMA_MODEL', 'llama3'))
         v = v.replace('${AI_ROUTER_API_BASE}', os.environ.get('AI_ROUTER_API_BASE', DEFAULT_AI_ROUTER_API_BASE))
         v = v.replace('${AI_ROUTER_UI_BASE}', os.environ.get('AI_ROUTER_UI_BASE', DEFAULT_AI_ROUTER_UI_BASE))
@@ -3505,74 +3791,71 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
 
     provider = service.provider or CloudProvider.objects.filter(is_active=True).first()
 
+    # ── Shared Ollama CPP Orchestration ─────────────────────────────────
+    # Intelligently manages a single Ollama CPP instance per project.
+    # When deploying any LLM that needs Ollama, the system auto-creates a
+    # shared Ollama CPP runtime if one doesn't exist, and wires the new
+    # service to it. When the last LLM consumer is deleted, the shared
+    # Ollama is removed to free VPS resources.
+    # ────────────────────────────────────────────────────────────────────
+    shared_ollama_id = _ensure_shared_ollama_cpp(service, provider)
+    shared_ollama_url = ""
+    if shared_ollama_id:
+        try:
+            shared_ollama = Service.objects.get(id=shared_ollama_id)
+            shared_name = shared_ollama.name
+            shared_port = shared_ollama.internal_port or 11434
+            shared_ollama_url = f"http://{shared_name}:{shared_port}"
+        except Service.DoesNotExist:
+            shared_ollama_id = None
+
+    # Inject OLLAMA_BASE_URL for any LLM that references it
+    if shared_ollama_url:
+        ollama_base_key = 'OLLAMA_BASE_URL'
+        if template:
+            env_vars = template.get('env_vars') or []
+            has_ollama_ref = any(
+                str(item.get('key') or '').upper() in {'OLLAMA_BASE_URL', 'OLLAMA_MODEL'}
+                for item in env_vars if isinstance(item, dict)
+            )
+            # Also detect Ollama-based templates by their docker image
+            docker_img = str(template.get('docker_image') or '').lower()
+            is_ollama_template = docker_img.startswith('ollama/') or docker_img == 'ollama/ollama:latest'
+            if has_ollama_ref or is_ollama_template:
+                EnvironmentVariable.objects.update_or_create(
+                    service=service,
+                    key=ollama_base_key,
+                    defaults={'value': shared_ollama_url, 'is_secret': False}
+                )
+                # For Ollama-native templates, also set OLLAMA_HOST so they
+                # know the host to talk to for ollama pull / API calls
+                if is_ollama_template and shared_ollama_id:
+                    EnvironmentVariable.objects.update_or_create(
+                        service=service,
+                        key='OLLAMA_HOST',
+                        defaults={'value': shared_ollama_url.replace('http://', '').replace(':11434', ':11434'), 'is_secret': False}
+                    )
+
     # One-Click AI Router + Ollama auto-deployment
     if provider and template and template.get('id') == 'ai-router':
-        import secrets
         import re
         def slugify(value: str) -> str:
             value = (value or 'service').lower()
             value = re.sub(r'[^a-z0-9]+', '-', value).strip('-')
             return (value[:48] or 'service')
 
-        companion_templates = ['llama3.1-7b', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
-        companion_service_ids = []
+        # AI Router uses shared Ollama CPP — no need for 3 separate containers.
+        # Register companion models via the shared Ollama instead.
+        if shared_ollama_id:
+            companion_service_ids = [str(shared_ollama_id)]
 
-        for c_template_id in companion_templates:
-            c_template = next((t for t in templates if t.get('id') == c_template_id), None)
-            if not c_template:
-                continue
-
-            c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
-            c_internal_port = int(c_template.get('default_port') or 11434)
-
-            c_service = Service.objects.create(
-                name=c_name,
-                deploy_type='DOCKER',
-                docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
-                internal_port=c_internal_port,
-                owner=service.owner,
-                provider=provider,
-                project=service.project,
-                memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
-                cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
-            )
-            companion_service_ids.append(str(c_service.id))
-
-            EnvironmentVariable.objects.update_or_create(
-                service=c_service,
-                key='PORT',
-                defaults={'value': str(c_internal_port), 'is_secret': False}
-            )
-            EnvironmentVariable.objects.update_or_create(
-                service=c_service,
-                key='PUBLIC_DOMAIN',
-                defaults={'value': c_service.public_domain, 'is_secret': False}
+            # Pull required default models into the shared Ollama
+            _pull_ollama_models_into_shared(
+                shared_ollama_id,
+                ['llama3.1:7b', 'qwen2.5:0.5b', 'nomic-embed-text'],
             )
 
-            c_env_vars = c_template.get('env_vars') or []
-            for item in c_env_vars:
-                key = str(item.get('key') or '').strip()
-                if key:
-                    EnvironmentVariable.objects.update_or_create(
-                        service=c_service,
-                        key=key,
-                        defaults={
-                            'value': render_value(item.get('value', '')),
-                            'is_secret': bool(item.get('is_secret', False)),
-                        }
-                    )
-
-            # trigger smart deploy for the companion
-            c_deployment = Deployment.objects.create(
-                service=c_service,
-                status='QUEUED',
-                commit_hash='template',
-                commit_message=f"Auto-companion Template: {c_template_id}"
-            )
-            smart_deploy_task.delay(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
-
-        # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS on the router before deploying it
-        if companion_service_ids:
+            # Automatically update the AI_ROUTER_SELECTED_SERVICE_IDS
             try:
                 import json
                 EnvironmentVariable.objects.update_or_create(
@@ -3583,8 +3866,101 @@ def one_click_deploy_template_task(self, service_id: str, template_id: str):
                         'is_secret': False,
                     }
                 )
-            except Exception as e:
-                pass  # Fail gracefully if auto-link fails
+            except Exception:
+                pass
+
+            # Wire OLLAMA_BASE_URL even if not in template env_vars
+            EnvironmentVariable.objects.update_or_create(
+                service=service,
+                key='OLLAMA_BASE_URL',
+                defaults={'value': shared_ollama_url, 'is_secret': False}
+            )
+        else:
+            # Fallback: shared Ollama unavailable — deploy separate companions
+            companion_templates = ['llama3.1-7b', 'qwen2.5-0.5b', 'ollama-nomic-embed-text']
+            companion_service_ids = []
+
+            for c_template_id in companion_templates:
+                c_template = next((t for t in templates if t.get('id') == c_template_id), None)
+                if not c_template:
+                    continue
+
+                c_name = f"{slugify(c_template_id)}-{secrets.token_hex(4)}"[:63]
+                c_internal_port = int(c_template.get('default_port') or 11434)
+
+                c_service = Service.objects.create(
+                    name=c_name,
+                    deploy_type='DOCKER',
+                    docker_image=str(c_template.get('docker_image', 'ollama/ollama:latest')),
+                    internal_port=c_internal_port,
+                    owner=service.owner,
+                    provider=provider,
+                    project=service.project,
+                    memory_mb=int(c_template.get('min_ram_gb') or 1) * 1024,
+                    cpu_cores=float(c_template.get('min_cpu_cores') or 1.0)
+                )
+                companion_service_ids.append(str(c_service.id))
+
+                EnvironmentVariable.objects.update_or_create(
+                    service=c_service,
+                    key='PORT',
+                    defaults={'value': str(c_internal_port), 'is_secret': False}
+                )
+                EnvironmentVariable.objects.update_or_create(
+                    service=c_service,
+                    key='PUBLIC_DOMAIN',
+                    defaults={'value': c_service.public_domain, 'is_secret': False}
+                )
+
+                c_env_vars = c_template.get('env_vars') or []
+                for item in c_env_vars:
+                    key = str(item.get('key') or '').strip()
+                    if key:
+                        EnvironmentVariable.objects.update_or_create(
+                            service=c_service,
+                            key=key,
+                            defaults={
+                                'value': render_value(item.get('value', '')),
+                                'is_secret': bool(item.get('is_secret', False)),
+                            }
+                        )
+
+                c_deployment = Deployment.objects.create(
+                    service=c_service,
+                    status='QUEUED',
+                    commit_hash='template',
+                    commit_message=f"Auto-companion Template: {c_template_id}"
+                )
+                smart_deploy_task.delay(deployment_id=str(c_deployment.id), provider_id=str(provider.id))
+
+            if companion_service_ids:
+                try:
+                    import json
+                    EnvironmentVariable.objects.update_or_create(
+                        service=service,
+                        key='AI_ROUTER_SELECTED_SERVICE_IDS',
+                        defaults={
+                            'value': json.dumps(companion_service_ids),
+                            'is_secret': False,
+                        }
+                    )
+                except Exception:
+                    pass
+
+    # ── Ollama model pull for standalone Ollama templates ──────────────
+    # When deploying a standalone Ollama model (e.g. deepseek-r1) and
+    # shared Ollama CPP is handling it, schedule a model pull.
+    if template and shared_ollama_id and shared_ollama_url:
+        docker_img = str(template.get('docker_image') or '').lower()
+        if docker_img.startswith('ollama/'):
+            env_vars = template.get('env_vars') or []
+            ollama_model = ""
+            for item in (env_vars or []):
+                if isinstance(item, dict) and str(item.get('key') or '').upper() == 'OLLAMA_MODEL':
+                    ollama_model = render_value(item.get('value', ''))
+                    break
+            if ollama_model:
+                _pull_ollama_models_into_shared(shared_ollama_id, [ollama_model])
 
     # Trigger deploy for the main template
     if provider:
@@ -4142,7 +4518,19 @@ def delete_service_task(self, service_id: str, force: bool = False):
             success = True
 
     if success:
+        # Capture project reference before deleting the service
+        service_project = getattr(service, 'project', None)
         service.delete()
+
+        # After deleting an LLM consumer, check if shared Ollama CPP
+        # is still needed. If no remaining services need it, clean it up
+        # to free VPS resources.
+        if service_project:
+            try:
+                _cleanup_shared_ollama_if_unused(service_project)
+            except Exception as cleanup_exc:
+                logger.warning("Shared Ollama cleanup check failed for project %s: %s",
+                               service_project.id, cleanup_exc)
     else:
         service.status = Service.Status.DELETION_FAILED
         service.deletion_error = "Failed to remove some runtime resources. If this node is unassigned or unreachable, use 'Retry' or manual DB cleanup."
