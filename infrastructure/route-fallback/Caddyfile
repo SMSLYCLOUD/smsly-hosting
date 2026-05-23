@@ -7,13 +7,12 @@
 
 	# Serve the "Service waking up" page for everything else
 	handle {
+		header Content-Type "text/html"
 		header Cache-Control "no-store, no-cache, must-revalidate"
 		header Pragma "no-cache"
 		header Expires "0"
 		header Retry-After "15"
 		header X-SMSLY-Route-Fallback "true"
-		respond /srv/index.html 503 {
-			content_type text/html
-		}
+		respond /srv/index.html 503
 	}
 }

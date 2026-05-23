@@ -3,6 +3,8 @@ import re
 from decimal import Decimal
 import logging
 
+from django.core.cache import cache
+from django.utils import timezone
 from rest_framework import serializers, viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -594,13 +596,34 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         Scan all accessible GitHub repositories and generate a zero-click deploy plan.
         """
         from apps.deployments.tasks_ecosystem import ecosystem_scan_task
+        from apps.deployments.models_ecosystem import EcosystemPlan
+
         ai_provider = request.data.get('ai_provider')
         selected_repos = request.data.get('selected_repos')
-        
-        # Keep a stable call signature for API/tests while task internals may evolve.
-        task = ecosystem_scan_task.delay(str(request.user.id), 30, ai_provider=ai_provider, selected_repos=selected_repos)
 
-        return Response({'task_id': task.id, 'status': 'scanning'})
+        plan_record = EcosystemPlan.objects.create(
+            user=request.user,
+            selected_repos=selected_repos or [],
+            ai_provider=ai_provider,
+            status=EcosystemPlan.Status.SCANNING,
+        )
+
+        task = ecosystem_scan_task.delay(
+            str(request.user.id),
+            30,
+            ai_provider=ai_provider,
+            selected_repos=selected_repos,
+            plan_id=str(plan_record.id),
+        )
+
+        plan_record.scan_task_id = task.id
+        plan_record.save(update_fields=['scan_task_id'])
+
+        return Response({
+            'task_id': task.id,
+            'plan_id': str(plan_record.id),
+            'status': 'scanning',
+        })
 
     @action(detail=False, methods=['post'])
     def ecosystem_bulk_env(self, request):
@@ -653,6 +676,10 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         """
         Deploy a previously generated ecosystem plan.
         """
+        from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
+        from apps.deployments.models_ecosystem import EcosystemPlan
+
+        plan_id = request.data.get('plan_id')
         plan = request.data.get('plan')
         if not isinstance(plan, dict):
             return Response(
@@ -660,16 +687,41 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        from apps.deployments.tasks_ecosystem import ecosystem_deploy_task
-        task = ecosystem_deploy_task.delay(str(request.user.id), plan)
+        try:
+            plan_record = EcosystemPlan.objects.get(id=plan_id, user=request.user)
+        except EcosystemPlan.DoesNotExist:
+            plan_record = EcosystemPlan.objects.create(
+                user=request.user,
+                plan=plan,
+                status=EcosystemPlan.Status.DEPLOYING,
+            )
+        else:
+            plan_record.plan = plan
+            plan_record.status = EcosystemPlan.Status.DEPLOYING
+            plan_record.save()
 
-        return Response({'task_id': task.id, 'status': 'deploying'})
+        task = ecosystem_deploy_task.delay(
+            str(request.user.id),
+            plan,
+            plan_id=str(plan_record.id),
+        )
+
+        plan_record.deploy_task_id = task.id
+        plan_record.save(update_fields=['deploy_task_id'])
+
+        return Response({
+            'task_id': task.id,
+            'plan_id': str(plan_record.id),
+            'status': 'deploying',
+        })
 
     @action(detail=False, methods=['get'])
     def task_status(self, request):
         """
         Check status of a long-running background task (Celery).
         """
+        from apps.deployments.models_ecosystem import EcosystemPlan
+
         task_id = request.query_params.get('task_id')
         if not task_id:
             return Response({'error': 'task_id required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -710,7 +762,66 @@ class IntelligenceViewSet(viewsets.GenericViewSet):
         }
         if isinstance(payload, dict) and payload.get('error'):
             response_data['error'] = payload.get('error')
+
+        # Cache scan results and sync plan status
+        if result.ready() and isinstance(payload, dict):
+            if 'plan' in payload and not payload.get('error'):
+                cache_key = f"ecosystem:scan:{request.user.id}"
+                cache.set(cache_key, payload, timeout=1800)
+
+            if result.status == 'SUCCESS':
+                EcosystemPlan.objects.filter(scan_task_id=task_id).update(
+                    status=EcosystemPlan.Status.REVIEW,
+                    plan=payload,
+                )
+                EcosystemPlan.objects.filter(deploy_task_id=task_id).update(
+                    status=EcosystemPlan.Status.COMPLETED,
+                    completed_at=timezone.now(),
+                )
+            elif result.status == 'FAILURE':
+                EcosystemPlan.objects.filter(scan_task_id=task_id).update(
+                    status=EcosystemPlan.Status.FAILED,
+                    error_message=str(payload.get('error', '')),
+                )
+                EcosystemPlan.objects.filter(deploy_task_id=task_id).update(
+                    status=EcosystemPlan.Status.FAILED,
+                    error_message=str(payload.get('error', '')),
+                )
+
         return Response(response_data)
+
+    @action(detail=False, methods=['get'])
+    def cached_scan_result(self, request):
+        """Return cached ecosystem scan result if available."""
+        cache_key = f"ecosystem:scan:{request.user.id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response({'has_cache': True, 'plan': cached})
+        return Response({'has_cache': False})
+
+    @action(detail=False, methods=['get'])
+    def active_plan(self, request):
+        """Return the user's most recent non-completed plan for resume."""
+        from apps.deployments.models_ecosystem import EcosystemPlan
+
+        plan = EcosystemPlan.objects.filter(
+            user=request.user,
+            status__in=['scanning', 'review', 'deploying'],
+        ).first()
+
+        if not plan:
+            return Response({'has_active_plan': False})
+
+        return Response({
+            'has_active_plan': True,
+            'plan_id': str(plan.id),
+            'status': plan.status,
+            'scan_task_id': plan.scan_task_id,
+            'deploy_task_id': plan.deploy_task_id,
+            'selected_repos': plan.selected_repos,
+            'ai_provider': plan.ai_provider,
+            'plan': plan.plan,
+        })
 
     @action(detail=False, methods=['post'])
     def analyze_repo(self, request):

@@ -7,7 +7,8 @@ import uuid
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from django.db import DatabaseError
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from django.http import StreamingHttpResponse, JsonResponse
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework import status
@@ -16,13 +17,16 @@ from .providers import (
     get_available_providers,
     get_configured_providers,
     ask_with_fallback,
+    _cached_ask,
     _sync_db_to_env,
     _sanitize_api_key,
+    PROVIDERS,
 )
 from .analyzer import LogAnalyzer
 from .cost import CostAdvisor
 from apps.deployments.models_audit import AuditLog
 from apps.core.auth import APIKeyAuthentication, CsrfExemptSessionAuthentication
+from apps.deployments.rate_limiting import AIChatRateThrottle, AIAnalysisRateThrottle
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +205,7 @@ def ai_providers_update(request):
 @extend_schema(request=OpenApiTypes.OBJECT, responses=OpenApiTypes.OBJECT)
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
+@throttle_classes([AIChatRateThrottle])
 def ai_test_prompt(request):
     """
     Test AI providers with a prompt.
@@ -212,7 +217,7 @@ def ai_test_prompt(request):
     system_prompt = request.data.get("system_prompt", None)
 
     try:
-        response, provider_name = ask_with_fallback(prompt, system_prompt=system_prompt)
+        response, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         configured = get_configured_providers()
         mode = "senate_committee" if len(configured) >= 2 else ("solo" if len(configured) == 1 else "mock")
 
@@ -233,6 +238,7 @@ def ai_test_prompt(request):
 @api_view(["POST"])
 @authentication_classes([APIKeyAuthentication, CsrfExemptSessionAuthentication])
 @permission_classes([IsAuthenticated])
+@throttle_classes([AIChatRateThrottle])
 def ai_chat_completions(request):
     """
     OpenAI-compatible chat completions endpoint.
@@ -259,7 +265,7 @@ def ai_chat_completions(request):
         return Response({"error": "No user message found"}, status=400)
 
     try:
-        response_text, provider_name = ask_with_fallback(prompt, system_prompt=system_prompt)
+        response_text, provider_name = _cached_ask(prompt, system_prompt=system_prompt, cache_bypass=True)
         
         # Format response in OpenAI style
         completion_id = f"chatcmpl-{uuid.uuid4()}"
@@ -292,7 +298,60 @@ def ai_chat_completions(request):
 
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def ai_chat_stream(request):
+    """SSE streaming endpoint for AI chat."""
+    prompt = request.data.get("prompt") or request.data.get("message", "")
+    system_prompt = request.data.get("system_prompt")
+    provider_id = request.data.get("provider")
+
+    if not prompt:
+        return JsonResponse({"error": "Prompt is required"}, status=400)
+
+    def event_stream():
+        try:
+            _sync_db_to_env()
+
+            provider = None
+            if provider_id and provider_id != "auto":
+                cls = PROVIDERS.get(provider_id)
+                if cls:
+                    instance = cls()
+                    if instance.is_configured():
+                        instance.id = provider_id
+                        provider = instance
+
+            if not provider:
+                configured = get_configured_providers()
+                provider = configured[0] if configured else None
+
+            if provider and hasattr(provider, 'ask_stream'):
+                for chunk in provider.ask_stream(prompt, system_prompt):
+                    yield f"data: {json.dumps({'content': chunk})}\n\n"
+            else:
+                response, _ = ask_with_fallback(prompt, system_prompt, provider_id)
+                yield f"data: {json.dumps({'content': response})}\n\n"
+
+            yield "data: [DONE]\n\n"
+        except Exception as exc:
+            logger.error("AI streaming error: %s", exc)
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingHttpResponse(
+        event_stream(),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@api_view(["POST"])
 @permission_classes([IsAdminUser])
+@throttle_classes([AIAnalysisRateThrottle])
 def ai_analyze_logs(request):
     """
     POST /api/v1/ai/analyze/

@@ -64,8 +64,8 @@ class EcosystemGraphBuilder:
             "type": "proxy",
             "kind": "PROXY",
             "label": "Traefik",
-            "health_check": {"type": "tcp", "host": "traefik", "port": 8081},
-            "metadata": {"ports": ["8081"], "role": "Docker Service Router"},
+            "health_check": {"type": "tcp", "host": "traefik", "port": 80},
+            "metadata": {"ports": ["80", "8080"], "role": "Docker Service Router"},
         },
         {
             "id": "backend",

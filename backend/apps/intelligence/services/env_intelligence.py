@@ -3,7 +3,7 @@ import logging
 import re
 import secrets
 from typing import Dict, List, Any
-from apps.intelligence.providers import ask_with_fallback
+from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class EnvironmentIntelligenceService:
         )
 
         try:
-            response_text, provider = ask_with_fallback(prompt, cls.SYSTEM_PROMPT)
+            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT)
             logger.info("Senate resolution for %s delivered by %s", service_name, provider)
 
             # Extract JSON from response
@@ -169,7 +169,7 @@ class EnvironmentIntelligenceService:
         )
 
         try:
-            response_text, provider = ask_with_fallback(prompt, cls.SYSTEM_PROMPT)
+            response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT)
             logger.info("Ecosystem Senate resolution delivered by %s", provider)
 
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)

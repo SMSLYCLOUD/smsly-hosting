@@ -53,6 +53,16 @@ urlpatterns = [
         name='ecosystem-bulk-env',
     ),
     path(
+        'ecosystem/cached-scan/',
+        IntelligenceViewSet.as_view({'get': 'cached_scan_result'}),
+        name='ecosystem-cached-scan',
+    ),
+    path(
+        'ecosystem/active-plan/',
+        IntelligenceViewSet.as_view({'get': 'active_plan'}),
+        name='ecosystem-active-plan',
+    ),
+    path(
         'ecosystem/deep_scan/',
         CodeIntelligenceView.as_view(),
         name='cloud-ecosystem-deep-scan',

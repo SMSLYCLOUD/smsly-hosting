@@ -660,7 +660,7 @@ class PipelineManager:
             )
             
             from apps.intelligence.providers import ask_with_fallback
-            response, provider = ask_with_fallback(prompt)
+            response, provider = ask_with_fallback(prompt, mode="code_review")
             
             self.deployment.ai_diagnosis = (response or "").replace('\x00', '')
             self.deployment.save(update_fields=['ai_diagnosis'])

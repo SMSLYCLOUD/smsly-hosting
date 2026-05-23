@@ -11,13 +11,14 @@ import os
 import time
 import json
 from typing import Any, Dict, List, Optional, Tuple, Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import tempfile
 import subprocess
 import shutil
 
-from apps.intelligence.providers import ask_with_fallback
+from apps.intelligence.providers import _cached_ask
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 
 logger = logging.getLogger(__name__)
@@ -789,7 +790,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
         if len(full_prompt) > 1000:
             logger.info("... [prompt truncated] ...")
         
-        response_text, provider = ask_with_fallback(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+        response_text, provider = _cached_ask(full_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
         response_text = response_text or ""
         
         logger.info("=== INITIAL AI RESPONSE RECEIVED ===")
@@ -863,7 +864,34 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
     # Process in chunks
     chunks = [repos_data[i:i + chunk_size] for i in range(0, len(repos_data), chunk_size)]
     
-    for i, chunk in enumerate(chunks):
+    def _analyze_single_chunk(idx: int, chunk: list, token: str = None, provider: str = None):
+        """Analyze a single ecosystem chunk."""
+        try:
+            plan = analyze_ecosystem(chunk, token, provider)
+            return idx, plan
+        except Exception as exc:
+            logger.warning("Ecosystem chunk %d failed: %s", idx, exc)
+            return idx, {"error": str(exc), "repos": [r.get("name", "unknown") for r in chunk]}
+
+    results = [None] * len(chunks)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(_analyze_single_chunk, i, chunk, github_token, ai_provider): i
+            for i, chunk in enumerate(chunks)
+        }
+        for future in as_completed(futures, timeout=600):
+            try:
+                idx, plan = future.result(timeout=120)
+                results[idx] = plan
+            except Exception as exc:
+                idx = futures[future]
+                results[idx] = {"error": str(exc)}
+
+    for i, plan in enumerate(results):
+        if plan is None:
+            plan = {"error": "Chunk processing timed out"}
+            results[i] = plan
+
         logger.info(f"Processing ecosystem chunk {i+1}/{len(chunks)}")
         try:
             from celery import current_task
@@ -875,14 +903,9 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
         except Exception:
             pass
         
-        # Note: We reuse analyze_ecosystem here, which will create a temporary workspace
-        # and do the AI scan for just these 3-4 repos.
-        plan = analyze_ecosystem(chunk, github_token, ai_provider)
-        
         services = plan.get("services", [])
         if not isinstance(services, list):
             services = []
-        # Defensive: skip non-dict entries from AI responses
         for svc in services:
             if isinstance(svc, dict):
                 global_services.append(svc)
@@ -943,8 +966,8 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
             logger.info("... [synthesis prompt truncated] ...")
         
         try:
-            from apps.intelligence.providers import ask_with_fallback
-            response_text, provider = ask_with_fallback(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
+            from apps.intelligence.providers import _cached_ask
+            response_text, provider = _cached_ask(synthesis_prompt, system_prompt=ECOSYSTEM_PROMPT, provider_id=ai_provider)
             response_text = response_text or ""
             
             logger.info("=== SYNTHESIS AI RESPONSE RECEIVED ===")
@@ -1249,8 +1272,8 @@ def _attempt_ai_revalidation(repos_data: List[dict], ai_provider: str, error_mes
             logger.info("... [truncated] ...")
             logger.info(preview_end)
         
-        from apps.intelligence.providers import ask_with_fallback
-        response_text, provider = ask_with_fallback(
+        from apps.intelligence.providers import _cached_ask
+        response_text, provider = _cached_ask(
             revalidation_prompt, 
             system_prompt=ECOSYSTEM_PROMPT, 
             provider_id=ai_provider
@@ -2027,8 +2050,8 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
             """
             
             try:
-                from apps.intelligence.providers import ask_with_fallback
-                response_text, provider = ask_with_fallback(
+                from apps.intelligence.providers import _cached_ask
+                response_text, provider = _cached_ask(
                     revalidation_prompt, 
                     system_prompt=ECOSYSTEM_PROMPT, 
                     provider_id=ai_provider

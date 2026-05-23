@@ -387,6 +387,7 @@ services:
     - --providers.docker.httpClientTimeout=300s
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
+    - --api=true
     - --log.level=WARN
     ports:
     - 127.0.0.1:8081:80
