@@ -1,3 +1,4 @@
+import logging
 import os
 import posixpath
 import uuid
@@ -10,7 +11,9 @@ from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from .models_storage import Volume
 from .models import Service
-from .utils import resolve_running_container
+from .utils import resolve_running_container, validate_and_sanitize_path
+
+logger = logging.getLogger(__name__)
 
 
 class VolumeSerializer(serializers.ModelSerializer):
@@ -55,6 +58,129 @@ class VolumeViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not own this service.")
         serializer.save(service=service)
 
+    def _resolve_volume_target(self, service):
+        """Resolve whether the volume's service runs locally or remotely."""
+        latest_deploy = service.deployments.filter(status='ACTIVE').first()
+        if not latest_deploy:
+            server = getattr(service, 'server', None)
+            if server and not getattr(server, 'is_primary', True):
+                return 'lite_agent' if getattr(server, 'is_lite_agent', False) else 'remote', server
+            provider = getattr(service, 'provider', None)
+            if provider and provider.provider_type in ('REMOTE', 'LITE_AGENT'):
+                from apps.deployments.models_core import ManagedServer
+                host = getattr(provider, 'host', None) or getattr(provider, 'api_url', None)
+                if host:
+                    server = ManagedServer.objects.filter(host=host).first()
+                    if not server:
+                        server = ManagedServer.objects.filter(private_ip=host).first()
+                    if server:
+                        return 'remote', server
+            return 'local', None
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            from apps.deployments.utils_target import resolve_remote_server
+            active_server = resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+        return target_type, active_server
+
+    def _find_remote_volume_id(self, orchestrator, remote_service_id, volume_name):
+        """Find a volume's remote ID by its name on the remote service."""
+        resp = orchestrator._request(
+            method='GET',
+            path=f"/api/v1/services/{remote_service_id}/volumes/",
+            timeout=15,
+        )
+        if resp and resp.status_code == 200:
+            try:
+                data = resp.json()
+                volumes = data if isinstance(data, list) else data.get('results', data.get('volumes', []))
+                for vol in volumes:
+                    if isinstance(vol, dict) and vol.get('name') == volume_name:
+                        return vol.get('id')
+            except Exception:
+                pass
+        return None
+
+    def _proxied_volume_action(self, volume, config):
+        """Proxy a volume file operation to a remote node, resolving IDs dynamically."""
+        service = volume.service
+        target_type, active_server = self._resolve_volume_target(service)
+        if target_type not in ("remote", "lite_agent") or not active_server:
+            return 'local', None, None
+
+        from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+        orchestrator = RemoteOrchestrator(active_server)
+        remote_service_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+        if not remote_service_id:
+            raise NotFound("Service not found on remote node")
+
+        remote_volume_id = self._find_remote_volume_id(orchestrator, remote_service_id, volume.name)
+        if not remote_volume_id:
+            logger.warning(f"Volume '{volume.name}' not found on remote node for service {service.id}")
+            raise NotFound("Volume not found on remote node")
+
+        return 'remote', orchestrator, (remote_service_id, remote_volume_id)
+
+    def _exec_remote_volume_request(self, orchestrator, remote_ids, volume, config):
+        """Execute the remote volume file operation and return a Response."""
+        remote_service_id, remote_volume_id = remote_ids
+        path_suffix = config['path_suffix']
+        method = config['method']
+
+        url_path = f"/api/v1/services/{remote_service_id}/volumes/{remote_volume_id}/{path_suffix}/"
+
+        try:
+            resp = orchestrator._request(
+                method=method,
+                path=url_path,
+                params=config.get('params'),
+                payload=config.get('payload'),
+                timeout=config.get('timeout', 30),
+            )
+            if resp and resp.status_code == 200:
+                on_success = config.get('on_success')
+                if on_success:
+                    return on_success(resp)
+                return Response(resp.json())
+            on_error = config.get('on_error')
+            if on_error:
+                return on_error(resp)
+            return Response(
+                {'error': 'Remote node returned an error', 'details': resp.text if resp else 'Timeout'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        except Exception as e:
+            if config.get('fallthrough_on_exception'):
+                logger.warning(
+                    f"Remote volume {path_suffix} failed for {volume.name}, falling back to local: {e}"
+                )
+                return None
+            on_error = config.get('on_error')
+            if on_error:
+                return on_error(None)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _volume_dispatch(self, volume, config, local_action, path=None):
+        """Dispatch a volume file operation to remote or local."""
+        target_type, orchestrator, remote_ids = self._proxied_volume_action(volume, config)
+        if target_type == 'remote':
+            result = self._exec_remote_volume_request(orchestrator, remote_ids, volume, config)
+            if result is not None:
+                return result
+            if not config.get('fallthrough_on_exception'):
+                return Response({'error': 'Remote volume operation failed'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        container = resolve_running_container(volume.service)
+        if container is None:
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if path:
+            path = validate_and_sanitize_path(path, container=container)
+        return local_action(container, path)
+
     @action(detail=True, methods=['get'])
     def browse(self, request, pk=None, service_pk=None):
         """
@@ -64,36 +190,41 @@ class VolumeViewSet(viewsets.ModelViewSet):
         volume = self.get_object()
         path = request.query_params.get('path', volume.mount_path)
 
-        # C-1 fix: normalize path to prevent traversal and command injection.
-        # posixpath.normpath collapses ".." and "." sequences.
-        path = posixpath.normpath(path)
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)},
+                            status=status.HTTP_403_FORBIDDEN)
 
-        # Reject any path that doesn't start with the volume mount path
         mount = posixpath.normpath(volume.mount_path)
         if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'},
                             status=status.HTTP_403_FORBIDDEN)
 
-        container = resolve_running_container(volume.service)
-        if container is None:
-            return Response({'error': 'No running container found'},
-                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'GET',
+                'path_suffix': 'browse',
+                'params': {'path': path},
+                'timeout': 30,
+                'fallthrough_on_exception': True,
+            },
+            local_action=lambda container, p: self._local_volume_browse(container, p),
+            path=path,
+        )
 
-        # C-1 fix: use argument-list form to prevent shell injection
+    def _local_volume_browse(self, container, path):
         exit_code, output = container.exec_run(
             ["ls", "-la", "--time-style=long-iso", path], user="root")
-
         if exit_code != 0:
-            return Response({'error': 'Failed to list directory', 'details': output.decode(
-            )}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Failed to list directory', 'details': output.decode()},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        # Parse ls -la --time-style=long-iso output into JSON
         files = []
         lines = output.decode('utf-8').splitlines()
-        # Skip total line
         if lines and lines[0].startswith('total'):
             lines = lines[1:]
-
         for line in lines:
             parts = line.split()
             if len(parts) >= 8:
@@ -104,7 +235,6 @@ class VolumeViewSet(viewsets.ModelViewSet):
                     'date': f"{parts[5]} {parts[6]}",
                     'name': " ".join(parts[7:])
                 })
-
         return Response({'path': path, 'files': files})
 
     @action(detail=True, methods=['post'], url_path='delete-file')
@@ -115,16 +245,33 @@ class VolumeViewSet(viewsets.ModelViewSet):
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security normalization
-        path = posixpath.normpath(path)
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
         mount = posixpath.normpath(volume.mount_path)
         if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
 
-        container = resolve_running_container(volume.service)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'POST',
+                'path_suffix': 'delete-file',
+                'payload': {'path': path},
+                'timeout': 15,
+                'fallthrough_on_exception': True,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            },
+            local_action=lambda container, p: self._local_volume_delete(container, p),
+            path=path,
+        )
 
+    def _local_volume_delete(self, container, path):
         try:
             exit_code, output = container.exec_run(["rm", "-rf", path], user="root")
             if exit_code != 0:
@@ -141,20 +288,39 @@ class VolumeViewSet(viewsets.ModelViewSet):
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Security normalization
-        path = posixpath.normpath(path)
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
         mount = posixpath.normpath(volume.mount_path)
         if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
 
-        container = resolve_running_container(volume.service)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'GET',
+                'path_suffix': 'download-file',
+                'params': {'path': path},
+                'timeout': 30,
+                'fallthrough_on_exception': True,
+                'on_success': lambda resp: StreamingHttpResponse(
+                    resp.iter_content(chunk_size=8192),
+                    content_type=resp.headers.get('Content-Type', 'application/x-tar'),
+                ),
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to download from remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            },
+            local_action=lambda container, p: self._local_volume_download(container, p),
+            path=path,
+        )
 
+    def _local_volume_download(self, container, path):
         try:
-            # Use get_archive for streaming
             bits, stat = container.get_archive(path)
-            
             response = StreamingHttpResponse(bits, content_type='application/x-tar')
             filename = os.path.basename(path) + ".tar"
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -170,15 +336,33 @@ class VolumeViewSet(viewsets.ModelViewSet):
         if not path:
             return Response({'error': 'Path required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        path = posixpath.normpath(path)
+        try:
+            path = validate_and_sanitize_path(path, skip_system_check=True)
+        except ValueError as e:
+            return Response({'error': 'Invalid path', 'details': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
         mount = posixpath.normpath(volume.mount_path)
         if not (path == mount or path.startswith(mount + "/")):
             return Response({'error': 'Invalid path'}, status=status.HTTP_403_FORBIDDEN)
 
-        container = resolve_running_container(volume.service)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return self._volume_dispatch(
+            volume,
+            {
+                'method': 'POST',
+                'path_suffix': 'mkdir',
+                'payload': {'path': path},
+                'timeout': 15,
+                'fallthrough_on_exception': True,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+            },
+            local_action=lambda container, p: self._local_volume_mkdir(container, p),
+            path=path,
+        )
 
+    def _local_volume_mkdir(self, container, path):
         try:
             exit_code, output = container.exec_run(["mkdir", "-p", path], user="root")
             if exit_code != 0:

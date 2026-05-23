@@ -66,6 +66,8 @@ DEBUG = _env_bool('DEBUG', default='False')
 SMSLY_DISABLE_SIGNATURE_CHECK = _env_bool('SMSLY_DISABLE_SIGNATURE_CHECK', default='False')
 # Owner edition: all tier gates disabled — all features unlocked.
 SMSLY_DISABLE_TIER_GATES = config("SMSLY_DISABLE_TIER_GATES", default=False, cast=bool)
+# Maximum file size in bytes for container file_read (default: 10MB)
+SMSLY_MAX_FILE_READ_SIZE = max(1, int(config("SMSLY_MAX_FILE_READ_SIZE", default=10 * 1024 * 1024)))
 # Enable transfer pipeline by default; can be turned off for hardened environments
 ALLOW_STUB_TRANSFER_PIPELINE = _env_bool('ALLOW_STUB_TRANSFER_PIPELINE', default='False')
 

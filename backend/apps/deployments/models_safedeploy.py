@@ -115,6 +115,7 @@ class DeploymentApproval(TimeStampedModel):
 
     requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='requested_approvals')
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='granted_approvals')
+    rejected_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='rejected_approvals')
 
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     risk_level = models.CharField(max_length=20, choices=MigrationValidation.RiskLevel.choices, default=MigrationValidation.RiskLevel.UNKNOWN)
