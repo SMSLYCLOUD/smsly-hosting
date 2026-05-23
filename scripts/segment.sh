@@ -150,8 +150,9 @@ restart_edge_stack() {
     local edge_services="socket-proxy traefik route-fallback caddy"
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (caddy/traefik/socket-proxy/route-fallback)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
+    # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
 
     # Restart core app entrypoints so new upstream bindings are live.
     docker compose -f "$COMPOSE_FILE" restart frontend backend >/dev/null 2>&1 || true
