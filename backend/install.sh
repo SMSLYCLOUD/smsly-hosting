@@ -3677,11 +3677,11 @@ echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -sfL http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    if curl -sfL --max-time 5 http://127.0.0.1:8000/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
-    if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
+    if curl -sfL --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
