@@ -42,11 +42,11 @@ if allowlisted_services:
 for svc in queryset.exclude(public_domain__isnull=True).exclude(public_domain=''):
     d = svc.public_domain.strip()
     if d:
-        print(f'{d} {{\\n    reverse_proxy localhost:8081\\n    encode gzip\\n}}\\n')
+        print(f'{d} {{\\n    reverse_proxy traefik:80\\n    encode gzip\\n}}\\n')
     for cd in (svc.custom_domains or []):
         cd = cd.strip()
         if cd:
-            print(f'{cd} {{\\n    reverse_proxy localhost:8081\\n    encode gzip\\n}}\\n')
+            print(f'{cd} {{\\n    reverse_proxy traefik:80\\n    encode gzip\\n}}\\n')
 PY
     )
 
