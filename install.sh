@@ -2504,7 +2504,10 @@ restart_edge_stack() {
     # stable socket-proxy is the only way to guarantee complete provider re-scan
     # after network topology changes.
     # Brief downtime: ~2-5s while Traefik restarts. Caddy retries through it.
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate traefik >/dev/null 2>&1 || true
+    # NOTE(Zero-Downtime): We removed --force-recreate. Traefik dynamically listens to
+    # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
+    # for deployed user services during an update.
+    docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
 
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then

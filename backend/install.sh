@@ -1270,8 +1270,9 @@ restart_edge_stack() {
     local edge_services="socket-proxy traefik route-fallback"
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
+    # NOTE(Zero-Downtime): Removed --force-recreate to eliminate downtime for deployed services.
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
 
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
