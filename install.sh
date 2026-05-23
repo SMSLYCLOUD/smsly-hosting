@@ -2480,16 +2480,31 @@ restart_edge_stack() {
     fi
 
     echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
-        docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
+    # First ensure socket-proxy and route-fallback are running (no recreate).
+    # Only Traefik is force-recreated below to avoid disruption to the Docker
+    # event stream that socket-proxy provides to Traefik.
+    local non_traefik_services="socket-proxy"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        non_traefik_services="socket-proxy route-fallback"
+    fi
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
+        docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
 
-    # Re-attach expected external networks (idempotent).
+    # Re-attach expected external networks BEFORE Traefik restart so it
+    # discovers containers with stable network topology (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     fi
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
+
+    # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
+    # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
+    # stable socket-proxy is the only way to guarantee complete provider re-scan
+    # after network topology changes.
+    # Brief downtime: ~2-5s while Traefik restarts. Caddy retries through it.
+    docker compose -f "$COMPOSE_FILE" up -d --force-recreate traefik >/dev/null 2>&1 || true
 
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then
