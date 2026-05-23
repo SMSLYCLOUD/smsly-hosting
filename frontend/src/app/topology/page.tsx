@@ -38,9 +38,12 @@ export default function TopologyPage() {
     if (selectedProject !== 'all') {
       const projNodes = nodes.filter(n => n.data?.project_name === selectedProject);
       const projNodeIds = new Set(projNodes.map(n => n.id));
-      const connectedAddonIds = new Set(edges.filter(e => projNodeIds.has(e.source)).map(e => e.target));
+      const connectedNodeIds = new Set([
+        ...edges.filter(e => projNodeIds.has(e.source)).map(e => e.target),
+        ...edges.filter(e => projNodeIds.has(e.target)).map(e => e.source)
+      ]);
       
-      nodes = nodes.filter(n => projNodeIds.has(n.id) || connectedAddonIds.has(n.id));
+      nodes = nodes.filter(n => projNodeIds.has(n.id) || connectedNodeIds.has(n.id));
       const allowedIds = new Set(nodes.map(n => n.id));
       edges = edges.filter(e => allowedIds.has(e.source) && allowedIds.has(e.target));
     }
@@ -48,9 +51,12 @@ export default function TopologyPage() {
     if (selectedService !== 'all') {
       const srvNodes = nodes.filter(n => n.data?.name === selectedService);
       const srvNodeIds = new Set(srvNodes.map(n => n.id));
-      const connectedAddonIds = new Set(edges.filter(e => srvNodeIds.has(e.source)).map(e => e.target));
+      const connectedNodeIds = new Set([
+        ...edges.filter(e => srvNodeIds.has(e.source)).map(e => e.target),
+        ...edges.filter(e => srvNodeIds.has(e.target)).map(e => e.source)
+      ]);
       
-      nodes = nodes.filter(n => srvNodeIds.has(n.id) || connectedAddonIds.has(n.id));
+      nodes = nodes.filter(n => srvNodeIds.has(n.id) || connectedNodeIds.has(n.id));
       const allowedIds = new Set(nodes.map(n => n.id));
       edges = edges.filter(e => allowedIds.has(e.source) && allowedIds.has(e.target));
     }
