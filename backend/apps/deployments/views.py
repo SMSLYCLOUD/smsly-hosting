@@ -812,11 +812,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
             if target["target_type"] in ("remote", "lite_agent") and active_server:
                 from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
                 orchestrator = RemoteOrchestrator(active_server)
-                orchestrator._request(
-                    method='POST',
-                    path=f"/api/v1/services/{service.id}/stop/",
-                    timeout=15,
-                )
+                remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+                if remote_id:
+                    orchestrator._request(
+                        method='POST',
+                        path=f"/api/v1/services/{remote_id}/stop/",
+                        timeout=15,
+                    )
         except Exception as e:
             logger.warning("Stop resolution/remote call failed for service %s: %s", service.id, e)
 
@@ -891,18 +893,22 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 try:
                     from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
                     orchestrator = RemoteOrchestrator(active_server)
-                    resp = orchestrator._request(
-                        method='POST',
-                        path=f"/api/v1/services/{service.id}/restart/",
-                        params={'force_rebuild': 'false'},
-                        timeout=15,
-                    )
-                    if resp and resp.status_code in (200, 202):
-                        return Response({
-                            'message': f'Service {service.name} restarted (fast) remotely',
-                            'method': 'remote_docker_restart',
-                        })
-                    logger.warning("Fast remote restart failed for %s. Falling back to full rebuild.", service.name)
+                    remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+                    if not remote_id:
+                        logger.warning("Remote service %s not found on %s for fast restart.", service.name, active_server.host)
+                    else:
+                        resp = orchestrator._request(
+                            method='POST',
+                            path=f"/api/v1/services/{remote_id}/restart/",
+                            params={'force_rebuild': 'false'},
+                            timeout=15,
+                        )
+                        if resp and resp.status_code in (200, 202):
+                            return Response({
+                                'message': f'Service {service.name} restarted (fast) remotely',
+                                'method': 'remote_docker_restart',
+                            })
+                        logger.warning("Fast remote restart failed for %s. Falling back to full rebuild.", service.name)
                 except Exception as exc:
                     logger.warning("Fast remote restart request failed: %s", exc)
 
@@ -2575,12 +2581,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             actual_path = path
             remote_ok = False
             try:
                 resp = orchestrator._request(
                     method='GET',
-                    path=f"/api/v1/services/{service.id}/file-browse/",
+                    path=f"/api/v1/services/{remote_id}/file-browse/",
                     params={'path': actual_path},
                     timeout=30,
                 )
@@ -2591,7 +2600,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     logger.warning(f"Remote file_browse failed for path {actual_path}, trying fallback: {fallback_path}. Error: {resp.status_code if resp else 'Timeout'}")
                     resp = orchestrator._request(
                         method='GET',
-                        path=f"/api/v1/services/{service.id}/file-browse/",
+                        path=f"/api/v1/services/{remote_id}/file-browse/",
                         params={'path': fallback_path},
                         timeout=30,
                     )
@@ -2757,10 +2766,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             try:
                 resp = orchestrator._request(
                     method='GET',
-                    path=f"/api/v1/services/{service.id}/file-download/",
+                    path=f"/api/v1/services/{remote_id}/file-download/",
                     params={'path': path},
                     timeout=30,
                 )
@@ -2816,10 +2828,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             try:
                 resp = orchestrator._request(
                     method='POST',
-                    path=f"/api/v1/services/{service.id}/file-delete/",
+                    path=f"/api/v1/services/{remote_id}/file-delete/",
                     payload={'path': path},
                     timeout=15,
                 )
@@ -2871,10 +2886,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             try:
                 resp = orchestrator._request(
                     method='POST',
-                    path=f"/api/v1/services/{service.id}/file-mkdir/",
+                    path=f"/api/v1/services/{remote_id}/file-mkdir/",
                     payload={'path': path},
                     timeout=15,
                 )
@@ -2927,10 +2945,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             try:
                 resp = orchestrator._request(
                     method='GET',
-                    path=f"/api/v1/services/{service.id}/file-read/",
+                    path=f"/api/v1/services/{remote_id}/file-read/",
                     params={'path': path},
                     timeout=15,
                 )
@@ -2989,10 +3010,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if target_type in ("remote", "lite_agent") and active_server:
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
             try:
                 resp = orchestrator._request(
                     method='POST',
-                    path=f"/api/v1/services/{service.id}/file-write/",
+                    path=f"/api/v1/services/{remote_id}/file-write/",
                     payload={'path': path, 'content': content},
                     timeout=30,
                 )
