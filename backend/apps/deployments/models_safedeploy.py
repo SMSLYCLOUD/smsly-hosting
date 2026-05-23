@@ -35,6 +35,9 @@ class PreviewEnvironment(TimeStampedModel):
     expires_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True)
 
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
         return f"{self.service.name} - {self.branch_name} ({self.status})"
 

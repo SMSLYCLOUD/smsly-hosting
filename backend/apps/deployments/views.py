@@ -2576,12 +2576,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
             from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
             orchestrator = RemoteOrchestrator(active_server)
             actual_path = path
+            remote_ok = False
             try:
                 resp = orchestrator._request(
                     method='GET',
                     path=f"/api/v1/services/{service.id}/file-browse/",
                     params={'path': actual_path},
-                    timeout=15,
+                    timeout=30,
                 )
                 if resp and resp.status_code == 200:
                     return Response(resp.json())
@@ -2592,15 +2593,17 @@ class ServiceViewSet(viewsets.ModelViewSet):
                         method='GET',
                         path=f"/api/v1/services/{service.id}/file-browse/",
                         params={'path': fallback_path},
-                        timeout=15,
+                        timeout=30,
                     )
                     if resp and resp.status_code == 200:
                         data = resp.json()
                         data['path'] = fallback_path
                         return Response(data)
-                return Response({'error': 'Failed to fetch from remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
+                remote_ok = True  # Mark that remote was attempted and failed (not a network error)
+                return Response({'error': 'Remote node returned an error', 'details': resp.text if resp else 'Unknown'}, status=status.HTTP_502_BAD_GATEWAY)
             except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                logger.warning(f"Remote file_browse failed for {service.id}, falling back to local: {e}")
+                # Fall through to local container resolution
 
         # K8s path: container_id is "k8s://namespace/podname"
         container_id = (latest_deploy.container_id or "")
