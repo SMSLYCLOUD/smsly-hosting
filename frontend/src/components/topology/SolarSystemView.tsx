@@ -341,23 +341,41 @@ function SolarSystemContent() {
       setCurrentSystemIndex((prev) => (prev - 1 + systems.length) % systems.length);
   };
 
-  if (loading) return <div className="flex h-full items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-500" /></div>;
-  if (error) return <div className="flex h-full items-center justify-center text-red-500">Error: {error.message}</div>;
-  if (systems.length === 0) return <div className="flex h-full items-center justify-center text-zinc-500">No active services to visualize.</div>;
-
   const currentSystem = systems[currentSystemIndex];
-
-  // Safeguard against data changes causing index out of bounds
-  if (!currentSystem) return <div className="flex h-full items-center justify-center text-zinc-500">System not found.</div>;
+  const isReady = !loading && !error && systems.length > 0 && !!currentSystem;
 
   return (
     <div className="relative h-full w-full bg-[#04070f] overflow-hidden">
       <div
         ref={containerRef}
-        className={`h-full w-full cursor-move ${renderMode === 'safe' ? 'opacity-0 pointer-events-none' : ''}`}
+        className={`absolute inset-0 cursor-move transition-opacity duration-500 ${renderMode === 'safe' || !isReady ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
       />
 
-      {renderMode === 'safe' && (
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-zinc-500" />
+        </div>
+      )}
+
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center text-red-500">
+          Error: {error.message}
+        </div>
+      )}
+
+      {!loading && !error && systems.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center text-zinc-500">
+          No active services to visualize.
+        </div>
+      )}
+
+      {!loading && !error && systems.length > 0 && !currentSystem && (
+        <div className="absolute inset-0 flex items-center justify-center text-zinc-500">
+          System not found.
+        </div>
+      )}
+
+      {isReady && renderMode === 'safe' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 px-4">
           <div className="text-xs text-amber-300/80 text-center">
             3D mode unavailable on this browser session.
@@ -392,59 +410,63 @@ function SolarSystemContent() {
         </div>
       )}
 
-      {/* HUD Overlay */}
-      <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start pointer-events-none">
-          <div className="space-y-1 pointer-events-auto">
-              <h2 className="text-2xl font-bold text-white tracking-tight font-display">{currentSystem.service.data.name}</h2>
-              <div className="flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                      currentSystem.service.data.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
-                  }`}>
-                      {currentSystem.service.data.status}
-                  </span>
-                  <span className="text-zinc-500 text-sm">System {currentSystemIndex + 1} of {systems.length}</span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setRenderMode((prev) => (prev === 'webgl' ? 'safe' : 'webgl'))}
-                    className="h-6 px-2 text-[10px] border-zinc-700 bg-black/40 hover:bg-zinc-800"
-                  >
-                    {renderMode === 'webgl' ? 'Safe Mode' : '3D Mode'}
-                  </Button>
+      {isReady && (
+        <>
+          {/* HUD Overlay */}
+          <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start pointer-events-none">
+              <div className="space-y-1 pointer-events-auto">
+                  <h2 className="text-2xl font-bold text-white tracking-tight font-display">{currentSystem.service.data.name}</h2>
+                  <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          currentSystem.service.data.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
+                      }`}>
+                          {currentSystem.service.data.status}
+                      </span>
+                      <span className="text-zinc-500 text-sm">System {currentSystemIndex + 1} of {systems.length}</span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setRenderMode((prev) => (prev === 'webgl' ? 'safe' : 'webgl'))}
+                        className="h-6 px-2 text-[10px] border-zinc-700 bg-black/40 hover:bg-zinc-800"
+                      >
+                        {renderMode === 'webgl' ? 'Safe Mode' : '3D Mode'}
+                      </Button>
+                  </div>
               </div>
           </div>
-      </div>
 
-      {/* Navigation Controls */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handlePrev}
-            className="rounded-full bg-black/40 border-zinc-700 hover:bg-zinc-800 backdrop-blur-md"
-          >
-              <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div className="bg-black/40 border border-zinc-700 px-4 py-2 rounded-full backdrop-blur-md text-xs text-zinc-300">
-             {currentSystem.addons.length} Satellites
+          {/* Navigation Controls */}
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handlePrev}
+                className="rounded-full bg-black/40 border-zinc-700 hover:bg-zinc-800 backdrop-blur-md"
+              >
+                  <ArrowLeft className="w-5 h-5" />
+              </Button>
+              <div className="bg-black/40 border border-zinc-700 px-4 py-2 rounded-full backdrop-blur-md text-xs text-zinc-300">
+                 {currentSystem.addons.length} Satellites
+              </div>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleNext}
+                className="rounded-full bg-black/40 border-zinc-700 hover:bg-zinc-800 backdrop-blur-md"
+              >
+                  <ArrowRight className="w-5 h-5" />
+              </Button>
           </div>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={handleNext}
-            className="rounded-full bg-black/40 border-zinc-700 hover:bg-zinc-800 backdrop-blur-md"
-          >
-              <ArrowRight className="w-5 h-5" />
-          </Button>
-      </div>
 
-      {/* Legend */}
-      <div className="absolute bottom-8 right-8 text-xs text-zinc-500 space-y-1 text-right pointer-events-none">
-          <div>Purple = Database</div>
-          <div>Pink = Cache</div>
-          <div>Amber = Queue</div>
-          <div>Click object for details</div>
-      </div>
+          {/* Legend */}
+          <div className="absolute bottom-8 right-8 text-xs text-zinc-500 space-y-1 text-right pointer-events-none">
+              <div>Purple = Database</div>
+              <div>Pink = Cache</div>
+              <div>Amber = Queue</div>
+              <div>Click object for details</div>
+          </div>
+        </>
+      )}
 
       {selectedNode && (
         <ServiceSidePanel node={selectedNode} onClose={() => setSelectedNode(null)} />

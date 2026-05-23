@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import Link from 'next/link';
+import { TopologyCanvas } from './components/TopologyCanvas';
 
 // Types
 interface ServicePlan {
@@ -129,6 +130,7 @@ export default function EcosystemPage() {
     const [servers, setServers] = useState<any[]>([]);
     const [availableRepos, setAvailableRepos] = useState<any[]>([]);
     const [selectedRepos, setSelectedRepos] = useState<string[]>(() => loadState('selectedRepos', []));
+    const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
     const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
@@ -830,151 +832,201 @@ export default function EcosystemPage() {
                                 )}
                             </div>
 
-                            {/* Addons */}
-                            {plan.addons && plan.addons.length > 0 && (
-                                <div className="bg-card border border-border p-5 rounded-xl">
-                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
-                                        <Database size={14} /> Shared Addons (Auto-Provisioned)
-                                    </h3>
-                                    <div className="flex flex-wrap gap-2">
-                                        {plan.addons.map((addon) => (
-                                            <span key={addon.type} className="px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium">
-                                                {addon.type} → {addon.shared_by.join(', ')}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Services List */}
-                            <div className="space-y-3">
-                                <div className="flex items-center justify-between mb-2">
-                                    <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                                        <Server size={14} /> Services to Deploy
-                                    </h3>
-                                    <button
-                                        onClick={syncHealth}
-                                        disabled={syncing}
-                                        className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
-                                        title="Synchronize health and tokens across all nodes"
+                            {/* View Toggle */}
+                            <div className="flex justify-end">
+                                <div className="bg-muted p-1 rounded-lg flex items-center gap-1 border border-border">
+                                    <button 
+                                        onClick={() => setViewMode('canvas')}
+                                        className={`text-xs px-3 py-1.5 rounded-md transition-all ${viewMode === 'canvas' ? 'bg-background shadow font-bold text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-background/50'}`}
                                     >
-                                        <RefreshCw size={10} className={syncing ? 'animate-spin' : ''} />
-                                        {syncing ? 'Syncing...' : 'Sync Fleet Health'}
+                                        Topology Canvas
+                                    </button>
+                                    <button 
+                                        onClick={() => setViewMode('list')}
+                                        className={`text-xs px-3 py-1.5 rounded-md transition-all ${viewMode === 'list' ? 'bg-background shadow font-bold text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-background/50'}`}
+                                    >
+                                        List View
                                     </button>
                                 </div>
+                            </div>
 
-                                {plan.services
-                                    .sort((a, b) => a.deploy_order - b.deploy_order)
-                                    .map((svc, idx) => (
-                                        <div key={svc.repo}>
-                                        <motion.div
-                                            initial={{ opacity: 0, x: -20 }}
-                                            animate={{ opacity: 1, x: 0 }}
-                                            transition={{ delay: idx * 0.05 }}
-                                            className={`bg-card border rounded-xl p-4 flex items-center justify-between transition-all ${svc.skip
-                                                    ? 'border-border/50 opacity-50'
-                                                    : 'border-border hover:border-emerald-500/30'
-                                                }`}
+                            {viewMode === 'canvas' ? (
+                                <div className="space-y-3">
+                                    {/* Services Topology Canvas */}
+                                    <div className="flex items-center justify-between mb-2">
+                                        <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                            <Server size={14} /> Services Topology
+                                        </h3>
+                                        <button
+                                            onClick={syncHealth}
+                                            disabled={syncing}
+                                            className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                            title="Synchronize health and tokens across all nodes"
                                         >
-                                            <div className="flex items-center gap-4">
-                                                <div className="text-xs text-muted-foreground font-mono w-6 text-center">
-                                                    #{svc.deploy_order}
-                                                </div>
-                                                <div>
-                                                    <p className="font-semibold flex items-center gap-2">
-                                                        <GitBranch size={14} className="text-muted-foreground" />
-                                                        {svc.repo}
-                                                    </p>
-                                                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                                        {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang) => (
-                                                            <span key={lang} className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STACK_COLORS[lang] || STACK_COLORS.unknown}`}>
-                                                                {lang}
-                                                            </span>
-                                                        ))}
-                                                        <span className="text-xs text-muted-foreground">
-                                                            :{svc.port}
-                                                        </span>
-                                                        <span className="text-xs text-muted-foreground">
-                                                            {svc.build}
-                                                        </span>
-                                                        {svc.addons?.map((a) => (
-                                                            <span key={a} className="text-xs px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">
-                                                                {a}
-                                                            </span>
-                                                        ))}
-                                                        {Object.keys(svc.env_vars || {}).length > 0 && (
-                                                            <button
-                                                                onClick={() => setExpandedEnv(expandedEnv === idx ? null : idx)}
-                                                                className="text-xs text-primary hover:underline"
-                                                            >
-                                                                {Object.keys(svc.env_vars).length} env vars {expandedEnv === idx ? '▲' : '▼'}
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </div>
+                                            <RefreshCw size={10} className={syncing ? 'animate-spin' : ''} />
+                                            {syncing ? 'Syncing...' : 'Sync Fleet Health'}
+                                        </button>
+                                    </div>
+                                    <TopologyCanvas 
+                                        plan={plan} 
+                                        servers={servers}
+                                        callbacks={{
+                                            updateServer,
+                                            toggleSkip,
+                                            updateEnvVar,
+                                            handlePasteEnv
+                                        }}
+                                    />
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Addons */}
+                                    {plan.addons && plan.addons.length > 0 && (
+                                        <div className="bg-card border border-border p-5 rounded-xl">
+                                            <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+                                                <Database size={14} /> Shared Addons (Auto-Provisioned)
+                                            </h3>
+                                            <div className="flex flex-wrap gap-2">
+                                                {plan.addons.map((addon) => (
+                                                    <span key={addon.type} className="px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-sm font-medium">
+                                                        {addon.type} → {addon.shared_by.join(', ')}
+                                                    </span>
+                                                ))}
                                             </div>
-                                            <div className="flex flex-col gap-2 items-end">
-                                                <div className="flex items-center gap-2">
-                                                    <Server size={12} className="text-muted-foreground" />
-                                                    <select
-                                                        value={svc.server_id || 'local'}
-                                                        onChange={(e) => updateServer(idx, e.target.value)}
-                                                        className="text-[10px] bg-background border border-border rounded px-2 py-1 outline-none focus:border-primary transition-colors min-w-[120px]"
-                                                    >
-                                                        <option value="local">Local Server</option>
-                                                        {servers.map(s => (
-                                                            <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <button
-                                                    onClick={() => toggleSkip(idx)}
-                                                    className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${svc.skip
-                                                            ? 'border-border text-muted-foreground hover:text-foreground'
-                                                            : 'border-emerald-500/30 text-emerald-500 bg-emerald-500/10'
+                                        </div>
+                                    )}
+
+                                    {/* Services List */}
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h3 className="font-bold text-sm uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                                                <Server size={14} /> Services to Deploy
+                                            </h3>
+                                            <button
+                                                onClick={syncHealth}
+                                                disabled={syncing}
+                                                className="text-[10px] flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-muted/80 text-muted-foreground transition-colors"
+                                                title="Synchronize health and tokens across all nodes"
+                                            >
+                                                <RefreshCw size={10} className={syncing ? 'animate-spin' : ''} />
+                                                {syncing ? 'Syncing...' : 'Sync Fleet Health'}
+                                            </button>
+                                        </div>
+
+                                        {plan.services
+                                            .sort((a, b) => a.deploy_order - b.deploy_order)
+                                            .map((svc, idx) => (
+                                                <div key={svc.repo}>
+                                                <motion.div
+                                                    initial={{ opacity: 0, x: -20 }}
+                                                    animate={{ opacity: 1, x: 0 }}
+                                                    transition={{ delay: idx * 0.05 }}
+                                                    className={`bg-card border rounded-xl p-4 flex items-center justify-between transition-all ${svc.skip
+                                                            ? 'border-border/50 opacity-50'
+                                                            : 'border-border hover:border-emerald-500/30'
                                                         }`}
                                                 >
-                                                    {svc.skip ? 'Skipped' : 'Include'}
-                                                </button>
-                                            </div>
-                                        </motion.div>
-                                        {expandedEnv === idx && !svc.skip && (
-                                            <motion.div
-                                                initial={{ opacity: 0, height: 0 }}
-                                                animate={{ opacity: 1, height: 'auto' }}
-                                                className="bg-card border border-t-0 rounded-b-xl p-4 -mt-2 space-y-3"
-                                            >
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <h4 className="text-sm font-semibold text-muted-foreground">Environment Variables</h4>
-                                                    <button
-                                                        onClick={() => handlePasteEnv(idx)}
-                                                        className="text-xs text-primary bg-primary/10 px-2 py-1 rounded hover:bg-primary/20"
-                                                    >
-                                                        Paste .env
-                                                    </button>
-                                                </div>
-                                                {Object.entries(svc.env_vars || {}).map(([key, value]) => (
-                                                    <div key={key} className="flex gap-2 items-center">
-                                                        <input
-                                                            type="text"
-                                                            value={key}
-                                                            disabled
-                                                            className="text-xs font-mono bg-muted border border-border rounded px-2 py-1.5 w-1/3"
-                                                        />
-                                                        <input
-                                                            type="text"
-                                                            value={value}
-                                                            onChange={(e) => updateEnvVar(idx, key, e.target.value)}
-                                                            className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
-                                                            placeholder="Empty value"
-                                                        />
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="text-xs text-muted-foreground font-mono w-6 text-center">
+                                                            #{svc.deploy_order}
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-semibold flex items-center gap-2">
+                                                                <GitBranch size={14} className="text-muted-foreground" />
+                                                                {svc.repo}
+                                                            </p>
+                                                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                                {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang) => (
+                                                                    <span key={lang} className={`text-xs px-2 py-0.5 rounded-md border font-medium ${STACK_COLORS[lang] || STACK_COLORS.unknown}`}>
+                                                                        {lang}
+                                                                    </span>
+                                                                ))}
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    :{svc.port}
+                                                                </span>
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {svc.build}
+                                                                </span>
+                                                                {svc.addons?.map((a) => (
+                                                                    <span key={a} className="text-xs px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">
+                                                                        {a}
+                                                                    </span>
+                                                                ))}
+                                                                {Object.keys(svc.env_vars || {}).length > 0 && (
+                                                                    <button
+                                                                        onClick={() => setExpandedEnv(expandedEnv === idx ? null : idx)}
+                                                                        className="text-xs text-primary hover:underline"
+                                                                    >
+                                                                        {Object.keys(svc.env_vars).length} env vars {expandedEnv === idx ? '▲' : '▼'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                ))}
-                                            </motion.div>
-                                        )}
-                                        </div>
-                                    ))}
-                            </div>
+                                                    <div className="flex flex-col gap-2 items-end">
+                                                        <div className="flex items-center gap-2">
+                                                            <Server size={12} className="text-muted-foreground" />
+                                                            <select
+                                                                value={svc.server_id || 'local'}
+                                                                onChange={(e) => updateServer(idx, e.target.value)}
+                                                                className="text-[10px] bg-background border border-border rounded px-2 py-1 outline-none focus:border-primary transition-colors min-w-[120px]"
+                                                            >
+                                                                <option value="local">Local Server</option>
+                                                                {servers.map(s => (
+                                                                    <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => toggleSkip(idx)}
+                                                            className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${svc.skip
+                                                                    ? 'border-border text-muted-foreground hover:text-foreground'
+                                                                    : 'border-emerald-500/30 text-emerald-500 bg-emerald-500/10'
+                                                                }`}
+                                                        >
+                                                            {svc.skip ? 'Skipped' : 'Include'}
+                                                        </button>
+                                                    </div>
+                                                </motion.div>
+                                                {expandedEnv === idx && !svc.skip && (
+                                                    <motion.div
+                                                        initial={{ opacity: 0, height: 0 }}
+                                                        animate={{ opacity: 1, height: 'auto' }}
+                                                        className="bg-card border border-t-0 rounded-b-xl p-4 -mt-2 space-y-3"
+                                                    >
+                                                        <div className="flex items-center justify-between mb-2">
+                                                            <h4 className="text-sm font-semibold text-muted-foreground">Environment Variables</h4>
+                                                            <button
+                                                                onClick={() => handlePasteEnv(idx)}
+                                                                className="text-xs text-primary bg-primary/10 px-2 py-1 rounded hover:bg-primary/20"
+                                                            >
+                                                                Paste .env
+                                                            </button>
+                                                        </div>
+                                                        {Object.entries(svc.env_vars || {}).map(([key, value]) => (
+                                                            <div key={key} className="flex gap-2 items-center">
+                                                                <input
+                                                                    type="text"
+                                                                    value={key}
+                                                                    disabled
+                                                                    className="text-xs font-mono bg-muted border border-border rounded px-2 py-1.5 w-1/3"
+                                                                />
+                                                                <input
+                                                                    type="text"
+                                                                    value={value}
+                                                                    onChange={(e) => updateEnvVar(idx, key, e.target.value)}
+                                                                    className="text-xs font-mono bg-background border border-border rounded px-2 py-1.5 flex-1"
+                                                                    placeholder="Empty value"
+                                                                />
+                                                            </div>
+                                                        ))}
+                                                    </motion.div>
+                                                )}
+                                                </div>
+                                            ))}
+                                    </div>
+                                </>
+                            )}
 
                             {/* Deploy Button */}
                             <div className="flex justify-center pt-4">

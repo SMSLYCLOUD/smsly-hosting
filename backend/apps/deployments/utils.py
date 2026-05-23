@@ -437,21 +437,25 @@ def get_default_env_value(key: str, scan_result: dict, service_name: str) -> tup
         stack = scan_result.get('stack', '')
         deps = scan_result.get('dependencies', [])
         dep_str = ' '.join(deps) if isinstance(deps, list) else str(deps)
+        platform_db = os.environ.get('DATABASE_URL', 'postgresql://user:password@db:5432/dbname')
         if 'asyncpg' in dep_str or 'async' in dep_str.lower():
-            return 'postgresql+asyncpg://user:password@db:5432/dbname', True
-        return 'postgresql://user:password@db:5432/dbname', True
+            # Convert sync URL to async if needed
+            if platform_db.startswith('postgresql://'):
+                return platform_db.replace('postgresql://', 'postgresql+asyncpg://', 1), True
+            return platform_db, True
+        return platform_db, True
 
     if key_upper == 'REDIS_URL':
-        return 'redis://redis:6379/0', True
+        return os.environ.get('REDIS_URL', 'redis://redis:6379/0'), True
 
     if key_upper in ('CELERY_BROKER_URL', 'BROKER_URL'):
-        return 'redis://redis:6379/1', True
+        return os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/1'), True
 
     if key_upper in ('CELERY_RESULT_BACKEND', 'RESULT_BACKEND'):
-        return 'redis://redis:6379/2', True
+        return os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/2'), True
 
     if key_upper in ('MONGODB_URI', 'MONGO_URI', 'MONGO_URL'):
-        return 'mongodb://mongo:27017/dbname', True
+        return os.environ.get('MONGODB_URI', 'mongodb://mongo:27017/dbname'), True
 
     if key_upper == 'PORT':
         return '8000', True
