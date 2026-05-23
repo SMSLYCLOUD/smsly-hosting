@@ -1635,13 +1635,51 @@ class PipelineManager:
         # Ensure smsly-net exists
         network_name = os.getenv('DOCKER_NETWORK', 'smsly-net')
 
-        # Build + start
+        # ─── Phase 1: Build images while old containers keep serving ───
+        # Separating build from deploy eliminates the build time from the
+        # downtime window. Old containers keep serving traffic during build.
+        append_log(
+            self.deployment,
+            f"  Building images (services stay live)...\n"
+        )
+        build_cmd = [
+            'docker', 'compose',
+            '-f', compose_path,
+            '-p', project_name,
+            'build',
+        ]
+        try:
+            process = subprocess.run(
+                build_cmd, check=True, cwd=self.source_dir, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=3600,
+            )
+            output = redact_values(
+                process.stdout + process.stderr, self.secret_values
+            )
+            if len(output) > 5000:
+                output = output[-5000:] + '\n...(truncated)'
+            append_log(self.deployment, output)
+        except subprocess.CalledProcessError as e:
+            full_err = redact_values(
+                (e.stdout or '') + (e.stderr or ''), self.secret_values
+            )
+            append_log(self.deployment, full_err)
+            raise BuildError(f"Compose build failed: {full_err[:500]}") from e
+
+        # ─── Phase 2: Deploy from cached images (fast restart) ───
+        # Images are already built — docker compose up replaces only containers
+        # whose config changed, using the cached images. No rebuild needed.
+        append_log(
+            self.deployment,
+            f"  Deploying from cached images...\n"
+        )
         cmd = [
             'docker', 'compose',
             '-f', compose_path,
             '-f', override_path,
             '-p', project_name,
-            'up', '-d', '--build',
+            'up', '-d',
             '--remove-orphans',
         ]
 
@@ -1662,7 +1700,7 @@ class PipelineManager:
                 (e.stdout or '') + (e.stderr or ''), self.secret_values
             )
             append_log(self.deployment, full_err)
-            raise BuildError(f"Compose build failed: {full_err[:500]}") from e
+            raise BuildError(f"Compose deploy failed: {full_err[:500]}") from e
         finally:
             try:
                 if os.path.exists(override_path):

@@ -1288,6 +1288,23 @@ restart_edge_stack() {
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
 
+wait_for_traefik_api() {
+    local max_wait="${1:-30}"
+    local waited=0
+    local interval=2
+    echo -e "${BLUE}  → Waiting for Traefik API to be ready...${NC}"
+    while [ "$waited" -lt "$max_wait" ]; do
+        if curl -sf --max-time 3 http://127.0.0.1:8081/api/version >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ Traefik API ready (${waited}s)${NC}"
+            return 0
+        fi
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+    echo -e "${YELLOW}  ⚠ Traefik API not ready after ${max_wait}s — services may be unreachable${NC}"
+    return 1
+}
+
 refresh_runtime_services() {
     local app_services_requested=(
         pgbouncer
@@ -1897,11 +1914,12 @@ if [ -n "$UPDATE_MODE" ]; then
 
             # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
             #    (recreation drops Docker DNS links — causes 502 gateway errors)
+            #    NOTE: ensure_container_on_network uses `docker network connect`
+            #    which works on running containers. No restart needed.
             echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
             for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
                 ensure_container_on_network "smsly-proxy" "$ctr"
             done
-            docker restart smsly-hosting-traefik-1 2>/dev/null || true
 
             # 8. Run migrations
             echo -e "${BLUE}  → Running migrations...${NC}"
@@ -1994,6 +2012,7 @@ if a_count > 0:
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
+    wait_for_traefik_api 30
 
     sleep 2
 

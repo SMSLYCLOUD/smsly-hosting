@@ -2502,6 +2502,23 @@ restart_edge_stack() {
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
 
+wait_for_traefik_api() {
+    local max_wait="${1:-30}"
+    local waited=0
+    local interval=2
+    echo -e "${BLUE}  → Waiting for Traefik API to be ready...${NC}"
+    while [ "$waited" -lt "$max_wait" ]; do
+        if curl -sf --max-time 3 http://127.0.0.1:8081/api/version >/dev/null 2>&1; then
+            echo -e "${GREEN}  ✓ Traefik API ready (${waited}s)${NC}"
+            return 0
+        fi
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+    echo -e "${YELLOW}  ⚠ Traefik API not ready after ${max_wait}s — services may be unreachable${NC}"
+    return 1
+}
+
 refresh_runtime_services() {
     # Ensure Docker mirror is configured (Option B)
     configure_docker_mirror
@@ -3035,8 +3052,19 @@ if ! is_checkpoint_done "update_git_synced"; then
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
     echo -e "${BLUE}  → Checking for local changes...${NC}"
-    # Save pre-update HEAD for reliable redeploy detection after git operations
-    PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+    # Save pre-update HEAD for reliable redeploy detection after git operations.
+    # Priority: 1) env var from re-exec (survives exec boundary),
+    #           2) stale file from failed previous update (survives process death),
+    #           3) current HEAD (normal first run).
+    PRE_UPDATE_HEAD=""
+    if [ -n "${SMSLY_PRE_UPDATE_HEAD:-}" ]; then
+        PRE_UPDATE_HEAD="$SMSLY_PRE_UPDATE_HEAD"
+    elif [ -f "$INSTALL_DIR/.pre-update-head" ] && [ -s "$INSTALL_DIR/.pre-update-head" ]; then
+        PRE_UPDATE_HEAD="$(cat "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true)"
+        echo -e "${YELLOW}  ⚠ Recovering pre-update baseline from prior incomplete run (${PRE_UPDATE_HEAD:0:7})${NC}"
+    else
+        PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
+    fi
     echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
     if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
@@ -3089,6 +3117,10 @@ fi
         export SMSLY_REEXEC=1
         export NO_SCREEN=true
         export SKIP_SCREEN=1
+        # Preserve pre-update HEAD across re-exec so the SHA comparison
+        # uses the TRUE baseline commit (before git pull), not the
+        # already-updated HEAD (which would prevent redeploy detection).
+        export SMSLY_PRE_UPDATE_HEAD="$PRE_UPDATE_HEAD"
         # Release the lock before re-exec so the new process can acquire it.
         # Closing FD 9 releases the flock.
         exec 9>&- 2>/dev/null || true
@@ -3433,11 +3465,12 @@ PYEOF
             if [ "$MODE_AGENT_LITE" != "true" ]; then
                 # 7. Reconnect Traefik + socket-proxy to smsly-proxy network
                 #    (recreation drops Docker DNS links — causes 502 gateway errors)
+                #    NOTE: ensure_container_on_network uses `docker network connect`
+                #    which works on running containers. No restart needed.
                 echo -e "${BLUE}    ↳ Reconnecting proxy network...${NC}"
                 for ctr in smsly-hosting-traefik-1 smsly-hosting-socket-proxy-1; do
                     ensure_container_on_network "smsly-proxy" "$ctr"
                 done
-                docker restart smsly-hosting-traefik-1 2>/dev/null || true
             fi
 
             # 8. Run migrations
@@ -3557,6 +3590,7 @@ if a_count > 0:
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
+    wait_for_traefik_api 30
 
     sleep 2
 
