@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
@@ -11,10 +11,52 @@ import { Network, Map as MapIcon, Orbit, Building, Trash2, Loader2, Layers } fro
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 import { servicesApi } from '@/lib/api';
 import { toast } from 'sonner';
+import { useGraphData } from '@/hooks/useGraphData';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export default function TopologyPage() {
   const [view, setView] = useState<'3d' | '2d' | 'solar' | 'city' | 'ecosystem'>('3d');
   const [isPruning, setIsPruning] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [selectedService, setSelectedService] = useState<string>('all');
+
+  const { data, loading, error, refresh } = useGraphData();
+
+  const uniqueProjects = useMemo(() => {
+    return Array.from(new Set(data?.nodes.map(n => n.data?.project_name).filter(Boolean))) as string[];
+  }, [data]);
+
+  const uniqueServices = useMemo(() => {
+    return Array.from(new Set(data?.nodes.filter(n => n.type?.toUpperCase() === 'SERVICE').map(n => n.data?.name).filter(Boolean))) as string[];
+  }, [data]);
+
+  const filteredData = useMemo(() => {
+    if (!data) return null;
+    let nodes = data.nodes;
+    let edges = data.edges;
+
+    if (selectedProject !== 'all') {
+      const projNodes = nodes.filter(n => n.data?.project_name === selectedProject);
+      const projNodeIds = new Set(projNodes.map(n => n.id));
+      const connectedAddonIds = new Set(edges.filter(e => projNodeIds.has(e.source)).map(e => e.target));
+      
+      nodes = nodes.filter(n => projNodeIds.has(n.id) || connectedAddonIds.has(n.id));
+      const allowedIds = new Set(nodes.map(n => n.id));
+      edges = edges.filter(e => allowedIds.has(e.source) && allowedIds.has(e.target));
+    }
+
+    if (selectedService !== 'all') {
+      const srvNodes = nodes.filter(n => n.data?.name === selectedService);
+      const srvNodeIds = new Set(srvNodes.map(n => n.id));
+      const connectedAddonIds = new Set(edges.filter(e => srvNodeIds.has(e.source)).map(e => e.target));
+      
+      nodes = nodes.filter(n => srvNodeIds.has(n.id) || connectedAddonIds.has(n.id));
+      const allowedIds = new Set(nodes.map(n => n.id));
+      edges = edges.filter(e => allowedIds.has(e.source) && allowedIds.has(e.target));
+    }
+
+    return { nodes, edges };
+  }, [data, selectedProject, selectedService]);
 
   const handlePrune = async () => {
     if (!confirm('Are you sure you want to clear all failed deployments and containers? This will also attempt to free up disk space on the VPS.')) {
@@ -57,6 +99,35 @@ export default function TopologyPage() {
                   {isPruning ? 'Pruning...' : 'Clear Failed'}
                 </button>
 
+                {/* Filters */}
+                {view !== 'ecosystem' && (
+                  <div className="flex items-center gap-2">
+                    <Select value={selectedProject} onValueChange={(v) => { setSelectedProject(v); setSelectedService('all'); }}>
+                      <SelectTrigger className="w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
+                        <SelectValue placeholder="Project" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Projects</SelectItem>
+                        {uniqueProjects.map(p => (
+                          <SelectItem key={p} value={p}>{p}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    
+                    <Select value={selectedService} onValueChange={setSelectedService}>
+                      <SelectTrigger className="w-[140px] h-8 text-xs bg-black/40 border-zinc-800 text-zinc-300">
+                        <SelectValue placeholder="Service" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Services</SelectItem>
+                        {uniqueServices.map(s => (
+                          <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
                 <div className="flex bg-zinc-900/50 rounded-lg p-1 border border-zinc-800 backdrop-blur-sm">
                 <button
                   onClick={() => setView('3d')}
@@ -93,10 +164,10 @@ export default function TopologyPage() {
         </div>
 
           <div className="flex-1 relative overflow-hidden bg-[#04070f]">
-             {view === '3d' && <Topology3D />}
-             {view === '2d' && <CanvasSchematic />}
-             {view === 'solar' && <SolarSystemView />}
-             {view === 'city' && <CityTopologyView />}
+             {view === '3d' && <Topology3D data={filteredData} loading={loading} error={error} refresh={refresh} />}
+             {view === '2d' && <CanvasSchematic data={filteredData} loading={loading} error={error} />}
+             {view === 'solar' && <SolarSystemView data={filteredData} loading={loading} error={error} />}
+             {view === 'city' && <CityTopologyView data={filteredData} loading={loading} error={error} />}
              {view === 'ecosystem' && <EcosystemTopology />}
           </div>
        </div>

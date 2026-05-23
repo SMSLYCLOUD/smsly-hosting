@@ -162,7 +162,7 @@ export function ResourcesTab({ serviceId, service: initialService }: ResourcesTa
                                 <div className="text-sm text-amber-600 dark:text-amber-400">
                                     <p className="font-semibold">Swap Memory In Use</p>
                                     <p className="mt-0.5 opacity-90">
-                                        This configuration uses <strong>{swapUsed >= 1024 ? `${(swapUsed/1024).toFixed(1)} GB` : `${swapUsed} MB`}</strong> of disk swap because it exceeds the node's physical RAM ({maxRam >= 1024 ? `${(maxRam/1024).toFixed(1)} GB` : `${maxRam} MB`}). Notice: Swap is significantly slower than physical RAM.
+                                        This configuration uses <strong>{swapUsed >= 1024 ? `${(swapUsed/1024).toFixed(1)} GB` : `${swapUsed} MB`}</strong> of disk swap because it exceeds the node&apos;s physical RAM ({maxRam >= 1024 ? `${(maxRam/1024).toFixed(1)} GB` : `${maxRam} MB`}). Notice: Swap is significantly slower than physical RAM.
                                     </p>
                                 </div>
                             </div>

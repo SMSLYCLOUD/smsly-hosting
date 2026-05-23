@@ -17,7 +17,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import dagre from 'dagre';
 
-import { useGraphData } from '@/hooks/useGraphData';
+// useGraphData removed as it's passed as prop
 import { TopologyNode, TopologyEdge } from '@/types/topology';
 import { Loader2, Server, Database, Activity, Globe, Box, DatabaseZap, HardDrive } from 'lucide-react';
 import { ServiceSidePanel } from './ServiceSidePanel';
@@ -110,8 +110,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
   return { nodes: layoutedNodes, edges };
 };
 
-export function CanvasSchematic() {
-  const { data, loading, error } = useGraphData();
+export function CanvasSchematic({ data, loading, error }: { data: any, loading: boolean, error: any }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);

@@ -3,7 +3,7 @@
 import { useMemo, useState, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import * as THREE from 'three';
-import { useGraphData } from '@/hooks/useGraphData';
+// useGraphData removed as it's passed as prop
 import { TopologyNode, TopologyNodeData } from '@/types/topology';
 import { Loader2 } from 'lucide-react';
 import { ServiceSidePanel } from './ServiceSidePanel';
@@ -41,8 +41,7 @@ function getNodeColor(status: string) {
   return STATUS_COLORS[status?.toUpperCase()] || STATUS_COLORS.UNKNOWN;
 }
 
-export function Topology3D() {
-  const { data, loading, error, refresh } = useGraphData(10000);
+export function Topology3D({ data, loading, error, refresh }: { data: any, loading: boolean, error: any, refresh: any }) {
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
   const fgRef = useRef<any>(null);
 
@@ -105,7 +104,7 @@ export function Topology3D() {
     if (!data) return { nodes: [], links: [] };
 
     // Create deep copy to avoid mutating state
-    const nodes = (data.nodes || []).map(n => ({ ...n }));
+    const nodes = (data.nodes || []).map((n: TopologyNode) => ({ ...n }));
     // Map 'edges' to 'links' if present, otherwise look for 'links'
     const links = (data.edges || (data as any).links || []).map((e: any) => ({
       ...e,

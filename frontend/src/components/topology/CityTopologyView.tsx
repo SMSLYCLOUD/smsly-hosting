@@ -3,7 +3,7 @@
 import React, { useRef, useEffect, useMemo, useCallback, useState } from 'react';
 import * as THREE from 'three';
 import { TopologyGraph, TopologyNode, TopologyEdge } from '@/types/topology';
-import { useGraphData } from '@/hooks/useGraphData';
+// useGraphData removed as it's passed as prop
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ServiceSidePanel } from './ServiceSidePanel';
 
@@ -274,14 +274,13 @@ function createGround(): THREE.Group {
 // ═══════════════════════════════════════════════════
 //  MAIN COMPONENT
 // ═══════════════════════════════════════════════════
-export function CityTopologyView() {
+export function CityTopologyView({ data, loading, error }: { data: TopologyGraph | null, loading: boolean, error: any }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const animFrameRef = useRef<number>(0);
-  const { data, loading } = useGraphData();
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
   const raycaster = useRef(new THREE.Raycaster());
   const mouse = useRef(new THREE.Vector2());
@@ -314,7 +313,7 @@ export function CityTopologyView() {
     const addons: Array<{ node: TopologyNode; x: number; z: number }> = [];
     addonNodes.forEach((addon, idx) => {
       // Find which service owns this addon via edges
-      const ownerEdge = data.edges.find(e => e.target === addon.id);
+      const ownerEdge = data.edges.find((e: TopologyEdge) => e.target === addon.id);
       const ownerPos = ownerEdge ? positions[ownerEdge.source] : null;
 
       if (ownerPos) {
@@ -333,10 +332,9 @@ export function CityTopologyView() {
       }
     });
 
-    // Bridges
     const bridges = data.edges
-      .filter(e => positions[e.source] && positions[e.target])
-      .map(e => {
+      .filter((e: TopologyEdge) => positions[e.source] && positions[e.target])
+      .map((e: TopologyEdge) => {
         const s = positions[e.source];
         const t = positions[e.target];
         return {
@@ -429,13 +427,13 @@ export function CityTopologyView() {
     });
 
     // Addon cubes
-    layout.addons.forEach(({ node, x, z }) => {
+    layout.addons.forEach(({ node, x, z }: { node: TopologyNode, x: number, z: number }) => {
       const cube = createAddonCube(node, x, z);
       scene.add(cube);
     });
 
     // Bridges
-    layout.bridges.forEach(({ from, to, type }) => {
+    layout.bridges.forEach(({ from, to, type }: { from: THREE.Vector3, to: THREE.Vector3, type: string }) => {
       const bridge = createBridge(from, to, type);
       scene.add(bridge);
     });
@@ -467,7 +465,7 @@ export function CityTopologyView() {
     const trafficCars: Array<{ mesh: THREE.Mesh; curve: THREE.QuadraticBezierCurve3; speed: number; offset: number }> = [];
     
     const carGeo = new THREE.SphereGeometry(0.06, 8, 8);
-    layout.bridges.forEach((bridge, bIdx) => {
+    layout.bridges.forEach((bridge: any, bIdx: number) => {
       // Recreate the curve for the traffic to follow
       const curve = new THREE.QuadraticBezierCurve3(bridge.from, 
         new THREE.Vector3().lerpVectors(bridge.from, bridge.to, 0.5).add(new THREE.Vector3(0, Math.max(bridge.from.y, bridge.to.y) * 0.8 + 1.5 - Math.max(bridge.from.y, bridge.to.y), 0)), 
@@ -542,7 +540,7 @@ export function CityTopologyView() {
         while (obj) {
           if ((obj as any).userData?.nodeId) {
             const nodeId = (obj as any).userData.nodeId;
-            const node = data?.nodes.find(n => n.id === nodeId);
+            const node = data?.nodes.find((n: TopologyNode) => n.id === nodeId);
             if (node) {
               setSelectedNode(node);
               return;
