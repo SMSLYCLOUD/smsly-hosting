@@ -157,7 +157,7 @@ def _resolve_provider_for_service(service: Service, prefer_local: bool = False):
     # Implicit default: if no explicit target, try to find one but don't fallback silently later.
     # We will pick a default global remote or local, but once picked, it's fixed.
     remote = CloudProvider.objects.filter(
-        provider_type=CloudProvider.ProviderType.GENERIC_SSH,
+        provider_type=CloudProvider.ProviderType.REMOTE,
         is_active=True
     ).first()
     if remote:
@@ -2584,7 +2584,7 @@ def _do_promote(deployment, provider):
         # Since this is non-local promote, we'll mark the verified fields based on the intended remote type.
         # But wait, actually, remote deployments don't go through `_do_promote` locally. They go through `_poll_remote_deployment`.
         # Just in case, we will fill in the generic metadata.
-        target_type = "remote" if provider.provider_type == 'GENERIC_SSH' else "lite_agent"
+        target_type = "remote" if provider.provider_type == CloudProvider.ProviderType.REMOTE else "lite_agent"
         host_ip = "unknown"
         if getattr(provider, 'server', None):
             host_ip = provider.server.private_ip or provider.server.host
