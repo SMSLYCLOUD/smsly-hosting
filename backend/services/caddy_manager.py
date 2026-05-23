@@ -1033,23 +1033,39 @@ def apply_caddyfile(content: str, cloudflare_token: str = "", preserve_existing_
             with os.fdopen(os.open(CADDY_TOKEN_CLEAR_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
                 handle.write("clear")
 
-        # Trigger reload — try Docker container first, fall back to systemd
+        # Trigger reload — try Docker container first, fall back to restart
         CONTAINER_NAME = "smsly-hosting-caddy-1"
         logger.info("Triggering Caddy reload via Docker container %s...", CONTAINER_NAME)
         dock_res = subprocess.run(
             ["docker", "exec", CONTAINER_NAME, "caddy", "reload", "--config", "/etc/caddy/Caddyfile"],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=30,
         )
         if dock_res.returncode == 0:
             result["ok"] = True
             result["message"] = "Caddyfile written and reloaded via Docker"
             logger.info("Caddyfile reloaded via Docker container %s", CONTAINER_NAME)
         else:
-            logger.error("Docker reload failed (%s): %s", CONTAINER_NAME, dock_res.stderr.strip())
-            result["message"] = f"Reload failed (Docker). Error: {dock_res.stderr.strip()}"
-            result["ok"] = False
-            return result
+            logger.warning(
+                "Docker reload failed (%s): %s. Attempting container restart...",
+                CONTAINER_NAME, dock_res.stderr.strip(),
+            )
+            restart_res = subprocess.run(
+                ["docker", "restart", CONTAINER_NAME],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if restart_res.returncode == 0:
+                result["ok"] = True
+                result["message"] = "Caddyfile written, Caddy container restarted"
+                logger.info("Caddy container %s restarted", CONTAINER_NAME)
+            else:
+                logger.error("Caddy restart failed: %s", restart_res.stderr.strip())
+                result["message"] = f"Reload and restart failed. Error: {restart_res.stderr.strip()}"
+                result["ok"] = False
+                return result
 
         logger.info("Caddyfile written to %s", CADDY_FILE_PATH)
 
