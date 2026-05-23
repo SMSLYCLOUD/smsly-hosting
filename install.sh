@@ -2647,6 +2647,13 @@ refresh_runtime_services() {
     install_caddy_health_guard "${DOMAIN:-}"
     reload_container_caddy 2>/dev/null || true
 
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        echo -e "${BLUE}  → Refreshing Observability Stack...${NC}"
+        if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+        fi
+    fi
+
     systemctl restart smsly-autoscaler >/dev/null 2>&1 || true
     echo -e "${GREEN}  OK Clean runtime refresh complete${NC}"
 }
@@ -4854,6 +4861,11 @@ fi
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         sync_agent_lite_rabbitmq_password
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate backend celery-worker
+    else
+        echo -e "${BLUE}  → Deploying Observability Stack...${NC}"
+        if [ -f "infrastructure/docker/docker-compose.observability.yml" ]; then
+            docker compose -f infrastructure/docker/docker-compose.observability.yml up -d >/dev/null 2>&1 || true
+        fi
     fi
     set_checkpoint "stack_deployed"
 fi
