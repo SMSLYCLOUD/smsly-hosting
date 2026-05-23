@@ -22,18 +22,18 @@ export function ServiceNode({ data }: any) {
     const isSkipped = svc.skip;
 
     return (
-        <div className={`w-[320px] bg-card border rounded-xl shadow-lg transition-all ${
+        <div className={`w-[260px] bg-card border rounded-xl shadow-lg transition-all ${
             isSkipped ? 'border-border/50 opacity-60' : 'border-emerald-500/30 ring-1 ring-emerald-500/10'
         }`}>
             {/* Top Handle for incoming edges */}
             <Handle type="target" position={Position.Top} className="w-3 h-3 bg-muted-foreground border-2 border-background" />
             
-            <div className="p-3 border-b border-border bg-muted/20 rounded-t-xl flex justify-between items-center">
+            <div className="p-2 border-b border-border bg-muted/20 rounded-t-xl flex justify-between items-center">
                 <div className="flex items-center gap-2">
                     <div className="text-xs text-muted-foreground font-mono bg-background border px-1.5 py-0.5 rounded">
                         #{svc.deploy_order}
                     </div>
-                    <p className="font-bold text-sm truncate flex items-center gap-1.5 max-w-[180px]">
+                    <p className="font-bold text-sm truncate flex items-center gap-1.5 max-w-[130px]">
                         <GitBranch size={12} className="text-muted-foreground" />
                         {svc.repo.split('/').pop()}
                     </p>
@@ -50,7 +50,7 @@ export function ServiceNode({ data }: any) {
                 </button>
             </div>
 
-            <div className="p-3 space-y-3">
+            <div className="p-2 space-y-2">
                 <div className="flex flex-wrap gap-1.5">
                     {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang: string) => (
                         <span key={lang} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${STACK_COLORS[lang.toLowerCase()] || STACK_COLORS.unknown}`}>

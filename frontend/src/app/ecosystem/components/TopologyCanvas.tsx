@@ -24,8 +24,8 @@ const nodeTypes = {
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
 
-const nodeWidth = 320;
-const nodeHeight = 150; // estimate height
+const nodeWidth = 260;
+const nodeHeight = 130; // estimate height
 
 const getLayoutedElements = (nodes: any[], edges: any[], direction = 'TB') => {
   const isHorizontal = direction === 'LR';
@@ -167,6 +167,16 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
         attributionPosition="bottom-right"
         className="dark" // Assuming dark mode by default for this app based on screenshot
       >
+        <style>{`
+            .react-flow__controls-button {
+                background-color: #18181b !important;
+                border-bottom: 1px solid #27272a !important;
+                fill: #d4d4d8 !important;
+            }
+            .react-flow__controls-button:hover {
+                background-color: #27272a !important;
+            }
+        `}</style>
         <MiniMap 
             nodeColor={(node) => {
                 if (node.type === 'addon') return '#a855f7';
@@ -175,7 +185,7 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
             maskColor="rgba(0,0,0,0.4)" 
             className="bg-card" 
         />
-        <Controls className="bg-card border-border fill-foreground" />
+        <Controls className="bg-zinc-900 border-zinc-800" />
         <Background color="#333" gap={16} size={1} />
         <Panel position="top-right" className="bg-card/80 backdrop-blur border border-border rounded-lg p-2 flex gap-2">
             <button className="text-xs px-2 py-1 bg-muted rounded hover:bg-muted/80" onClick={() => onLayout('TB')}>Vertical</button>
