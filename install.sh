@@ -2119,12 +2119,12 @@ print(f'PlatformConfig domain set to: {cfg.domain}')
 # SMSLY Caddyfile — Fixed by --fix-domain
 {
     on_demand_tls {
-        ask http://nginx:80/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 $target_domain {
-    reverse_proxy nginx:80
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -2141,7 +2141,7 @@ ${fix_ip} {
         path /.well-known/acme-challenge/*
     }
     handle @acme {
-        reverse_proxy nginx:80
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
@@ -2152,7 +2152,7 @@ ${fix_ip} {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy nginx:80
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 CADDYFIX
@@ -2356,12 +2356,12 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 # Auto-generated safe fallback (reason: $reason)
 {
     on_demand_tls {
-        ask http://nginx:80/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 ${domain_block_label} {
-    reverse_proxy nginx:80
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -2378,7 +2378,7 @@ ${safe_ip} {
         path /.well-known/acme-challenge/*
     }
     handle @acme {
-        reverse_proxy nginx:80
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
     @redirectable {
         not header_regexp host ^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]+)?$
@@ -2389,7 +2389,7 @@ ${safe_ip} {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy nginx:80
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
@@ -2476,10 +2476,10 @@ bust_core_build_cache() {
 restart_edge_stack() {
     local edge_services="socket-proxy traefik"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
-        edge_services="socket-proxy traefik route-fallback nginx"
+        edge_services="socket-proxy traefik route-fallback"
     fi
 
-    echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
+    echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --no-deps $edge_services >/dev/null 2>&1 || \
         docker compose -f "$COMPOSE_FILE" up -d $edge_services >/dev/null 2>&1 || true
 
@@ -2487,15 +2487,9 @@ restart_edge_stack() {
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     if [ "$MODE_AGENT_LITE" != "true" ]; then
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
-        ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
     fi
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
-
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
-        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
-            docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
-    fi
 
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then
@@ -2523,7 +2517,6 @@ refresh_runtime_services() {
         frps
     )
     local edge_services_requested=(
-        nginx
         socket-proxy
         route-fallback
         traefik
@@ -2571,7 +2564,6 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-deploy-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-fast-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
@@ -2597,14 +2589,10 @@ refresh_runtime_services() {
         docker compose -f "$COMPOSE_FILE" up -d --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
             docker compose -f "$COMPOSE_FILE" up -d "${edge_services[@]}" >/dev/null 2>&1 || true
 
-        ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
-
-        docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -t >/dev/null 2>&1 && \
-            docker compose -f "$COMPOSE_FILE" exec -T nginx nginx -s reload >/dev/null 2>&1 || true
 
         for svc in "${edge_services[@]}"; do
             container_name="smsly-hosting-${svc}-1"
@@ -2773,7 +2761,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
-    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx traefik pgcat redis 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend traefik pgcat redis 2>/dev/null || true
     echo -e "${YELLOW}=== END DEBUG SNAPSHOT ===${NC}\n"
     set -e
 }
@@ -2904,7 +2892,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
         ;;
     esac
 
-    # Platform domain (public-facing — tests Caddy → nginx → backend chain)
+    # Platform domain (public-facing — tests Caddy → Traefik → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
         EP_PUB_URL="http://${DOMAIN}/health"
         EP_PUB_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP_PUB_URL" 2>/dev/null) || EP_PUB_CODE="000"
@@ -3123,11 +3111,6 @@ fi
 
     if [ ! -f "$COMPOSE_FILE" ]; then
         echo -e "${RED}✗ Missing $COMPOSE_FILE — cannot deploy.${NC}"
-        exit 1
-    fi
-
-    if [ ! -f "nginx.conf" ]; then
-        echo -e "${RED}✗ Missing nginx.conf — cannot deploy. This file is required for routing.${NC}"
         exit 1
     fi
 
@@ -3575,18 +3558,7 @@ if a_count > 0:
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
 
-    # Verify nginx loaded the correct custom config (not the default)
     sleep 2
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
-        NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-        if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-            echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
-        else
-            echo -e "${RED}  ✗ WARNING: Nginx may be running default config!${NC}"
-            echo -e "${YELLOW}    Expected 'events {' but got: $NGINX_CONFIG_CHECK${NC}"
-            echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
-        fi
-    fi
 
     # ─── Fix .env permissions (must be writable by Docker container UID 1000) ──
     if [ -f "$INSTALL_DIR/.env" ]; then
@@ -3728,12 +3700,12 @@ for domain in Domain.objects.select_related('service').filter(
 # Auto-generated with Cloudflare DNS challenge (wildcard SSL)
 {
     on_demand_tls {
-        ask http://nginx:80/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 ${cf_domain} {
-    reverse_proxy nginx:80
+    reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     encode gzip
     log {
         output file /var/log/caddy/access.log
@@ -3745,12 +3717,8 @@ ${cf_domain} {
         dns cloudflare {env.CLOUDFLARE_API_TOKEN}
     }
 ${cf_known_stanza}
-    @platform_assets path /_next/* /favicon.ico /images/* /logos/* /assets/* /static/* /media/*
-    handle @platform_assets {
-        reverse_proxy nginx:80
-    }
     handle {
-        reverse_proxy nginx:80
+        reverse_proxy {$SMSLY_SERVICE_PROXY_UPSTREAM:-traefik:80}
     }
 }
 
@@ -3880,7 +3848,6 @@ if d and d != 'localhost':
             ;;
         esac
         if [ "$attempt" -eq 1 ] && [ "$MODE_AGENT_LITE" != "true" ]; then
-            docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
         fi
         sleep 3
     done
@@ -4068,7 +4035,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    oom_containers="smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
+    oom_containers="smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy"
     if [ "$MODE_AGENT_LITE" = "true" ]; then
         oom_containers="smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1"
     fi
@@ -4480,7 +4447,7 @@ MISSING_FILES=()
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "backend/entrypoint.sh" "backend/requirements.txt")
 else
-    REQUIRED_FILES=("$COMPOSE_FILE" "nginx.conf" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh")
+    REQUIRED_FILES=("$COMPOSE_FILE" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh")
 fi
 for required_file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$required_file" ]; then
@@ -5255,7 +5222,7 @@ echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
 if [ "$MODE_AGENT_LITE" = "true" ]; then
     CRITICAL_CONTAINERS=(smsly-hosting-traefik-1 smsly-hosting-backend-1 smsly-hosting-celery-worker-1 smsly-hosting-socket-proxy-1)
 else
-    CRITICAL_CONTAINERS=(smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
+    CRITICAL_CONTAINERS=(smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgcat-1)
 fi
 for CONTAINER in "${CRITICAL_CONTAINERS[@]}"; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
@@ -5320,7 +5287,7 @@ if printf '%s\n' "$AGENT_SERVICES" | grep -qx "backend" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "socket-proxy" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "redis" \
    && printf '%s\n' "$AGENT_SERVICES" | grep -qx "rabbitmq" \
-   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|nginx|db|pgcat)$"; then
+   && ! printf '%s\n' "$AGENT_SERVICES" | grep -Eq "^(frontend|db|pgcat)$"; then
     echo -e "${GREEN}  ✓ Lite Agent profile selected; local Redis/RabbitMQ enabled and control-plane services excluded${NC}"
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
 else
@@ -5370,30 +5337,9 @@ else
     echo -e "${YELLOW}  ⚠ Swap low (${SWAP_TOTAL}MB) — recommend 2GB+${NC}"
 fi
 else
-# ─── Check 1: Verify nginx loaded custom config (not default) ──────────────
-echo -e "${BLUE}  → [1/5] Verifying nginx configuration...${NC}"
-NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-    echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
-    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-else
-    echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
-    docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
-    sleep 3
-    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-        echo -e "${GREEN}  ✓ Nginx config fixed after force-recreate${NC}"
-        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-    else
-        echo -e "${RED}  ✗ Nginx config still incorrect. Manual fix needed.${NC}"
-    fi
-fi
-
-# ─── Check 2: Health check ─────────────────────────────────────────────────
-echo -e "${BLUE}  → [2/5] Running health check...${NC}"
+# ─── Check 1: Health check ─────────────────────────────────────────────────
+echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
-# ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
     if curl -sfL http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
@@ -5401,10 +5347,6 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
         break
     fi
     echo -ne "\r${YELLOW}  → Health check attempt $attempt/$MAX_ATTEMPTS — waiting...${NC}"
-    if [ "$attempt" -eq 5 ]; then
-        echo -e "\n${BLUE}  → Restarting Nginx to ensure upstream binding...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
-    fi
     sleep 5
 done
 echo ""
