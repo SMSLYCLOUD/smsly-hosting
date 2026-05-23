@@ -151,7 +151,7 @@ export default function InstallGuidePage() {
                   ['CPU', '2 vCPUs', '4 vCPUs'],
                   ['RAM', '2 GB', '4 GB+'],
                   ['Disk', '20 GB', '40 GB+ SSD'],
-                  ['Ports', '80, 443', '80, 443, 8090'],
+                  ['Ports', '80, 443', '80, 443'],
                 ].map(([req, min, rec]) => (
                   <tr key={req} className="border-b border-slate-100 dark:border-slate-800">
                     <td className="py-3 px-4 font-medium">{req}</td>
@@ -466,7 +466,7 @@ sudo chmod 664 /opt/smsly-hosting/.env`}</CodeBlock>
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">Diagnose from the server:</p>
               <CodeBlock>{`# 1. Check the ask endpoint (must return 200)
 curl -s -w "\nHTTP %{http_code}\n" \\
-  "http://localhost:8090/api/v1/services/check-domain/?domain=your-domain.com"
+  "http://backend:8000/api/v1/services/check-domain/?domain=your-domain.com"
 
 # 2. Check Caddy logs for ACME errors
 docker logs smsly-hosting-caddy-1 --tail 50
@@ -598,7 +598,7 @@ docker compose -f docker-compose.prod.yml restart backend
 docker compose -f docker-compose.prod.yml restart caddy`}</CodeBlock>
 
           <h3 id="health-check">Health Check</h3>
-          <CodeBlock>{`curl http://localhost:8090/health`}</CodeBlock>
+          <CodeBlock>{`curl http://localhost/health`}</CodeBlock>
 
           <h3 id="container-map">Container Map</h3>
           <div className="overflow-x-auto not-prose my-6">
@@ -615,7 +615,6 @@ docker compose -f docker-compose.prod.yml restart caddy`}</CodeBlock>
                   ['caddy', '80 / 443', 'Reverse proxy, TLS termination, Let\'s Encrypt'],
                   ['backend', '8000', 'Django API (Gunicorn + Uvicorn)'],
                   ['frontend', '3000', 'Next.js SSR'],
-                  ['nginx', '8090', 'Internal routing (behind Caddy)'],
                   ['db', '5432', 'PostgreSQL 16'],
                   ['redis', '6379', 'Cache + Celery broker'],
                   ['celery', '—', 'Background task worker'],
@@ -633,7 +632,7 @@ docker compose -f docker-compose.prod.yml restart caddy`}</CodeBlock>
             </table>
           </div>
           <p>
-            <strong>Architecture note:</strong> All external traffic enters through <strong>Caddy</strong> (ports 80/443). Caddy terminates TLS and proxies to <strong>nginx</strong> (port 80 internal), which routes to the appropriate backend or frontend service. The stack does <em>not</em> expose backend/frontend ports directly to the internet.
+            <strong>Architecture note:</strong> All external traffic enters through <strong>Caddy</strong> (ports 80/443). Caddy terminates TLS and proxies directly to the <strong>backend</strong> (port 8000) or <strong>frontend</strong> (port 3000) based on the request path. The stack does <em>not</em> expose backend/frontend ports directly to the internet.
           </p>
 
 
@@ -677,7 +676,7 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
             {[
               {
                 q: 'Dashboard Not Loading (blank page or 502)',
-                a: 'Check that all containers are running: docker compose -f docker-compose.prod.yml ps. Wait for backend migrations to finish (may take 1-3 min after reboot). Check nginx on port 8090: curl http://localhost:8090/health. Verify firewall allows ports 80/443: ufw status.'
+                a: 'Check that all containers are running: docker compose -f docker-compose.prod.yml ps. Wait for backend migrations to finish (may take 1-3 min after reboot). Check caddy health: curl http://localhost/health. Verify firewall allows ports 80/443: ufw status.'
               },
               {
                 q: 'ERR_CERT_AUTHORITY_INVALID',
@@ -689,7 +688,7 @@ docker compose -f docker-compose.prod.yml start backend celery celery-beat`}</Co
               },
               {
                 q: 'Caddy SSL Error — Certificate Not Issued',
-                a: 'Verify DNS resolves (host your-domain.com), check Caddy logs (docker logs smsly-hosting-caddy-1), ensure ports 80/443 are open from outside (curl -v http://your-domain.com/.well-known/acme-challenge/check should not timeout). The ask endpoint must return 200 for your domain: curl -s "http://localhost:8090/api/v1/services/check-domain/?domain=your-domain.com".'
+                a: 'Verify DNS resolves (host your-domain.com), check Caddy logs (docker logs smsly-hosting-caddy-1), ensure ports 80/443 are open from outside (curl -v http://your-domain.com/.well-known/acme-challenge/check should not timeout). The ask endpoint must return 200 for your domain: curl -s "http://backend:8000/api/v1/services/check-domain/?domain=your-domain.com".'
               },
               {
                 q: 'Database Connection Error',
@@ -757,7 +756,7 @@ ufw allow 443/tcp
 ufw enable`}</CodeBlock>
 
           <p>
-            Port <strong>8090</strong> (nginx direct access) should not be exposed externally — it is bound to <code>127.0.0.1</code> by default. Ports <strong>5432</strong> (PostgreSQL), <strong>6379</strong> (Redis), and other internal ports are only accessible within the Docker network and should not be exposed to the internet.
+            Port <strong>5432</strong> (PostgreSQL), <strong>6379</strong> (Redis), and other internal ports are only accessible within the Docker network and should not be exposed to the internet.
           </p>
 
           <h3>.env File Permissions</h3>
@@ -811,13 +810,9 @@ Caddy (port 443)
   ├─ On-demand TLS: asks backend "is this domain allowed?"
   │    → GET /api/v1/services/check-domain/?domain=your-domain.com
   │    → 200 OK = proceed, 404 = reject
-  └─ Proxies to → nginx (port 80 internal)
-                      │
-                      ├─ /api/*      → backend (port 8000)
-                      ├─ /ws/*       → backend (WebSocket)
-                      ├─ /admin/*    → backend
-                      ├─ /static/*   → served directly
-                      └─ /*          → frontend (port 3000)`}
+  ├─ /api/*, /ws/*, /admin/*, /health → backend (port 8000)
+  ├─ /static/* → served directly from volume
+  └─ /* → frontend (port 3000)`}
             </pre>
           </div>
 

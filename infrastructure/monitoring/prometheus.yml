@@ -53,9 +53,3 @@ scrape_configs:
   - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
-
-  # Nginx
-  - job_name: 'nginx'
-    static_configs:
-      - targets: ['smsly-nginx:9113']
-    # Uses nginx_prometheus_exporter

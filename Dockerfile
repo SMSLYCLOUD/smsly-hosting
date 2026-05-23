@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Monolithic Dockerfile (single container) for Dockerfile-based PaaS deploys.
-# Runs: nginx (public) + Django backend + Next.js frontend + (optional) celery/beat.
+# Runs: Django backend + Next.js frontend + (optional) celery/beat.
 
 FROM node:20-bookworm-slim AS frontend_builder
 WORKDIR /frontend
@@ -28,7 +28,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# System deps + nginx/supervisor + gettext for envsubst.
+# System deps + supervisor + gettext for envsubst.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -38,7 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libpq-dev \
     postgresql-client \
-    nginx \
     supervisor \
     gettext-base \
     gnupg \
@@ -58,6 +57,13 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -sL https://nixpacks.com/install.sh | bash \
     && rm -rf /var/lib/apt/lists/*
 
+# Caddy (reverse proxy for monolithic mode)
+RUN curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends caddy \
+    && rm -rf /var/lib/apt/lists/*
+
 # Backend deps
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
@@ -75,7 +81,7 @@ COPY --from=frontend_builder /frontend/public /frontend/public
 COPY --from=frontend_builder /usr/local/bin/node /usr/local/bin/node
 
 # Platform runtime wiring
-COPY infrastructure/nginx/nginx.platform.conf.template /etc/nginx/nginx.conf.template
+COPY infrastructure/caddy/Caddyfile.monolith.template /etc/caddy/Caddyfile.template
 COPY scripts/entrypoint.platform.sh /entrypoint.platform.sh
 RUN chmod +x /app/entrypoint.sh /entrypoint.platform.sh
 
@@ -88,6 +94,6 @@ ENV PORT=8080
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
-    CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/nginx-health" || exit 1
+    CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
 
 ENTRYPOINT ["/entrypoint.platform.sh"]

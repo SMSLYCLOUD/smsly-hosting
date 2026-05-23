@@ -272,31 +272,6 @@ services:
       - smsly-net
 
   # ============================================================
-  # Nginx (Reverse proxy for backend + frontend)
-  # ============================================================
-  nginx:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8090:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./backend/staticfiles:/app/staticfiles:ro
-    depends_on:
-      backend:
-        condition: service_healthy
-      frontend:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - smsly-net
-
-  # ============================================================
   # Docker Registry
   # ============================================================
   registry:

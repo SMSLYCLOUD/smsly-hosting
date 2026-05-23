@@ -322,28 +322,6 @@ services:
     networks:
     - smsly-net
     - socket-proxy
-  nginx:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    ports:
-    - 127.0.0.1:8090:80
-    volumes:
-    - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    - static_volume:/app/staticfiles:ro
-    - media_volume:/app/media:ro
-    depends_on:
-    - backend
-    - frontend
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - wget -q -O /dev/null http://127.0.0.1:80/nginx-health || exit 1
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-    - smsly-net
   socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
     restart: unless-stopped
@@ -385,11 +363,11 @@ services:
           cpus: '0.50'
           memory: 256M
   route-fallback:
-    image: nginx:1.27-alpine
+    image: caddy:2-alpine
     restart: unless-stopped
     volumes:
-    - ./infrastructure/route-fallback/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    - ./infrastructure/route-fallback/index.html:/usr/share/nginx/html/index.html:ro
+    - ./infrastructure/route-fallback/Caddyfile:/etc/caddy/Caddyfile:ro
+    - ./infrastructure/route-fallback/index.html:/srv/index.html:ro
     labels:
     - traefik.enable=true
     - traefik.http.routers.route-fallback.rule=PathPrefix(`/`)
@@ -489,8 +467,10 @@ services:
       - ./caddy-config:/etc/caddy
       - caddy_config:/config
       - caddy_data:/data
+      - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
     depends_on:
-      - nginx
+      - backend
     networks:
       - smsly-net
 networks:

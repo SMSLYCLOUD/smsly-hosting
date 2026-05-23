@@ -6,13 +6,14 @@ import { Topology3D } from '@/components/topology/Topology3D';
 import { CanvasSchematic } from '@/components/topology/CanvasSchematic';
 import { SolarSystemView } from '@/components/topology/SolarSystemView';
 import CityTopologyView from '@/components/topology/CityTopologyView';
-import { Network, Map as MapIcon, Orbit, Building, Trash2, Loader2 } from 'lucide-react';
+import { EcosystemTopology } from '@/components/topology/EcosystemTopology';
+import { Network, Map as MapIcon, Orbit, Building, Trash2, Loader2, Layers } from 'lucide-react';
 import { RequiresTier } from '@/components/licensing/RequiresTier';
 import { servicesApi } from '@/lib/api';
 import { toast } from 'sonner';
 
 export default function TopologyPage() {
-  const [view, setView] = useState<'3d' | '2d' | 'solar' | 'city'>('3d');
+  const [view, setView] = useState<'3d' | '2d' | 'solar' | 'city' | 'ecosystem'>('3d');
   const [isPruning, setIsPruning] = useState(false);
 
   const handlePrune = async () => {
@@ -81,6 +82,12 @@ export default function TopologyPage() {
                 >
                    <Building className="w-3.5 h-3.5" /> City
                  </button>
+                <button
+                  onClick={() => setView('ecosystem')}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${view === 'ecosystem' ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700/50' : 'text-zinc-400 hover:text-zinc-200'}`}
+                >
+                   <Layers className="w-3.5 h-3.5" /> Ecosystem
+                 </button>
               </div>
            </div>
         </div>
@@ -90,6 +97,7 @@ export default function TopologyPage() {
              {view === '2d' && <CanvasSchematic />}
              {view === 'solar' && <SolarSystemView />}
              {view === 'city' && <CityTopologyView />}
+             {view === 'ecosystem' && <EcosystemTopology />}
           </div>
        </div>
       </RequiresTier>

@@ -168,23 +168,17 @@ if [ -f "$CADDY_FILE" ] || [ -d "/etc/caddy" ]; then
 # SMSLY Caddyfile — Fixed by fix-domain.sh
 {
     on_demand_tls {
-        ask http://localhost:8090/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 $DOMAIN {
-    reverse_proxy localhost:8090
+    reverse_proxy backend:8000
+    reverse_proxy frontend:3000
     encode gzip
     log {
         output file /var/log/caddy/access.log
     }
-}
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy localhost:8090
 }
 
 :80 {
@@ -197,7 +191,8 @@ $DOMAIN {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy localhost:8090
+        reverse_proxy backend:8000
+        reverse_proxy frontend:3000
     }
 }
 CADDYEOF
@@ -210,23 +205,17 @@ if [ -d "caddy-config" ]; then
 # SMSLY Caddyfile — Container (fixed by fix-domain.sh)
 {
     on_demand_tls {
-        ask http://nginx:80/api/v1/services/check-domain/
+        ask http://backend:8000/api/v1/services/check-domain/
     }
 }
 
 $DOMAIN {
-    reverse_proxy nginx:80
+    reverse_proxy backend:8000
+    reverse_proxy frontend:3000
     encode gzip
     log {
         output file /var/log/caddy/access.log
     }
-}
-
-:443 {
-    tls {
-        on_demand
-    }
-    reverse_proxy nginx:80
 }
 
 :80 {
@@ -239,7 +228,8 @@ $DOMAIN {
     }
     redir @redirectable https://{host}{uri} 308
     handle {
-        reverse_proxy nginx:80
+        reverse_proxy backend:8000
+        reverse_proxy frontend:3000
     }
 }
 CADDYVOL

@@ -1,0 +1,19 @@
+:80 {
+	# Proxy route health recheck to backend
+	@api_recheck path /api/v1/system/route-recheck/*
+	handle @api_recheck {
+		reverse_proxy backend:8000
+	}
+
+	# Serve the "Service waking up" page for everything else
+	handle {
+		header Cache-Control "no-store, no-cache, must-revalidate"
+		header Pragma "no-cache"
+		header Expires "0"
+		header Retry-After "15"
+		header X-SMSLY-Route-Fallback "true"
+		respond /srv/index.html 503 {
+			content_type text/html
+		}
+	}
+}

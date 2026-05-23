@@ -4,6 +4,7 @@ import logging
 import uuid
 
 from rest_framework import serializers, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Service, Deployment
@@ -344,3 +345,11 @@ class TopologyViewSet(viewsets.GenericViewSet):
                         })
 
         return Response({'nodes': nodes, 'edges': edges})
+
+    @action(detail=False, methods=['get'], url_path='ecosystem')
+    def ecosystem(self, request):
+        """Return the full platform infrastructure ecosystem topology graph."""
+        from .services.ecosystem_graph_builder import EcosystemGraphBuilder
+        builder = EcosystemGraphBuilder()
+        graph = builder.build()
+        return Response(graph)

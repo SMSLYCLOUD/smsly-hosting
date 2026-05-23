@@ -147,9 +147,9 @@ bust_core_build_cache() {
 }
 
 restart_edge_stack() {
-    local edge_services="socket-proxy traefik route-fallback nginx"
+    local edge_services="socket-proxy traefik route-fallback caddy"
 
-    echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
+    echo -e "${BLUE}  -> Refreshing edge proxy stack (caddy/traefik/socket-proxy/route-fallback)...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
 
@@ -160,7 +160,7 @@ restart_edge_stack() {
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
+    ensure_container_on_network "smsly-net" "smsly-hosting-caddy-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 

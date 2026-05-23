@@ -116,7 +116,7 @@ celery:
       memory: 384Mi
 
 nginx:
-  enabled: true
+  enabled: false
   image: nginx:1.27-alpine
   replicaCount: 1
   service:
