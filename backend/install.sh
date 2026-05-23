@@ -2437,7 +2437,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
     echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╦══════╦══════════╣${NC}"
     echo -e "${BLUE}  ║  Endpoint                                            ║ HTTP ║  Result  ║${NC}"
     echo -e "${BLUE}  ╠════════════════════════════════════════════════════════╬══════╬══════════╣${NC}"
-    printf "  ║  %-52.52s ║ %-4s ║ " "Backend: $EP1_URL" "$EP1_CODE"
+    printf "  ║  %-52.52s ║ %-4s ║ " "Backend (docker exec):8000/health" "$EP1_CODE"
     echo -e " $EP1_RESULT  ║"
     printf "  ║  %-52.52s ║ %-4s ║ " "HTTPS: $EP2_URL" "$EP2_CODE"
     echo -e " $EP2_RESULT  ║"
