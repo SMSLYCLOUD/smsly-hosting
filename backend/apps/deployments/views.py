@@ -2608,6 +2608,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
                         data = resp.json()
                         data['path'] = fallback_path
                         return Response(data)
+                if resp is None:
+                    raise Exception(orchestrator.describe_last_error() or "Network timeout communicating with remote node")
                 remote_ok = True  # Mark that remote was attempted and failed (not a network error)
                 return Response({'error': 'Remote node returned an error', 'details': resp.text if resp else 'Unknown'}, status=status.HTTP_502_BAD_GATEWAY)
             except Exception as e:

@@ -58,7 +58,7 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(updated_preview)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='destroy')
+    @action(detail=True, methods=['post'], url_path='destroy_preview')
     def destroy_preview(self, request, pk=None, service_pk=None):
         preview = self.get_object()
 
