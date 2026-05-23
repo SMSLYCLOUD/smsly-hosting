@@ -4,6 +4,7 @@ Utility functions for deployment tasks.
 import json
 import logging
 import os
+import posixpath
 import re
 import secrets
 import tarfile
@@ -595,3 +596,100 @@ def resolve_running_container(service, deployment=None):
         pass
 
     return None
+
+
+def validate_and_sanitize_path(path: str, skip_system_check: bool = False, container=None) -> str:
+    """
+    Validate and sanitize file system paths to prevent directory traversal attacks.
+
+    Args:
+        path: The file path to validate
+        skip_system_check: If True, skip the system directory prefix check
+            (e.g. for volume paths like /data/usr/lib that legitimately
+            contain system dir names inside a mount).
+        container: Optional Docker container object. When provided, attempts
+            best-effort symlink resolution via `readlink -f` and validates the
+            resolved path as well.
+
+    Returns:
+        str: Sanitized path if valid
+
+    Raises:
+        ValueError: If path contains dangerous characters or sequences
+    """
+    if not path or not isinstance(path, str):
+        raise ValueError("Path must be a non-empty string")
+
+    dangerous_patterns = [
+        r'\.\./',  # Parent directory traversal
+        r'\.\.\\',  # Windows-style parent directory traversal
+        r'[/\\]\.\.[/\\]',  # Any parent directory traversal
+        r'^\.\./',  # Starting with parent directory
+        r'/\.\.$',  # Ending with parent directory
+        r'[/\\]\.\.$',  # Ending with parent directory (Windows)
+    ]
+
+    for pattern in dangerous_patterns:
+        if re.search(pattern, path):
+            raise ValueError(f"Path contains potentially dangerous sequence: {pattern}")
+
+    if '\x00' in path:
+        raise ValueError("Path contains null bytes")
+
+    normalized_path = path.replace('\\', '/')
+    normalized_path = posixpath.normpath(normalized_path)
+
+    if not normalized_path.startswith('/'):
+        normalized_path = '/' + normalized_path
+
+    normalized_path = re.sub(r'/+', '/', normalized_path)
+
+    if len(normalized_path) > 4096:
+        raise ValueError("Path is too long")
+
+    dangerous_chars = ['<', '>', '|', '?', '*', '"']
+    for char in dangerous_chars:
+        if char in normalized_path:
+            raise ValueError(f"Path contains dangerous character: {char}")
+
+    if '$' in normalized_path and '{' in normalized_path and '}' in normalized_path:
+        raise ValueError("Path contains environment variables")
+
+    def _validate_system_dirs(candidate_path: str):
+        if not skip_system_check:
+            system_directories = ['/etc', '/usr', '/bin', '/sbin', '/var', '/sys', '/proc', '/dev']
+            for sys_dir in system_directories:
+                if candidate_path == sys_dir or candidate_path.startswith(sys_dir + '/'):
+                    raise ValueError(f"Access to system directory '{sys_dir}' is not allowed")
+
+    _validate_system_dirs(normalized_path)
+
+    if container is not None:
+        try:
+            exit_code, output = container.exec_run(["readlink", "-f", normalized_path])
+            if exit_code == 0:
+                resolved_path = output.decode('utf-8', errors='replace').strip()
+                if resolved_path:
+                    resolved_path = resolved_path.replace('\\', '/')
+                    resolved_path = posixpath.normpath(resolved_path)
+                    if not resolved_path.startswith('/'):
+                        resolved_path = '/' + resolved_path
+                    resolved_path = re.sub(r'/+', '/', resolved_path)
+                    _validate_system_dirs(resolved_path)
+
+                    if len(resolved_path) > 4096:
+                        raise ValueError("Path is too long")
+
+                    for char in dangerous_chars:
+                        if char in resolved_path:
+                            raise ValueError(f"Path contains dangerous character: {char}")
+
+                    if '$' in resolved_path and '{' in resolved_path and '}' in resolved_path:
+                        raise ValueError("Path contains environment variables")
+
+                    normalized_path = resolved_path
+        except Exception:
+            pass
+
+    return normalized_path
+

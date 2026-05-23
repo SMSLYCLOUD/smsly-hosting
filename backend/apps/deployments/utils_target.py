@@ -1,5 +1,5 @@
 import logging
-from apps.deployments.models_core import Service, Deployment
+from apps.deployments.models_core import Service, Deployment, ManagedServer
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,6 @@ def resolve_active_execution_target(service: Service) -> dict:
              raise ValueError(f"Cannot resolve remote target for service {service.id}: Missing active_host_ip.")
 
         # Try to resolve to a ManagedServer object if possible
-        from apps.deployments.models_core import ManagedServer
         server = ManagedServer.objects.filter(host=target["host_ip"]).first()
         if not server:
             server = ManagedServer.objects.filter(private_ip=target["host_ip"]).first()
@@ -42,3 +41,26 @@ def resolve_active_execution_target(service: Service) -> dict:
         target["server_obj"] = server
 
     return target
+
+
+def resolve_remote_server(service, latest_deploy):
+    """
+    Fallback: resolve remote server when active_target_type is not set.
+    Checks deployment's target_server, service.server, then provider.
+    """
+    from django.db.models import Q
+    if latest_deploy and latest_deploy.target_server_id:
+        target = latest_deploy.target_server
+        if not target.is_primary:
+            return target
+    server = getattr(service, 'server', None)
+    if server and not server.is_primary:
+        return server
+    provider = getattr(service, 'provider', None)
+    if provider and provider.provider_type in ('REMOTE', 'LITE_AGENT'):
+        host = provider.host or getattr(provider, 'api_url', None)
+        if host:
+            return ManagedServer.objects.filter(
+                Q(host=host) | Q(private_ip=host)
+            ).first()
+    return None

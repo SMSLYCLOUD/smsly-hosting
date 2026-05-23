@@ -1,4 +1,5 @@
 import logging
+from django.db import models, transaction
 from django.utils import timezone
 from apps.deployments.models_core import Deployment
 from apps.deployments.models_safedeploy import DeploymentApproval, MigrationValidation, DeploymentArtifact
@@ -13,7 +14,6 @@ class ProductionDeploymentPipeline:
 
         validation = self._get_latest_validation_for_commit(deployment.service_id, deployment.commit_hash)
 
-        # Guardrail: Do not allow deploy if validation did not pass or wasn't configured properly
         if validation:
             validation.deployment = deployment
             validation.save()
@@ -33,23 +33,27 @@ class ProductionDeploymentPipeline:
 
         if validation and validation.requires_backup:
             self._run_backup_phase(deployment)
-            if deployment.status == Deployment.Status.BACKUP_FAILED: return
+            if deployment.status == Deployment.Status.BACKUP_FAILED:
+                return
 
         self._run_migration_phase(deployment)
-        if deployment.status == Deployment.Status.MIGRATION_FAILED: return
+        if deployment.status == Deployment.Status.MIGRATION_FAILED:
+            return
 
         deployment.status = Deployment.Status.DEPLOYING
         deployment.save()
 
-        # Mock completion
         deployment.status = Deployment.Status.ACTIVE
         deployment.save()
 
     def _get_latest_validation_for_commit(self, service_id, commit_hash):
-        return MigrationValidation.objects.filter(preview_environment__service_id=service_id, preview_environment__commit_sha=commit_hash).order_by('-created_at').first()
+        qs = MigrationValidation.objects.filter(
+            models.Q(preview_environment__service_id=service_id, preview_environment__commit_sha=commit_hash)
+            | models.Q(deployment__service_id=service_id, deployment__commit_hash=commit_hash)
+        ).order_by('-created_at')
+        return qs.first()
 
     def _run_backup_phase(self, deployment: Deployment) -> None:
-        # TODO: Implement actual backup logic
         logger.info(f"Backup phase not yet implemented for deployment {deployment.id}")
 
     def _run_migration_phase(self, deployment: Deployment) -> None:
@@ -57,7 +61,7 @@ class ProductionDeploymentPipeline:
         deployment.save()
         try:
             from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
-            import tempfile, shutil, subprocess
+            import tempfile, shutil
             adapter = DjangoAdapter()
             workspace_dir = tempfile.mkdtemp(prefix=f"prod_deploy_{deployment.id}_")
             repo_url = deployment.service.repository_url
@@ -86,27 +90,40 @@ class ProductionDeploymentPipeline:
                 env = {"DATABASE_URL": prod_db_url}
                 rc, out, err = adapter.run_migrate(cloned_path, env)
                 DeploymentArtifact.objects.create(service=deployment.service, deployment=deployment, artifact_type=DeploymentArtifact.ArtifactType.MIGRATION_OUTPUT, content=f"RC: {rc}\n{out}\n{err}")
-                if rc != 0: raise Exception("Production Migration apply failed.")
+                if rc != 0:
+                    raise Exception("Production Migration apply failed.")
             shutil.rmtree(workspace_dir, ignore_errors=True)
         except Exception as e:
             deployment.status = Deployment.Status.MIGRATION_FAILED
             deployment.save()
 
+    @transaction.atomic
     def approve_deployment(self, deployment: Deployment, user) -> DeploymentApproval:
         approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
         approval.status = DeploymentApproval.Status.APPROVED
         approval.approved_by = user
+        approval.rejected_by = None
         approval.approved_at = timezone.now()
         validation = getattr(deployment, 'migration_validation', None)
-        if validation: approval.risk_level = validation.risk_level
+        if validation:
+            approval.risk_level = validation.risk_level
         approval.save()
+        deployment.status = Deployment.Status.MIGRATION_PLANNING
+        deployment.save()
+        return approval
+
+    def approve_and_process(self, deployment: Deployment, user) -> DeploymentApproval:
+        approval = self.approve_deployment(deployment, user)
         self.process_deployment(deployment)
         return approval
 
+    @transaction.atomic
     def reject_deployment(self, deployment: Deployment, user, notes: str = "") -> DeploymentApproval:
-        approval, _ = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        approval, created = DeploymentApproval.objects.get_or_create(service=deployment.service, deployment=deployment)
+        if not created:
+            approval.approved_by = approval.approved_by
         approval.status = DeploymentApproval.Status.REJECTED
-        approval.approved_by = None  # Note: a rejected_by field should be added to track who rejected
+        approval.rejected_by = user
         approval.rejected_at = timezone.now()
         approval.approval_notes = notes
         approval.save()

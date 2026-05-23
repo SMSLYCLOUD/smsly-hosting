@@ -1,4 +1,5 @@
 import logging
+import re
 from rest_framework import serializers
 from .models import Service, Deployment, EnvironmentVariable, Region
 from .models_audit import AuditLog
@@ -347,6 +348,46 @@ class BackupScheduleSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 # --- SafeDeploy Serializers ---
+
+class PreviewCreateSerializer(serializers.Serializer):
+    branch_name = serializers.CharField(max_length=255, min_length=1, trim_whitespace=True)
+    commit_sha = serializers.CharField(max_length=64, min_length=7)
+
+    def validate_branch_name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("branch_name must not be blank")
+        if re.search(r'[^a-zA-Z0-9._\-/]', value):
+            raise serializers.ValidationError("branch_name contains invalid characters")
+        return value
+
+    def validate_commit_sha(self, value):
+        if not re.match(r'^[0-9a-fA-F]{7,64}$', value):
+            raise serializers.ValidationError("commit_sha must be a valid hex SHA (7-64 characters)")
+        return value
+
+
+class PreviewRebuildSerializer(serializers.Serializer):
+    commit_sha = serializers.CharField(max_length=64, min_length=7, required=False)
+
+    def validate_commit_sha(self, value):
+        if not re.match(r'^[0-9a-fA-F]{7,64}$', value):
+            raise serializers.ValidationError("commit_sha must be a valid hex SHA (7-64 characters)")
+        return value
+
+
+class ApprovalApproveSerializer(serializers.Serializer):
+    pass
+
+
+class ApprovalRejectSerializer(serializers.Serializer):
+    notes = serializers.CharField(max_length=2000, required=False, allow_blank=True, trim_whitespace=True)
+
+
+class ApprovalCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeploymentApproval
+        fields = ['service', 'deployment', 'preview_environment', 'requested_by', 'risk_level', 'approval_notes']
+
 
 class DatabaseCloneSerializer(serializers.ModelSerializer):
     class Meta:

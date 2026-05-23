@@ -50,12 +50,13 @@ from .tasks import (
 from .domain_utils import normalize_domain
 from .services.server_guard import ServerGuard
 from apps.cloud.models import CloudProvider
-import os
 import uuid
 import logging
 import re
 from celery.result import AsyncResult
 from apps.cloud.docker_client import get_docker_client
+from .utils import validate_and_sanitize_path as _validate_and_sanitize_path
+from apps.deployments.utils import resolve_running_container
 
 
 class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
@@ -2542,20 +2543,125 @@ class ServiceViewSet(viewsets.ModelViewSet):
             'message': f'{domain} removed. No redeploy required.',
         })
 
+    def _resolve_target_type(self, service, latest_deploy):
+        """Resolve execution target (remote/lite_agent/local) with fallback."""
+        try:
+            from apps.deployments.utils_target import resolve_active_execution_target
+            target = resolve_active_execution_target(service)
+            active_server = target.get("server_obj")
+            target_type = target.get("target_type")
+        except Exception:
+            active_server = self._resolve_remote_server(service, latest_deploy)
+            target_type = "remote" if active_server else "local"
+        return target_type, active_server
+
+    def _dispatch_file_operation(self, service, latest_deploy, remote_config, local_action, path=None):
+        """
+        Dispatch a file operation to a remote node or local Docker container.
+
+        Args:
+            service: Service object.
+            latest_deploy: Latest active deployment.
+            remote_config: dict with:
+                method (str), path_suffix (str),
+                params (dict, optional), payload (dict, optional),
+                timeout (int, optional, default 30),
+                on_success (callable(resp)->Response, optional),
+                on_error (callable(resp|None)->Response, optional),
+                fallthrough_on_exception (bool, optional, default False),
+                retry (callable(resp, orchestrator, remote_id, config)->Response|None, optional),
+                k8s_handler (callable(container_id, path)->Response, optional),
+                k8s_command (list, optional).
+            local_action: callable(container, path=None) -> Response.
+            path: Optional path string for symlink resolution and K8s command.
+
+        Returns:
+            Response
+        """
+        target_type, active_server = self._resolve_target_type(service, latest_deploy)
+        fallthrough = remote_config.get('fallthrough_on_exception', False)
+
+        if target_type in ("remote", "lite_agent") and active_server:
+            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
+            orchestrator = RemoteOrchestrator(active_server)
+            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
+            if not remote_id:
+                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
+            try:
+                resp = orchestrator._request(
+                    method=remote_config['method'],
+                    path=f"/api/v1/services/{remote_id}/{remote_config['path_suffix']}/",
+                    params=remote_config.get('params'),
+                    payload=remote_config.get('payload'),
+                    timeout=remote_config.get('timeout', 30),
+                )
+                if resp and resp.status_code == 200:
+                    on_success = remote_config.get('on_success')
+                    if on_success:
+                        return on_success(resp)
+                    return Response(resp.json())
+                retry_handler = remote_config.get('retry')
+                if retry_handler:
+                    retry_result = retry_handler(resp, orchestrator, remote_id, remote_config)
+                    if retry_result is not None:
+                        return retry_result
+                if fallthrough:
+                    logger.warning(
+                        f"Remote {remote_config['path_suffix']} returned non-200 for {service.id}, "
+                        f"falling back to local: {resp.status_code if resp else 'Timeout'}"
+                    )
+                else:
+                    on_error = remote_config.get('on_error')
+                    if on_error:
+                        return on_error(resp)
+                    return Response(
+                        {'error': 'Remote node returned an error', 'details': resp.text if resp else 'Timeout'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+            except Exception as e:
+                if fallthrough:
+                    logger.warning(
+                        f"Remote {remote_config['path_suffix']} failed for {service.id}, falling back to local: {e}"
+                    )
+                else:
+                    on_error = remote_config.get('on_error')
+                    if on_error:
+                        return on_error(None)
+                    return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Local execution
+        container = resolve_running_container(service, latest_deploy)
+        if container is None:
+            container_id = (latest_deploy.container_id or "")
+            if container_id.startswith('k8s://'):
+                k8s_handler = remote_config.get('k8s_handler')
+                if k8s_handler:
+                    return k8s_handler(container_id, path)
+                if path is not None:
+                    k8s_command = remote_config.get('k8s_command')
+                    if k8s_command:
+                        return self._k8s_exec_file_op(container_id, k8s_command)
+                return Response({'error': 'K8s operation not supported'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # Symlink resolution for Docker containers
+        if path is not None:
+            try:
+                path = _validate_and_sanitize_path(path, container=container)
+            except Exception:
+                pass
+
+        return local_action(container, path) if path is not None else local_action(container)
+
+
     @action(detail=True, methods=['get'], url_path='file-browse')
     def file_browse(self, request, pk=None):
         """List files inside the running container (Docker, K8s, or remote node)."""
         service = self.get_object()
         path = request.query_params.get('path', '/')
 
-        # Validate and sanitize path to prevent directory traversal attacks
         try:
-            normalized_path = _validate_and_sanitize_path(path)
-            if normalized_path is None:
-                return Response({
-                    'error': 'Invalid path',
-                    'details': 'Path contains potentially dangerous characters or sequences'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            path = _validate_and_sanitize_path(path)
         except Exception as e:
             return Response({
                 'error': 'Path validation failed',
@@ -2569,66 +2675,47 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 'details': f'Deployment {service.id} has no active deployments'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
-
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            actual_path = path
-            remote_ok = False
+        def _retry_browse(resp, orchestrator, remote_id, config):
+            """Retry file_browse with fallback path (/app <-> /)."""
+            original_path = config.get('params', {}).get('path', '')
+            if original_path not in ('/app', '/'):
+                return None
+            fallback_path = '/' if original_path == '/app' else '/app'
+            logger.warning(
+                f"Remote file_browse failed for path {original_path}, "
+                f"trying fallback: {fallback_path}. "
+                f"Error: {resp.status_code if resp else 'Timeout'}"
+            )
             try:
-                resp = orchestrator._request(
+                fallback_resp = orchestrator._request(
                     method='GET',
                     path=f"/api/v1/services/{remote_id}/file-browse/",
-                    params={'path': actual_path},
+                    params={'path': fallback_path},
                     timeout=30,
                 )
-                if resp and resp.status_code == 200:
-                    return Response(resp.json())
-                if actual_path in ('/app', '/'):
-                    fallback_path = '/' if actual_path == '/app' else '/app'
-                    logger.warning(f"Remote file_browse failed for path {actual_path}, trying fallback: {fallback_path}. Error: {resp.status_code if resp else 'Timeout'}")
-                    resp = orchestrator._request(
-                        method='GET',
-                        path=f"/api/v1/services/{remote_id}/file-browse/",
-                        params={'path': fallback_path},
-                        timeout=30,
-                    )
-                    if resp and resp.status_code == 200:
-                        data = resp.json()
-                        data['path'] = fallback_path
-                        return Response(data)
-                if resp is None:
-                    raise Exception(orchestrator.describe_last_error() or "Network timeout communicating with remote node")
-                remote_ok = True  # Mark that remote was attempted and failed (not a network error)
-                return Response({'error': 'Remote node returned an error', 'details': resp.text if resp else 'Unknown'}, status=status.HTTP_502_BAD_GATEWAY)
-            except Exception as e:
-                logger.warning(f"Remote file_browse failed for {service.id}, falling back to local: {e}")
-                # Fall through to local container resolution
+                if fallback_resp and fallback_resp.status_code == 200:
+                    data = fallback_resp.json()
+                    data['path'] = fallback_path
+                    return Response(data)
+            except Exception:
+                pass
+            return None
 
-        # K8s path: container_id is "k8s://namespace/podname"
-        container_id = (latest_deploy.container_id or "")
-        if container_id.startswith('k8s://'):
-            return self._k8s_file_browse(container_id, path)
-
-        # Try the deployment's stored container_id first; if stale,
-        # resolve_running_container falls back to label/name search.
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_400_BAD_REQUEST)
-
-        return self._exec_file_list(container, path)
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'GET',
+                'path_suffix': 'file-browse',
+                'params': {'path': path},
+                'timeout': 30,
+                'fallthrough_on_exception': True,
+                'retry': _retry_browse,
+                'k8s_handler': lambda cid, p: self._k8s_file_browse(cid, p),
+            },
+            local_action=lambda container, path=None: self._exec_file_list(container, path or '/'),
+            path=path,
+        )
 
     def _k8s_file_browse(self, container_id: str, path: str):
         """List files via K8s exec into the pod."""
@@ -2671,6 +2758,36 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     return Response({'error': 'Path not found'}, status=status.HTTP_400_BAD_REQUEST)
             files = self._parse_ls_output(output)
             return Response({'path': path, 'files': files})
+        except ImportError:
+            return Response({'error': 'Kubernetes client not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _k8s_exec_file_op(self, container_id: str, command_args: list):
+        """Execute a file operation command inside a K8s pod."""
+        try:
+            from kubernetes import client as k8s_client, config as k8s_config
+            try:
+                k8s_config.load_incluster_config()
+            except BaseException:
+                k8s_config.load_kube_config()
+            parts = container_id.replace('k8s://', '').split('/', 1)
+            namespace = parts[0] if len(parts) > 1 else 'default'
+            pod_name = parts[-1]
+            core_v1 = k8s_client.CoreV1Api()
+            resp = core_v1.connect_get_namespaced_pod_exec(
+                pod_name, namespace,
+                command=command_args,
+                stderr=True, stdin=False,
+                stdout=True, tty=False,
+                _request_timeout=30,
+            )
+            output = resp
+            if isinstance(output, bytes):
+                output = output.decode('utf-8', errors='replace')
+            if 'No such file' in output or 'cannot access' in output:
+                return Response({'error': 'Path not found', 'details': output}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'output': output})
         except ImportError:
             return Response({'error': 'Kubernetes client not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
@@ -2756,44 +2873,31 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'GET',
+                'path_suffix': 'file-download',
+                'params': {'path': path},
+                'timeout': 30,
+                'on_success': lambda resp: StreamingHttpResponse(
+                    resp.iter_content(chunk_size=8192),
+                    content_type=resp.headers.get('Content-Type', 'application/x-tar'),
+                ),
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to download from remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'fallthrough_on_exception': True,
+            },
+            local_action=lambda container, path=None: self._local_file_download(container, path),
+            path=path,
+        )
 
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            try:
-                resp = orchestrator._request(
-                    method='GET',
-                    path=f"/api/v1/services/{remote_id}/file-download/",
-                    params={'path': path},
-                    timeout=30,
-                )
-                if resp and resp.status_code == 200:
-                    from django.http import StreamingHttpResponse
-                    return StreamingHttpResponse(resp.iter_content(chunk_size=8192), content_type=resp.headers.get('Content-Type', 'application/x-tar'))
-                return Response({'error': 'Failed to download from remote node'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    def _local_file_download(self, container, path: str):
         try:
             bits, stat = container.get_archive(path)
-            
-            from django.http import StreamingHttpResponse
             response = StreamingHttpResponse(bits, content_type='application/x-tar')
             filename = os.path.basename(path) + ".tar"
             response['Content-Disposition'] = f'attachment; filename="{filename}"'
@@ -2818,39 +2922,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'POST',
+                'path_suffix': 'file-delete',
+                'payload': {'path': path},
+                'timeout': 15,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'fallthrough_on_exception': True,
+                'k8s_command': ['rm', '-rf', path],
+            },
+            local_action=lambda container, path=None: self._local_file_delete(container, path),
+            path=path,
+        )
 
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            try:
-                resp = orchestrator._request(
-                    method='POST',
-                    path=f"/api/v1/services/{remote_id}/file-delete/",
-                    payload={'path': path},
-                    timeout=15,
-                )
-                if resp and resp.status_code == 200:
-                    return Response(resp.json())
-                return Response({'error': 'Failed to delete on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    def _local_file_delete(self, container, path: str):
         try:
             exit_code, output = container.exec_run(["rm", "-rf", path])
             if exit_code != 0:
@@ -2876,39 +2967,26 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'POST',
+                'path_suffix': 'file-mkdir',
+                'payload': {'path': path},
+                'timeout': 15,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'fallthrough_on_exception': True,
+                'k8s_command': ['mkdir', '-p', path],
+            },
+            local_action=lambda container, path=None: self._local_file_mkdir(container, path),
+            path=path,
+        )
 
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            try:
-                resp = orchestrator._request(
-                    method='POST',
-                    path=f"/api/v1/services/{remote_id}/file-mkdir/",
-                    payload={'path': path},
-                    timeout=15,
-                )
-                if resp and resp.status_code == 200:
-                    return Response(resp.json())
-                return Response({'error': 'Failed to mkdir on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    def _local_file_mkdir(self, container, path: str):
         try:
             exit_code, output = container.exec_run(["mkdir", "-p", path])
             if exit_code != 0:
@@ -2935,47 +3013,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'GET',
+                'path_suffix': 'file-read',
+                'params': {'path': path},
+                'timeout': 15,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'fallthrough_on_exception': True,
+                'k8s_command': ['cat', path],
+            },
+            local_action=lambda container, path=None: self._local_file_read(container, path),
+            path=path,
+        )
 
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            try:
-                resp = orchestrator._request(
-                    method='GET',
-                    path=f"/api/v1/services/{remote_id}/file-read/",
-                    params={'path': path},
-                    timeout=15,
-                )
-                if resp and resp.status_code == 200:
-                    return Response(resp.json())
-                return Response({'error': 'Failed to read file on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    def _local_file_read(self, container, path: str):
         try:
             exit_code, output = container.exec_run(["cat", path])
             if exit_code != 0:
                 return Response({'error': 'Failed to read file', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
 
-            MAX_READ_SIZE = 10 * 1024 * 1024
-            if len(output) > MAX_READ_SIZE:
-                return Response({'error': 'File too large to read. Use download instead.'}, status=413)
+            from django.conf import settings
+            max_read_size = settings.SMSLY_MAX_FILE_READ_SIZE
+            if len(output) > max_read_size:
+                return Response({'error': 'File too large to read. Use download instead.'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
 
             return Response({'path': path, 'content': output.decode('utf-8')})
         except Exception as e:
@@ -3000,45 +3066,31 @@ class ServiceViewSet(viewsets.ModelViewSet):
         if not latest_deploy:
             return Response({'error': 'No active deployment'}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            from apps.deployments.utils_target import resolve_active_execution_target
-            target = resolve_active_execution_target(service)
-            active_server = target.get("server_obj")
-            target_type = target.get("target_type")
-        except Exception:
-            active_server = self._resolve_remote_server(service, latest_deploy)
-            target_type = "remote" if active_server else "local"
+        return self._dispatch_file_operation(
+            service,
+            latest_deploy,
+            remote_config={
+                'method': 'POST',
+                'path_suffix': 'file-write',
+                'payload': {'path': path, 'content': content},
+                'timeout': 30,
+                'on_error': lambda resp: Response(
+                    {'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                ),
+                'fallthrough_on_exception': True,
+                'k8s_command': ['sh', '-c', f'cat > {path}'],
+            },
+            local_action=lambda container, path=None: self._local_file_write(container, path, content),
+            path=path,
+        )
 
-        if target_type in ("remote", "lite_agent") and active_server:
-            from apps.deployments.services.remote_orchestrator import RemoteOrchestrator
-            orchestrator = RemoteOrchestrator(active_server)
-            remote_id = orchestrator._search_remote_service(service, "/api/v1/services/")
-            if not remote_id:
-                return Response({'error': 'Service not found on remote node'}, status=status.HTTP_404_NOT_FOUND)
-            try:
-                resp = orchestrator._request(
-                    method='POST',
-                    path=f"/api/v1/services/{remote_id}/file-write/",
-                    payload={'path': path, 'content': content},
-                    timeout=30,
-                )
-                if resp and resp.status_code == 200:
-                    return Response(resp.json())
-                return Response({'error': 'Failed to write file on remote node', 'details': resp.text if resp else 'Timeout'}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        from apps.deployments.utils import resolve_running_container
-        container = resolve_running_container(service, latest_deploy)
-        if container is None:
-            return Response({'error': 'No running container found'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    def _local_file_write(self, container, path: str, content: str):
         try:
             import tarfile
             import io
             import time
 
-            # Create a tar archive in memory containing the file
             tar_stream = io.BytesIO()
             with tarfile.open(fileobj=tar_stream, mode='w') as tar:
                 file_data = content.encode('utf-8')
@@ -3048,12 +3100,10 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 tar.addfile(tarinfo, io.BytesIO(file_data))
 
             tar_stream.seek(0)
-
-            # Put the archive into the container's directory
             dir_name = os.path.dirname(path)
-            # Ensure the directory exists
-            container.exec_run(["mkdir", "-p", dir_name])
-
+            exit_code, output = container.exec_run(["mkdir", "-p", dir_name])
+            if exit_code != 0:
+                return Response({'error': 'Failed to create parent directory', 'details': output.decode()}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             success = container.put_archive(dir_name, tar_stream)
 
             if not success:
@@ -4939,79 +4989,3 @@ class RemoteTriggerView(GenericAPIView):
         except Exception as e:
             logger.exception("Remote trigger failed")
             return Response({"error": str(e)}, status=500)
-
-
-def _validate_and_sanitize_path(path: str) -> str:
-        """
-        Validate and sanitize file system paths to prevent directory traversal attacks.
-        
-        Args:
-            path: The file path to validate
-            
-        Returns:
-            str: Sanitized path if valid, None if invalid
-            
-        Raises:
-            ValueError: If path contains dangerous characters or sequences
-        """
-        import re
-        
-        if not path or not isinstance(path, str):
-            raise ValueError("Path must be a non-empty string")
-        
-        # Check for path traversal attempts
-        dangerous_patterns = [
-            r'\.\./',  # Parent directory traversal
-            r'\.\.\\',  # Windows-style parent directory traversal
-            r'[/\\]\.\.[/\\]',  # Any parent directory traversal
-            r'^\.\./',  # Starting with parent directory
-            r'/\.\.$',  # Ending with parent directory
-            r'[/\\]\.\.$',  # Ending with parent directory (Windows)
-        ]
-        
-        for pattern in dangerous_patterns:
-            if re.search(pattern, path):
-                raise ValueError(f"Path contains potentially dangerous sequence: {pattern}")
-        
-        # Check for null bytes or other control characters
-        if '\x00' in path:
-            raise ValueError("Path contains null bytes")
-        
-        # Normalize path separators
-        normalized_path = path.replace('\\', '/')
-        
-        # Resolve any remaining path traversal components (e.g., /app/foo/../../etc/passwd)
-        normalized_path = posixpath.normpath(normalized_path)
-        
-        # Ensure absolute path
-        if not normalized_path.startswith('/'):
-            normalized_path = '/' + normalized_path
-        
-        # Remove duplicate slashes
-        normalized_path = re.sub(r'/+', '/', normalized_path)
-        
-        # NOTE: Symlinks within the container (e.g., /app/link-to-etc -> /etc) can
-        # bypass this blacklist-based validation. Full symlink resolution requires
-        # container exec which is not performed here.
-        
-        # Check if path is within reasonable bounds
-        if len(normalized_path) > 4096:  # Max path length
-            raise ValueError("Path is too long")
-        
-        # Check for potentially dangerous characters
-        dangerous_chars = ['<', '>', '|', '?', '*', '"']
-        for char in dangerous_chars:
-            if char in normalized_path:
-                raise ValueError(f"Path contains dangerous character: {char}")
-        
-        # Validate that the path doesn't contain environment variables
-        if '$' in normalized_path and '{' in normalized_path and '}' in normalized_path:
-            raise ValueError("Path contains environment variables")
-        
-        # Additional security check: ensure path doesn't attempt to access system files
-        system_directories = ['/etc', '/usr', '/bin', '/sbin', '/var', '/sys', '/proc', '/dev']
-        for sys_dir in system_directories:
-            if normalized_path.startswith(sys_dir):
-                raise ValueError(f"Access to system directory '{sys_dir}' is not allowed")
-        
-        return normalized_path
