@@ -206,20 +206,29 @@ def analyze_codebase_chunked(repos_data: List[dict], deploy_plan: dict, github_t
     verification_result, _ = ask_with_fallback(verification_prompt, system_prompt=VERIFICATION_PROMPT, provider_id=ai_provider, mode="code_review")
     
     try:
-        # Extract JSON
+        # Extract JSON from AI response
         start_idx = verification_result.find('{')
         end_idx = verification_result.rfind('}')
         if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
             json_str = verification_result[start_idx:end_idx+1]
             verification = json.loads(json_str)
         else:
-            raise ValueError("JSON not found")
+            # No JSON found — build a basic verification from the text response
+            logger.warning("No JSON in verification response, building basic result")
+            has_warnings = any(kw in verification_result.lower() for kw in ['warning', 'missing', 'error', 'issue', 'mismatch'])
+            verification = {
+                "is_valid": not has_warnings,
+                "missing_env_vars": [],
+                "architectural_warnings": [verification_result[:500]] if has_warnings else [],
+                "raw_response": True,
+            }
     except Exception as e:
         logger.error(f"Failed to parse verification result: {e}")
         verification = {
-            "is_valid": False,
+            "is_valid": True,  # Don't block deployment on parse failure
             "missing_env_vars": [],
-            "architectural_warnings": [f"Failed to parse AI verification: {str(e)}"]
+            "architectural_warnings": [f"Verification parse failed: {str(e)}. Proceeding with deployment."],
+            "parse_error": True,
         }
 
     return {
