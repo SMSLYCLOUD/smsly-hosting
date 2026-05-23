@@ -2897,9 +2897,28 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     PASS_COUNT=0
     FAIL_COUNT=0
 
-    # Backend health (internal)
-    EP1_URL="http://127.0.0.1:8090/health"
-    EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+    # Backend health (internal) — prefer direct backend port, fallback to local proxy
+    EP1_URL="http://127.0.0.1:8000/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
+    _LITE_HOST_HEADER=""
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        _ep1_domain="$(grep -m1 '^DOMAIN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]' || true)"
+        if [ -n "$_ep1_domain" ] && [ "$_ep1_domain" != "localhost" ]; then
+            _LITE_HOST_HEADER="$_ep1_domain"
+        fi
+    fi
+    if [ "$MODE_AGENT_LITE" = "true" ]; then
+        if [ -n "${_LITE_HOST_HEADER:-}" ]; then
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+        else
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
+        fi
+    else
+        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+        if [ "$EP1_CODE" = "000" ]; then
+            EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+        fi
+    fi
     case "$EP1_CODE" in
         2*|3*)
         echo -e "${GREEN}  ✓ Backend (local): HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -3865,8 +3884,8 @@ if d and d != 'localhost':
                 # Route through Traefik with the correct Host header
                 EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${_LITE_HOST_HEADER}" "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
             else
-                # No domain — curl backend container directly (port 8000)
-                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+                # No domain — route through Traefik on port 80
+                EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/health" 2>/dev/null) || EP1_CODE="000"
             fi
         else
             EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
@@ -5373,7 +5392,11 @@ echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -sfL http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
+    HEALTH_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health/live 2>/dev/null) || HEALTH_CODE="000"
+    if [ "$HEALTH_CODE" -ge 200 ] 2>/dev/null && [ "$HEALTH_CODE" -lt 400 ] 2>/dev/null; then
+        HEALTH_OK=true
+        break
+    elif curl -sfL http://127.0.0.1:8090/health/live >/dev/null 2>&1; then
         HEALTH_OK=true
         break
     fi
@@ -5384,7 +5407,8 @@ echo ""
 
 if [ "$HEALTH_OK" = "true" ]; then
     echo -e "${GREEN}  ✓ Health Check Passed!${NC}"
-    if ! curl -sfL http://127.0.0.1:8090/health/ready >/dev/null 2>&1; then
+    READY_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/health/ready 2>/dev/null) || READY_CODE="000"
+    if ! { [ "$READY_CODE" -ge 200 ] 2>/dev/null && [ "$READY_CODE" -lt 400 ] 2>/dev/null || curl -sfL http://127.0.0.1:8090/health/ready >/dev/null 2>&1; }; then
         echo -e "${YELLOW}  ⚠ Readiness endpoint is still warming; continuing because liveness passed.${NC}"
     fi
     VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))

@@ -94,7 +94,7 @@ echo ""
 echo "[5/9] Starting backend..."
 "${COMPOSE_CMD[@]}" up -d backend
 echo "Waiting for backend health..."
-wait_for_healthy backend 120 || wait_for_endpoint "http://localhost:8090/health" 30
+wait_for_healthy backend 120 || wait_for_endpoint "http://localhost/health" 30
 
 echo ""
 echo "[6/9] Starting and recycling celery worker + beat..."
