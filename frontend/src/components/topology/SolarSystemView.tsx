@@ -3,15 +3,14 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { useGraphData } from '@/hooks/useGraphData';
+// useGraphData removed as it's passed as prop
 import { TopologyNode } from '@/types/topology';
 import { Loader2, ArrowLeft, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ServiceSidePanel } from './ServiceSidePanel';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
-function SolarSystemContent() {
-  const { data, loading, error } = useGraphData();
+export function SolarSystemView({ data, loading, error }: { data: any, loading: boolean, error: any }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -27,11 +26,11 @@ function SolarSystemContent() {
     if (!data) return [];
 
     const normalizeNodeType = (value: unknown) => String(value || '').toLowerCase();
-    const serviceNodes = data.nodes.filter(n => normalizeNodeType(n.type) === 'service');
-    const addonNodes = data.nodes.filter(n => normalizeNodeType(n.type) === 'addon');
-    const addonById = new Map(addonNodes.map(node => [node.id, node]));
+    const serviceNodes = data.nodes.filter((n: TopologyNode) => normalizeNodeType(n.type) === 'service');
+    const addonNodes = data.nodes.filter((n: TopologyNode) => normalizeNodeType(n.type) === 'addon');
+    const addonById = new Map<string, TopologyNode>(addonNodes.map((node: TopologyNode) => [node.id, node]));
 
-    return serviceNodes.map(service => {
+    return serviceNodes.map((service: TopologyNode) => {
       // Addons are connected by service -> addon edges (DATABASE/CACHE/QUEUE/SEARCH/ADDON/etc.).
       // We match by actual target node type instead of hardcoded prefixes/edge names.
       const ownedAddons: TopologyNode[] = [];
@@ -78,6 +77,12 @@ function SolarSystemContent() {
       renderer.setClearColor(0x04070f, 1);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.domElement.style.display = 'block';
+      renderer.domElement.style.position = 'absolute';
+      renderer.domElement.style.top = '0';
+      renderer.domElement.style.left = '0';
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      renderer.domElement.style.outline = 'none';
       containerEl.appendChild(renderer.domElement);
       rendererRef.current = renderer;
 
@@ -87,7 +92,7 @@ function SolarSystemContent() {
         const height = Math.max(containerEl.clientHeight, 1);
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
-        renderer.setSize(width, height, false);
+        renderer.setSize(width, height);
       };
       syncRendererSize();
       sizeObserver = new ResizeObserver(syncRendererSize);
@@ -176,7 +181,7 @@ function SolarSystemContent() {
     const starColor = serviceStatus === 'ACTIVE' ? 0x10b981 :
                       serviceStatus === 'FAILED' ? 0xef4444 : 0x3b82f6;
 
-    const starGeometry = new THREE.SphereGeometry(4, 32, 32);
+    const starGeometry = new THREE.SphereGeometry(8, 64, 64); // Doubled size for "bold" look
     const starMaterial = new THREE.MeshBasicMaterial({
         color: starColor,
     });
@@ -206,13 +211,13 @@ function SolarSystemContent() {
         spriteMaterial.map = new THREE.CanvasTexture(canvas);
     }
     const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(12, 12, 1);
+    sprite.scale.set(24, 24, 1); // Increased glow size
     sprite.userData = { isSystemObj: true }; // Not clickable
     starMesh.add(sprite);
 
 
     // --- Planets (Addons) ---
-    addons.forEach((addon, index) => {
+    currentSystem.addons.forEach((addon: TopologyNode, index: number) => {
         const addonKind = String(addon.data.kind || '').toUpperCase();
         const planetColor =
             addonKind === 'DATABASE' ? 0xa78bfa : // Purple
@@ -220,13 +225,13 @@ function SolarSystemContent() {
             addonKind === 'QUEUE' ? 0xfbbf24 :    // Amber
             0x9ca3af; // Gray
 
-        const size = Math.random() * 1 + 0.8; // Random size 0.8 - 1.8
-        const geometry = new THREE.SphereGeometry(size, 16, 16);
+        const size = Math.random() * 2 + 1.5; // Larger planets
+        const geometry = new THREE.SphereGeometry(size, 32, 32);
         const material = new THREE.MeshBasicMaterial({ color: planetColor });
         const planet = new THREE.Mesh(geometry, material);
 
         // Orbit parameters
-        const distance = 8 + (index * 3) + (Math.random() * 2);
+        const distance = 16 + (index * 5) + (Math.random() * 3); // Spread further to accommodate larger sun
         const speed = 0.005 + (Math.random() * 0.01);
         const angle = Math.random() * Math.PI * 2;
 
@@ -390,7 +395,7 @@ function SolarSystemContent() {
               {currentSystem.service.data.name}
             </button>
 
-            {currentSystem.addons.map((addon, idx) => {
+            {currentSystem.addons.map((addon: TopologyNode, idx: number) => {
               const angle = (idx / Math.max(currentSystem.addons.length, 1)) * Math.PI * 2;
               const radius = 108;
               const x = Math.cos(angle) * radius;
@@ -413,25 +418,23 @@ function SolarSystemContent() {
       {isReady && (
         <>
           {/* HUD Overlay */}
-          <div className="absolute top-0 left-0 w-full p-6 flex justify-between items-start pointer-events-none">
-              <div className="space-y-1 pointer-events-auto">
-                  <h2 className="text-2xl font-bold text-white tracking-tight font-display">{currentSystem.service.data.name}</h2>
-                  <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                          currentSystem.service.data.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-800 text-zinc-400'
-                      }`}>
-                          {currentSystem.service.data.status}
-                      </span>
-                      <span className="text-zinc-500 text-sm">System {currentSystemIndex + 1} of {systems.length}</span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRenderMode((prev) => (prev === 'webgl' ? 'safe' : 'webgl'))}
-                        className="h-6 px-2 text-[10px] border-zinc-700 bg-black/40 hover:bg-zinc-800"
-                      >
-                        {renderMode === 'webgl' ? 'Safe Mode' : '3D Mode'}
-                      </Button>
-                  </div>
+          <div className="absolute top-8 left-8 flex flex-col items-start space-y-3 pointer-events-none z-10">
+              <h2 className="text-4xl font-extrabold text-white/90 tracking-tight font-display drop-shadow-lg">{currentSystem.service.data.name}</h2>
+              <div className="flex items-center justify-start gap-3 pointer-events-auto">
+                  <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${
+                      currentSystem.service.data.status === 'ACTIVE' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/20 text-red-400 border border-red-500/20'
+                  }`}>
+                      {currentSystem.service.data.status}
+                  </span>
+                  <span className="text-zinc-500 text-xs font-medium">System {currentSystemIndex + 1} of {systems.length}</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRenderMode((prev) => (prev === 'webgl' ? 'safe' : 'webgl'))}
+                    className="h-6 px-3 text-[10px] border-zinc-800 bg-black/40 hover:bg-zinc-800 rounded-md text-zinc-400 hover:text-white"
+                  >
+                    {renderMode === 'webgl' ? 'Safe Mode' : '3D Mode'}
+                  </Button>
               </div>
           </div>
 
@@ -472,13 +475,5 @@ function SolarSystemContent() {
         <ServiceSidePanel node={selectedNode} onClose={() => setSelectedNode(null)} />
       )}
     </div>
-  );
-}
-
-export function SolarSystemView() {
-  return (
-    <ErrorBoundary fallback={<div className="flex items-center justify-center h-full text-red-500">Failed to render Solar System View.</div>}>
-      <SolarSystemContent />
-    </ErrorBoundary>
   );
 }

@@ -17,13 +17,13 @@ import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell"
 
 import { ADDON_REGISTRY, getAddonMetadata, AddonRegistryItem } from "@/lib/addonRegistry"
 
-type AddonType = Addon["addon_type"]
+type AddonType = any
 
 export default function MarketplacePage() {
     const { toast } = useToast()
     const confirm = useConfirm()
-    const [addons, setAddons] = React.useState<Addon[]>([])
-    const [services, setServices] = React.useState<Service[]>([])
+    const [addons, setAddons] = React.useState<any[]>([])
+    const [services, setServices] = React.useState<any[]>([])
     const [isLoading, setIsLoading] = React.useState(true)
     
     // One-click provisioning target (default to most recent service).
@@ -32,8 +32,8 @@ export default function MarketplacePage() {
 
     // Backups Modal State
     const [isBackupsOpen, setIsBackupsOpen] = React.useState(false)
-    const [activeAddon, setActiveAddon] = React.useState<Addon | null>(null)
-    const [backups, setBackups] = React.useState<Backup[]>([])
+    const [activeAddon, setActiveAddon] = React.useState<any | null>(null)
+    const [backups, setBackups] = React.useState<any[]>([])
     const [isLoadingBackups, setIsLoadingBackups] = React.useState(false)
 
     // Initial Fetch
@@ -127,7 +127,7 @@ export default function MarketplacePage() {
         }
     }
 
-    const loadBackups = async (addon: Addon) => {
+    const loadBackups = async (addon: any) => {
         setActiveAddon(addon)
         setIsBackupsOpen(true)
         setIsLoadingBackups(true)
@@ -189,7 +189,7 @@ export default function MarketplacePage() {
         }
     }
 
-    const handleDownload = async (backup: Backup) => {
+    const handleDownload = async (backup: any) => {
         if (!activeAddon) return
         const token = localStorage.getItem("auth_token")
         

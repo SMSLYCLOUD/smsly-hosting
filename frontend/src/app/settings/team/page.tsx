@@ -181,7 +181,7 @@ export default function TeamPage() {
             </CardHeader>
             <CardContent className="py-10 text-center space-y-4">
               <p className="text-muted-foreground">
-                You don't have any teams yet. Create one to get started.
+                You don&apos;t have any teams yet. Create one to get started.
               </p>
               <Dialog open={showCreateTeamDialog} onOpenChange={setShowCreateTeamDialog}>
                 <DialogTrigger asChild>
