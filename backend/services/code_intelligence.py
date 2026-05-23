@@ -4,6 +4,7 @@ import logging
 import json
 import re
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from apps.intelligence.providers import ask_with_fallback
 from services.ecosystem import _clone_repo
 
@@ -94,8 +95,6 @@ def analyze_codebase_chunked(repos_data: List[dict], deploy_plan: dict, github_t
     except ImportError:
         current_task = None
 
-    chunk_summaries = []
-    
     with tempfile.TemporaryDirectory(prefix="deep-scan-") as workspace_dir:
         logger.info(f"Created deep scan workspace: {workspace_dir}")
         
@@ -155,13 +154,37 @@ def analyze_codebase_chunked(repos_data: List[dict], deploy_plan: dict, github_t
         chunk_size = 30
         file_chunks = [all_files_content[i:i + chunk_size] for i in range(0, len(all_files_content), chunk_size)]
         
-        for i, chunk in enumerate(file_chunks):
-            if current_task:
-                current_task.update_state(state='PROGRESS', meta={'state': f'Analyzing codebase chunk {i+1} of {len(file_chunks)}...'})
-                
+        chunk_summaries = [None] * len(file_chunks)
+
+        def _analyze_chunk(idx: int, chunk: list, provider: str = None):
+            """Analyze a single code chunk."""
             prompt = "Please analyze the following codebase chunk:\n\n" + "\n".join(chunk)
-            summary, _ = ask_with_fallback(prompt, system_prompt=CODE_OVERVIEW_PROMPT, provider_id=ai_provider)
-            chunk_summaries.append(f"## CHUNK {i+1} SUMMARY:\n{summary}")
+            try:
+                summary, _ = ask_with_fallback(
+                    prompt,
+                    system_prompt=CODE_OVERVIEW_PROMPT,
+                    provider_id=provider,
+                    mode="code_review",
+                )
+                return idx, summary
+            except Exception as exc:
+                logger.warning("Chunk %d analysis failed: %s", idx, exc)
+                return idx, f"[Chunk {idx+1} analysis failed: {exc}]"
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {
+                pool.submit(_analyze_chunk, i, chunk, ai_provider): i
+                for i, chunk in enumerate(file_chunks)
+            }
+            for future in as_completed(futures, timeout=300):
+                try:
+                    idx, summary = future.result(timeout=60)
+                    chunk_summaries[idx] = f"## CHUNK {idx+1} SUMMARY:\n{summary}"
+                except Exception as exc:
+                    idx = futures[future]
+                    chunk_summaries[idx] = f"## CHUNK {idx+1} SUMMARY:\n[Error: {exc}]"
+
+        chunk_summaries = [s for s in chunk_summaries if s is not None]
 
     # 4. Global Synthesis (Overview of All)
     if current_task:
@@ -180,7 +203,7 @@ def analyze_codebase_chunked(repos_data: List[dict], deploy_plan: dict, github_t
     verification_prompt += "### PROPOSED DEPLOYMENT PLAN (ENV VARS):\n" + json.dumps(deploy_plan, indent=2) + "\n\n"
     verification_prompt += "Execute verification."
     
-    verification_result, _ = ask_with_fallback(verification_prompt, system_prompt=VERIFICATION_PROMPT, provider_id=ai_provider)
+    verification_result, _ = ask_with_fallback(verification_prompt, system_prompt=VERIFICATION_PROMPT, provider_id=ai_provider, mode="code_review")
     
     try:
         # Extract JSON

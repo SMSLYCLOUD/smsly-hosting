@@ -2508,7 +2508,7 @@ wait_for_traefik_api() {
     local interval=2
     echo -e "${BLUE}  → Waiting for Traefik API to be ready...${NC}"
     while [ "$waited" -lt "$max_wait" ]; do
-        if curl -sf --max-time 3 http://127.0.0.1:8081/api/version >/dev/null 2>&1; then
+        if curl -sf --max-time 3 http://127.0.0.1:8082/api/version >/dev/null 2>&1; then
             echo -e "${GREEN}  ✓ Traefik API ready (${waited}s)${NC}"
             return 0
         fi

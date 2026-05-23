@@ -1,7 +1,7 @@
 """Cost module."""
 from typing import Dict, List, Any
 from decimal import Decimal
-from .providers import ask_with_fallback
+from .providers import _cached_ask
 
 class CostAdvisor:
     """
@@ -53,7 +53,7 @@ class CostAdvisor:
             f"Compare AWS vs GCP vs Railway pricing. Be concise."
         )
         try:
-            response, provider = ask_with_fallback(prompt)
+            response, provider = _cached_ask(prompt)
             return f"[{provider}] {response}"
         except Exception:
             return self._fallback_advice(service_config)

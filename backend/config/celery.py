@@ -82,6 +82,9 @@ app.conf.task_routes = {
     'apps.deployments.tasks.restore_addon_task': {'queue': 'deploy'},
     'apps.deployments.tasks_election.heartbeat_task': {'queue': 'fast'},
     'apps.deployments.services.provisioner.cleanup_stale_server_provisioning': {'queue': 'deploy'},
+    'apps.deployments.tasks_ecosystem.ecosystem_scan_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_ecosystem.ecosystem_deploy_task': {'queue': 'deploy'},
+    'apps.deployments.tasks_ecosystem.ecosystem_release_wave_task': {'queue': 'fast'},
 }
 
 app.conf.beat_schedule = {

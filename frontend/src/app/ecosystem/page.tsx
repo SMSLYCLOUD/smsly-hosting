@@ -70,6 +70,25 @@ function getToken() {
     return typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
 }
 
+type Step = 'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done';
+
+function saveState(key: string, value: any) {
+    try { localStorage.setItem(`ecosystem:${key}`, JSON.stringify(value)); } catch {}
+}
+
+function loadState<T>(key: string, fallback: T): T {
+    try {
+        const stored = localStorage.getItem(`ecosystem:${key}`);
+        return stored ? JSON.parse(stored) : fallback;
+    } catch { return fallback; }
+}
+
+function clearState() {
+    ['step', 'plan', 'planId', 'scanTaskId', 'deployTaskId', 'selectedRepos', 'aiProvider'].forEach(
+        key => localStorage.removeItem(`ecosystem:${key}`)
+    );
+}
+
 async function apiPost(path: string, body?: object) {
     const token = getToken();
     const res = await fetch(path, {
@@ -98,20 +117,21 @@ async function apiGet(path: string) {
 }
 
 export default function EcosystemPage() {
-    const [step, setStep] = useState<'idle' | 'selection' | 'scanning' | 'review' | 'deploying' | 'done'>('idle');
-    const [plan, setPlan] = useState<DeployPlan | null>(null);
-    const [scanTaskId, setScanTaskId] = useState<string | null>(null);
-    const [deployTaskId, setDeployTaskId] = useState<string | null>(null);
+    const [step, setStep] = useState<Step>(() => loadState('step', 'idle'));
+    const [plan, setPlan] = useState<DeployPlan | null>(() => loadState('plan', null));
+    const [planId, setPlanId] = useState<string>(() => loadState('planId', ''));
+    const [scanTaskId, setScanTaskId] = useState<string | null>(() => loadState('scanTaskId', null));
+    const [deployTaskId, setDeployTaskId] = useState<string | null>(() => loadState('deployTaskId', null));
     const [deployResults, setDeployResults] = useState<DeployResult[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [scanProgress, setScanProgress] = useState('Initializing scan...');
     const [expandedEnv, setExpandedEnv] = useState<number | null>(null);
     const [servers, setServers] = useState<any[]>([]);
     const [availableRepos, setAvailableRepos] = useState<any[]>([]);
-    const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+    const [selectedRepos, setSelectedRepos] = useState<string[]>(() => loadState('selectedRepos', []));
 
     const [aiProviders, setAiProviders] = useState<any[]>([]);
-    const [selectedProvider, setSelectedProvider] = useState<string>('auto');
+    const [selectedProvider, setSelectedProvider] = useState<string>(() => loadState('aiProvider', 'auto'));
 
     // Deep scan states
     const [isDeepScanning, setIsDeepScanning] = useState(false);
@@ -126,6 +146,68 @@ export default function EcosystemPage() {
         apiGet('/api/v1/cloud/intelligence/providers/').then(data => {
             setAiProviders(data || []);
         }).catch(() => {});
+    }, []);
+
+    // Persist state to localStorage
+    useEffect(() => { saveState('step', step); }, [step]);
+    useEffect(() => { saveState('plan', plan); }, [plan]);
+    useEffect(() => { saveState('planId', planId); }, [planId]);
+    useEffect(() => { saveState('scanTaskId', scanTaskId); }, [scanTaskId]);
+    useEffect(() => { saveState('deployTaskId', deployTaskId); }, [deployTaskId]);
+    useEffect(() => { saveState('selectedRepos', selectedRepos); }, [selectedRepos]);
+    useEffect(() => { saveState('aiProvider', selectedProvider); }, [selectedProvider]);
+
+    // Check for active plan on mount
+    useEffect(() => {
+        const checkActivePlan = async () => {
+            const token = getToken();
+            if (!token) return;
+            // Only check if we're in idle state with no plan
+            if (step !== 'idle' || plan) return;
+
+            try {
+                const res = await fetch('/api/v1/cloud/ecosystem/active-plan/', {
+                    headers: { 'Authorization': `Token ${token}` },
+                });
+                const data = await res.json();
+                if (!data.has_active_plan) return;
+
+                setPlanId(data.plan_id);
+                setSelectedRepos(data.selected_repos || []);
+                setSelectedProvider(data.ai_provider || 'auto');
+
+                if (data.status === 'scanning' && data.scan_task_id) {
+                    setScanTaskId(data.scan_task_id);
+                    setStep('scanning');
+                    pollTask(data.scan_task_id, (result: any) => {
+                        if (result.error) {
+                            setError(result.error);
+                            setStep('selection');
+                        } else {
+                            setPlan(result);
+                            setStep('review');
+                        }
+                    });
+                } else if (data.status === 'review' && data.plan) {
+                    setPlan(data.plan);
+                    setStep('review');
+                } else if (data.status === 'deploying' && data.deploy_task_id) {
+                    setDeployTaskId(data.deploy_task_id);
+                    setPlan(data.plan);
+                    setStep('deploying');
+                    pollTask(data.deploy_task_id, (result: any) => {
+                        if (result.error) {
+                            setError(result.error);
+                            setStep('review');
+                        } else {
+                            setDeployResults(result.services || []);
+                            setStep('done');
+                        }
+                    });
+                }
+            } catch {}
+        };
+        checkActivePlan();
     }, []);
 
     // Poll for scan task completion
@@ -206,6 +288,7 @@ export default function EcosystemPage() {
                 selected_repos: selectedRepos
             });
             setScanTaskId(data.task_id);
+            if (data.plan_id) setPlanId(data.plan_id);
             
             // Note: The UI now polls the task status. The backend can optionally provide 
             // progress updates by returning custom state, or we just rely on generic messages.
@@ -279,8 +362,9 @@ export default function EcosystemPage() {
         setError(null);
 
         try {
-            const data = await apiPost('/api/v1/cloud/ecosystem/deploy/', { plan });
+            const data = await apiPost('/api/v1/cloud/ecosystem/deploy/', { plan, plan_id: planId });
             setDeployTaskId(data.task_id);
+            if (data.plan_id) setPlanId(data.plan_id);
 
             pollTask(data.task_id, (result) => {
                 if (result.error) {
@@ -419,7 +503,7 @@ export default function EcosystemPage() {
                         </div>
                         {step !== 'idle' && step !== 'scanning' && (
                             <button
-                                onClick={() => { setStep('idle'); setPlan(null); setError(null); }}
+                                onClick={() => { clearState(); setStep('idle'); setPlan(null); setPlanId(''); setError(null); }}
                                 className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
                             >
                                 <RefreshCw size={14} /> Start Over

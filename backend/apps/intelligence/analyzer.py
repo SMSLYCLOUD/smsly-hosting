@@ -3,7 +3,7 @@ import re
 import logging
 from typing import List, Dict
 
-from .providers import ask_with_fallback
+from .providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class LogAnalyzer:
                     f"Analyze these deployment logs and diagnose the issue. "
                     f"Be concise (max 3 sentences):\n\n{logs[-5000:]}"
                 )
-                response, provider = ask_with_fallback(prompt)
+                response, provider = _cached_ask(prompt, mode="code_review")
                 return f"[{provider}] {response}"
             except Exception as e:
                 logger.warning("AI diagnosis failed: %s", e)

@@ -4,6 +4,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
+from apps.deployments.rate_limiting import AIChatRateThrottle
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,9 +17,10 @@ class AIChatSchemaSerializer(serializers.Serializer):
 class AIChatView(GenericAPIView):
     serializer_class = AIChatSchemaSerializer
     permission_classes = [IsAuthenticated]  # SECURITY: Require authentication
+    throttle_classes = [AIChatRateThrottle]
 
     def post(self, request):
-        from apps.intelligence.providers import ask_with_fallback, SYSTEM_PROMPT
+        from apps.intelligence.providers import _cached_ask, SYSTEM_PROMPT
         message = request.data.get('message')
         if not message:
             return Response({"detail": "Message required"},
@@ -33,9 +35,10 @@ class AIChatView(GenericAPIView):
 
         try:
             logger.info("AI chat message from user %s", request.user.id)
-            response, provider_name = ask_with_fallback(
+            response, provider_name = _cached_ask(
                 prompt=message,
                 system_prompt=SYSTEM_PROMPT,
+                cache_bypass=True,
             )
             return Response({
                 "text": response,

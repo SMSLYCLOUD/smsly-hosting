@@ -21,3 +21,13 @@ class BurstRateThrottle(UserRateThrottle):
     """
     scope = 'deployment_burst'
     rate = '3/minute'
+
+
+class AIChatRateThrottle(UserRateThrottle):
+    rate = '30/minute'
+    scope = 'ai_chat'
+
+
+class AIAnalysisRateThrottle(UserRateThrottle):
+    rate = '10/minute'
+    scope = 'ai_analysis'

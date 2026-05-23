@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional
 import json
-from apps.intelligence.providers import ask_with_fallback
+from apps.intelligence.providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class EcosystemDeploymentSenate:
         )
 
         try:
-            response_text, provider = ask_with_fallback(prompt)
+            response_text, provider = _cached_ask(prompt)
             if response_text:
                 import re
                 json_match = re.search(r'\{.*\}', response_text, re.DOTALL)

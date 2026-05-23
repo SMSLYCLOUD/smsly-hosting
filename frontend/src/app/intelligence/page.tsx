@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
 import {
@@ -59,9 +59,9 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const [chatResponse, setChatResponse] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatProvider, setChatProvider] = useState<string | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
   const { toast } = useToast();
 
   // Config State
@@ -122,19 +122,105 @@ export default function IntelligencePage() {
 
   const handleChat = async () => {
     if (!chatInput.trim()) return;
+    const prompt = chatInput.trim();
+    setChatInput('');
     setChatLoading(true);
-    setChatResponse(null);
+
+    setChatMessages(prev => [...prev, { role: 'user', content: prompt }, { role: 'assistant', content: '' }]);
+
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
+
     try {
-      const result = await aiApi.testPrompt(
-        chatInput,
-        'You are the SMSLY Hosting AI assistant. Help users with deployment, infrastructure, and DevOps questions. Be concise and actionable.'
-      );
-      setChatResponse(result.response);
-      setChatProvider(result.provider);
+      const token = typeof window !== 'undefined'
+        ? (localStorage.getItem('auth_token') || (document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)?.[1] ? decodeURIComponent(document.cookie.match(/(?:^|;\s*)auth_token=([^;]+)/)![1]) : null))
+        : null;
+
+      const response = await fetch('/api/v1/ai/chat/stream/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Token ${token}` } : {}),
+        },
+        body: JSON.stringify({ prompt }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No reader available');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') {
+              setChatLoading(false);
+              return;
+            }
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.content) {
+                setChatMessages(prev => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last.role === 'assistant') {
+                    last.content += parsed.content;
+                  }
+                  return [...updated];
+                });
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+            } catch (e: any) {
+              if (e.message && !e.message.includes('JSON')) throw e;
+            }
+          }
+        }
+      }
     } catch (err: any) {
-      setChatResponse(`Error: ${err.message || 'AI request failed'}`);
+      if (err.name !== 'AbortError') {
+        console.error('Streaming error:', err);
+        try {
+          const result = await aiApi.testPrompt(prompt,
+            'You are the SMSLY Hosting AI assistant. Help users with deployment, infrastructure, and DevOps questions. Be concise and actionable.'
+          );
+          setChatMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last.role === 'assistant') {
+              last.content = result.response;
+            }
+            return [...updated];
+          });
+        } catch (fallbackErr: any) {
+          setChatMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last.role === 'assistant') {
+              last.content = `Error: ${fallbackErr.message || 'AI request failed'}`;
+            }
+            return [...updated];
+          });
+        }
+      }
     } finally {
       setChatLoading(false);
+      chatAbortRef.current = null;
     }
   };
 
@@ -529,34 +615,42 @@ export default function IntelligencePage() {
                        <MessageSquare className="text-cyan-500" /> AI Ops Chat
                      </CardTitle>
                   </CardHeader>
-                  <CardContent className="flex-1 flex flex-col gap-4">
+                   <CardContent className="flex-1 flex flex-col gap-4">
                      <div className="flex-1 overflow-y-auto p-4 bg-muted/10 rounded-lg space-y-4">
-                        {chatResponse && (
-                          <div className="flex gap-3">
-                             <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
-                               <Bot size={16} className="text-purple-500" />
-                             </div>
-                             <div className="bg-muted/30 p-4 rounded-lg rounded-tl-none border border-border/50 text-sm leading-relaxed whitespace-pre-wrap">
-                               <div className="text-xs font-bold text-muted-foreground mb-1">{chatProvider || 'AI'}</div>
-                               {chatResponse}
+                        {chatMessages.length > 0 && chatMessages.map((msg, i) => (
+                          <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                             {msg.role === 'assistant' && (
+                               <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
+                                 <Bot size={16} className="text-purple-500" />
+                               </div>
+                             )}
+                             <div className={`max-w-[80%] p-4 rounded-lg text-sm leading-relaxed whitespace-pre-wrap ${
+                               msg.role === 'user'
+                                 ? 'bg-purple-600 text-white rounded-tr-none'
+                                 : 'bg-muted/30 border border-border/50 rounded-tl-none'
+                             }`}>
+                               {msg.role === 'assistant' && (
+                                 <div className="text-xs font-bold text-muted-foreground mb-1">AI</div>
+                               )}
+                               {msg.content || (msg.role === 'assistant' && chatLoading ? <Loader2 className="animate-spin h-4 w-4" /> : '')}
                              </div>
                           </div>
-                        )}
-                        {!chatResponse && <div className="text-center text-muted-foreground mt-20">Ask me anything about your infrastructure.</div>}
+                        ))}
+                        {chatMessages.length === 0 && <div className="text-center text-muted-foreground mt-20">Ask me anything about your infrastructure.</div>}
                      </div>
 
                      <div className="flex gap-2">
                         <Input
                           value={chatInput}
                           onChange={e => setChatInput(e.target.value)}
-                          onKeyDown={e => e.key === 'Enter' && handleChat()}
+                          onKeyDown={e => e.key === 'Enter' && !chatLoading && handleChat()}
                           placeholder="Ask about logs, costs, or configuration..."
                         />
-                        <Button onClick={handleChat} disabled={chatLoading}>
+                        <Button onClick={handleChat} disabled={chatLoading || !chatInput.trim()}>
                           {chatLoading ? <Loader2 className="animate-spin" /> : <Send size={16} />}
                         </Button>
                      </div>
-                  </CardContent>
+                   </CardContent>
                </Card>
             </TabsContent>
 

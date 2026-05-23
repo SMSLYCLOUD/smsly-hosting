@@ -37,5 +37,6 @@ from .models_metrics import ServiceMetric
 from .models_templates import Template
 from .models_transfer import ServerTransfer
 from .models_tunnels import Tunnel, TunnelRequest, ReservedSubdomain
+from .models_ecosystem import EcosystemPlan
 
 # pylint: enable=unused-import, wrong-import-position

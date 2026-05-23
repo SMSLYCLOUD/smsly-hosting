@@ -8,7 +8,7 @@ from django.utils import timezone
 from apps.deployments.models import Service, Deployment
 from apps.deployments.models_audit import AuditLog
 from apps.deployments.tasks import enqueue_smart_deploy_task, _resolve_provider_for_service
-from .providers import ask_with_fallback
+from .providers import _cached_ask
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ class RemediationEngine:
                     if last_deploy and last_deploy.build_logs:
                         prompt = f"Diagnose this build failure for {service.name}:\n\n{last_deploy.build_logs[-5000:]}"
                         try:
-                            response, provider = ask_with_fallback(prompt)
+                            response, provider = _cached_ask(prompt)
                             last_deploy.ai_diagnosis = f"[{provider}] {response}"
                             last_deploy.save(update_fields=['ai_diagnosis'])
                             AuditLog.objects.create(

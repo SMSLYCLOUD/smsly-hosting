@@ -733,8 +733,8 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     service.save()
 
 
-@shared_task(bind=True, soft_time_limit=1800, time_limit=2100)
-def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str = None, selected_repos: list = None) -> dict:
+@shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
+def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provider: str = None, selected_repos: list = None, plan_id: str = None) -> dict:
     """
     Scan all of a user's GitHub repos and return a deploy plan.
     This is async because fetching and AI analysis can take 30-60s.
@@ -759,6 +759,17 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         logger.info(f"Starting ecosystem scan for user {user_id} with selected_repos: {selected_repos}")
         result = scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos)
         logger.info(f"Ecosystem scan completed successfully for user {user_id}")
+
+        if plan_id:
+            from apps.deployments.models_ecosystem import EcosystemPlan
+            try:
+                plan_record = EcosystemPlan.objects.get(id=plan_id)
+                plan_record.plan = result
+                plan_record.status = EcosystemPlan.Status.REVIEW
+                plan_record.save(update_fields=['plan', 'status', 'updated_at'])
+            except Exception:
+                pass
+
         return result
     except SoftTimeLimitExceeded:
         logger.warning("Ecosystem scan timed out for user %s", user_id, exc_info=True)
@@ -778,7 +789,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
         return {"error": f"Scan failed: {str(exc)}"}
 
 
-@shared_task(bind=True, soft_time_limit=120, time_limit=180)
+@shared_task(bind=True, queue='fast', soft_time_limit=120, time_limit=180)
 def ecosystem_release_wave_task(
     self,
     provider_id: str,
@@ -904,8 +915,8 @@ def ecosystem_release_wave_task(
     }
 
 
-@shared_task(bind=True, soft_time_limit=1800, time_limit=2100)
-def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
+@shared_task(bind=True, queue='deploy', soft_time_limit=1800, time_limit=2100)
+def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -> dict:
     """
     Deploy all services in the plan using dependency-aware waves.
 
@@ -1320,7 +1331,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
                 ),
             )
 
-    return {
+    deploy_result = {
         "status": "deploying",
         "total": len(services_plan),
         "prepared": len(results),
@@ -1334,6 +1345,22 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict) -> dict:
         "failed": len([r for r in results if r["status"] == "failed"]),
         "services": results,
     }
+
+    if plan_id:
+        from apps.deployments.models_ecosystem import EcosystemPlan
+        try:
+            plan_record = EcosystemPlan.objects.get(id=plan_id)
+            plan_record.services_created = results
+            if deploy_result.get("failed", 0) == len(results):
+                plan_record.status = EcosystemPlan.Status.FAILED
+                plan_record.error_message = "All services failed to deploy"
+            else:
+                plan_record.status = EcosystemPlan.Status.DEPLOYING
+            plan_record.save(update_fields=['services_created', 'status', 'error_message', 'updated_at'])
+        except Exception:
+            pass
+
+    return deploy_result
 
 
 def _rollback_ecosystem_deploy(
