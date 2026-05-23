@@ -40,7 +40,6 @@ def _get_client(provider_key: str, timeout: int = 60) -> httpx.Client:
                     max_keepalive_connections=5,
                     keepalive_expiry=30,
                 ),
-                http2=True,
             )
         return _client_pool[provider_key]
 
