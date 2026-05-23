@@ -1638,8 +1638,12 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
     FAIL_COUNT=0
 
     # Backend health (internal)
-    EP1_URL="http://127.0.0.1:8090/health"
+    EP1_URL="http://127.0.0.1:8000/health"
+    EP1_FALLBACK_URL="http://127.0.0.1:8090/health"
     EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_URL" 2>/dev/null) || EP1_CODE="000"
+    if [ "$EP1_CODE" = "000" ]; then
+        EP1_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$EP1_FALLBACK_URL" 2>/dev/null) || EP1_CODE="000"
+    fi
     case "$EP1_CODE" in
         2*|3*)
         echo -e "${GREEN}  ✓ Backend (local): HTTP $EP1_CODE${NC}"; PASS_COUNT=$((PASS_COUNT + 1))
@@ -3673,6 +3677,10 @@ echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
+    if curl -sfL http://127.0.0.1:8000/health >/dev/null 2>&1; then
+        HEALTH_OK=true
+        break
+    fi
     if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
         HEALTH_OK=true
         break
