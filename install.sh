@@ -2327,11 +2327,11 @@ from apps.deployments.models import Service
 for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_domain=''):
     d = svc.public_domain.strip()
     if d:
-        print(f'{d} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+        print(f'{d} {{\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
     for cd in (svc.custom_domains or []):
         cd = cd.strip()
         if cd:
-            print(f'{cd} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+            print(f'{cd} {{\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
     # 3. Check if domain is a real hostname (not an IP address)
@@ -3681,7 +3681,7 @@ for svc in Service.objects.all():
     public_domain = (svc.public_domain or '').strip().lower()
     if public_domain and (not suffix or not public_domain.endswith(suffix)) and public_domain not in seen:
         seen.add(public_domain)
-        print(f'{public_domain} {{\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+        print(f'{public_domain} {{\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
 
 for domain in Domain.objects.select_related('service').filter(
     status__in=[DomainStatus.ACTIVE, DomainStatus.DNS_VERIFIED, DomainStatus.SSL_PROVISIONING],
@@ -3698,9 +3698,9 @@ for domain in Domain.objects.select_related('service').filter(
     seen.add(custom_domain)
 
     if public_domain and public_domain != custom_domain:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy localhost:8081 {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
+        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy traefik:80 {{\n        header_up Host {public_domain}\n    }}\n    encode gzip\n}}\n')
     else:
-        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy localhost:8081\n    encode gzip\n}}\n')
+        print(f'{custom_domain} {{\n    tls {{\n        on_demand\n    }}\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
             # Only generate wildcard Caddyfile for real domains
@@ -3716,7 +3716,7 @@ for domain in Domain.objects.select_related('service').filter(
                 if [ -n "$cf_wildcard_known_hosts" ]; then
                     cf_known_stanza="    @known_hosts host ${cf_wildcard_known_hosts}
     handle @known_hosts {
-        reverse_proxy localhost:8081
+        reverse_proxy traefik:80
     }"
                 fi
 
