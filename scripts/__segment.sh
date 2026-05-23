@@ -25,6 +25,8 @@ if d and d != 'localhost':
     # 2. Discover ALL deployed service domains from DB (public + custom)
     local svc_blocks=""
     svc_blocks="$(docker compose -f "$COMPOSE_FILE" exec -T backend python manage.py shell -c "
+import os
+upstream = os.environ.get('SMSLY_SERVICE_PROXY_UPSTREAM', 'traefik:80')
 from apps.deployments.models import Service
 allowlisted_services = $SERVICE_ALLOWLIST_PY
 queryset = Service.objects.all()
@@ -33,11 +35,11 @@ if allowlisted_services:
 for svc in queryset.exclude(public_domain__isnull=True).exclude(public_domain=''):
     d = svc.public_domain.strip()
     if d:
-        print(f'{d} {{\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
+        print(f'{d} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
     for cd in (svc.custom_domains or []):
         cd = cd.strip()
         if cd:
-            print(f'{cd} {{\n    reverse_proxy traefik:80\n    encode gzip\n}}\n')
+            print(f'{cd} {{\n    reverse_proxy {upstream}\n    encode gzip\n}}\n')
 " 2>/dev/null | tr -d '\r' || true)"
 
     # 3. Check if domain is a real hostname (not an IP address)
