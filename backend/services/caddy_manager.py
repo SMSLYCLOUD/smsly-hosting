@@ -564,7 +564,7 @@ def validate_service_routes_do_not_hit_control_plane(content: str) -> list[str]:
     """
     Fail-closed guard for Caddyfile writes.
 
-    Platform domains may proxy to nginx, but service and addon domains must
+    Platform domains may proxy to the control plane, but service and addon domains must
     never do that. If they do, the deployed URL serves the PaaS homepage.
     """
     service_domains = _known_service_route_domains()
@@ -759,7 +759,7 @@ def generate_caddyfile(config) -> str:
                     [
                         f"    @known_hosts host {' '.join(wildcard_known_hosts)}",
                         "    handle @known_hosts {",
-                        "        reverse_proxy traefik:80",
+                        f"        reverse_proxy {_service_proxy_upstream()}",
                         "    }",
                     ]
                 )

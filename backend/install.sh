@@ -393,7 +393,7 @@ dump_diagnostic_logs() {
     docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
     
     echo -e "\n${YELLOW}  → Nginx Logs (Last 50 lines):${NC}"
-    docker compose -f "$COMPOSE_FILE" logs --tail=50 nginx || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=50 traefik || true
 
     echo -e "\n${YELLOW}  → Redis Logs (Last 50 lines):${NC}"
     docker compose -f "$COMPOSE_FILE" logs --tail=50 redis || true
@@ -1267,16 +1267,15 @@ bust_core_build_cache() {
 }
 
 restart_edge_stack() {
-    local edge_services="socket-proxy traefik route-fallback nginx"
+    local edge_services="socket-proxy traefik route-fallback"
 
-    echo -e "${BLUE}  -> Refreshing edge proxy stack (nginx/traefik/socket-proxy/route-fallback)...${NC}"
+    echo -e "${BLUE}  -> Refreshing edge proxy stack (traefik/socket-proxy/route-fallback)...${NC}"
     docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps $edge_services >/dev/null 2>&1 || \
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate $edge_services >/dev/null 2>&1 || true
 
     # Re-attach expected external networks (idempotent).
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
@@ -1285,12 +1284,6 @@ restart_edge_stack() {
         if caddy_needs_fix; then
             generate_safe_caddyfile "restart_edge_stack validation"
         fi
-    if docker compose -f "$COMPOSE_FILE" ps -q caddy 2>/dev/null | grep -q .; then
-    true
-        else
-    true
-        fi
-    true
     fi
     echo -e "${GREEN}  OK Edge stack refreshed${NC}"
 }
@@ -1307,7 +1300,6 @@ refresh_runtime_services() {
         frps
     )
     local edge_services_requested=(
-        nginx
         socket-proxy
         route-fallback
         traefik
@@ -1355,7 +1347,6 @@ refresh_runtime_services() {
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-deploy-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-celery-fast-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frontend-1"
-    ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
     ensure_container_on_network "smsly-net" "smsly-hosting-frps-1"
@@ -1381,7 +1372,6 @@ refresh_runtime_services() {
         docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "${edge_services[@]}" >/dev/null 2>&1 || \
             docker compose -f "$COMPOSE_FILE" up -d --force-recreate "${edge_services[@]}" >/dev/null 2>&1 || true
 
-        ensure_container_on_network "smsly-net" "smsly-hosting-nginx-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
         ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
         ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
@@ -1509,7 +1499,7 @@ debug_platform_status() {
     echo ""
 
     echo "---- Key Logs (tail 120) ----"
-    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend nginx traefik pgbouncer redis 2>/dev/null || true
+    docker compose -f "$COMPOSE_FILE" logs --tail=120 backend frontend traefik pgbouncer redis 2>/dev/null || true
     echo -e "${YELLOW}=== END DEBUG SNAPSHOT ===${NC}\n"
     set -e
 }
@@ -1642,7 +1632,7 @@ if [ "${VERIFY_MODE:-false}" = "true" ]; then
         ;;
     esac
 
-    # Platform domain (public-facing — tests Caddy → nginx → backend chain)
+    # Platform domain (public-facing — tests Caddy → Traefik → backend chain)
     if [ -n "$DOMAIN" ] && [ "$DOMAIN" != "localhost" ]; then
         EP_PUB_URL="http://${DOMAIN}/health"
         EP_PUB_CODE=$(curl -so /dev/null -w '%{http_code}' --max-time 10 "$EP_PUB_URL" 2>/dev/null) || EP_PUB_CODE="000"
@@ -1796,11 +1786,6 @@ if [ -n "$UPDATE_MODE" ]; then
         exit 1
     fi
 
-    if [ ! -f "nginx.conf" ]; then
-        echo -e "${RED}✗ Missing nginx.conf — cannot deploy. This file is required for routing.${NC}"
-        exit 1
-    fi
-
     if [ ! -f "backend/Dockerfile" ]; then
         echo -e "${RED}✗ Missing backend/Dockerfile${NC}"
         exit 1
@@ -1881,7 +1866,7 @@ if [ -n "$UPDATE_MODE" ]; then
             echo -e "${BLUE}  → [FULL REBUILD] Rebuilding PaaS core (preserving addon databases)...${NC}"
 
             # 1. Only stop PaaS core services — NEVER touch addon containers
-            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat nginx traefik socket-proxy route-fallback"
+            CORE_SERVICES="frontend backend celery celery-deploy celery-fast celery-beat traefik socket-proxy route-fallback"
 
             # 2. Remove old PaaS images (NOT addon images) to free up space BEFORE the build
             # We untag them so docker compose build has to make new ones. Running containers keep the actual image data alive.
@@ -2010,16 +1995,7 @@ if a_count > 0:
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
 
-    # Verify nginx loaded the correct custom config (not the default)
     sleep 2
-    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-        echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
-    else
-        echo -e "${RED}  ✗ WARNING: Nginx may be running default config!${NC}"
-        echo -e "${YELLOW}    Expected 'events {' but got: $NGINX_CONFIG_CHECK${NC}"
-        echo -e "${YELLOW}    Fix: docker compose -f $COMPOSE_FILE up -d --force-recreate nginx${NC}"
-    fi
 
     # ─── Caddy: Regenerate Caddyfile with service domains (writes directly to host) ──
     if command -v caddy &> /dev/null; then
@@ -2301,9 +2277,6 @@ print('Stripped tls blocks')
             break
             ;;
         esac
-        if [ "$attempt" -eq 1 ]; then
-            docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
-        fi
         sleep 3
     done
     if [ "$BACKEND_OK" = "true" ]; then
@@ -2482,7 +2455,7 @@ for svc in Service.objects.exclude(public_domain__isnull=True).exclude(public_do
 
     # ─── Re-apply OOM protection (scores reset when containers restart) ──────
     echo -e "${BLUE}  → Re-applying OOM protection for critical containers...${NC}"
-    for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
+    for CONTAINER in smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1 smsly-hosting-celery-1 smsly-hosting-celery-deploy-1 smsly-hosting-celery-fast-1 smsly-hosting-celery-beat-1 smsly-socket-proxy; do
         CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
         if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
             echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
@@ -2654,7 +2627,7 @@ cd "$INSTALL_DIR"
 # ─── BLINDSPOT FIX: Validate required deployment files ──────────────────────
 echo -e "${BLUE}  → Validating deployment files...${NC}"
 MISSING_FILES=()
-for required_file in "$COMPOSE_FILE" "nginx.conf" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh"; do
+for required_file in "$COMPOSE_FILE" "backend/Dockerfile" "frontend/Dockerfile" "backend/entrypoint.sh"; do
     if [ ! -f "$required_file" ]; then
         MISSING_FILES+=("$required_file")
     fi
@@ -3633,13 +3606,13 @@ fi
 
 # ─── OOM Protection for critical containers ──────────────────────────────────
 echo -e "${BLUE}  → Setting OOM protection for critical containers...${NC}"
-for CONTAINER in smsly-hosting-nginx-1 smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
+for CONTAINER in smsly-hosting-backend-1 smsly-hosting-db-1 smsly-hosting-pgbouncer-1; do
     CPID=$(docker inspect --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || echo "")
     if [ -n "$CPID" ] && [ "$CPID" != "0" ] && [ -f "/proc/$CPID/oom_score_adj" ]; then
         echo -500 > "/proc/$CPID/oom_score_adj" 2>/dev/null || true
     fi
 done
-echo -e "${GREEN}  ✓ OOM protection set (nginx, backend, db, pgbouncer)${NC}"
+echo -e "${GREEN}  ✓ OOM protection set (backend, db, pgbouncer)${NC}"
 
 echo -e "${GREEN}  ✓ System memory hardening complete${NC}"
 
@@ -3672,30 +3645,9 @@ VERIFY_PASS_COUNT=0
 VERIFY_TOTAL=5
 sleep 5
 
-# ─── Check 1: Verify nginx loaded custom config (not default) ──────────────
-echo -e "${BLUE}  → [1/5] Verifying nginx configuration...${NC}"
-NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-    echo -e "${GREEN}  ✓ Nginx config verified (custom proxy config loaded)${NC}"
-    VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-else
-    echo -e "${YELLOW}  ⚠ Nginx may have default config — force-recreating...${NC}"
-    docker compose -f "$COMPOSE_FILE" up -d --force-recreate --no-deps nginx
-    docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
-    sleep 3
-    NGINX_CONFIG_CHECK=$(docker exec smsly-hosting-nginx-1 head -1 /etc/nginx/nginx.conf 2>/dev/null || echo "FAIL")
-    if echo "$NGINX_CONFIG_CHECK" | grep -q "events"; then
-        echo -e "${GREEN}  ✓ Nginx config fixed after force-recreate${NC}"
-        VERIFY_PASS_COUNT=$((VERIFY_PASS_COUNT + 1))
-    else
-        echo -e "${RED}  ✗ Nginx config still incorrect. Manual fix needed.${NC}"
-    fi
-fi
-
-# ─── Check 2: Health check ─────────────────────────────────────────────────
-echo -e "${BLUE}  → [2/5] Running health check...${NC}"
+# ─── Check 1: Health check ─────────────────────────────────────────────────
+echo -e "${BLUE}  → [1/5] Running health check...${NC}"
 HEALTH_OK=false
-# ZH-012 HARDENING: Increased from 12 (1m) to 36 attempts (3m) for slow VPS I/O
 MAX_ATTEMPTS=36
 for attempt in $(seq 1 $MAX_ATTEMPTS); do
     if curl -sfL http://127.0.0.1:8090/health >/dev/null 2>&1; then
@@ -3703,10 +3655,6 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
         break
     fi
     echo -ne "\r${YELLOW}  → Health check attempt $attempt/$MAX_ATTEMPTS — waiting...${NC}"
-    if [ "$attempt" -eq 5 ]; then
-        echo -e "\n${BLUE}  → Restarting Nginx to ensure upstream binding...${NC}"
-        docker compose -f "$COMPOSE_FILE" restart nginx >/dev/null 2>&1 || true
-    fi
     sleep 5
 done
 echo ""
