@@ -406,6 +406,7 @@ services:
     - --providers.docker.exposedbydefault=false
     - --providers.docker.network=smsly-net
     - --providers.docker.endpoint=tcp://socket-proxy:2375
+    - --providers.docker.pollInterval=30s
     - --providers.docker.httpClientTimeout=300s
     - --entrypoints.web.address=:80
     - --entrypoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12,10.0.0.0/8
