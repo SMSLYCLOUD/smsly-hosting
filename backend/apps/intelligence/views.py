@@ -153,6 +153,11 @@ def ai_providers_update(request):
         "localllm_api_key", "localllm_model", "localllm_base_url",
         "smslycloud_api_key", "smslycloud_model",
         "deepseek_api_key", "deepseek_model",
+        "freemodel_api_key", "freemodel_model", "freemodel_base_url",
+        "opencode_api_key", "opencode_model", "opencode_base_url",
+        "mistral_api_key", "mistral_model", "mistral_base_url",
+        "nvidia_api_key", "nvidia_model", "nvidia_base_url",
+        "cloudflare_api_key", "cloudflare_model", "cloudflare_base_url",
         "senate_enabled", "senate_max_members",
     ]
 

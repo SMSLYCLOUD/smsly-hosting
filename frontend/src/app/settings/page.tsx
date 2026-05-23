@@ -1082,9 +1082,14 @@ export default function SettingsPage() {
                       deepseek: ['deepseek-coder', 'deepseek-chat'],
                       jules: ['jules-latest', 'jules-pro'],
                       localllm: ['local-model'],
-                      smslycloud: ['smsly-latest']
+                      smslycloud: ['smsly-latest'],
+                      freemodel: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo', 'claude-3.5-sonnet', 'llama-3.1-70b'],
+                      opencode: ['opencode-latest', 'gpt-4o', 'claude-sonnet-4-20250514'],
+                      mistral: ['mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest', 'codestral-latest', 'pixtral-large-latest', 'ministral-8b-latest'],
+                      nvidia: ['nvidia/llama-3.1-nemotron-70b-instruct', 'nvidia/nemotron-4-340b-instruct', 'meta/llama-3.1-8b-instruct', 'mistralai/mixtral-8x22b-instruct-v0.1'],
+                      cloudflare: ['@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.3-70b-instruct', '@cf/qwen/qwen3-30b-a3b-fp8', '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b', '@cf/mistral/mistral-small-3.1-24b-instruct']
                     };
-                    const hasUrl = ['jules', 'localllm'].includes(p.id);
+                    const hasUrl = ['jules', 'localllm', 'freemodel', 'opencode', 'mistral', 'nvidia', 'cloudflare'].includes(p.id);
                     
                     return (
                       <div
@@ -1173,7 +1178,7 @@ export default function SettingsPage() {
                       setSaving(true);
                       try {
                         const data: Record<string, string> = {};
-                        const allIds = ['openai', 'grok', 'gemini', 'claude', 'openrouter', 'groq', 'alibaba', 'deepseek', 'jules', 'localllm', 'smslycloud'];
+                        const allIds = ['openai', 'grok', 'gemini', 'claude', 'openrouter', 'groq', 'alibaba', 'deepseek', 'jules', 'localllm', 'smslycloud', 'freemodel', 'opencode', 'mistral', 'nvidia', 'cloudflare'];
                         allIds.forEach((id) => {
                           if (aiKeys[id]) data[`${id}_api_key`] = aiKeys[id];
                           if (aiModels[id]) data[`${id}_model`] = aiModels[id];
@@ -1204,7 +1209,7 @@ export default function SettingsPage() {
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY), or admin panel.
+                  Set keys and models above, or via env vars (OPENAI_API_KEY, GROK_API_KEY, GEMINI_API_KEY, CLAUDE_API_KEY, JULES_API_KEY, FREEMODEL_API_KEY, OPENCODE_API_KEY, MISTRAL_API_KEY, NVIDIA_API_KEY, CLOUDFLARE_API_KEY), or admin panel.
                 </p>
               </CardContent>
             </Card>

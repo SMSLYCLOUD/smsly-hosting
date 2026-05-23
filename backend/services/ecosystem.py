@@ -404,7 +404,7 @@ _ENV_HINTS: Dict[str, dict] = {
     'RUST_LOG':            {'hint': 'info, debug, or warn',   'default': 'info',  'required': False},
     'PORT':                {'hint': 'Listening port',         'required': False},
     'ALLOWED_HOSTS':       {'hint': 'Comma-separated or *',  'default': '*',     'required': False},
-    'AI_PROVIDER':         {'hint': 'openai | grok | gemini | claude | auto', 'required': True, 'user_required': True},
+    'AI_PROVIDER':         {'hint': 'openai | grok | gemini | claude | mistral | nvidia | cloudflare | freemodel | opencode | auto', 'required': True, 'user_required': True},
     'QDRANT_PORT':         {'hint': 'Default: 6333',         'default': '6333',  'required': True},
     'QDRANT_HOST':         {'hint': 'Qdrant hostname',       'required': True,   'user_required': True},
     'SENTRY_DSN':          {'hint': 'https://...@sentry.io/...', 'is_secret': True, 'required': False, 'user_required': True},
