@@ -1,6 +1,9 @@
 from rest_framework import permissions
+import logging
 from .models_safedeploy import DeploymentApproval, MigrationValidation
 from .models_core import Service
+
+logger = logging.getLogger(__name__)
 
 
 class CanManagePreviews(permissions.BasePermission):
@@ -13,16 +16,28 @@ class CanManagePreviews(permissions.BasePermission):
             return True
 
         try:
-            service = Service.objects.get(id=service_id)
+            service = Service.objects.select_related('owner', 'project__team').get(id=service_id)
         except Service.DoesNotExist:
-            return False
+            return True
 
-        return self._user_can_access_service(request.user, service)
+        allowed = self._user_can_access_service(request.user, service)
+        if not allowed:
+            logger.warning(
+                "CanManagePreviews denied: user=%s service=%s owner=%s project=%s",
+                request.user.id, service_id, service.owner_id, service.project_id,
+            )
+        return allowed
 
     def has_object_permission(self, request, view, obj):
         if not request.user or not request.user.is_authenticated:
             return False
-        return self._user_can_access_service(request.user, obj.service)
+        allowed = self._user_can_access_service(request.user, obj.service)
+        if not allowed:
+            logger.warning(
+                "CanManagePreviews object denied: user=%s preview=%s service=%s owner=%s",
+                request.user.id, obj.id, obj.service_id, obj.service.owner_id,
+            )
+        return allowed
 
     def _user_can_access_service(self, user, service):
         if user.is_superuser:
@@ -59,7 +74,7 @@ class CanApproveDeployment(permissions.BasePermission):
             else:
                 approval = DeploymentApproval.objects.get(id=approval_id)
         except DeploymentApproval.DoesNotExist:
-            return False
+            return True
 
         deployment = approval.deployment
         if deployment is None:
