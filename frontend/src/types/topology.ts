@@ -1,7 +1,7 @@
 export interface TopologyNodeData {
   name: string;
   label?: string;
-  kind: 'COMPUTE' | 'DATABASE' | 'CACHE' | 'QUEUE' | 'STORAGE' | 'SEARCH' | 'EXTERNAL';
+  kind: 'COMPUTE' | 'DATABASE' | 'CACHE' | 'QUEUE' | 'STORAGE' | 'SEARCH' | 'EXTERNAL' | 'PROXY' | 'WORKER';
   subtype: string;
   status: string;
   region: string;
@@ -43,7 +43,7 @@ export interface TopologyNodeData {
 
 export interface TopologyNode {
   id: string;
-  type: 'service' | 'addon' | 'volume' | 'domain' | 'cron' | 'tunnel';
+  type: 'service' | 'addon' | 'volume' | 'domain' | 'cron' | 'tunnel' | 'proxy' | 'worker' | 'broker' | 'platform' | 'platform_db' | 'platform_cache' | 'registry' | 'external';
   data: TopologyNodeData;
   // Position fields populated by layout engine
   x?: number;
@@ -63,7 +63,7 @@ export interface TopologyEdge {
   id: string;
   source: string;
   target: string;
-  type: 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'STORAGE' | 'ADDON' | 'API' | 'DOMAIN' | 'CRON' | 'TUNNEL';
+  type: 'DATABASE' | 'CACHE' | 'QUEUE' | 'SEARCH' | 'STORAGE' | 'ADDON' | 'API' | 'DOMAIN' | 'CRON' | 'TUNNEL' | 'PROXY_CHAIN' | 'INTERNAL';
   label?: string;
   data?: TopologyEdgeData;
 }
@@ -71,4 +71,28 @@ export interface TopologyEdge {
 export interface TopologyGraph {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
+}
+
+// ── Ecosystem Infrastructure Types ──────────────────────────────────────────
+
+export interface EcosystemNode {
+  id: string;
+  type: string;
+  kind: string;
+  label: string;
+  status?: 'healthy' | 'degraded' | 'down';
+  metadata?: Record<string, any>;
+}
+
+export interface EcosystemEdge {
+  source: string;
+  target: string;
+  type: string;
+  label?: string;
+  animated?: boolean;
+}
+
+export interface EcosystemGraph {
+  nodes: EcosystemNode[];
+  edges: EcosystemEdge[];
 }

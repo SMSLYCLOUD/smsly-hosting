@@ -1,0 +1,38 @@
+:${PORT} {
+	# API
+	@api path /api/*
+	reverse_proxy @api 127.0.0.1:${BACKEND_PORT}
+
+	# WebSockets
+	@ws path /ws/*
+	reverse_proxy @ws 127.0.0.1:${BACKEND_PORT}
+
+	# Admin
+	@admin path /admin/*
+	reverse_proxy @admin 127.0.0.1:${BACKEND_PORT}
+
+	# Health
+	@health path /health
+	reverse_proxy @health 127.0.0.1:${BACKEND_PORT}
+
+	# OAuth
+	@oauth_github path /accounts/github/*
+	@oauth_google path /accounts/google/*
+	reverse_proxy @oauth_github 127.0.0.1:${BACKEND_PORT}
+	reverse_proxy @oauth_google 127.0.0.1:${BACKEND_PORT}
+
+	# Static files
+	@static path /static/*
+	handle @static {
+		root * /app/staticfiles
+		file_server
+	}
+
+	# Health endpoint for the proxy itself
+	respond /caddy-health 200 "ok"
+
+	# Everything else → frontend
+	reverse_proxy 127.0.0.1:${FRONTEND_PORT}
+
+	encode gzip
+}

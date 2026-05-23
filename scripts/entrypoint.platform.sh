@@ -10,8 +10,8 @@ ROLE="${ROLE:-all}" # all|web|worker|beat
 export PORT BACKEND_PORT FRONTEND_PORT ROLE
 
 envsubst '${PORT} ${BACKEND_PORT} ${FRONTEND_PORT}' \
-  < /etc/nginx/nginx.conf.template \
-  > /etc/nginx/nginx.conf
+  < /etc/caddy/Caddyfile.template \
+  > /etc/caddy/Caddyfile
 
 SUP_CONF="/tmp/supervisord.conf"
 
@@ -75,8 +75,8 @@ if [ "$ROLE" = "all" ] || [ "$ROLE" = "web" ]; then
     "PORT=\"${FRONTEND_PORT}\",HOSTNAME=\"127.0.0.1\",NODE_ENV=\"production\""
 
   # Public entrypoint
-  add_program "nginx" \
-    "/usr/sbin/nginx -g \"daemon off;\"" \
+  add_program "caddy" \
+    "/usr/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile" \
     "/" \
     "root"
 fi

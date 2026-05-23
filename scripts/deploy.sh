@@ -108,8 +108,8 @@ echo "[7/9] Starting frontend..."
 wait_for_healthy frontend 60
 
 echo ""
-echo "[8/9] Starting platform reverse-proxy (nginx)..."
-"${COMPOSE_CMD[@]}" up -d nginx
+echo "[8/9] Starting platform reverse-proxy (caddy)..."
+"${COMPOSE_CMD[@]}" up -d caddy
 
 # In production, app domain routing depends on traefik/route-fallback (127.0.0.1:8081).
 # These services live in docker-compose.prod.yml in many deployments.

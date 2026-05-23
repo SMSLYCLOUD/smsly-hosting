@@ -132,15 +132,6 @@ jobs:
             -e REDIS_URL=redis://127.0.0.1:6379/0 \
             smsly-hosting:ci
 
-          echo "Waiting for /nginx-health..."
-          for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:18080/nginx-health >/dev/null; then
-              echo "nginx ok"
-              break
-            fi
-            sleep 2
-          done
-
           echo "Waiting for /health..."
           for i in $(seq 1 90); do
             if curl -sf http://127.0.0.1:18080/health >/dev/null; then

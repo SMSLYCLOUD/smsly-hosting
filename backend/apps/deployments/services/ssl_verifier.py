@@ -7,24 +7,25 @@ class SSLVerifier:
     """Safely issues and tests SSL certificates."""
 
     @classmethod
-    def test_reverse_proxy_config(cls, proxy_type="nginx"):
+    def test_reverse_proxy_config(cls, proxy_type="caddy"):
         """Ensures proxy config is valid before reloading."""
-        if proxy_type == "nginx":
+        if proxy_type == "caddy":
             try:
-                result = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
+                result = subprocess.run(
+                    ["caddy", "validate", "--config", "/opt/smsly-hosting/caddy-config/Caddyfile"],
+                    capture_output=True, text=True
+                )
                 if result.returncode == 0:
                     return {"ok": True}
                 return {
                     "ok": False,
                     "error": {
                         "code": "PROXY_CONFIG_TEST_FAILED",
-                        "message": "Nginx config test failed. SSL issuance aborted to protect existing routes.",
+                        "message": "Caddy config validation failed. SSL issuance aborted to protect existing routes.",
                         "details": {"stderr": result.stderr}
                     }
                 }
             except FileNotFoundError:
-                 # Running in a worker or env without nginx binary directly available
-                 # Would usually dispatch this to the proxy container or ssh depending on arch.
-                 # Mocking ok for now if nginx not installed on this specific node.
+                 # Running in a worker or env without caddy binary directly available
                  return {"ok": True}
         return {"ok": True}

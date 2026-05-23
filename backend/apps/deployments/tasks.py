@@ -2154,7 +2154,7 @@ def _wait_for_local_route_ready(
 
     # Probe through the public edge first, then the raw Traefik ingress. The
     # direct Traefik probe is useful during DNS propagation, but it must not
-    # mask a Caddy/nginx misroute that serves the platform homepage.
+    # mask a Caddy misroute that serves the platform homepage.
     probe_candidates = []
 
     def _add_probe(base_url: str, headers=None, verify=True, kind="direct"):
