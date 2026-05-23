@@ -2691,7 +2691,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     method='GET',
                     path=f"/api/v1/services/{remote_id}/file-browse/",
                     params={'path': fallback_path},
-                    timeout=30,
+                    timeout=10,
                 )
                 if fallback_resp and fallback_resp.status_code == 200:
                     data = fallback_resp.json()

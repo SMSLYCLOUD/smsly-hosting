@@ -50,81 +50,86 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         return max(5.0, min(parsed, 60.0))
 
     async def connect(self):
-        logger.info("[CONSOLE_DEBUG] TerminalConsumer.connect() started for deployment %s", self.scope["url_route"]["kwargs"]["deployment_id"])
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
         self.user = None
 
-        # ======================================================================
-        # SECURITY: Authenticate WebSocket connection via token
-        # ======================================================================
-        query_string = self.scope.get('query_string', b'').decode()
-        token_key = None
-        for param in query_string.split('&'):
-            if param.startswith('token='):
-                token_key = param.split('=', 1)[1]
-                break
-
-        if not token_key:
-            logger.warning(
-                "WebSocket connection rejected: No token provided for "
-                "deployment %s", self.deployment_id)
-            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
-            return
-
-        # Validate token
-        self.user = await self._authenticate_token(token_key)
-        if not self.user:
-            logger.warning(
-                "WebSocket connection rejected: Invalid token for "
-                "deployment %s", self.deployment_id)
-            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
-            return
-
-        # ======================================================================
-        # SECURITY: Verify user owns this deployment
-        # ======================================================================
-        if not await self._verify_ownership():
-            logger.warning(
-                "WebSocket connection rejected: User %s doesn't own "
-                "deployment %s", self.user.id, self.deployment_id)
-            logger.error("[CONSOLE_DEBUG] Closing 4003: Ownership failed"); await self.close(code=4003)
-            return
-
-        # ── ACCEPT IMMEDIATELY: Lockdown the handshake ──
+        # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
         await self.accept()
         self._accepted = True
 
-        # ── INITIALIZE ──
-        # ── LOG SESSION START ──
-        log_event(
-            action="CONSOLE_SESSION_STARTED",
-            target=f"Deployment: {self.deployment_id}",
-            actor=self.user,
-            metadata={
-                "container_id": self.container_id,
-                "user_id": str(self.user.id),
-                "user_email": self.user.email
-            }
-        )
-        logger.info("[CONSOLE_DEBUG] WS connected: User %s, PID %s, deployment %s",
-                    self.user, os.getpid(), self.deployment_id)
-        
-        # ── STATUS UPDATE: Immediate traffic after accept ──
         try:
-            # Tell client we are initializing
-            msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
-            enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
-            await self._out_queue.put({'message': enc})
-        except Exception:
-            pass
+            # ======================================================================
+            # SECURITY: Authenticate WebSocket connection via token
+            # ======================================================================
+            query_string = self.scope.get('query_string', b'').decode()
+            token_key = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token_key = param.split('=', 1)[1]
+                    break
 
-        # ── TASK PIPELINE ──
-        # Start background tasks
-        self._send_task = asyncio.create_task(self._send_loop())
-        
-        # Move discovery and exec into background task so connect() returns 
-        # immediately, satisfying proxy handshake timeouts.
-        self._setup_task = asyncio.create_task(self._async_setup())
+            if not token_key:
+                logger.warning(
+                    "WebSocket connection rejected: No token provided for "
+                    "deployment %s", self.deployment_id)
+                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+                await self.close(code=4001)
+                return
+
+            # Validate token
+            self.user = await self._authenticate_token(token_key)
+            if not self.user:
+                logger.warning(
+                    "WebSocket connection rejected: Invalid token for "
+                    "deployment %s", self.deployment_id)
+                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
+                await self.close(code=4002)
+                return
+
+            # ======================================================================
+            # SECURITY: Verify user owns this deployment
+            # ======================================================================
+            if not await self._verify_ownership():
+                logger.warning(
+                    "WebSocket connection rejected: User %s doesn't own "
+                    "deployment %s", self.user.id, self.deployment_id)
+                await self.send(text_data=json.dumps({'error': 'Access denied'}))
+                await self.close(code=4003)
+                return
+
+            # ── INITIALIZE ──
+            log_event(
+                action="CONSOLE_SESSION_STARTED",
+                target=f"Deployment: {self.deployment_id}",
+                actor=self.user,
+                metadata={
+                    "container_id": self.container_id,
+                    "user_id": str(self.user.id),
+                    "user_email": self.user.email
+                }
+            )
+            logger.info("[CONSOLE_DEBUG] TerminalConsumer connected: User %s, PID %s, deployment %s",
+                        self.user, os.getpid(), self.deployment_id)
+
+            # ── STATUS UPDATE: Immediate traffic after accept ──
+            try:
+                msg = '\r\n\x1b[36m[status] initializing stable tunnel...\x1b[0m\r\n\r\n'
+                enc = base64.b64encode(msg.encode('utf-8')).decode('utf-8')
+                await self._out_queue.put({'message': enc})
+            except Exception:
+                pass
+
+            # ── TASK PIPELINE ──
+            self._send_task = asyncio.create_task(self._send_loop())
+            self._setup_task = asyncio.create_task(self._async_setup())
+        except Exception as e:
+            logger.error("[CONSOLE_DEBUG] TerminalConsumer.connect() failed: %s", e, exc_info=True)
+            if self._accepted:
+                try:
+                    await self.send(text_data=json.dumps({'error': 'Internal error'}))
+                except Exception:
+                    pass
+                await self.close(code=4000)
 
     async def _async_setup(self):
         """Background task to handle discovery and attachment without blocking handshake."""
@@ -691,44 +696,56 @@ class BuildLogConsumer(AsyncWebsocketConsumer):
         self.user = None
 
     async def connect(self):
-        logger.info("[CONSOLE_DEBUG] TerminalConsumer.connect() started for deployment %s", self.scope["url_route"]["kwargs"]["deployment_id"])
         self.deployment_id = self.scope['url_route']['kwargs']['deployment_id']
 
-        # Authenticate
-        query_string = self.scope.get('query_string', b'').decode()
-        token_key = None
-        for param in query_string.split('&'):
-            if param.startswith('token='):
-                token_key = param.split('=', 1)[1]
-                break
-
-        if not token_key:
-            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
-            return
-
-        self.user = await self._authenticate_token(token_key)
-        if not self.user:
-            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
-            return
-
-        if not await self._verify_ownership():
-            logger.error("[CONSOLE_DEBUG] Closing 4003: Ownership failed"); await self.close(code=4003)
-            return
-
-        # Join the deployment's log group
-        self.group_name = f"build_logs_{self.deployment_id}"
-        await self.channel_layer.group_add(
-            self.group_name,
-            self.channel_name
-        )
+        # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
         await self.accept()
 
-        # Send current logs and status as initial payload
-        initial = await self._get_current_state()
-        await self.send(text_data=json.dumps({
-            'type': 'initial_state',
-            **initial
-        }))
+        try:
+            # Authenticate
+            query_string = self.scope.get('query_string', b'').decode()
+            token_key = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token_key = param.split('=', 1)[1]
+                    break
+
+            if not token_key:
+                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+                await self.close(code=4001)
+                return
+
+            self.user = await self._authenticate_token(token_key)
+            if not self.user:
+                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
+                await self.close(code=4002)
+                return
+
+            if not await self._verify_ownership():
+                await self.send(text_data=json.dumps({'error': 'Access denied'}))
+                await self.close(code=4003)
+                return
+
+            # Join the deployment's log group
+            self.group_name = f"build_logs_{self.deployment_id}"
+            await self.channel_layer.group_add(
+                self.group_name,
+                self.channel_name
+            )
+
+            # Send current logs and status as initial payload
+            initial = await self._get_current_state()
+            await self.send(text_data=json.dumps({
+                'type': 'initial_state',
+                **initial
+            }))
+        except Exception as e:
+            logger.error("[CONSOLE_DEBUG] BuildLogConsumer.connect() failed: %s", e, exc_info=True)
+            try:
+                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            except Exception:
+                pass
+            await self.close(code=4000)
 
     async def disconnect(self, code):
         if self.group_name:
@@ -880,33 +897,45 @@ class ServiceStatusConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         """Authenticate and join user's service status group."""
-        # Authenticate
-        query_string = self.scope.get('query_string', b'').decode()
-        token_key = None
-        for param in query_string.split('&'):
-            if param.startswith('token='):
-                token_key = param.split('=', 1)[1]
-                break
-
-        if not token_key:
-            logger.error("[CONSOLE_DEBUG] Closing 4001: Missing token"); await self.close(code=4001)
-            return
-
-        self.user = await self._authenticate_token(token_key)
-        if not self.user:
-            logger.error("[CONSOLE_DEBUG] Closing 4002: Invalid token"); await self.close(code=4002)
-            return
-
-        # Join the user's service status group
-        self.user_group_name = f"user_services_{self.user.id}"
-        await self.channel_layer.group_add(
-            self.user_group_name,
-            self.channel_name
-        )
+        # ── ACCEPT IMMEDIATELY: Prevent proxy timeouts during auth ──
         await self.accept()
 
-        # Send initial service statuses
-        await self._send_initial_services()
+        try:
+            # Authenticate
+            query_string = self.scope.get('query_string', b'').decode()
+            token_key = None
+            for param in query_string.split('&'):
+                if param.startswith('token='):
+                    token_key = param.split('=', 1)[1]
+                    break
+
+            if not token_key:
+                await self.send(text_data=json.dumps({'error': 'Missing token'}))
+                await self.close(code=4001)
+                return
+
+            self.user = await self._authenticate_token(token_key)
+            if not self.user:
+                await self.send(text_data=json.dumps({'error': 'Invalid token'}))
+                await self.close(code=4002)
+                return
+
+            # Join the user's service status group
+            self.user_group_name = f"user_services_{self.user.id}"
+            await self.channel_layer.group_add(
+                self.user_group_name,
+                self.channel_name
+            )
+
+            # Send initial service statuses
+            await self._send_initial_services()
+        except Exception as e:
+            logger.error("[CONSOLE_DEBUG] ServiceStatusConsumer.connect() failed: %s", e, exc_info=True)
+            try:
+                await self.send(text_data=json.dumps({'error': 'Internal error'}))
+            except Exception:
+                pass
+            await self.close(code=4000)
 
     async def disconnect(self, code):
         """Leave group on disconnect."""
