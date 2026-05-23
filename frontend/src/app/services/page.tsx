@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { platformApi, servicesApi, addonsApi, Service } from '@/lib/api';
 import { useRouter } from 'next/navigation';
-import { Plus, LayoutGrid, Radar, Puzzle, Orbit, Store } from 'lucide-react';
+import { Plus, LayoutGrid, Radar, Puzzle, Store } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
@@ -12,10 +12,6 @@ import { AddonsTab } from '@/components/addons/AddonsTab';
 import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
 import dynamic from 'next/dynamic';
 
-const ServiceCanvas = dynamic(() => import('@/components/canvas/ServiceCanvas').then(mod => mod.ServiceCanvas), {
-  loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Galaxy...</div>,
-  ssr: false
-});
 
 const FleetRadar = dynamic(() => import('@/components/canvas/FleetRadar').then(mod => mod.FleetRadar), {
   loading: () => <div className="flex items-center justify-center h-full text-muted-foreground">Loading Radar...</div>,
@@ -40,7 +36,7 @@ function buildServiceFingerprint(services: Service[]): string {
 
 export default function ServicesPage() {
   const router = useRouter();
-  const [viewMode, setViewMode] = useState<'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'>('GRID');
+  const [viewMode, setViewMode] = useState<'GRID' | 'RADAR' | 'ADDONS'>('GRID');
   const [services, setServices] = useState<Service[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [pollIntervalMs, setPollIntervalMs] = useState(5000);
@@ -48,9 +44,8 @@ export default function ServicesPage() {
   const fingerprintRef = useRef('');
   const consecutiveFailuresRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const viewTabs: Array<{ id: 'GRID' | 'GALAXY' | 'RADAR' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
+  const viewTabs: Array<{ id: 'GRID' | 'RADAR' | 'ADDONS'; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }> = [
     { id: 'GRID', label: 'Grid', icon: LayoutGrid },
-    { id: 'GALAXY', label: 'Galaxy', icon: Orbit },
     { id: 'RADAR', label: 'Radar', icon: Radar },
     { id: 'ADDONS', label: 'Addons', icon: Puzzle },
   ];
@@ -222,11 +217,7 @@ export default function ServicesPage() {
         transition={{ duration: 0.5 }}
         className="relative flex-1 min-h-0 overflow-hidden bg-dot-pattern"
       >
-        {viewMode === 'GALAXY' && (
-            <div className="h-full min-h-0">
-                <ServiceCanvas services={primaryServices} />
-            </div>
-        )}
+
         {viewMode === 'GRID' && (
             <div className="h-full overflow-y-auto">
                 <ServicesGrid services={primaryServices} />
