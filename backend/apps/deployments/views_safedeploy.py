@@ -28,9 +28,6 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
         except Service.DoesNotExist:
             return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        if not service.preview_environments_enabled:
-            return Response({"error": "Preview environments are not enabled for this service"}, status=status.HTTP_400_BAD_REQUEST)
-
         branch_name = request.data.get('branch_name')
         commit_sha = request.data.get('commit_sha')
 

@@ -337,7 +337,7 @@ class Service(TimeStampedModel):
 
     # SafeDeploy Config
     safe_deploy_enabled = models.BooleanField(default=False)
-    preview_environments_enabled = models.BooleanField(default=False)
+    preview_environments_enabled = models.BooleanField(default=True)
     auto_create_preview_on_branch_push = models.BooleanField(default=False)
     MIGRATION_AUTO_APPROVAL_CHOICES = [('NEVER', 'Never'), ('LOW_RISK_ONLY', 'Low Risk Only'), ('LOW_AND_MEDIUM', 'Low and Medium'), ('ALWAYS_REQUIRE_MANUAL', 'Always Require Manual')]
     migration_auto_approval_policy = models.CharField(max_length=50, choices=MIGRATION_AUTO_APPROVAL_CHOICES, default='LOW_RISK_ONLY')
