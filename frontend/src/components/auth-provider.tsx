@@ -77,6 +77,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
       if (!token) {
+        if (process.env.NODE_ENV === "development") {
+          setUser({
+            pk: 1,
+            username: "dev_user",
+            email: "dev@example.com",
+            first_name: "Dev",
+            last_name: "User",
+          });
+          setLoading(false);
+          return;
+        }
         setUser(null);
         setLoading(false);
         if (isProtectedPath(path)) {

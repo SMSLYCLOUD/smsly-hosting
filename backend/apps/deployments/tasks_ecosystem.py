@@ -334,15 +334,27 @@ def _resolve_env_placeholders(
             continue
 
         if value_text == "{{POSTGRES_URL}}":
-            resolved[key] = shared_addons.get("POSTGRES", "postgresql://smsly:smsly@postgres:5432/smsly")
+            if "POSTGRES" in shared_addons:
+                resolved[key] = shared_addons["POSTGRES"]
+            else:
+                resolved[key] = os.environ.get("DATABASE_URL", "postgresql://smsly:smsly@postgres:5432/smsly")
+                logger.warning("No POSTGRES addon provisioned, using platform default for %s", key)
             continue
 
         if value_text == "{{REDIS_URL}}":
-            resolved[key] = shared_addons.get("REDIS", "redis://redis:6379/0")
+            if "REDIS" in shared_addons:
+                resolved[key] = shared_addons["REDIS"]
+            else:
+                resolved[key] = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+                logger.warning("No REDIS addon provisioned, using platform default for %s", key)
             continue
 
         if value_text == "{{ELASTICSEARCH_URL}}":
-            resolved[key] = shared_addons.get("ELASTICSEARCH", "http://elasticsearch:9200")
+            if "ELASTICSEARCH" in shared_addons:
+                resolved[key] = shared_addons["ELASTICSEARCH"]
+            else:
+                resolved[key] = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
+                logger.warning("No ELASTICSEARCH addon provisioned, using platform default for %s", key)
             continue
 
         resolved[key] = value_text
@@ -1050,6 +1062,90 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
     created_service_records: List[Any] = []
 
+    # Provision all required addons BEFORE service creation so env vars get real URLs.
+    provisioned_addon_urls: Dict[str, str] = {}
+    addon_anchor_service = _select_shared_addon_anchor(created_service_records)
+
+    if not addon_anchor_service and required_addons:
+        # No existing services yet — create the anchor service early so we can
+        # attach addons to it before the rest of the service loop runs.
+        for svc_plan in services_plan:
+            if not isinstance(svc_plan, dict) or svc_plan.get("skip"):
+                continue
+            repo = str(svc_plan.get("repo") or "").strip()
+            if not repo:
+                continue
+            anchor_name = _slugify_name(svc_plan.get("name") or repo.split("/")[-1])
+            anchor_branch = str(
+                svc_plan.get("branch") or svc_plan.get("default_branch") or "main"
+            ).strip() or "main"
+            try:
+                anchor_port = int(svc_plan.get("port", 3000) or 3000)
+            except (TypeError, ValueError):
+                anchor_port = 3000
+
+            existing_svc = Service.objects.filter(owner=user, name=anchor_name).first()
+            if existing_svc:
+                addon_anchor_service = existing_svc
+            else:
+                final_anchor_name = _next_available_service_name(Service, anchor_name)
+                addon_anchor_service = Service.objects.create(
+                    name=final_anchor_name,
+                    owner=user,
+                    repository_url=f"https://github.com/{repo}",
+                    branch=anchor_branch,
+                    internal_port=anchor_port,
+                    provider=provider,
+                )
+                _rollback_services.append(str(addon_anchor_service.id))
+                _apply_service_profile(addon_anchor_service, {**svc_plan, "repo": repo}, provider, anchor_port)
+
+            created_service_records.append(addon_anchor_service)
+            aliases = {
+                anchor_name, anchor_name.lower(),
+                addon_anchor_service.name, addon_anchor_service.name.lower(),
+                repo, repo.lower(),
+                repo.split("/")[-1], repo.split("/")[-1].lower(),
+            }
+            for alias in aliases:
+                created_services[alias] = addon_anchor_service
+            break
+
+    if addon_anchor_service and required_addons:
+        supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
+        for addon_type in required_addons:
+            if addon_type not in supported_addons:
+                logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+                continue
+
+            existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
+            if existing_addon and existing_addon.status == Addon.Status.ACTIVE and existing_addon.connection_url:
+                provisioned_addon_urls[addon_type] = existing_addon.connection_url
+                logger.info("Reusing existing %s addon: %s", addon_type, existing_addon.id)
+                continue
+
+            if not existing_addon:
+                existing_addon = Addon.objects.create(
+                    service=addon_anchor_service,
+                    name=f"{addon_type.lower()}-shared"[:255],
+                    addon_type=addon_type,
+                    status=Addon.Status.PROVISIONING,
+                )
+                _rollback_addons.append(str(existing_addon.id))
+
+            try:
+                logger.info("Provisioning shared addon %s for ecosystem", addon_type)
+                cid, url = addon_provisioner.provision(existing_addon)
+                existing_addon.connection_url = url
+                existing_addon.status = Addon.Status.ACTIVE
+                existing_addon.save(update_fields=['connection_url', 'status', 'updated_at'])
+                provisioned_addon_urls[addon_type] = url
+                logger.info("Provisioned %s addon: %s", addon_type, existing_addon.id)
+            except Exception as exc:
+                logger.error("Failed to provision shared addon %s: %s", addon_type, exc)
+                existing_addon.status = Addon.Status.FAILED
+                existing_addon.save(update_fields=['status'])
+
     for repo_key in ordered_keys:
         entry = entries_by_key[repo_key]
         svc_plan = entry["plan"]
@@ -1155,17 +1251,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
             env_vars = _normalize_env_vars(svc_plan.get("env_vars", {}))
 
-            shared_addons_urls = {}
-            graph_anchor_service = _select_shared_addon_anchor(created_service_records)
-            if graph_anchor_service:
-                from services.ecosystem_graph import build_ecosystem_graph
-                graph = build_ecosystem_graph(graph_anchor_service)
-                shared_addons_urls = graph.get("shared_addons", {})
-
             resolved_env = _resolve_env_placeholders(
                 env_vars,
                 created_services,
-                shared_addons=shared_addons_urls
+                shared_addons=provisioned_addon_urls,
             )
 
             # -----------------------------------------------------------------
@@ -1267,51 +1356,35 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         if deployment_ids:
             waves.append(deployment_ids)
 
-    # Synchronously provision required addons onto a stable anchor service.
-    addon_anchor_service = _select_shared_addon_anchor(created_service_records)
-    if addon_anchor_service and required_addons:
-        supported_addons = set(addon_provisioner.ADDON_IMAGES.keys())
-        for addon_type in required_addons:
-            if addon_type not in supported_addons:
-                logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
+    # Reconcile: update ALL services' addon env vars with real provisioned URLs
+    if provisioned_addon_urls:
+        _addon_env_key_map = {
+            'POSTGRES': 'DATABASE_URL',
+            'REDIS': 'REDIS_URL',
+            'ELASTICSEARCH': 'ELASTICSEARCH_URL',
+            'MYSQL': 'MYSQL_URL',
+            'MONGODB': 'MONGODB_URL',
+        }
+        updated_service_ids: set = set()
+        for repo_key, entry in entries_by_key.items():
+            svc = created_services.get(repo_key)
+            if not svc or svc.id in updated_service_ids:
                 continue
-
-            # Check if addon already exists
-            existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
-            if existing_addon and existing_addon.status == Addon.Status.ACTIVE:
-                continue
-
-            if not existing_addon:
-                existing_addon = Addon.objects.create(
-                    service=addon_anchor_service,
-                    name=f"{addon_type.lower()}-shared"[:255],
-                    addon_type=addon_type,
-                    status=Addon.Status.PROVISIONING,
-                )
-                _rollback_addons.append(str(existing_addon.id))
-
-            try:
-                logger.info("Provisioning shared addon %s for ecosystem", addon_type)
-                cid, url = addon_provisioner.provision(existing_addon)
-                existing_addon.connection_url = url
-                existing_addon.status = Addon.Status.ACTIVE
-                existing_addon.save()
-
-                key_map = {
-                    'POSTGRES': 'DATABASE_URL',
-                    'REDIS': 'REDIS_URL',
-                    'ELASTICSEARCH': 'ELASTICSEARCH_URL',
-                }
-                key = key_map.get(addon_type, f"{addon_type}_URL")
-                EnvironmentVariable.objects.update_or_create(
-                    service=addon_anchor_service,
-                    key=key,
-                    defaults={"value": url, "is_secret": True}
-                )
-            except Exception as e:
-                logger.error("Failed to provision shared addon %s: %s", addon_type, e)
-                existing_addon.status = Addon.Status.FAILED
-                existing_addon.save()
+            svc_addons = entry.get("plan", {}).get("addons", [])
+            svc_addon_types = {
+                a.upper() if isinstance(a, str) else str(a.get("type", "")).upper()
+                for a in svc_addons
+            }
+            for addon_type, url in provisioned_addon_urls.items():
+                if addon_type in svc_addon_types:
+                    env_key = _addon_env_key_map.get(addon_type, f"{addon_type}_URL")
+                    EnvironmentVariable.objects.update_or_create(
+                        service=svc,
+                        key=env_key,
+                        defaults={"value": url, "is_secret": True},
+                    )
+                    logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
+            updated_service_ids.add(svc.id)
 
     queued_now = 0
     # Pass dependencies to the wave task

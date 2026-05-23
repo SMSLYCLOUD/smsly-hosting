@@ -579,56 +579,58 @@ export function CityTopologyView() {
     };
   }, [data, layout]);
 
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500/30 border-t-emerald-400" />
-          <span className="text-xs text-zinc-500">Loading city topology...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!data || data.nodes.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center text-zinc-500 text-sm">
-        No services to visualize. Deploy a service to see the city skyline.
-      </div>
-    );
-  }
+  const isReady = !loading && data && data.nodes.length > 0;
 
   return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="h-full w-full" />
+    <div className="relative h-full w-full bg-[#04070f]">
+      <div ref={containerRef} className={`absolute inset-0 transition-opacity duration-500 ${!isReady ? 'opacity-0 pointer-events-none' : 'opacity-100'}`} />
       
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 rounded-xl border border-zinc-800/60 bg-black/60 backdrop-blur-xl p-3 flex flex-col gap-2 text-[11px] text-zinc-400">
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#10b981' }} />
-          <span>Service</span>
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-[#04070f]">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500/30 border-t-emerald-400" />
+            <span className="text-xs text-zinc-500">Loading city topology...</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#8b5cf6' }} />
-          <span>Addon</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#f59e0b' }} />
-          <span>Volume</span>
-        </div>
-        <hr className="border-zinc-700/50" />
-        <div className="flex items-center gap-2">
-          <div className="h-0.5 w-4 rounded-full" style={{ backgroundColor: '#3b82f6' }} />
-          <span>Connection</span>
-        </div>
-      </div>
+      )}
 
-      {/* Controls hint */}
-      <div className="absolute bottom-4 right-4 rounded-xl border border-zinc-800/60 bg-black/60 backdrop-blur-xl p-3 text-[10px] text-zinc-500 flex flex-col gap-1">
-        <span>🖱️ Drag to orbit</span>
-        <span>🔍 Scroll to zoom</span>
-        <span>👆 Click tower for details</span>
-      </div>
+      {!loading && (!data || data.nodes.length === 0) && (
+        <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-sm bg-[#04070f]">
+          No services to visualize. Deploy a service to see the city skyline.
+        </div>
+      )}
+
+      {isReady && (
+        <>
+          {/* Legend */}
+          <div className="absolute bottom-4 left-4 rounded-xl border border-zinc-800/60 bg-black/60 backdrop-blur-xl p-3 flex flex-col gap-2 text-[11px] text-zinc-400">
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#10b981' }} />
+              <span>Service</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#8b5cf6' }} />
+              <span>Addon</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-3 w-3 rounded-sm" style={{ backgroundColor: '#f59e0b' }} />
+              <span>Volume</span>
+            </div>
+            <hr className="border-zinc-700/50" />
+            <div className="flex items-center gap-2">
+              <div className="h-0.5 w-4 rounded-full" style={{ backgroundColor: '#3b82f6' }} />
+              <span>Connection</span>
+            </div>
+          </div>
+
+          {/* Controls hint */}
+          <div className="absolute bottom-4 right-4 rounded-xl border border-zinc-800/60 bg-black/60 backdrop-blur-xl p-3 text-[10px] text-zinc-500 flex flex-col gap-1">
+            <span>🖱️ Drag to orbit</span>
+            <span>🔍 Scroll to zoom</span>
+            <span>👆 Click tower for details</span>
+          </div>
+        </>
+      )}
 
       {/* Side Panel */}
       {selectedNode && (
