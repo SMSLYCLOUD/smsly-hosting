@@ -300,7 +300,7 @@ export function EcosystemTopology() {
             proOptions={{ hideAttribution: true }}
           >
             <Background color="#1a1a2e" gap={20} size={1} />
-            <Controls className="!bg-zinc-800 !border-zinc-700 !fill-white" />
+            <Controls className="!bg-transparent [&_button]:!bg-zinc-900 [&_button]:!border-zinc-800 [&_button]:!fill-zinc-300 [&_button:hover]:!bg-zinc-800 [&_button]:!border-b [&_button:last-child]:!border-b-0 border border-zinc-800 rounded-md overflow-hidden shadow-lg" />
             <MiniMap
               nodeColor={(n) => {
                 const status = n.data?.status;
