@@ -24,8 +24,8 @@ from apps.deployments.models import (
 logger = logging.getLogger(__name__)
 
 # SEC-ZT-005: Inter-server TLS enforcement.
-# Set SMSLY_ENFORCE_INTERSERVER_TLS=true to reject non-HTTPS connections.
-_ENFORCE_TLS = os.environ.get("SMSLY_ENFORCE_INTERSERVER_TLS", "false").lower() in (
+# Enforce TLS by default. Set SMSLY_ENFORCE_INTERSERVER_TLS=false to bypass (insecure).
+_ENFORCE_TLS = os.environ.get("SMSLY_ENFORCE_INTERSERVER_TLS", "true").lower() in (
     "1", "true", "yes", "on",
 )
 # SEC-ZT-005: TLS certificate verification for inter-server requests.
@@ -539,56 +539,43 @@ class RemoteOrchestrator:
             if normalized and normalized not in urls:
                 urls.append(normalized)
 
-        # MESH-OPTIMIZATION: For IP-based hosts, prefer HTTP first (mesh VPN handles encryption)
         host_port = str(getattr(self.server, "host", "") or "").strip().rstrip("/")
         if "://" in host_port:
             parsed = urlparse(host_port)
             host_port = parsed.netloc or parsed.path
         host_port = host_port.split("/", 1)[0].strip()
         
-        if _host_is_ip(host_port):
-            if getattr(self.server, 'is_lite_agent', False):
-                # Lite agents: only Traefik on port 80 — skip 8090/443
-                # which don't exist and waste ~10s each on timeout.
-                append(f"http://{host_port}")
-                return urls
-            # IP-based mesh nodes: HTTP first, then HTTPS as fallback
-            append(f"http://{host_port}")
-            append(f"http://{host_port}:8090")
-            append(f"https://{host_port}")
-        else:
-            append(self.base_url)
-
-        host_port = str(getattr(self.server, "host", "") or "").strip().rstrip("/")
-        if "://" in host_port:
-            parsed = urlparse(host_port)
-            host_port = parsed.netloc or parsed.path
-        host_port = host_port.split("/", 1)[0].strip()
         if not host_port:
             return urls
 
+        # Internal mesh VPN IPs should use HTTP (encryption handled by WireGuard/ZeroTier)
+        enforce_tls = _ENFORCE_TLS and not _is_internal_target(host_port)
+
         has_explicit_port = host_port.count(":") == 1
-        # SEC-ZT-005: When TLS enforcement is active, skip plain HTTP URLs
+        
         if _host_is_ip(host_port):
             if getattr(self.server, 'is_lite_agent', False):
-                if not _ENFORCE_TLS:
+                # Lite agents: only Traefik on port 80
+                if not enforce_tls:
                     append(f"http://{host_port}")
                     append(f"http://{host_port}:8090")
+                append(f"https://{host_port}")
             else:
                 # Full install: Nginx on 8090 → Django API, Traefik on 80
-                if not _ENFORCE_TLS:
+                if not enforce_tls:
                     append(f"http://{host_port}:8090")
                     append(f"http://{host_port}")
-            append(f"https://{host_port}")
+                append(f"https://{host_port}")
         else:
             # Domain-based: HTTPS first, then HTTP variants
+            append(self.base_url)
             append(f"https://{host_port}")
-            if not _ENFORCE_TLS:
+            if not enforce_tls:
                 append(f"http://{host_port}")
-            if not has_explicit_port and not _ENFORCE_TLS:
-                append(f"http://{host_port}:8090")
+                if not has_explicit_port:
+                    append(f"http://{host_port}:8090")
 
-        if _ENFORCE_TLS and urls:
+        if enforce_tls and urls:
             https_urls = [u for u in urls if u.startswith("https://")]
             if https_urls:
                 return https_urls
