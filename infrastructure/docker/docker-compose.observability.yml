@@ -108,6 +108,7 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - smsly-net
+      - smsly-proxy
     depends_on:
       - loki
       - prometheus
@@ -122,6 +123,7 @@ services:
       - "traefik.http.routers.grafana.entrypoints=websecure"
       - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+      - "traefik.docker.network=smsly-proxy"
 
 volumes:
   loki-data:
@@ -130,4 +132,6 @@ volumes:
 
 networks:
   smsly-net:
+    external: true
+  smsly-proxy:
     external: true
