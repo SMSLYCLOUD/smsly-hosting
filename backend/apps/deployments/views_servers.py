@@ -521,7 +521,7 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
                     continue
                 break
 
-         return None, _safe_remote_error_payload(
+    return None, _safe_remote_error_payload(
         kind,
         f"Remote server unreachable or returned HTTP {last_status}" if last_status else "Remote server unreachable",
         upstream_status=last_status,
