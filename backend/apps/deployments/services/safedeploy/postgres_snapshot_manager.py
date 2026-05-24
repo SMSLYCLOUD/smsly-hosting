@@ -3,6 +3,7 @@ import subprocess
 import logging
 import os
 import re
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,20 @@ def _validate_db_name(name: str) -> None:
     if not _VALID_DB_NAME_RE.match(name):
         raise ValueError(f"Invalid database name: {name!r}")
 
+def _mask_url_password(url: str) -> str:
+    """Mask password in a database URL for safe logging."""
+    try:
+        parsed = urlparse(url)
+        if parsed.password:
+            netloc = f"{parsed.username}:****@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            masked = parsed._replace(netloc=netloc)
+            return urlunparse(masked)
+    except Exception:
+        pass
+    return url
+
 class PostgresSnapshotManager:
     def __init__(self, admin_db_url: Optional[str] = None):
         url = admin_db_url or os.environ.get('DIRECT_DATABASE_URL') or os.environ.get('DATABASE_URL')
@@ -19,35 +34,178 @@ class PostgresSnapshotManager:
             raise ValueError("DATABASE_URL or DIRECT_DATABASE_URL must be set to use PostgresSnapshotManager")
         self.admin_db_url = url
 
+    def _get_maintenance_url(self) -> str:
+        """Return a URL connecting to the 'postgres' maintenance database.
+
+        Uses the same server/credentials as the original URL, but replaces the
+        database name with 'postgres' so that admin operations (CREATE/DROP
+        DATABASE, pg_terminate_backend) do not compete for locks with the
+        source/target databases themselves.
+        """
+        parsed = urlparse(self.admin_db_url)
+        return urlunparse(parsed._replace(path='/postgres'))
+
+    def _build_db_url(self, db_name: str) -> str:
+        """Return a URL pointing to a specific database on the same server."""
+        parsed = urlparse(self.admin_db_url)
+        return urlunparse(parsed._replace(path=f'/{db_name}'))
+
+    def _run_psql(self, db_url: str, sql: str, check: bool = True,
+                  timeout: int = 120) -> subprocess.CompletedProcess:
+        """Run a psql command and return the CompletedProcess result."""
+        masked = _mask_url_password(db_url)
+        logger.debug(f"psql %s: %s", masked, sql[:300])
+        return subprocess.run(
+            ['psql', '-d', db_url, '-v', 'ON_ERROR_STOP=1', '-c', sql],
+            check=check,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+
     def create_clone(self, source_db_name: str, clone_db_name: str) -> bool:
         _validate_db_name(source_db_name)
         _validate_db_name(clone_db_name)
+
+        maintenance_url = self._get_maintenance_url()
+        source_url = self._build_db_url(source_db_name)
+        clone_url = self._build_db_url(clone_db_name)
+
         try:
-            logger.info(f"Cloning DB {source_db_name} to {clone_db_name}")
-            term_sql = f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
-            subprocess.run(['psql', self.admin_db_url, '-c', term_sql], check=False, capture_output=True)
-            create_sql = f'CREATE DATABASE "{clone_db_name}" WITH TEMPLATE "{source_db_name}";'
-            res = subprocess.run(['psql', self.admin_db_url, '-c', create_sql], check=True, capture_output=True, text=True)
-            return True
+            logger.info(f"Cloning DB %s to %s", source_db_name, clone_db_name)
+
+            # 1.  Terminate other connections to the source database.
+            #     We connect to 'postgres' so our own session does not hold a
+            #     lock on source_db.
+            term_sql = (
+                f"SELECT pg_terminate_backend(pid) "
+                f"FROM pg_stat_activity "
+                f"WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
+            )
+            term_res = self._run_psql(maintenance_url, term_sql, check=False)
+            if term_res.returncode != 0:
+                logger.warning(f"pg_terminate_backend non-zero exit: %s",
+                               term_res.stderr.strip())
+            else:
+                terminated = term_res.stdout.strip()
+                if terminated:
+                    logger.info(f"Terminated %s backends on %s",
+                                terminated, source_db_name)
+
+            # 2.  Drop any stale clone database left from a previous attempt.
+            drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
+            drop_res = self._run_psql(maintenance_url, drop_sql, check=False)
+            if drop_res.returncode != 0:
+                logger.warning(f"DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
+
+            # 3.  CREATE DATABASE … WITH TEMPLATE (from the maintenance
+            #     connection so no session holds a lock on source_db).
+            create_sql = (
+                f'CREATE DATABASE "{clone_db_name}" WITH TEMPLATE "{source_db_name}";'
+            )
+            try:
+                self._run_psql(maintenance_url, create_sql, check=True)
+                logger.info(f"Cloned %s → %s via TEMPLATE", source_db_name, clone_db_name)
+                return True
+            except subprocess.CalledProcessError as e:
+                stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
+                stdout_msg = e.stdout.strip() if e.stdout else '(empty)'
+                logger.warning(
+                    f"CREATE DATABASE WITH TEMPLATE failed.\n"
+                    f"  stderr: %s\n"
+                    f"  stdout: %s",
+                    stderr_msg, stdout_msg
+                )
+
+                # 4.  Fallback — try pg_dump → psql pipe.
+                logger.info("Attempting pg_dump / psql fallback …")
+                return self._clone_via_dump(
+                    source_db_name, clone_db_name,
+                    source_url, clone_url, maintenance_url
+                )
+
         except Exception as e:
-            logger.error(f"Failed to clone db: {str(e)}")
+            logger.error(f"create_clone unexpected error: %s", str(e), exc_info=True)
+            return False
+
+    def _clone_via_dump(self, source_db_name: str, clone_db_name: str,
+                        source_url: str, clone_url: str,
+                        maintenance_url: str) -> bool:
+        """Fallback: create an empty database, then pipe pg_dump into psql."""
+        try:
+            # Create empty database
+            create_empty_sql = f'CREATE DATABASE "{clone_db_name}";'
+            try:
+                self._run_psql(maintenance_url, create_empty_sql, check=True)
+            except subprocess.CalledProcessError as e:
+                stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
+                logger.error(
+                    f"Fallback CREATE DATABASE also failed "
+                    f"(user likely lacks CREATEDB privilege).\n"
+                    f"  stderr: %s", stderr_msg
+                )
+                return False
+
+            # Pipe pg_dump of source into the empty clone
+            dump_proc = subprocess.Popen(
+                ['pg_dump', '-d', source_url, '--no-owner', '--no-acl',
+                 source_db_name],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            restore_proc = subprocess.Popen(
+                ['psql', '-d', clone_url, '-v', 'ON_ERROR_STOP=1'],
+                stdin=dump_proc.stdout, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True
+            )
+            if dump_proc.stdout:
+                dump_proc.stdout.close()
+
+            restore_stdout, restore_stderr = restore_proc.communicate(timeout=600)
+            dump_proc.wait(timeout=60)
+
+            if restore_proc.returncode == 0:
+                logger.info(f"pg_dump fallback succeeded for %s", clone_db_name)
+                return True
+            else:
+                logger.error(
+                    f"pg_dump fallback failed.\n"
+                    f"  restore stderr: %s",
+                    restore_stderr.strip() if restore_stderr else '(empty)'
+                )
+                # Clean up the empty clone we created
+                clean_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
+                self._run_psql(maintenance_url, clean_sql, check=False)
+                return False
+        except Exception as e:
+            logger.error(f"pg_dump fallback unexpected error: %s",
+                         str(e), exc_info=True)
             return False
 
     def destroy_clone(self, clone_db_name: str) -> bool:
         _validate_db_name(clone_db_name)
         if 'prod' in clone_db_name.lower() or 'main' in clone_db_name.lower():
-             logger.error(f"SECURITY BLOCK: Attempted to drop protected database name '{clone_db_name}'")
-             return False
+            logger.error(
+                f"SECURITY BLOCK: Attempted to drop protected database "
+                f"name '%s'", clone_db_name
+            )
+            return False
         try:
-            term_sql = f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{clone_db_name}';"
-            subprocess.run(['psql', self.admin_db_url, '-c', term_sql], check=False, capture_output=True)
+            maintenance_url = self._get_maintenance_url()
+            term_sql = (
+                f"SELECT pg_terminate_backend(pid) "
+                f"FROM pg_stat_activity "
+                f"WHERE datname = '{clone_db_name}';"
+            )
+            self._run_psql(maintenance_url, term_sql, check=False)
             drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
-            subprocess.run(['psql', self.admin_db_url, '-c', drop_sql], check=True, capture_output=True)
+            self._run_psql(maintenance_url, drop_sql, check=True)
             return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"destroy_clone failed: stderr=%s", e.stderr.strip())
+            return False
         except Exception as e:
+            logger.error(f"destroy_clone error: %s", str(e), exc_info=True)
             return False
 
     def get_clone_url(self, clone_db_name: str) -> str:
-        base_url = self.admin_db_url
-        parts = base_url.split('/')
-        return '/'.join(parts[:-1]) + f"/{clone_db_name}"
+        return self._build_db_url(clone_db_name)
