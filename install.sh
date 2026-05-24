@@ -2490,15 +2490,6 @@ restart_edge_stack() {
     docker compose -f "$COMPOSE_FILE" up -d --no-deps $non_traefik_services >/dev/null 2>&1 || \
         docker compose -f "$COMPOSE_FILE" up -d $non_traefik_services >/dev/null 2>&1 || true
 
-    # Re-attach expected external networks BEFORE Traefik restart so it
-    # discovers containers with stable network topology (idempotent).
-    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
-    if [ "$MODE_AGENT_LITE" != "true" ]; then
-        ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
-    fi
-    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
-    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
-
     # Force-recreate ONLY Traefik (not socket-proxy) to trigger full container
     # re-discovery. Traefik v3.x removed pollInterval; a fresh start against a
     # stable socket-proxy is the only way to guarantee complete provider re-scan
@@ -2508,6 +2499,17 @@ restart_edge_stack() {
     # Docker events and does not need to be restarted. This eliminates the 2-5s downtime
     # for deployed user services during an update.
     docker compose -f "$COMPOSE_FILE" up -d traefik >/dev/null 2>&1 || true
+
+    # Re-attach expected external networks AFTER Traefik restart so it
+    # discovers containers with stable network topology (idempotent).
+    # If run before 'up -d', Docker Compose will forcefully strip 'smsly-proxy' 
+    # since it's not defined in the compose file's networks block.
+    ensure_container_on_network "smsly-net" "smsly-hosting-traefik-1"
+    if [ "$MODE_AGENT_LITE" != "true" ]; then
+        ensure_container_on_network "smsly-net" "smsly-hosting-route-fallback-1"
+    fi
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-traefik-1"
+    ensure_container_on_network "smsly-proxy" "smsly-hosting-socket-proxy-1"
 
     # Validate Caddy config before restart (H1 fix)
     if command -v caddy >/dev/null 2>&1; then
