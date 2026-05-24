@@ -598,6 +598,27 @@ class RemoteOrchestrator:
         return urls
 
     @staticmethod
+    def _filter_reachable(urls: list[str], probe_timeout: float = 1.0) -> list[str]:
+        """Pre-filter candidate URLs by fast TCP connect probe. Skip dead endpoints."""
+        import socket as sock_module
+        reachable: list[str] = []
+        for url in urls:
+            parsed = urlparse(url)
+            host = parsed.hostname or ""
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not host:
+                reachable.append(url)
+                continue
+            try:
+                with sock_module.create_connection((host, port), timeout=probe_timeout):
+                    reachable.append(url)
+            except (OSError, sock_module.timeout):
+                logger.debug("Pre-filter skipped unreachable %s", url)
+        if not reachable and urls:
+            logger.warning("All %d candidate URLs unreachable: %s", len(urls), urls[:3])
+        return reachable
+
+    @staticmethod
     def _timeout(timeout: int | float | tuple | None):
         if timeout is None:
             return (5, 20)
@@ -626,7 +647,7 @@ class RemoteOrchestrator:
         network_retry_statuses = {429, 500, 502, 503, 504}
         last_response = None
         modes = self._auth_modes()
-        base_urls = self._candidate_base_urls()
+        base_urls = self._filter_reachable(self._candidate_base_urls())
         
         if retry_auth and (not modes or modes == ["none"]):
             # If no auth modes, try auto-auth first

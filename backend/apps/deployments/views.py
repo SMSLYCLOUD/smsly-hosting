@@ -2731,38 +2731,28 @@ class ServiceViewSet(viewsets.ModelViewSet):
             namespace = parts[0] if len(parts) > 1 else 'default'
             pod_name = parts[-1]
             core_v1 = k8s_client.CoreV1Api()
-            exec_command = ['ls', '-la', '--time-style=long-iso', path]
-            resp = core_v1.connect_get_namespaced_pod_exec(
-                pod_name, namespace,
-                command=exec_command,
-                stderr=True, stdin=False,
-                stdout=True, tty=False,
-                _request_timeout=30,
-            )
-            output = resp
-            if isinstance(output, bytes):
-                output = output.decode('utf-8', errors='replace')
-                
-            if 'unrecognized option' in output or 'invalid option' in output:
-                # Alpine fallback
-                resp = core_v1.connect_get_namespaced_pod_exec(
-                    pod_name, namespace,
-                    command=['ls', '-la', path],
-                    stderr=True, stdin=False,
-                    stdout=True, tty=False,
-                    _request_timeout=30,
-                )
-                output = resp
-                if isinstance(output, bytes):
-                    output = output.decode('utf-8', errors='replace')
 
-            if 'No such file' in output or 'cannot access' in output:
-                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
-                if fallback_path:
-                    path = fallback_path
+            cmd_chain = [
+                ['ls', '-la', '--time-style=long-iso', path],
+                ['ls', '-la', path],
+                ['python3', '-c', (
+                    "import os,stat,datetime,sys;"
+                    "p=sys.argv[1];"
+                    "for f in os.listdir(p):"
+                    " fp=os.path.join(p,f);"
+                    " s=os.lstat(fp);"
+                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M');"
+                    " print(stat.filemode(s.st_mode),s.st_nlink,"
+                    " s.st_uid,s.st_gid,s.st_size,mt,f)"
+                ), path],
+            ]
+            output = ""
+            last_err = ""
+            for cmd in cmd_chain:
+                try:
                     resp = core_v1.connect_get_namespaced_pod_exec(
                         pod_name, namespace,
-                        command=['ls', '-la', '--time-style=long-iso', path],
+                        command=cmd,
                         stderr=True, stdin=False,
                         stdout=True, tty=False,
                         _request_timeout=30,
@@ -2770,20 +2760,51 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     output = resp
                     if isinstance(output, bytes):
                         output = output.decode('utf-8', errors='replace')
-                        
-                    if 'unrecognized option' in output or 'invalid option' in output:
-                        resp = core_v1.connect_get_namespaced_pod_exec(
-                            pod_name, namespace,
-                            command=['ls', '-la', path],
-                            stderr=True, stdin=False,
-                            stdout=True, tty=False,
-                            _request_timeout=30,
-                        )
-                        output = resp
-                        if isinstance(output, bytes):
-                            output = output.decode('utf-8', errors='replace')
-                else:
-                    return Response({'error': 'Path not found'}, status=status.HTTP_400_BAD_REQUEST)
+                    if not any(err in output for err in (
+                        'unrecognized option', 'invalid option',
+                        'No such file', 'cannot access',
+                        'No such file or directory', 'command not found',
+                        'executable file not found',
+                    )):
+                        break
+                    last_err = output
+                    output = ""
+                except Exception:
+                    continue
+
+            if not output or 'No such file' in output or 'cannot access' in output or 'No such file or directory' in output:
+                fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
+                if fallback_path:
+                    path = fallback_path
+                    for cmd in cmd_chain:
+                        try:
+                            resp = core_v1.connect_get_namespaced_pod_exec(
+                                pod_name, namespace,
+                                command=cmd,
+                                stderr=True, stdin=False,
+                                stdout=True, tty=False,
+                                _request_timeout=30,
+                            )
+                            output = resp
+                            if isinstance(output, bytes):
+                                output = output.decode('utf-8', errors='replace')
+                            if not any(err in output for err in (
+                                'unrecognized option', 'invalid option',
+                                'No such file', 'cannot access',
+                                'No such file or directory', 'command not found',
+                                'executable file not found',
+                            )):
+                                break
+                            last_err = output
+                            output = ""
+                        except Exception:
+                            continue
+
+            if not output:
+                return Response(
+                    {'error': 'Failed to list directory', 'details': last_err or output},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             files = self._parse_ls_output(output)
             return Response({'path': path, 'files': files})
         except ImportError:
@@ -2822,19 +2843,39 @@ class ServiceViewSet(viewsets.ModelViewSet):
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def _exec_file_list(self, container, path: str):
-        """List files via Docker exec."""
+        """List files via Docker exec with fallback chain for containers missing coreutils."""
         try:
-            exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
-            if exit_code != 0:
-                exit_code, output = container.exec_run(["ls", "-la", path])
-                
+            cmd_chain = [
+                ["ls", "-la", "--time-style=long-iso", path],
+                ["ls", "-la", path],
+                # Python-based fallback for distroless/minimal images without ls
+                ["python3", "-c", (
+                    "import os,stat,datetime,sys;"
+                    "p=sys.argv[1];"
+                    "for f in os.listdir(p):"
+                    " fp=os.path.join(p,f);"
+                    " s=os.lstat(fp);"
+                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M');"
+                    " print(stat.filemode(s.st_mode),s.st_nlink,"
+                    " s.st_uid,s.st_gid,s.st_size,mt,f)"
+                ), path],
+            ]
+            exit_code = 1
+            output = b""
+            for cmd in cmd_chain:
+                exit_code, output = container.exec_run(cmd)
+                if exit_code == 0:
+                    break
+
             if exit_code != 0:
                 fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
                 if fallback_path:
                     path = fallback_path
-                    exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
-                    if exit_code != 0:
-                        exit_code, output = container.exec_run(["ls", "-la", path])
+                    for cmd in cmd_chain:
+                        exit_code, output = container.exec_run(cmd)
+                        if exit_code == 0:
+                            break
+
             if exit_code != 0:
                 logger.warning("_exec_file_list 400: ls command failed. Code: %s, Output: %s", exit_code, output.decode('utf-8', errors='replace'))
                 return Response({'error': 'Failed to list directory', 'details': output.decode('utf-8', errors='replace')}, status=status.HTTP_400_BAD_REQUEST)
