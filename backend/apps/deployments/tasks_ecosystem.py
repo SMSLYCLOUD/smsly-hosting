@@ -14,6 +14,7 @@ import re
 import secrets
 import string
 from collections import defaultdict
+from urllib.parse import urlparse
 from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from celery import shared_task
@@ -65,6 +66,198 @@ _SMSLY_CORE_HINTS = {
     "smsly-platform-api",
     "platform-api",
 }
+_ADDON_ENV_ALIASES = {
+    "POSTGRES": ("DATABASE_URL", "POSTGRES_URL"),
+    "REDIS": ("REDIS_URL", "CACHE_URL"),
+    "MONGODB": ("MONGODB_URI", "MONGODB_URL"),
+}
+
+
+def _canonical_repo_ref(raw: Any) -> str:
+    """Normalize repo references to owner/name when possible."""
+    text = str(raw or "").strip().rstrip("/")
+    if not text:
+        return ""
+
+    if text.startswith("git@github.com:"):
+        text = text.split(":", 1)[1]
+    else:
+        parsed = urlparse(text)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            text = parsed.path.strip("/")
+
+    if text.endswith(".git"):
+        text = text[:-4]
+    return text.strip("/")
+
+
+def _repository_url(repo_ref: Any) -> str:
+    """Return a cloneable HTTPS URL for a plan repo reference."""
+    raw = str(repo_ref or "").strip()
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return raw.rstrip("/")
+    canonical = _canonical_repo_ref(raw)
+    return f"https://github.com/{canonical}" if canonical else ""
+
+
+def _repo_short_name(repo_ref: Any) -> str:
+    """Return the repository name portion for display/service names."""
+    canonical = _canonical_repo_ref(repo_ref)
+    return canonical.split("/")[-1] if canonical else ""
+
+
+def _coerce_addon_type(raw: Any) -> str:
+    """Normalize addon entries from service or top-level plan payloads."""
+    if isinstance(raw, dict):
+        for key in ("type", "addon", "name", "service", "value"):
+            value = raw.get(key)
+            if value:
+                return str(value).strip().upper()
+        return ""
+    return str(raw or "").strip().upper()
+
+
+def _addon_env_key_map() -> Dict[str, str]:
+    """Return addon type to primary connection env key mapping."""
+    try:
+        from services.addon_provisioner import AddonProvisioner
+        return dict(AddonProvisioner.ENV_KEY_MAP)
+    except Exception:
+        return {
+            "POSTGRES": "DATABASE_URL",
+            "REDIS": "REDIS_URL",
+            "MYSQL": "MYSQL_URL",
+            "MONGODB": "MONGODB_URI",
+            "QDRANT": "QDRANT_URL",
+            "ELASTICSEARCH": "ELASTICSEARCH_URL",
+            "RABBITMQ": "RABBITMQ_URL",
+            "MINIO": "MINIO_URL",
+        }
+
+
+def _addon_env_keys(addon_type: str) -> Tuple[str, ...]:
+    """Return accepted env keys for an addon type."""
+    addon_type = str(addon_type or "").strip().upper()
+    primary = _addon_env_key_map().get(addon_type, f"{addon_type}_URL")
+    aliases = _ADDON_ENV_ALIASES.get(addon_type, ())
+    keys = [primary, *aliases]
+    return tuple(dict.fromkeys(k for k in keys if k))
+
+
+def _addon_type_from_placeholder(token: str) -> str:
+    """Map {{FOO_URL}} style placeholders back to addon types."""
+    token = str(token or "").strip().upper()
+    if token in {"DATABASE_URL", "POSTGRES_URL"}:
+        return "POSTGRES"
+    if token in {"CACHE_URL", "REDIS_URL"}:
+        return "REDIS"
+
+    for addon_type, env_key in _addon_env_key_map().items():
+        if token == str(env_key or "").upper():
+            return addon_type
+
+    if token.endswith("_URL"):
+        return token[:-4]
+    if token.endswith("_URI"):
+        return token[:-4]
+    return ""
+
+
+def _placeholder_addon_types(raw_env: Any) -> Set[str]:
+    """Extract addon types referenced by env placeholders."""
+    addon_types: Set[str] = set()
+    for value in _normalize_env_vars(raw_env).values():
+        value_text = str(value or "").strip()
+        if not (value_text.startswith("{{") and value_text.endswith("}}")):
+            continue
+        token = value_text[2:-2].strip()
+        if token.upper().startswith("SHARED_SECRET:") or token.upper() == "GENERATE":
+            continue
+        addon_type = _addon_type_from_placeholder(token)
+        if addon_type:
+            addon_types.add(addon_type)
+    return addon_types
+
+
+def _plan_addon_types(plan_addons: Any) -> Set[str]:
+    """Collect addon types declared at the top level."""
+    if not isinstance(plan_addons, list):
+        return set()
+    return {addon for addon in (_coerce_addon_type(item) for item in plan_addons) if addon}
+
+
+def _service_plan_addon_types(svc_plan: Dict[str, Any], plan_addons: Any = None) -> Set[str]:
+    """Return all addon types intended for a service."""
+    addon_types: Set[str] = set()
+    raw_service_addons = svc_plan.get("addons", [])
+    if isinstance(raw_service_addons, list):
+        addon_types.update(
+            addon for addon in (_coerce_addon_type(item) for item in raw_service_addons) if addon
+        )
+
+    addon_types.update(_placeholder_addon_types(svc_plan.get("env_vars", {})))
+
+    if isinstance(plan_addons, list):
+        aliases = {
+            str(svc_plan.get("name") or "").strip().lower(),
+            _slugify_name(svc_plan.get("name") or ""),
+            _canonical_repo_ref(svc_plan.get("repo")).lower(),
+            _repo_short_name(svc_plan.get("repo")).lower(),
+        }
+        aliases.discard("")
+        for addon in plan_addons:
+            addon_type = _coerce_addon_type(addon)
+            if not addon_type:
+                continue
+            if not isinstance(addon, dict):
+                continue
+            shared_by = addon.get("shared_by") or addon.get("services") or addon.get("used_by") or []
+            if isinstance(shared_by, str):
+                shared_tokens = [shared_by]
+            elif isinstance(shared_by, list):
+                shared_tokens = shared_by
+            else:
+                shared_tokens = []
+            normalized_shared = set()
+            for token in shared_tokens:
+                token_text = str(token or "").strip()
+                if not token_text:
+                    continue
+                normalized_shared.update({
+                    token_text.lower(),
+                    _slugify_name(token_text),
+                    _canonical_repo_ref(token_text).lower(),
+                    _repo_short_name(token_text).lower(),
+                })
+            normalized_shared.discard("")
+            if aliases & normalized_shared:
+                addon_types.add(addon_type)
+
+    return addon_types
+
+
+def _inject_addon_env_defaults(
+    resolved_env: Dict[str, str],
+    addon_types: Set[str],
+    provisioned_addon_urls: Dict[str, str],
+) -> None:
+    """Populate standard addon URL env vars when a service requests an addon."""
+    for addon_type in sorted(addon_types):
+        url = provisioned_addon_urls.get(addon_type)
+        if not url:
+            continue
+        for env_key in _addon_env_keys(addon_type):
+            resolved_env.setdefault(env_key, url)
+
+
+def _deployment_target_for_server(server, provider) -> tuple[Any, bool]:
+    """Translate a selected server into Deployment target fields."""
+    if server is None:
+        return None, str(getattr(provider, "provider_type", "")).upper() == "LOCAL"
+    if bool(getattr(server, "is_primary", False)):
+        return None, True
+    return server, False
 
 
 def _validate_plan_structure(plan: dict) -> list[str]:
@@ -309,16 +502,25 @@ def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
     shared_addons: Dict[str, str] = None,
+    shared_secrets: Dict[str, str] = None,
 ) -> Dict[str, str]:
     """Resolve known placeholders into concrete values."""
     resolved: Dict[str, str] = {}
     shared_addons = shared_addons or {}
+    shared_secrets = shared_secrets if shared_secrets is not None else {}
 
     for key, value in env_vars.items():
         value_text = str(value or "")
 
         if value_text == "{{GENERATE}}":
             resolved[key] = _generate_secret()
+            continue
+
+        if value_text.startswith("{{SHARED_SECRET:") and value_text.endswith("}}"):
+            secret_name = value_text[16:-2].strip().lower()
+            if not secret_name:
+                secret_name = str(key or "shared").strip().lower()
+            resolved[key] = shared_secrets.setdefault(secret_name, _generate_secret())
             continue
 
         if value_text.startswith("{{SERVICE:") and value_text.endswith("}}"):
@@ -333,28 +535,25 @@ def _resolve_env_placeholders(
                 resolved[key] = f"http://{safe_ref}:3000"
             continue
 
-        if value_text == "{{POSTGRES_URL}}":
-            if "POSTGRES" in shared_addons:
-                resolved[key] = shared_addons["POSTGRES"]
-            else:
-                resolved[key] = os.environ.get("DATABASE_URL", "postgresql://smsly:smsly@postgres:5432/smsly")
-                logger.warning("No POSTGRES addon provisioned, using platform default for %s", key)
-            continue
+        if value_text.startswith("{{") and value_text.endswith("}}"):
+            token = value_text[2:-2].strip()
+            addon_type = _addon_type_from_placeholder(token)
+            if addon_type and addon_type in shared_addons:
+                resolved[key] = shared_addons[addon_type]
+                continue
 
-        if value_text == "{{REDIS_URL}}":
-            if "REDIS" in shared_addons:
-                resolved[key] = shared_addons["REDIS"]
-            else:
-                resolved[key] = os.environ.get("REDIS_URL", "redis://redis:6379/0")
-                logger.warning("No REDIS addon provisioned, using platform default for %s", key)
-            continue
+            env_fallback = os.environ.get(token)
+            if env_fallback:
+                resolved[key] = env_fallback
+                continue
 
-        if value_text == "{{ELASTICSEARCH_URL}}":
-            if "ELASTICSEARCH" in shared_addons:
-                resolved[key] = shared_addons["ELASTICSEARCH"]
-            else:
-                resolved[key] = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-                logger.warning("No ELASTICSEARCH addon provisioned, using platform default for %s", key)
+            if addon_type:
+                raise ValueError(
+                    f"Addon placeholder {value_text} for {key} could not be resolved. "
+                    f"Provision addon {addon_type} or set {token}."
+                )
+
+            resolved[key] = value_text
             continue
 
         resolved[key] = value_text
@@ -370,16 +569,13 @@ def _validate_resolved_env(resolved_env: Dict[str, str]) -> None:
             raise ValueError(f"Unresolved placeholder found in env var values: {value}")
 
 
-def _validate_required_env(resolved_env: Dict[str, str]) -> None:
-    """Validate that required production environment variables are present and resolved."""
-    required_keys = {
-        "POSTGRES_URL",
-        "REDIS_URL",
-        "ELASTICSEARCH_URL",
-        "DATABASE_URL",
-        "CACHE_URL",
-    }
-    missing = [k for k in required_keys if not resolved_env.get(k)]
+def _validate_required_env(resolved_env: Dict[str, str], addon_types: Set[str] = None) -> None:
+    """Validate env required by requested addons without forcing every stack to use every addon."""
+    missing = []
+    for addon_type in sorted(addon_types or set()):
+        keys = _addon_env_keys(addon_type)
+        if keys and not any(resolved_env.get(key) for key in keys):
+            missing.append(f"{addon_type} ({'/'.join(keys)})")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
@@ -684,7 +880,7 @@ def _cancel_dependent_deployments(
     return cancelled
 
 
-def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: int):
+def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: int, server=None):
     """Apply ecosystem plan profile to a service with production defaults.
 
     Important: user-customisable fields (health_check_path, internal_port,
@@ -699,7 +895,7 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
         root_directory = f"/{root_directory.lstrip('/')}"
     root_directory = root_directory or "/"
 
-    service.repository_url = f"https://github.com/{svc_plan['repo']}"
+    service.repository_url = _repository_url(svc_plan["repo"])
     resolved_branch = str(
         svc_plan.get("branch")
         or svc_plan.get("default_branch")
@@ -719,6 +915,8 @@ def _apply_service_profile(service, svc_plan: Dict[str, Any], provider, port: in
     service.root_directory = root_directory
     if not service.provider:
         service.provider = provider
+    if server is not None or svc_plan.get("force_local_target"):
+        service.server = server
 
     # Only set health_check_path from plan if user hasn't customised it
     # (still at model default "/health" or empty).
@@ -791,6 +989,7 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
                 "Retry the scan; large accounts may take several minutes."
             ),
             "code": "ecosystem_scan_timeout",
+            "retryable": True,
             "services": [],
             "addons": [],
             "deploy_sequence": [],
@@ -1005,12 +1204,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         if svc_plan.get("skip"):
             continue
 
-        repo = str(svc_plan.get("repo") or "").strip()
+        repo = _canonical_repo_ref(svc_plan.get("repo"))
         if not repo:
             continue
         repo_key = repo.lower()
 
-        source_name = str(svc_plan.get("name") or repo.split("/")[-1]).strip()
+        source_name = str(svc_plan.get("name") or _repo_short_name(repo)).strip()
         requested_name = _slugify_name(source_name)
         entry = {
             "repo": repo,
@@ -1045,6 +1244,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
     ordered_keys = [key for wave in waves_repo_keys for key in wave]
     results = []
     created_services: Dict[str, Any] = {}
+    shared_secrets: Dict[str, str] = {}
     deployment_by_repo_key: Dict[str, str] = {}
 
     # Bug 4 Fix: Provision required addons synchronously before wave 1.
@@ -1052,13 +1252,11 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
     from services.addon_provisioner import addon_provisioner
     from apps.deployments.models import Service
 
-    # Collect all needed addons across all services
-    required_addons = set()
+    # Collect all needed addons across all services.
+    required_addons = _plan_addon_types(plan.get("addons", []))
     for svc_plan in services_plan:
         if isinstance(svc_plan, dict) and not svc_plan.get("skip"):
-            addons_list = svc_plan.get("addons", [])
-            for a in addons_list:
-                required_addons.add(str(a).strip().upper())
+            required_addons.update(_service_plan_addon_types(svc_plan, plan.get("addons", [])))
 
     created_service_records: List[Any] = []
 
@@ -1072,10 +1270,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         for svc_plan in services_plan:
             if not isinstance(svc_plan, dict) or svc_plan.get("skip"):
                 continue
-            repo = str(svc_plan.get("repo") or "").strip()
+            repo = _canonical_repo_ref(svc_plan.get("repo"))
             if not repo:
                 continue
-            anchor_name = _slugify_name(svc_plan.get("name") or repo.split("/")[-1])
+            anchor_name = _slugify_name(svc_plan.get("name") or _repo_short_name(repo))
             anchor_branch = str(
                 svc_plan.get("branch") or svc_plan.get("default_branch") or "main"
             ).strip() or "main"
@@ -1092,7 +1290,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 addon_anchor_service = Service.objects.create(
                     name=final_anchor_name,
                     owner=user,
-                    repository_url=f"https://github.com/{repo}",
+                    repository_url=_repository_url(repo),
                     branch=anchor_branch,
                     internal_port=anchor_port,
                     provider=provider,
@@ -1105,7 +1303,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 anchor_name, anchor_name.lower(),
                 addon_anchor_service.name, addon_anchor_service.name.lower(),
                 repo, repo.lower(),
-                repo.split("/")[-1], repo.split("/")[-1].lower(),
+                _repo_short_name(repo), _repo_short_name(repo).lower(),
             }
             for alias in aliases:
                 created_services[alias] = addon_anchor_service
@@ -1175,7 +1373,9 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             from apps.deployments.services.node_selector import select_eligible_node
             server = select_eligible_node(user)
 
-        if not server:
+        target_server, target_is_local = _deployment_target_for_server(server, provider)
+
+        if not server and not target_is_local:
             # Mark the deployment as pending so the user sees a clear status
             # and can retry later when a node becomes available.
             logger.error(f"No eligible deployment node available for {repo}.")
@@ -1191,7 +1391,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 Service.objects.create(
                     name=requested_name,
                     owner=user,
-                    repository_url=f"https://github.com/{repo}",
+                    repository_url=_repository_url(repo),
                     branch=str(
                         svc_plan.get("branch")
                         or svc_plan.get("default_branch")
@@ -1200,7 +1400,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                     internal_port=port,
                     provider=provider,
                     server=None,
-                    status="PENDING",
+                    status=Service.Status.UNKNOWN,
                 )
             except Exception:
                 # If creation fails (e.g., model does not have a status field),
@@ -1216,7 +1416,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 service = Service.objects.create(
                     name=final_name,
                     owner=user,
-                    repository_url=f"https://github.com/{repo}",
+                    repository_url=_repository_url(repo),
                     branch=str(
                         svc_plan.get("branch")
                         or svc_plan.get("default_branch")
@@ -1228,7 +1428,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 )
                 _rollback_services.append(str(service.id))
 
-            _apply_service_profile(service, {**svc_plan, "repo": repo}, provider, port)
+            service_profile = {**svc_plan, "repo": repo}
+            if target_is_local and server is None:
+                service_profile["force_local_target"] = True
+            _apply_service_profile(service, service_profile, provider, port, server=server)
 
             if all(getattr(existing, "id", None) != getattr(service, "id", None) for existing in created_service_records):
                 created_service_records.append(service)
@@ -1243,8 +1446,8 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 service.name.lower(),
                 repo,
                 repo.lower(),
-                repo.split("/")[-1],
-                repo.split("/")[-1].lower(),
+                _repo_short_name(repo),
+                _repo_short_name(repo).lower(),
             }
             for alias in aliases:
                 created_services[alias] = service
@@ -1255,7 +1458,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 env_vars,
                 created_services,
                 shared_addons=provisioned_addon_urls,
+                shared_secrets=shared_secrets,
             )
+            service_addon_types = _service_plan_addon_types(svc_plan, plan.get("addons", []))
+            _inject_addon_env_defaults(resolved_env, service_addon_types, provisioned_addon_urls)
 
             # -----------------------------------------------------------------
             # AI Senate integration – optionally enrich env vars using the
@@ -1285,7 +1491,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             _validate_resolved_env(resolved_env)
 
             # Ensure required production env vars are present
-            _validate_required_env(resolved_env)
+            _validate_required_env(resolved_env, service_addon_types)
 
             for key, value in resolved_env.items():
                 key_upper = str(key or "").strip().upper()
@@ -1302,7 +1508,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 service=service,
                 commit_hash="ecosystem-deploy",
                 commit_message=f"Zero-config ecosystem deploy ({stack})",
+                branch=service.branch or "",
                 status=Deployment.Status.QUEUED,
+                target_server=target_server,
+                target_is_local=target_is_local,
                 build_logs=(
                     f"Ecosystem deploy: {repo} ({stack})\n"
                     f"Port: {port} | Build: {build_method}\n"
@@ -1358,32 +1567,21 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
 
     # Reconcile: update ALL services' addon env vars with real provisioned URLs
     if provisioned_addon_urls:
-        _addon_env_key_map = {
-            'POSTGRES': 'DATABASE_URL',
-            'REDIS': 'REDIS_URL',
-            'ELASTICSEARCH': 'ELASTICSEARCH_URL',
-            'MYSQL': 'MYSQL_URL',
-            'MONGODB': 'MONGODB_URL',
-        }
         updated_service_ids: set = set()
         for repo_key, entry in entries_by_key.items():
             svc = created_services.get(repo_key)
             if not svc or svc.id in updated_service_ids:
                 continue
-            svc_addons = entry.get("plan", {}).get("addons", [])
-            svc_addon_types = {
-                a.upper() if isinstance(a, str) else str(a.get("type", "")).upper()
-                for a in svc_addons
-            }
+            svc_addon_types = _service_plan_addon_types(entry.get("plan", {}), plan.get("addons", []))
             for addon_type, url in provisioned_addon_urls.items():
                 if addon_type in svc_addon_types:
-                    env_key = _addon_env_key_map.get(addon_type, f"{addon_type}_URL")
-                    EnvironmentVariable.objects.update_or_create(
-                        service=svc,
-                        key=env_key,
-                        defaults={"value": url, "is_secret": True},
-                    )
-                    logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
+                    for env_key in _addon_env_keys(addon_type):
+                        EnvironmentVariable.objects.update_or_create(
+                            service=svc,
+                            key=env_key,
+                            defaults={"value": url, "is_secret": True},
+                        )
+                        logger.info("Reconciled %s %s with provisioned %s URL", svc.name, env_key, addon_type)
             updated_service_ids.add(svc.id)
 
     queued_now = 0

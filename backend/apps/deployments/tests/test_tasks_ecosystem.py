@@ -13,8 +13,11 @@ from apps.deployments.tasks_ecosystem import (
     _resolve_env_placeholders,
     _runtime_watch_defaults,
     _select_shared_addon_anchor,
+    ecosystem_deploy_task,
     ecosystem_scan_task,
 )
+from apps.cloud.models import CloudProvider
+from apps.deployments.models import Deployment, EnvironmentVariable, ManagedServer, Service
 
 
 class TasksEcosystemHelpersTests(SimpleTestCase):
@@ -39,7 +42,11 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
         }
         created = {"backend": SimpleNamespace(name="backend-api", internal_port=8000)}
 
-        out = _resolve_env_placeholders(env_map, created)
+        out = _resolve_env_placeholders(
+            env_map,
+            created,
+            shared_addons={"POSTGRES": "postgresql://smsly:smsly@postgres:5432/smsly"},
+        )
 
         self.assertEqual(out["API_URL"], "http://backend-api:8000")
         self.assertTrue(out["DATABASE_URL"].startswith("postgresql://"))
@@ -78,6 +85,30 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
         self.assertEqual(service.repository_url, "https://github.com/owner/repo")
         self.assertEqual(service.branch, "master")
         self.assertEqual(service.internal_port, 8080)
+
+    def test_apply_service_profile_accepts_full_github_url(self):
+        service = SimpleNamespace(
+            repository_url="",
+            branch="",
+            internal_port=0,
+            buildpack="NIXPACKS",
+            deploy_mode="SINGLE",
+            compose_file="",
+            compose_main_service="",
+            root_directory="/",
+            provider=None,
+            health_check_path="/health",
+            save=lambda *args, **kwargs: None,
+        )
+
+        _apply_service_profile(
+            service,
+            {"repo": "https://github.com/owner/repo.git", "branch": "main"},
+            provider=None,
+            port=3000,
+        )
+
+        self.assertEqual(service.repository_url, "https://github.com/owner/repo.git")
 
     def test_select_shared_addon_anchor_prefers_smsly_core(self):
         services = [
@@ -119,3 +150,112 @@ class EcosystemScanTaskTests(TestCase):
         self.assertEqual(result["code"], "ecosystem_scan_timeout")
         self.assertTrue(result["retryable"])
         self.assertIn("timed out", result["error"])
+
+
+class EcosystemDeployTaskTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="ecosystem-deploy",
+            email="deploy@example.com",
+            password="password123",
+        )
+        self.provider = CloudProvider.objects.create(
+            name="Local",
+            provider_type=CloudProvider.ProviderType.LOCAL,
+            is_active=True,
+        )
+
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_local_provider_without_managed_server_queues_local_deployment(self, _queue_wave):
+        plan = {
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "owner/api",
+                    "stack": "node",
+                    "port": 3000,
+                    "env_vars": {},
+                }
+            ]
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service = Service.objects.get(owner=self.user, name="api")
+        deployment = Deployment.objects.get(service=service)
+        self.assertIsNone(service.server)
+        self.assertIsNone(deployment.target_server)
+        self.assertTrue(deployment.target_is_local)
+        self.assertEqual(deployment.branch, service.branch)
+        self.assertEqual(service.repository_url, "https://github.com/owner/api")
+
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_existing_service_is_reassigned_to_selected_node_and_deployment_targets_it(self, _queue_wave):
+        server = ManagedServer.objects.create(
+            owner=self.user,
+            name="Worker",
+            host="10.0.0.2",
+            status=ManagedServer.Status.ONLINE,
+            is_primary=False,
+        )
+        service = Service.objects.create(
+            owner=self.user,
+            name="api",
+            provider=self.provider,
+            repository_url="https://github.com/old/api",
+            server=None,
+        )
+        plan = {
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "owner/api",
+                    "stack": "node",
+                    "port": 3000,
+                    "env_vars": {},
+                }
+            ]
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service.refresh_from_db()
+        deployment = Deployment.objects.get(service=service)
+        self.assertEqual(service.server, server)
+        self.assertEqual(deployment.target_server, server)
+        self.assertFalse(deployment.target_is_local)
+
+    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/app"))
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_top_level_addons_and_shared_secret_placeholders_are_resolved(self, _queue_wave, _provision):
+        plan = {
+            "addons": [{"type": "POSTGRES", "shared_by": ["api"]}],
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "https://github.com/owner/api.git",
+                    "stack": "django",
+                    "port": 8000,
+                    "env_vars": {
+                        "DATABASE_URL": "{{POSTGRES_URL}}",
+                        "JWT_SECRET": "{{SHARED_SECRET:jwt}}",
+                    },
+                }
+            ],
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service = Service.objects.get(owner=self.user, name="api")
+        env = {var.key: var.value for var in EnvironmentVariable.objects.filter(service=service)}
+        self.assertEqual(service.repository_url, "https://github.com/owner/api")
+        self.assertEqual(env["DATABASE_URL"], "postgresql://u:p@db:5432/app")
+        self.assertEqual(env["POSTGRES_URL"], "postgresql://u:p@db:5432/app")
+        self.assertTrue(env["JWT_SECRET"])
+        self.assertNotIn("{{", env["JWT_SECRET"])
