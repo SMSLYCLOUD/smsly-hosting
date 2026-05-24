@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import subprocess
+import hashlib
 from celery import shared_task
 from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentArtifact
 from apps.deployments.services.safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
@@ -10,6 +11,132 @@ from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
 from apps.deployments.models_core import Service, EnvironmentVariable, Deployment
 from apps.deployments.models_addons import Addon
 logger = logging.getLogger(__name__)
+
+
+def _preview_service_name(preview: PreviewEnvironment) -> str:
+    return f"preview-{preview.id.hex[:8]}"
+
+
+def _make_clone_database_name(source_db_name: str, branch_name: str, commit_sha: str) -> str:
+    raw_branch = ''.join(c if c.isalnum() or c == '_' else '_' for c in branch_name)
+    raw_source = ''.join(c if c.isalnum() or c == '_' else '_' for c in source_db_name)
+    digest = hashlib.sha1(f"{source_db_name}:{branch_name}:{commit_sha}".encode()).hexdigest()[:10]
+    clone_name = f"preview_{raw_source[:18]}_{raw_branch[:20]}_{commit_sha[:8]}_{digest}"
+    clone_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_name)
+    return clone_name[:63].rstrip('_') or f"preview_{digest}"
+
+
+def _copy_environment_variables(source: Service, target: Service) -> None:
+    for env in source.env_vars.all():
+        EnvironmentVariable.objects.update_or_create(
+            service=target,
+            key=env.key,
+            defaults={
+                'value': env.value,
+                'is_secret': env.is_secret,
+                'is_locked': env.is_locked,
+                'source': env.source,
+            },
+        )
+
+
+def _upsert_preview_environment_variables(preview: PreviewEnvironment, target: Service) -> None:
+    from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
+
+    preview_vars = BranchPreviewManager().inject_preview_environment_variables(preview)
+    secret_keys = {'DATABASE_URL', 'POSTGRES_URL', 'REDIS_URL'}
+    for key, value in preview_vars.items():
+        EnvironmentVariable.objects.update_or_create(
+            service=target,
+            key=key,
+            defaults={
+                'value': value,
+                'is_secret': key in secret_keys or key.endswith('_PASSWORD') or key.endswith('_URL'),
+                'is_locked': True,
+                'source': 'SYSTEM',
+            },
+        )
+
+
+def _inject_addon_credentials(addon: Addon) -> None:
+    creds = addon.parsed_credentials
+    for key, value in creds.items():
+        EnvironmentVariable.objects.update_or_create(
+            service=addon.service,
+            key=key,
+            defaults={
+                'value': value,
+                'is_secret': key.endswith('_PASSWORD') or key.endswith('_URL') or key in {'DATABASE_URL', 'REDIS_URL'},
+                'source': 'ADDON',
+            },
+        )
+
+    if addon.addon_type == Addon.Type.POSTGRES and addon.connection_url:
+        EnvironmentVariable.objects.update_or_create(
+            service=addon.service,
+            key='DATABASE_URL',
+            defaults={'value': addon.connection_url, 'is_secret': True, 'source': 'ADDON'},
+        )
+    elif addon.addon_type == Addon.Type.REDIS and addon.connection_url:
+        EnvironmentVariable.objects.update_or_create(
+            service=addon.service,
+            key='REDIS_URL',
+            defaults={'value': addon.connection_url, 'is_secret': True, 'source': 'ADDON'},
+        )
+
+
+def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service) -> None:
+    from services.addon_provisioner import addon_provisioner
+
+    try:
+        db_clone = preview.database_clone
+    except DatabaseClone.DoesNotExist:
+        db_clone = None
+
+    for addon in preview.service.addons.exclude(status=Addon.Status.DELETED):
+        preview_addon_name = f"{addon.name}-preview-{preview.id.hex[:6]}"
+        new_addon, _ = Addon.objects.get_or_create(
+            service=transient_service,
+            name=preview_addon_name,
+            addon_type=addon.addon_type,
+            defaults={
+                'project': transient_service.project,
+                'status': Addon.Status.PROVISIONING,
+            },
+        )
+        update_fields = []
+        if new_addon.project_id != transient_service.project_id:
+            new_addon.project = transient_service.project
+            update_fields.append('project')
+        if new_addon.name != preview_addon_name:
+            new_addon.name = preview_addon_name
+            update_fields.append('name')
+
+        if addon.addon_type == Addon.Type.POSTGRES and db_clone:
+            if db_clone.status != DatabaseClone.Status.READY:
+                raise RuntimeError("PostgreSQL clone is not ready")
+            new_addon.connection_url = db_clone.clone_database_url_secret_ref
+            new_addon.status = Addon.Status.ACTIVE
+            update_fields.extend(['connection_url', 'status'])
+            new_addon.save(update_fields=list(set(update_fields)) or None)
+            _inject_addon_credentials(new_addon)
+            continue
+
+        if new_addon.status == Addon.Status.ACTIVE and new_addon.connection_url:
+            if update_fields:
+                new_addon.save(update_fields=list(set(update_fields)))
+            _inject_addon_credentials(new_addon)
+            continue
+
+        if update_fields:
+            new_addon.save(update_fields=list(set(update_fields)))
+
+        cid, url = addon_provisioner.provision(new_addon)
+        new_addon.connection_url = url
+        new_addon.coolify_uuid = cid
+        new_addon.status = Addon.Status.ACTIVE
+        new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
+        _inject_addon_credentials(new_addon)
 
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str = None) -> str:
     from apps.deployments.services.git_manager import GitManager
@@ -52,6 +179,7 @@ def create_database_clone_job(preview_id: str):
         pg_addon = Addon.objects.filter(
             service=preview.service,
             addon_type=Addon.Type.POSTGRES,
+            status=Addon.Status.ACTIVE,
         ).first()
 
         if not pg_addon:
@@ -75,9 +203,7 @@ def create_database_clone_job(preview_id: str):
             preview.save()
             return
 
-        clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_').replace('/', '_').replace('.', '_')
-        # Ensure only valid PostgreSQL identifier characters
-        clone_db_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_db_name)
+        clone_db_name = _make_clone_database_name(source_db_name, preview.branch_name, preview.commit_sha)
         logger.error(f"CLONE_TASK >>> source_db={source_db_name} clone_db={clone_db_name}")
 
         clone, created = DatabaseClone.objects.get_or_create(
@@ -208,6 +334,7 @@ def run_migration_validation_job(preview_id: str):
             validation.save()
             preview.status = PreviewEnvironment.Status.TESTS_RUNNING
             preview.save()
+            run_preview_tests_job.delay(preview_id)
             return
 
         env = {"DATABASE_URL": clone_url}
@@ -303,14 +430,14 @@ def run_preview_health_check_job(preview_id: str):
         preview = PreviewEnvironment.objects.get(id=preview_id)
         parent = preview.service
 
-        # 1. Create Transient Service
-        transient_service_name = f"preview-{preview.id.hex[:8]}"
+        # 1. Create or update transient service
+        transient_service_name = _preview_service_name(preview)
         transient_service, created = Service.objects.get_or_create(
             name=transient_service_name,
             defaults={
                 'owner': parent.owner,
                 'project': parent.project,
-                'repo_url': parent.repo_url,
+                'repository_url': parent.repository_url,
                 'branch': preview.branch_name,
                 'parent_service': parent,
                 'is_preview': True,
@@ -318,68 +445,68 @@ def run_preview_health_check_job(preview_id: str):
                 'custom_domains': [],
                 'provider': parent.provider,
                 'server': parent.server,
-                'install_command': parent.install_command,
+                'deploy_type': parent.deploy_type,
+                'buildpack': parent.buildpack,
+                'docker_image': parent.docker_image,
                 'build_command': parent.build_command,
                 'start_command': parent.start_command,
                 'root_directory': parent.root_directory,
-                'base_directory': parent.base_directory,
-                'env_type': parent.env_type,
+                'internal_port': parent.internal_port,
+                'cpu_cores': parent.cpu_cores,
+                'memory_mb': parent.memory_mb,
+                'health_check_path': parent.health_check_path,
+                'health_check_port': parent.health_check_port,
+                'deploy_mode': parent.deploy_mode,
+                'compose_file': parent.compose_file,
+                'compose_main_service': parent.compose_main_service,
             }
         )
 
-        if created:
-            # 2. Copy Environment Variables
-            for env in parent.env_vars.all():
-                EnvironmentVariable.objects.create(
-                    service=transient_service,
-                    key=env.key,
-                    value=env.value,
-                    is_build_variable=env.is_build_variable,
-                    is_locked=env.is_locked
-                )
-            
-            # Inject isolated preview variables (DATABASE_URL, REDIS_PREFIX, etc.)
-            from apps.deployments.services.safedeploy.branch_preview_manager import BranchPreviewManager
-            preview_vars = BranchPreviewManager().inject_preview_environment_variables(preview)
-            for k, v in preview_vars.items():
-                env_obj, _ = EnvironmentVariable.objects.get_or_create(service=transient_service, key=k)
-                env_obj.value = v
-                env_obj.save()
+        if not created:
+            transient_service.owner = parent.owner
+            transient_service.project = parent.project
+            transient_service.repository_url = parent.repository_url
+            transient_service.branch = preview.branch_name
+            transient_service.parent_service = parent
+            transient_service.is_preview = True
+            transient_service.public_domain = preview.preview_url.replace("https://", "").replace("http://", "") if preview.preview_url else transient_service.public_domain
+            transient_service.custom_domains = []
+            transient_service.provider = parent.provider
+            transient_service.server = parent.server
+            transient_service.deploy_type = parent.deploy_type
+            transient_service.buildpack = parent.buildpack
+            transient_service.docker_image = parent.docker_image
+            transient_service.build_command = parent.build_command
+            transient_service.start_command = parent.start_command
+            transient_service.root_directory = parent.root_directory
+            transient_service.internal_port = parent.internal_port
+            transient_service.cpu_cores = parent.cpu_cores
+            transient_service.memory_mb = parent.memory_mb
+            transient_service.health_check_path = parent.health_check_path
+            transient_service.health_check_port = parent.health_check_port
+            transient_service.deploy_mode = parent.deploy_mode
+            transient_service.compose_file = parent.compose_file
+            transient_service.compose_main_service = parent.compose_main_service
+            transient_service.save()
 
-            # 3. Duplicate Addons
-            for addon in parent.addons.all():
-                new_addon = Addon.objects.create(
-                    service=transient_service,
-                    project=transient_service.project,
-                    name=f"{addon.name}-preview-{preview.id.hex[:6]}",
-                    addon_type=addon.addon_type,
-                    status=Addon.Status.PROVISIONING
-                )
-                try:
-                    db_clone = preview.database_clone
-                except DatabaseClone.DoesNotExist:
-                    db_clone = None
+        # 2. Sync environment variables and isolated preview overrides.
+        _copy_environment_variables(parent, transient_service)
+        _upsert_preview_environment_variables(preview, transient_service)
 
-                if addon.addon_type == Addon.Type.POSTGRES and db_clone:
-                    # Link Postgres to the cloned database instead of provisioning a fresh one
-                    if db_clone.status == DatabaseClone.Status.READY:
-                        new_addon.connection_url = db_clone.clone_database_url_secret_ref
-                        new_addon.status = Addon.Status.ACTIVE
-                        new_addon.save()
-                else:
-                    from apps.deployments.tasks import provision_addon_task
-                    provision_addon_task.delay(str(new_addon.id))
+        # 3. Duplicate/provision addons before deployment so injected URLs exist.
+        _sync_preview_addons(preview, transient_service)
+        _upsert_preview_environment_variables(preview, transient_service)
 
-            # 4. Trigger Deployment
-            deployment = Deployment.objects.create(
-                service=transient_service,
-                commit_hash=preview.commit_sha,
-                commit_message=f"SafeDeploy preview for {preview.branch_name}",
-                triggered_by='safe_deploy'
-            )
-            provider_id = str(parent.provider.id) if parent.provider else None
-            from apps.deployments.tasks import enqueue_smart_deploy_task
-            enqueue_smart_deploy_task(str(deployment.id), provider_id)
+        # 4. Trigger deployment on every run, including rebuilds.
+        deployment = Deployment.objects.create(
+            service=transient_service,
+            commit_hash=preview.commit_sha,
+            branch=preview.branch_name,
+            commit_message=f"SafeDeploy preview for {preview.branch_name}"
+        )
+        provider_id = str(parent.provider.id) if parent.provider else None
+        from apps.deployments.tasks import enqueue_smart_deploy_task
+        enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
 
         preview.status = PreviewEnvironment.Status.READY
         preview.save()
@@ -399,10 +526,10 @@ def destroy_preview_environment_job(preview_id: str):
         preview = PreviewEnvironment.objects.get(id=preview_id)
         
         # 1. Destroy Transient Service
-        transient_service_name = f"preview-{preview.id.hex[:8]}"
+        transient_service_name = _preview_service_name(preview)
         transient_service = Service.objects.filter(name=transient_service_name, is_preview=True).first()
         if transient_service:
-            transient_service.status = Service.Status.DELETING
+            transient_service.status = Service.Status.DELETION_PENDING
             transient_service.save()
             from apps.deployments.tasks import delete_service_task
             delete_service_task.delay(str(transient_service.id))
@@ -414,7 +541,7 @@ def destroy_preview_environment_job(preview_id: str):
             db_clone = None
 
         if db_clone:
-            db_manager = PostgresSnapshotManager()
+            db_manager = PostgresSnapshotManager(admin_db_url=db_clone.clone_database_url_secret_ref)
             db_manager.destroy_clone(db_clone.clone_database_name)
             db_clone.status = DatabaseClone.Status.DESTROYED
             db_clone.save()
@@ -435,4 +562,3 @@ def destroy_preview_environment_job(preview_id: str):
             p.save()
         except Exception:
             pass
-

@@ -19,8 +19,9 @@ class BranchPreviewManager:
             commit_sha=commit_sha,
             created_by=user,
             status=PreviewEnvironment.Status.PENDING,
-            preview_url=self.generate_preview_url(service, branch_name)
         )
+        preview.preview_url = self.generate_preview_url(service, branch_name, preview.id.hex[:6])
+        preview.save(update_fields=['preview_url', 'updated_at'])
         return preview
 
     def rebuild_preview(self, preview: PreviewEnvironment, commit_sha: str) -> PreviewEnvironment:
@@ -69,7 +70,7 @@ class BranchPreviewManager:
 
         return env_vars
 
-    def generate_preview_url(self, service: Service, branch_name: str) -> str:
+    def generate_preview_url(self, service: Service, branch_name: str, unique_suffix: str = "") -> str:
         """
         Generates a safely slugified preview URL under a single subdomain level
         so wildcard TLS (e.g. *.grid.smsly.cloud) covers it.
@@ -83,6 +84,7 @@ class BranchPreviewManager:
         except Exception:
             base_domain = "cloud.smsly.cloud"
 
-        slug = f"{safe_branch}-{safe_app}-preview"
+        suffix = f"-{unique_suffix}" if unique_suffix else ""
+        slug = f"{safe_branch}-{safe_app}{suffix}-preview"
         slug = re.sub(r'-+', '-', slug).strip('-')
         return f"https://{slug}.{base_domain}"
