@@ -225,6 +225,26 @@ ensure_agent_env_defaults() {
     env_set_value "$env_file" "REDIS_URL" "redis://:${redis_password}@redis:6379/0"
     env_set_value "$env_file" "MODE" "agent"
     env_set_value "$env_file" "SMSLY_DISABLE_LOCAL_SERVICES" "false"
+
+    # Automatically set and update ALLOWED_HOSTS
+    local allowed_hosts current_ips public_ip new_hosts
+    allowed_hosts="$(env_get_value "$env_file" "ALLOWED_HOSTS")"
+    current_ips="$(hostname -I 2>/dev/null | tr -s ' ' ',' | sed 's/,$//')"
+    public_ip="$(curl -s --max-time 3 ifconfig.me 2>/dev/null || true)"
+    
+    new_hosts="localhost,127.0.0.1,backend,smsly-hosting-backend-1"
+    [ -n "$current_ips" ] && new_hosts="${new_hosts},${current_ips}"
+    [ -n "$public_ip" ] && new_hosts="${new_hosts},${public_ip}"
+    
+    if [ -z "$allowed_hosts" ]; then
+        env_set_value "$env_file" "ALLOWED_HOSTS" "$new_hosts"
+        echo -e "${BLUE}  -> Set default ALLOWED_HOSTS for agent${NC}"
+    else
+        local merged_hosts="${allowed_hosts},${new_hosts}"
+        merged_hosts="$(python3 -c 'import sys; print(",".join(dict.fromkeys([x.strip() for x in sys.argv[1].split(",") if x.strip()])))' "$merged_hosts" 2>/dev/null || echo "$merged_hosts")"
+        env_set_value "$env_file" "ALLOWED_HOSTS" "$merged_hosts"
+        echo -e "${BLUE}  -> Updated ALLOWED_HOSTS with current node IPs${NC}"
+    fi
 }
 
 configure_docker_registry_trust() {
