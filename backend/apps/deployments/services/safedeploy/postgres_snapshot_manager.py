@@ -14,9 +14,9 @@ def _validate_db_name(name: str) -> None:
 
 class PostgresSnapshotManager:
     def __init__(self, admin_db_url: Optional[str] = None):
-        url = admin_db_url or os.environ.get('DATABASE_URL')
+        url = admin_db_url or os.environ.get('DIRECT_DATABASE_URL') or os.environ.get('DATABASE_URL')
         if not url:
-            raise ValueError("DATABASE_URL must be set to use PostgresSnapshotManager")
+            raise ValueError("DATABASE_URL or DIRECT_DATABASE_URL must be set to use PostgresSnapshotManager")
         self.admin_db_url = url
 
     def create_clone(self, source_db_name: str, clone_db_name: str) -> bool:

@@ -45,14 +45,39 @@ def create_preview_environment_job(preview_id: str):
 def create_database_clone_job(preview_id: str):
     try:
         preview = PreviewEnvironment.objects.get(id=preview_id)
-        safe_service_name = preview.service.name.replace('-','_').lower()
-        clone_db_name = f"preview_{str(preview.service.id)[:8]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-','_')
+
+        # Find the service's PostgreSQL addon to determine the source database name
+        pg_addon = Addon.objects.filter(
+            service=preview.service,
+            addon_type=Addon.Type.POSTGRES,
+        ).first()
+
+        if not pg_addon:
+            logger.info("No PostgreSQL addon for service %s, skipping DB clone", preview.service.id)
+            preview.status = PreviewEnvironment.Status.MIGRATION_RUNNING
+            preview.save()
+            run_migration_validation_job.delay(preview_id)
+            return
+
+        # Extract the actual database name from the addon's connection URL
+        from urllib.parse import urlparse
+        parsed = urlparse(pg_addon.connection_url)
+        source_db_name = parsed.path.lstrip('/') if parsed.path else None
+        if not source_db_name:
+            logger.error("Could not determine database name from addon %s URL for service %s",
+                         pg_addon.id, preview.service.id)
+            preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
+            preview.error_message = "Could not determine source database name"
+            preview.save()
+            return
+
+        clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_')
 
         clone = DatabaseClone.objects.create(
             service=preview.service,
             preview_environment=preview,
             source_environment='production',
-            source_database_name=safe_service_name,
+            source_database_name=source_db_name,
             clone_database_name=clone_db_name,
             status=DatabaseClone.Status.CREATING
         )
@@ -73,14 +98,17 @@ def create_database_clone_job(preview_id: str):
             run_migration_validation_job.delay(preview_id)
         else:
             clone.status = DatabaseClone.Status.FAILED
+            clone.error_message = clone.error_message or "PostgresSnapshotManager.create_clone returned False"
             clone.save()
             preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
+            preview.error_message = clone.error_message
             preview.save()
     except Exception as e:
         logger.error(f"Error in create_database_clone_job: {e}", exc_info=True)
         try:
             p = PreviewEnvironment.objects.get(id=preview_id)
             p.status = PreviewEnvironment.Status.DB_CLONE_FAILED
+            p.error_message = str(e)
             p.save()
         except:
             pass
