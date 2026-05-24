@@ -182,7 +182,7 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
             maskColor="#00000080" 
             className="!bg-zinc-900 !border-zinc-800" 
         />
-        <Controls className="!bg-zinc-800 !border-zinc-700 !fill-white" />
+        <Controls className="!bg-transparent [&_button]:!bg-zinc-900 [&_button]:!border-zinc-800 [&_button]:!fill-zinc-300 [&_button:hover]:!bg-zinc-800 [&_button]:!border-b [&_button:last-child]:!border-b-0 border border-zinc-800 rounded-md overflow-hidden shadow-lg" />
         <Background color="#27272a" gap={20} size={1} />
         <Panel position="top-right" className="bg-card/80 backdrop-blur border border-border rounded-lg p-2 flex gap-2">
             <button className="text-xs px-2 py-1 bg-muted rounded hover:bg-muted/80" onClick={() => onLayout('TB')}>Vertical</button>
