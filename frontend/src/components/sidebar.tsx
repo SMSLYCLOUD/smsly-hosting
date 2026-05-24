@@ -22,6 +22,7 @@ const HIDDEN_BY_FLAG = new Set<string>([
   ...(featureFlags.replication ? [] : ['/replication']),
   ...(featureFlags.vpnMesh ? [] : ['/network']),
   ...(featureFlags.functions ? [] : ['/functions']),
+  ...(featureFlags.grafana ? [] : ['/grafana/']),
 ]);
 
 export function Sidebar() {

@@ -5,9 +5,11 @@ export const featureFlags = {
   vpnMesh: true,
   functions: true,
   transfers: true,
+  grafana: true,
 };
 
 export const featureDisabledReason = {
+  grafana: "Grafana is active.",
   autoscaler: "Autoscaler is active.",
   replication: "Replication is active.",
   tunnels: "Tunnels are active.",

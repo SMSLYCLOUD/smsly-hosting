@@ -50,7 +50,10 @@ data:
       scrape_interval: 15s
     scrape_configs:
       - job_name: 'smsly-backend'
-        metrics_path: '/api/health/'
+        metrics_path: '/metrics'
         static_configs:
           - targets: ['{{ include "smsly-hosting.fullname" . }}-backend:8000']
+      - job_name: 'smsly-frontend'
+        static_configs:
+          - targets: ['{{ include "smsly-hosting.fullname" . }}-frontend:3000']
 {{- end }}
