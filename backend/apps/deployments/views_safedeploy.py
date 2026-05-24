@@ -25,7 +25,7 @@ class ApprovalThrottle(UserRateThrottle):
 class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
     queryset = PreviewEnvironment.objects.all()
     serializer_class = PreviewEnvironmentSerializer
-    authentication_classes = [authentication.SessionAuthentication, authentication.TokenAuthentication]
+    authentication_classes = [authentication.TokenAuthentication, authentication.SessionAuthentication]
     permission_classes = [permissions.IsAuthenticated, CanManagePreviews]
 
     def _user_owns_or_member(self, service):
@@ -143,7 +143,7 @@ class DeploymentApprovalViewSet(viewsets.ModelViewSet):
     """
     queryset = DeploymentApproval.objects.all()
     serializer_class = DeploymentApprovalSerializer
-    authentication_classes = [authentication.SessionAuthentication, authentication.TokenAuthentication]
+    authentication_classes = [authentication.TokenAuthentication, authentication.SessionAuthentication]
     permission_classes = [permissions.IsAuthenticated, CanApproveDeployment]
 
     def get_queryset(self):
