@@ -494,14 +494,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             # Timeout case - return empty heartbeat-equivalent
             return b''
         except Exception as e:
-            logger.error("[CONSOLE_DEBUG] _blocking_read exception: %s", e, exc_info=True)
             err_name = e.__class__.__name__
             err_str = str(e).lower()
-            # docker-py/urllib3/requests timeout variants
             if err_name == 'ReadTimeoutError' or 'timed out' in err_str or 'timeout' in err_str:
                 return b''
             if 'connection broken' in err_str or 'chunkedencodingerror' in err_name.lower():
                 return b''
+            if 'bad file descriptor' in err_str or getattr(e, 'errno', None) == 9:
+                return None
+            logger.error("[CONSOLE_DEBUG] _blocking_read exception: %s", e, exc_info=True)
             logger.error(
                 "Terminal _blocking_read exception for %s: %s - %s",
                 self.deployment_id, type(e), e)
