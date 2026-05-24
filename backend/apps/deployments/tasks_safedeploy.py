@@ -5,6 +5,7 @@ import tempfile
 import subprocess
 import hashlib
 from celery import shared_task
+from django.conf import settings
 from apps.deployments.models_safedeploy import PreviewEnvironment, DatabaseClone, MigrationValidation, DeploymentArtifact
 from apps.deployments.services.safedeploy.postgres_snapshot_manager import PostgresSnapshotManager
 from apps.deployments.services.safedeploy.django_adapter import DjangoAdapter
@@ -138,6 +139,15 @@ def _sync_preview_addons(preview: PreviewEnvironment, transient_service: Service
         new_addon.save(update_fields=['connection_url', 'coolify_uuid', 'status', 'updated_at'])
         _inject_addon_credentials(new_addon)
 
+
+def _dispatch_preview_deployment(deployment: Deployment, provider_id: str | None):
+    if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False) and os.environ.get('SAFEDEPLOY_RUN_EAGER_DEPLOY') != '1':
+        logger.info("Skipping preview deployment dispatch while CELERY_TASK_ALWAYS_EAGER is enabled")
+        return None
+
+    from apps.deployments.tasks import enqueue_smart_deploy_task
+    return enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
+
 def checkout_code(repo_url: str, branch: str, commit_sha: str, target_dir: str, token: str = None) -> str:
     from apps.deployments.services.git_manager import GitManager
     try:
@@ -184,9 +194,13 @@ def create_database_clone_job(preview_id: str):
 
         if not pg_addon:
             logger.error("CLONE_TASK >>> No PostgreSQL addon for service %s, skipping DB clone", preview.service.id)
-            preview.status = PreviewEnvironment.Status.MIGRATION_RUNNING
+            validation, _ = MigrationValidation.objects.get_or_create(preview_environment=preview)
+            validation.status = MigrationValidation.Status.NOT_CONFIGURED
+            validation.summary = "No PostgreSQL addon configured; migration validation skipped."
+            validation.save()
+            preview.status = PreviewEnvironment.Status.TESTS_RUNNING
             preview.save()
-            run_migration_validation_job.delay(preview_id)
+            run_preview_tests_job.delay(preview_id)
             return
 
         logger.error(f"CLONE_TASK >>> addon found: {pg_addon.id} url={pg_addon.connection_url[:60]}")
@@ -505,8 +519,7 @@ def run_preview_health_check_job(preview_id: str):
             commit_message=f"SafeDeploy preview for {preview.branch_name}"
         )
         provider_id = str(parent.provider.id) if parent.provider else None
-        from apps.deployments.tasks import enqueue_smart_deploy_task
-        enqueue_smart_deploy_task(str(deployment.id), provider_id, skip_review=True)
+        _dispatch_preview_deployment(deployment, provider_id)
 
         preview.status = PreviewEnvironment.Status.READY
         preview.save()

@@ -2311,6 +2311,7 @@ def _deploy_container(deployment, provider, image_name):
                         f"Container failed readiness checks: {container_name}"
                     )
                 # Route check AFTER container is healthy — poll until active
+                _regenerate_caddyfile()
                 if service.is_public:
                     _wait_for_local_route_ready(
                         deployment, service,
@@ -2491,16 +2492,17 @@ def _deploy_container(deployment, provider, image_name):
                     f"Container failed readiness checks for service {service.name}"
                 )
             # Route check after container is healthy (standard deploy)
+            _regenerate_caddyfile()
             if service.is_public:
                 route_timeout = _local_route_timeout_seconds(service)
                 route_ready = _wait_for_local_route_ready(
                     deployment, service, timeout_seconds=route_timeout,
                 )
                 if not route_ready:
-                    append_log(
-                        deployment,
-                        "[ROUTE-CHECK] WARNING: Route not ready before STAGED. "
-                        "Will recheck at promotion.\n",
+                    host = (service.public_domain or "").strip() or service.name
+                    raise RuntimeError(
+                        f"Route for {host} did not become ready after deployment. "
+                        "Caddy/Traefik may still be returning 404 for this host."
                     )
             _run_managed_image_post_deploy_hooks(
                 deployment,
@@ -5005,4 +5007,3 @@ def node_watchdog_task(self):
         results["checked"], results["healed"], results["failed"], results["offline"],
     )
     return results
-

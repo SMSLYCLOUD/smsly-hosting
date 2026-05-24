@@ -75,7 +75,7 @@ class CanApproveDeployment(permissions.BasePermission):
             else:
                 approval = DeploymentApproval.objects.get(id=approval_id)
         except DeploymentApproval.DoesNotExist:
-            return True
+            return False if service_pk else True
 
         deployment = approval.deployment
         if deployment is None:
