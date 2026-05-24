@@ -60,20 +60,30 @@ class EnvironmentIntelligenceService:
             response_text, provider = _cached_ask(prompt, cls.SYSTEM_PROMPT)
             logger.info("Senate resolution for %s delivered by %s", service_name, provider)
 
-            # Extract JSON from response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            # Extract JSON from response — use non-greedy match to avoid capturing
+            # Markdown or deliberation text between multiple JSON blocks.
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
             if json_match:
-                suggestions = json.loads(json_match.group(0))
+                try:
+                    suggestions = json.loads(json_match.group(0))
+                except json.JSONDecodeError:
+                    suggestions = {}
             else:
-                # Fallback: simple line-by-line parsing
                 suggestions = {}
+
+            if not suggestions:
+                # Fallback: line-by-line parsing with stricter key validation
                 for line in response_text.splitlines():
-                    if ':' in line:
-                        parts = line.split(':', 1)
-                        k = parts[0].strip().strip('"').strip("'").strip("- ")
-                        v = parts[1].strip().strip('"').strip("'").strip(",")
-                        if k and v:
-                            suggestions[k] = v
+                    line = line.strip()
+                    if ':' not in line:
+                        continue
+                    parts = line.split(':', 1)
+                    k = parts[0].strip().strip('"').strip("'").strip("- ").strip("*_#")
+                    v = parts[1].strip().strip('"').strip("'").strip(",")
+                    # Validate: keys must start with a letter, underscore, or number and
+                    # contain only valid env var characters. Reject Markdown/rich text.
+                    if k and v and re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
+                        suggestions[k] = v
 
             # Post-process suggestions
             # Config/integer vars that should NEVER get token_hex even if they
@@ -217,6 +227,9 @@ class EnvironmentIntelligenceService:
         
         injected = []
         for key, val in suggestions.items():
+            if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', key):
+                logger.warning("Skipping invalid env var key from AI: %s", key)
+                continue
             ev, created = EnvironmentVariable.objects.get_or_create(
                 service=service,
                 key=key,
