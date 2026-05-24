@@ -73,16 +73,24 @@ def create_database_clone_job(preview_id: str):
 
         clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_').replace('/', '_').replace('.', '_')
         # Ensure only valid PostgreSQL identifier characters
-        clone_db_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_db_name)  
+        clone_db_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_db_name)
 
-        clone = DatabaseClone.objects.create(
-            service=preview.service,
+        clone, created = DatabaseClone.objects.get_or_create(
             preview_environment=preview,
-            source_environment='production',
-            source_database_name=source_db_name,
-            clone_database_name=clone_db_name,
-            status=DatabaseClone.Status.CREATING
+            defaults={
+                'service': preview.service,
+                'source_environment': 'production',
+                'source_database_name': source_db_name,
+                'clone_database_name': clone_db_name,
+                'status': DatabaseClone.Status.CREATING,
+            },
         )
+        if not created:
+            clone.source_database_name = source_db_name
+            clone.clone_database_name = clone_db_name
+            clone.status = DatabaseClone.Status.CREATING
+            clone.error_message = ""
+            clone.save()
 
         preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
         preview.save()
