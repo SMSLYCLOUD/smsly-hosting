@@ -4435,16 +4435,29 @@ def run_maintenance_task(self, command_flag: str, lock_key: str = ""):
         elif command_flag in ['--update', '--update-frontend']:
             from .models_updates import PlatformUpdate
 
-            # Check if an update is already in progress
-            in_progress = PlatformUpdate.objects.filter(
+            # Clear any stuck/stale in-progress updates before starting a new one
+            stale_in_progress = PlatformUpdate.objects.filter(
                 status__in=['PENDING', 'PULLING', 'BACKING_UP', 'RESTARTING', 'HEALTH_CHECK', 'MIGRATING']
-            ).exists()
+            )
+            if stale_in_progress.exists():
+                cleared_count = 0
+                for stale in stale_in_progress:
+                    stale.status = 'FAILED'
+                    stale.error_message = 'Cleared stale update to allow new update to proceed.'
+                    stale.completed_at = timezone.now()
+                    stale.append_log('✗ Cleared as stale to allow new update to proceed.')
+                    stale.save()
+                    cleared_count += 1
+                    logger.info("Cleared stale platform update %s (was %s)", stale.id, stale.status)
 
-            if in_progress:
-                return {
-                    "status": "error",
-                    "message": "A platform update is already in progress.",
-                }
+                if cleared_count:
+                    self.update_state(
+                        state="STARTED",
+                        meta={
+                            "status": "running",
+                            "message": f"Cleared {cleared_count} stale update(s). Starting fresh update...",
+                        },
+                    )
 
             # Create the update record
             update = PlatformUpdate.objects.create(
