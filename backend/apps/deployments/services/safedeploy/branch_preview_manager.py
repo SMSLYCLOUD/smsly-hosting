@@ -71,15 +71,18 @@ class BranchPreviewManager:
 
     def generate_preview_url(self, service: Service, branch_name: str) -> str:
         """
-        Generates a safely slugified preview URL.
-        Example: feature-new-billing-system--myapp.preview.domain.com
+        Generates a safely slugified preview URL under a single subdomain level
+        so wildcard TLS (e.g. *.grid.smsly.cloud) covers it.
+        Example: feature-new-billing-myapp-preview.grid.smsly.cloud
         """
-        safe_branch = re.sub(r'[^a-z0-9]+', '-', branch_name.lower()).strip('-')
-        safe_app = re.sub(r'[^a-z0-9]+', '-', service.name.lower()).strip('-')
+        safe_branch = re.sub(r'[^a-z0-9]+', '-', branch_name.lower()).strip('-')[:40]
+        safe_app = re.sub(r'[^a-z0-9]+', '-', service.name.lower()).strip('-')[:30]
 
         try:
             base_domain = service.default_public_base_domain()
         except Exception:
             base_domain = "cloud.smsly.cloud"
 
-        return f"https://{safe_branch}--{safe_app}.preview.{base_domain}"
+        slug = f"{safe_branch}-{safe_app}-preview"
+        slug = re.sub(r'-+', '-', slug).strip('-')
+        return f"https://{slug}.{base_domain}"
