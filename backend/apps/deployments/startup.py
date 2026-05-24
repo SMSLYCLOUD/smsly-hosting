@@ -67,6 +67,13 @@ def _store_ssh_from_env():
     ssh_key = str(os.environ.get("NODE_SSH_KEY", "")).strip()
     node_host = str(os.environ.get("NODE_HOST", "") or os.environ.get("HOST_IP", "")).strip()
 
+    if ssh_key and not ssh_key.startswith("-----BEGIN "):
+        logger.warning(
+            "NODE_SSH_KEY is set but does not look like a valid PEM private key "
+            "(must start with '-----BEGIN ...'); ignoring it."
+        )
+        ssh_key = ""
+
     if not ssh_password and not ssh_key:
         return
 

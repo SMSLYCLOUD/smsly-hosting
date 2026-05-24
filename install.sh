@@ -1242,9 +1242,8 @@ ensure_env_runtime_defaults() {
     env_ensure_var "$env_file" "SMSLY_DISABLE_TIER_GATES" "true" "Disable owner-tier paywall gates in this edition"
     env_ensure_var "$env_file" "SMSLY_ENABLE_STARTUP_CADDY_SYNC" "false" "Keep AppConfig.ready side-effect free; installer/watchers sync edge config"
     env_ensure_var "$env_file" "PGCAT_ADMIN_PASSWORD" "$(gen_hex_secret 24)" "PgCat administration password (mandatory for 1.2+)"
-    # SSH host key check: false by default so provisioning works without manual SSH setup.
-    # The first connection auto-accepts and saves the host key; set to true for strict mode.
-    env_set_value "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "false"
+    # SSH host key check: strict by default. Set to false only for bootstrap/trusted labs.
+    env_ensure_var "$env_file" "SMSLY_STRICT_SSH_HOST_KEY_CHECK" "true" "SSH host key verification (True=strict, False=accept-first)"
 
     redis_password="$(env_get_value "$env_file" "REDIS_PASSWORD")"
     rabbitmq_password="$(env_get_value "$env_file" "RABBITMQ_PASSWORD")"
@@ -1314,19 +1313,29 @@ ensure_env_runtime_defaults() {
         # [EDGE NODE] Override for Lite Agent mode
         if [ "$MODE_AGENT_LITE" = "true" ] && [ -n "${MASTER_IP:-}" ]; then
             echo -e "${BLUE}  -> Configuring for Edge Node (Lite Agent) mode...${NC}"
+
+            # Self-heal: recover MASTER_MESH_IP from .env if not already in shell
+            if [ -z "${MASTER_MESH_IP:-}" ] && [ -f "$env_file" ]; then
+                MASTER_MESH_IP="$(env_get_value "$env_file" "MASTER_MESH_IP")"
+            fi
             local db_user="${MASTER_DB_USER:-smsly_admin}"
             local db_pass="${MASTER_DB_PASSWORD:-$postgres_password}"
             local mq_pass="${MASTER_MQ_PASSWORD:-$rabbitmq_password}"
 
-            # Use Master IP directly for external connections
-            expected_database_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
-            expected_direct_url="postgresql://${db_user}:${db_pass}@${MASTER_IP}:5432/smsly_hosting"
+            # Use WireGuard mesh IP for database connections (public IP is firewalled)
+            local db_host="${MASTER_MESH_IP:-$MASTER_IP}"
+            expected_database_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
+            expected_direct_url="postgresql://${db_user}:${db_pass}@${db_host}:5432/smsly_hosting"
             # Local RabbitMQ is used for Lite Agent node
             expected_celery_broker_url="amqp://smsly_user:${rabbitmq_password}@rabbitmq:5672//"
 
             env_set_value "$env_file" "DATABASE_URL" "$expected_database_url"
             env_set_value "$env_file" "DIRECT_DATABASE_URL" "$expected_direct_url"
             env_set_value "$env_file" "CELERY_BROKER_URL" "$expected_celery_broker_url"
+            # Persist MASTER_MESH_IP for future self-healing
+            if [ -n "${MASTER_MESH_IP:-}" ]; then
+                env_set_value "$env_file" "MASTER_MESH_IP" "$MASTER_MESH_IP"
+            fi
 
             # Sync local vars for consistent validation below
             current_database_url="$expected_database_url"

@@ -43,10 +43,16 @@ class SSHClient:
         # Validate the content looks like a key before trying to parse it
         trimmed = self.key_content.strip()
         if not trimmed.startswith("-----BEGIN "):
-            raise ValueError(
-                "Key content does not look like a valid private key "
-                "(must start with '-----BEGIN ...')"
-            )
+            # Defensive: if the stored value is raw base64 key body without PEM
+            # headers (legacy bug), try wrapping it so existing DB entries work.
+            recovered = self._try_recover_pem(trimmed)
+            if recovered:
+                trimmed = recovered
+            else:
+                raise ValueError(
+                    "Key content does not look like a valid private key "
+                    "(must start with '-----BEGIN ...')"
+                )
 
         # Try various key formats
         errors = []
@@ -66,6 +72,47 @@ class SSHClient:
             f"Errors: {'; '.join(errors)}"
         )
 
+    @staticmethod
+    def _try_recover_pem(raw: str) -> str | None:
+        """Try to wrap raw base64 key body in PEM headers (legacy data fix).
+
+        Returns a PEM-formatted string if the raw content decodes to a
+        plausible private key, otherwise None.
+        """
+        import base64
+        # Strip any whitespace/newlines and attempt base64 decode
+        candidate = raw.replace('\n', '').replace('\r', '').replace(' ', '')
+        try:
+            decoded = base64.b64decode(candidate)
+        except Exception:
+            return None
+        # DER-encoded RSA private key starts with SEQUENCE tag 0x30
+        # Ed25519 private key is 32-64 bytes; PKCS8 is longer.
+        # A reasonable minimum is 32 bytes for any key type.
+        if len(decoded) < 32:
+            return None
+        # Try wrapping as RSA (most common), then generic PKCS8
+        for label in ("RSA PRIVATE KEY", "PRIVATE KEY"):
+            pem = f"-----BEGIN {label}-----\n"
+            # Insert newlines every 64 chars (standard PEM line width)
+            for i in range(0, len(candidate), 64):
+                pem += candidate[i : i + 64] + "\n"
+            pem += f"-----END {label}-----\n"
+            try:
+                # Quick validation: attempt to parse it
+                key_file = io.StringIO(pem)
+                paramiko.RSAKey.from_private_key(key_file)
+                return pem
+            except Exception:
+                pass
+            try:
+                key_file = io.StringIO(pem)
+                paramiko.Ed25519Key.from_private_key(key_file)
+                return pem
+            except Exception:
+                pass
+        return None
+
     def connect(self):
         if self.client:
             return
@@ -77,14 +124,17 @@ class SSHClient:
         # *changed* ones).  WarningPolicy logs but accepts any host key, which
         # is appropriate for infrastructure automation inside a trusted network.
 
-        # We enforce strict host key checking. 
-        # For initial provisioning, TOFU (Trust On First Use) is allowed via ALLOW_SSH_AUTOADD.
+        strict_mode = str(os.environ.get("SMSLY_STRICT_SSH_HOST_KEY_CHECK", "true")).lower() not in ("false", "0", "no")
         allow_auto_add = str(os.environ.get("ALLOW_SSH_AUTOADD", "false")).lower() in ("true", "1", "yes")
-        if allow_auto_add:
+
+        if strict_mode and not allow_auto_add:
+            self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        elif allow_auto_add:
             self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             warnings.warn("Using AutoAddPolicy for initial provisioning (Trust On First Use).")
         else:
-            self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            self.client.set_missing_host_key_policy(paramiko.WarningPolicy())
+            warnings.warn("Strict SSH host key checking is disabled. This is insecure!")
 
 
         # Determine auth method: key or password

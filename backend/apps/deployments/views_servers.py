@@ -613,10 +613,24 @@ class ManagedServerCreateSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "api_token": {"write_only": True, "required": False},
             "gateway_secret": {"write_only": True, "required": False},
-            "ssh_key": {"write_only": True, "required": False},
+            "ssh_key": {"write_only": True, "required": False, "trim_whitespace": False},
             "ssh_password": {"write_only": True, "required": False},
             "provider_metadata": {"required": False},
         }
+
+    def validate_ssh_key(self, value):
+        if value and value.strip():
+            key = value.strip()
+            if not key.startswith('-----BEGIN '):
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Must be a valid PEM-encoded private key "
+                    "starting with '-----BEGIN ... PRIVATE KEY-----'."
+                )
+            if '-----END ' not in key:
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Missing '-----END ... PRIVATE KEY-----' footer."
+                )
+        return value
 
     def to_representation(self, instance):
         # Return the stable read serializer shape after create/update operations.
@@ -658,8 +672,22 @@ class ManagedServerProvisionSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             "ssh_password": {"write_only": True},
-            "ssh_key": {"write_only": True},
+            "ssh_key": {"write_only": True, "trim_whitespace": False},
         }
+
+    def validate_ssh_key(self, value):
+        if value and value.strip():
+            key = value.strip()
+            if not key.startswith('-----BEGIN '):
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Must be a valid PEM-encoded private key "
+                    "starting with '-----BEGIN ... PRIVATE KEY-----'."
+                )
+            if '-----END ' not in key:
+                raise serializers.ValidationError(
+                    "Invalid SSH private key format. Missing '-----END ... PRIVATE KEY-----' footer."
+                )
+        return value
 
     def validate(self, data):
         method = data.get("ssh_auth_method", "password")

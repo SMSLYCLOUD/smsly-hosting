@@ -4855,6 +4855,24 @@ def update_remote_server_task(server_id: str):
             if gateway_secret:
                 server.gateway_secret = gateway_secret
                 update_fields.append("gateway_secret")
+        else:
+            # Full-install agents: re-read GATEWAY_SECRET from the remote
+            # .env to catch any changes made by the installer update.
+            try:
+                hosting_path = ssh.find_hosting_path()
+                fresh_secret = ssh.get_gateway_secret(hosting_path)
+                if fresh_secret and server.gateway_secret != fresh_secret:
+                    server.gateway_secret = fresh_secret
+                    update_fields.append("gateway_secret")
+                    _append_remote_update_log(
+                        server,
+                        "> Re-synced GATEWAY_SECRET from agent after update.\n",
+                    )
+            except Exception as secret_exc:
+                _append_remote_update_log(
+                    server,
+                    f"> Warning: could not re-sync GATEWAY_SECRET: {secret_exc}\n",
+                )
         server.provision_status = ManagedServer.ProvisionStatus.DONE
         server.save(update_fields=update_fields)
         _append_remote_update_log(

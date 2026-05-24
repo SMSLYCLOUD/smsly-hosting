@@ -66,7 +66,16 @@ class Command(BaseCommand):
             server.ssh_password = options["ssh_password"]
             changed = True
         if options.get("ssh_key"):
-            server.ssh_key = options["ssh_key"]
+            key_value = options["ssh_key"].strip()
+            if not key_value.startswith("-----BEGIN "):
+                raise CommandError(
+                    "Invalid SSH private key format. Must start with '-----BEGIN ... PRIVATE KEY-----'."
+                )
+            if "-----END " not in key_value:
+                raise CommandError(
+                    "Invalid SSH private key format. Missing '-----END ... PRIVATE KEY-----' footer."
+                )
+            server.ssh_key = key_value
             changed = True
 
         if not changed:
