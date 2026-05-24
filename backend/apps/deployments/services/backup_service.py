@@ -140,7 +140,10 @@ class BackupService:
                 'SERVER_TRANSFER',
                 'PRE_TRANSFER',
             }
-            env_vars_raw = list(EnvironmentVariable.objects.filter(service=service).values('key', 'value', 'is_secret'))
+            env_vars_raw = [
+                {"key": ev.key, "value": ev.value, "is_secret": ev.is_secret}
+                for ev in EnvironmentVariable.objects.filter(service=service).only('key', 'value', 'is_secret')
+            ]
             env_vars = []
             for ev in env_vars_raw:
                 entry = dict(ev)
@@ -362,12 +365,28 @@ class BackupService:
 
             # 2. Restore Env Vars
             if 'env_vars' in metadata:
+                _fernet_prefix = b'gAAAAAB'
                 for env in metadata['env_vars']:
-                    EnvironmentVariable.objects.update_or_create(
-                        service=target_service,
-                        key=env['key'],
-                        defaults={'value': env['value'], 'is_secret': env['is_secret']}
-                    )
+                    value = env.get('value', '')
+                    # Detect double-encrypted values from corrupted pre-fix backups.
+                    # If value already starts with the Fernet token prefix, it was
+                    # raw encrypted bytes from a broken .values() backup. Write it
+                    # directly to avoid re-encrypting again.
+                    if isinstance(value, str) and value.startswith('gAAAAAB'):
+                        from django.db import connection
+                        with connection.cursor() as cursor:
+                            cursor.execute(
+                                "INSERT INTO deployments_environmentvariable (service_id, key, value, is_secret, created_at, updated_at) "
+                                "VALUES (%s, %s, %s, %s, NOW(), NOW()) "
+                                "ON CONFLICT (service_id, key) DO UPDATE SET value = EXCLUDED.value, is_secret = EXCLUDED.is_secret, updated_at = NOW()",
+                                [str(target_service.id), env['key'], value, env.get('is_secret', False)]
+                            )
+                    else:
+                        EnvironmentVariable.objects.update_or_create(
+                            service=target_service,
+                            key=env['key'],
+                            defaults={'value': value, 'is_secret': env.get('is_secret', False)}
+                        )
 
             # 3. Load Docker Image
             image_path = os.path.join(temp_dir, "image.tar")
@@ -1068,3 +1087,53 @@ class BackupService:
 
         # Finally delete the DB rows
         model_cls.objects.filter(id__in=ids_to_delete).delete()
+
+
+def repair_double_encrypted_env_vars(service_id: str | None = None) -> dict:
+    """
+    Detect and repair EnvironmentVariables corrupted by pre-fix backup/restore
+    double-encryption. Returns {fixed: N, skipped: N} counts.
+    """
+    import base64
+    from cryptography.fernet import Fernet, InvalidToken
+    from django.conf import settings
+    from django.db import connection
+
+    key_str = getattr(settings, 'FIELD_ENCRYPTION_KEY', '')
+    if not key_str:
+        return {"error": "FIELD_ENCRYPTION_KEY not configured"}
+    fernet = Fernet(key_str.encode() if isinstance(key_str, str) else key_str)
+
+    from apps.deployments.models_core import EnvironmentVariable
+    qs = EnvironmentVariable.objects.all()
+    if service_id:
+        qs = qs.filter(service_id=service_id)
+
+    fixed = 0
+    skipped = 0
+
+    for ev in qs.iterator():
+        raw_val = getattr(ev, 'value', '') or ''
+        if not isinstance(raw_val, str) or not raw_val.startswith('gAAAAAB'):
+            skipped += 1
+            continue
+
+        try:
+            inner = fernet.decrypt(raw_val.encode())
+            inner_str = inner.decode('utf-8', errors='replace')
+            if not inner_str.startswith('gAAAAAB'):
+                skipped += 1
+                continue
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE deployments_environmentvariable SET value = %s, updated_at = NOW() "
+                    "WHERE id = %s",
+                    [inner_str, str(ev.id)]
+                )
+            fixed += 1
+        except (InvalidToken, Exception):
+            skipped += 1
+            continue
+
+    return {"fixed": fixed, "skipped": skipped}
