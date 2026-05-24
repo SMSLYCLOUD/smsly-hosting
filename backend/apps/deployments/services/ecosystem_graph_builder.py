@@ -2,6 +2,8 @@
 import socket
 import logging
 from typing import Dict, List, Any, Optional
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,17 @@ def _check_tcp(host: str, port: int, timeout: float = 1.0) -> bool:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except (OSError, socket.timeout):
+        return False
+
+
+def _check_http(host: str, port: int, path: str = "/", timeout: float = 2.0) -> bool:
+    """Return True if an HTTP GET to host:port/path returns a 2xx/3xx status."""
+    try:
+        url = f"http://{host}:{port}{path}"
+        req = Request(url, headers={"User-Agent": "SMSLY-EcosystemHealth/1.0"})
+        with urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 400
+    except (URLError, OSError):
         return False
 
 
@@ -72,7 +85,7 @@ class EcosystemGraphBuilder:
             "type": "platform",
             "kind": "COMPUTE",
             "label": "Backend (Django)",
-            "health_check": {"type": "tcp", "host": "backend", "port": 8000},
+            "health_check": {"type": "http", "host": "backend", "port": 8000, "path": "/health/live"},
             "metadata": {"ports": ["8000"], "role": "REST API / WebSocket / Admin"},
         },
         {
@@ -228,13 +241,15 @@ class EcosystemGraphBuilder:
         try:
             if check["type"] == "tcp":
                 host, port = check["host"], check["port"]
+                return "healthy" if _check_tcp(host, port, timeout=1.5) else "down"
+            elif check["type"] == "http":
+                host, port = check["host"], check["port"]
+                path = check.get("path", "/")
+                return "healthy" if _check_http(host, port, path, timeout=2.0) else "down"
             elif check["type"] == "dynamic":
                 fn_name = check["fn"]
                 host, port = globals()[fn_name]()
-            else:
-                return "healthy"
-
-            return "healthy" if _check_tcp(host, port, timeout=1.5) else "down"
+                return "healthy" if _check_tcp(host, port, timeout=1.5) else "down"
         except Exception as exc:
             logger.debug("Health check failed for %s: %s", defn["id"], exc)
             return "degraded"

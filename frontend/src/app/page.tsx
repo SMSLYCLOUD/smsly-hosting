@@ -212,29 +212,6 @@ const battleCards = [
 ];
 
 // ============================================
-// DATA: TESTIMONIALS
-// ============================================
-const testimonials = [
-    {
-        quote: "Grid's predictive scaling handled our Black Friday traffic without a single hiccup. It felt like magic.",
-        author: "Sarah Jenkins",
-        role: "VP Engineering, E-Shopify",
-        image: "https://ui-avatars.com/api/?name=Sarah+Jenkins&background=6366f1&color=fff&format=png"
-    },
-    {
-        quote: "We moved our entire microservices architecture from AWS ECS to Grid. Dev productivity is up 300%.",
-        author: "David Chen",
-        role: "Lead Architect, FinTech Global",
-        image: "https://ui-avatars.com/api/?name=David+Chen&background=10b981&color=fff&format=png"
-    },
-    {
-        quote: "The ability to deploy to bare metal and cloud simultaneously gives us the best of both worlds.",
-        author: "Emily Ross",
-        role: "CTO, StartupXYZ",
-        image: "https://ui-avatars.com/api/?name=Emily+Ross&background=f59e0b&color=fff&format=png"
-    }
-];
-
 // ============================================
 // DATA: COMPLIANCE
 // ============================================
@@ -367,6 +344,15 @@ export default function Home() {
                         </motion.div>
                     </div>
 
+                    <motion.p
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.05, duration: 0.5 }}
+                        className="text-sm md:text-base font-medium text-slate-500 dark:text-slate-400 mb-3 tracking-wide"
+                    >
+                        What are you building?
+                    </motion.p>
+
                     <motion.h1
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -387,6 +373,15 @@ export default function Home() {
                     >
                         Grid is a free, open-source PaaS. Deploy complete software ecosystems on infrastructure you control. <br />
                         <strong>Connect your VPS and deploy connected apps, services, databases, workers, AI auto-remediation, tunnels, and multi-server clusters without DevOps pain.</strong>
+                    </motion.p>
+
+                    <motion.p
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.25, duration: 0.5 }}
+                        className="mt-4 text-lg md:text-xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-violet-600 via-purple-500 to-fuchsia-500"
+                    >
+                        Grid eliminates the fear of microservices.
                     </motion.p>
 
                     <motion.div
@@ -837,56 +832,6 @@ export default function Home() {
             </section>
 
 
-
-            {/* TESTIMONIALS */}
-            <section className="py-16 md:py-32 bg-slate-50 dark:bg-slate-900">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="text-center mb-12 md:mb-20">
-                        <h2 className="text-2xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 dark:text-white mb-4 md:mb-6 tracking-tight">Trusted by Engineering Leaders</h2>
-                        <p className="text-base md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">
-                            Join thousands of teams shipping faster and scaling smarter with Grid.
-                        </p>
-                    </div>
-
-                    <div className="grid md:grid-cols-3 gap-6 md:gap-8">
-                        {testimonials.map((testimonial, i) => (
-                            <motion.div
-                                key={i}
-                                initial={{ opacity: 0, y: 30 }}
-                                whileInView={{ opacity: 1, y: 0 }}
-                                viewport={{ once: true }}
-                                transition={{ delay: i * 0.2 }}
-                                className="p-6 md:p-8 rounded-2xl md:rounded-3xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md transition-all"
-                            >
-                                <div className="mb-4 md:mb-6 text-emerald-500">
-                                    {[1, 2, 3, 4, 5].map((s) => (
-                                        <span key={s} className="inline-block text-base md:text-lg">★</span>
-                                    ))}
-                                </div>
-                                <p className="text-base md:text-lg text-slate-700 dark:text-slate-300 mb-6 md:mb-8 leading-relaxed italic">
-                                    &ldquo;{testimonial.quote}&rdquo;
-                                </p>
-                                <div className="flex items-center gap-3 md:gap-4">
-                                    <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-slate-200 overflow-hidden">
-                                        <Image
-                                            src={testimonial.image}
-                                            alt={testimonial.author}
-                                            width={48}
-                                            height={48}
-                                            className="w-full h-full object-cover"
-                                            unoptimized
-                                        />
-                                    </div>
-                                    <div>
-                                        <p className="font-bold text-sm md:text-base text-slate-900 dark:text-white">{testimonial.author}</p>
-                                        <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400">{testimonial.role}</p>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </div>
-                </div>
-            </section>
 
             {/* ENTERPRISE SECURITY */}
             <section className="py-16 md:py-32 bg-white dark:bg-slate-950 overflow-hidden border-t border-slate-200 dark:border-slate-800">
