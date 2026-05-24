@@ -438,6 +438,31 @@ export default function Home() {
                 </div>
             </section>
 
+            {/* VIDEO DEMO SECTION */}
+            <section className="relative -mt-12 md:-mt-24 z-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto mb-16 md:mb-24">
+                <motion.div 
+                    initial={{ opacity: 0, y: 40 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.6, duration: 0.7 }}
+                    className="bg-slate-900 rounded-2xl md:rounded-[2rem] p-2 md:p-4 shadow-2xl border border-slate-800 relative group overflow-hidden"
+                >
+                    <div className="absolute inset-0 bg-gradient-to-tr from-emerald-500/20 to-blue-500/20 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
+                    <div className="aspect-video bg-black rounded-xl md:rounded-[1.5rem] overflow-hidden relative flex items-center justify-center border border-slate-800">
+                        {/* Placeholder for video */}
+                        <video 
+                            className="w-full h-full object-cover"
+                            controls
+                            preload="metadata"
+                            poster="/images/video-placeholder.jpg" // Add your poster image to public/images/
+                        >
+                            {/* Replace with your actual video source */}
+                            <source src="/videos/grid-demo.mp4" type="video/mp4" />
+                            Your browser does not support the video tag.
+                        </video>
+                    </div>
+                </motion.div>
+            </section>
+
             {/* GLOBAL STATISTICS BAR */}
             <section className="bg-white dark:bg-slate-900 border-y border-slate-200 dark:border-slate-800 relative z-20">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
