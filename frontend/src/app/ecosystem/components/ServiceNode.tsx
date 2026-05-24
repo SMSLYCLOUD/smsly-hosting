@@ -22,58 +22,60 @@ export function ServiceNode({ data }: any) {
     const isSkipped = svc.skip;
 
     return (
-        <div className={`w-[260px] bg-card border rounded-xl shadow-lg transition-all ${
-            isSkipped ? 'border-border/50 opacity-60' : 'border-emerald-500/30 ring-1 ring-emerald-500/10'
+        <div className={`w-[280px] bg-zinc-900 border rounded-md shadow-sm transition-all hover:border-zinc-500 hover:shadow-md ${
+            isSkipped ? 'border-zinc-800 opacity-60' : 'border-zinc-700'
         }`}>
             {/* Top Handle for incoming edges */}
-            <Handle type="target" position={Position.Top} className="w-3 h-3 bg-muted-foreground border-2 border-background" />
+            <Handle type="target" position={Position.Left} className="!bg-zinc-500" />
             
-            <div className="p-2 border-b border-border bg-muted/20 rounded-t-xl flex justify-between items-center">
+            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950/50 px-3 py-2 rounded-t-md">
                 <div className="flex items-center gap-2">
-                    <div className="text-xs text-muted-foreground font-mono bg-background border px-1.5 py-0.5 rounded">
+                    <GitBranch className="h-4 w-4 text-zinc-400" />
+                    <span className="text-xs font-semibold text-zinc-200 truncate max-w-[130px]" title={svc.repo.split('/').pop()}>
+                        {svc.repo.split('/').pop()}
+                    </span>
+                </div>
+                <div className="flex items-center gap-2">
+                    <div className="text-[9px] text-zinc-500 font-mono bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded">
                         #{svc.deploy_order}
                     </div>
-                    <p className="font-bold text-sm truncate flex items-center gap-1.5 max-w-[130px]">
-                        <GitBranch size={12} className="text-muted-foreground" />
-                        {svc.repo.split('/').pop()}
-                    </p>
+                    <button
+                        onClick={() => toggleSkip(idx)}
+                        className={`text-[9px] px-1.5 py-0.5 rounded border transition-colors ${
+                            isSkipped
+                                ? 'border-zinc-800 text-zinc-500 hover:text-zinc-300'
+                                : 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                        }`}
+                    >
+                        {isSkipped ? 'Skipped' : 'Include'}
+                    </button>
                 </div>
-                <button
-                    onClick={() => toggleSkip(idx)}
-                    className={`text-[10px] px-2 py-1 rounded border transition-colors ${
-                        isSkipped
-                            ? 'border-border text-muted-foreground hover:text-foreground'
-                            : 'border-emerald-500/30 text-emerald-500 bg-emerald-500/10'
-                    }`}
-                >
-                    {isSkipped ? 'Skipped' : 'Include'}
-                </button>
             </div>
 
-            <div className="p-2 space-y-2">
+            <div className="p-3 space-y-3">
                 <div className="flex flex-wrap gap-1.5">
                     {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang: string) => (
-                        <span key={lang} className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${STACK_COLORS[lang.toLowerCase()] || STACK_COLORS.unknown}`}>
+                        <span key={lang} className={`text-[9px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wider ${STACK_COLORS[lang.toLowerCase()] || STACK_COLORS.unknown}`}>
                             {lang}
                         </span>
                     ))}
-                    <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5">
+                    <span className="text-[9px] text-zinc-500 border border-zinc-800 bg-zinc-950 rounded px-1.5 py-0.5">
                         :{svc.port}
                     </span>
                     {svc.addons?.map((a: string) => (
-                        <span key={a} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                        <span key={a} className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 uppercase tracking-wider">
                             {a}
                         </span>
                     ))}
                 </div>
 
-                <div className="flex items-center justify-between gap-2 bg-muted/30 p-2 rounded-lg border border-border">
-                    <Server size={12} className="text-muted-foreground shrink-0" />
+                <div className="flex items-center justify-between gap-2 bg-zinc-950/50 p-2 rounded border border-zinc-800">
+                    <Server size={12} className="text-zinc-500 shrink-0" />
                     <select
                         value={svc.server_id || 'local'}
                         onChange={(e) => updateServer(idx, e.target.value)}
                         disabled={isSkipped}
-                        className="text-[10px] bg-background border border-border rounded px-2 py-1 flex-1 outline-none focus:border-primary transition-colors disabled:opacity-50"
+                        className="text-[10px] bg-transparent text-zinc-300 border-none rounded flex-1 outline-none transition-colors disabled:opacity-50 appearance-none"
                     >
                         <option value="local">Local Server</option>
                         {servers?.map((s: any) => (
@@ -87,30 +89,30 @@ export function ServiceNode({ data }: any) {
                         <button
                             onClick={() => setIsExpanded(!isExpanded)}
                             disabled={isSkipped}
-                            className="text-[10px] text-primary hover:underline w-full text-left flex justify-between items-center"
+                            className="text-[10px] text-blue-400 hover:text-blue-300 w-full text-left flex justify-between items-center"
                         >
-                            <span>{Object.keys(svc.env_vars).length} Environment Variables</span>
+                            <span>{Object.keys(svc.env_vars).length} Env Variables</span>
                             <span>{isExpanded ? '▲' : '▼'}</span>
                         </button>
                         
                         {isExpanded && !isSkipped && (
-                            <div className="mt-2 space-y-2 max-h-[150px] overflow-y-auto pr-1 nodrag">
+                            <div className="mt-2 space-y-2 max-h-[120px] overflow-y-auto pr-1 nodrag custom-scrollbar">
                                 <div className="flex justify-end mb-1">
                                     <button
                                         onClick={() => handlePasteEnv(idx)}
-                                        className="text-[9px] text-primary bg-primary/10 px-1.5 py-0.5 rounded hover:bg-primary/20 transition-colors"
+                                        className="text-[9px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded hover:bg-blue-500/20 transition-colors"
                                     >
                                         Paste .env
                                     </button>
                                 </div>
                                 {Object.entries(svc.env_vars || {}).map(([key, value]: [string, any]) => (
                                     <div key={key} className="flex flex-col gap-1">
-                                        <label className="text-[9px] font-mono text-muted-foreground truncate">{key}</label>
+                                        <label className="text-[9px] font-mono text-zinc-500 truncate" title={key}>{key}</label>
                                         <input
                                             type="text"
                                             value={value}
                                             onChange={(e) => updateEnvVar(idx, key, e.target.value)}
-                                            className="text-[10px] font-mono bg-background border border-border rounded px-2 py-1 w-full"
+                                            className="text-[10px] font-mono bg-zinc-950 text-zinc-300 border border-zinc-800 rounded px-2 py-1 w-full focus:border-blue-500 focus:outline-none"
                                             placeholder="Empty value"
                                         />
                                     </div>
@@ -122,7 +124,7 @@ export function ServiceNode({ data }: any) {
             </div>
 
             {/* Bottom Handle for outgoing edges */}
-            <Handle type="source" position={Position.Bottom} className="w-3 h-3 bg-primary border-2 border-background" />
+            <Handle type="source" position={Position.Right} className="!bg-zinc-500" />
         </div>
     );
 }
