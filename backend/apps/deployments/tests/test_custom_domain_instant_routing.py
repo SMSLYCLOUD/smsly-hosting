@@ -189,7 +189,8 @@ class CaddyCustomDomainRoutingTests(TestCase):
         caddyfile = generate_caddyfile(config)
 
         self.assertIn('@remote_hosts_0 host remote-api.cloud.smsly.cloud', caddyfile)
-        self.assertIn('reverse_proxy http://10.150.0.2 {', caddyfile)
+        self.assertIn('reverse_proxy http://10.150.0.2 http://203.0.113.50 {', caddyfile)
+        self.assertIn('lb_try_duration 5s', caddyfile)
         self.assertIn('header_up Host {host}', caddyfile)
 
     def test_apply_caddyfile_rejects_service_domain_to_control_plane(self):

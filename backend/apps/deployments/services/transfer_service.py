@@ -1076,17 +1076,8 @@ if os.path.exists(services_dir):
 
         self._update(96, 'Configuring mesh interconnect between source and target servers...')
         try:
-            # 1. Look for or create a default mesh network
-            mesh, created = MeshNetwork.objects.get_or_create(
-                name="transfer-mesh",
-                defaults={"subnet": "10.150.0.0/24"}
-            )
-
-            # 2. Add local (source) server to mesh if not present
-            WireGuardService.add_peer_to_mesh(mesh, is_local=True)
-
-            # 3. Add the target server as a ManagedServer (if not already managed)
-            target_server = ManagedServer.objects.filter(host=self.transfer.target_server_ip).first()
+            # Add the target server as a ManagedServer (if not already managed).
+            target_server = self._target_server_record()
             if not target_server:
                 owner = None
                 if self.transfer.service and self.transfer.service.owner:
@@ -1101,6 +1092,7 @@ if os.path.exists(services_dir):
                 target_server = ManagedServer.objects.create(
                     name=f"TransferTarget-{self.transfer.target_server_ip}",
                     host=self.transfer.target_server_ip,
+                    project=getattr(self.transfer.service, "project", None),
                     owner=owner,
                     ssh_key=self.transfer.target_ssh_key,
                     ssh_password=self.transfer.target_ssh_password,
@@ -1114,10 +1106,18 @@ if os.path.exists(services_dir):
                 target_server.ssh_password = self.transfer.target_ssh_password
                 target_server.save(update_fields=['ssh_key', 'ssh_password', 'updated_at'])
 
-            # 4. Add remote target server to mesh
-            WireGuardService.add_peer_to_mesh(mesh, server=target_server, is_local=False)
+            if self.transfer.service and self.transfer.service.project and not target_server.project_id:
+                target_server.project = self.transfer.service.project
+                target_server.save(update_fields=['project', 'updated_at'])
 
-            # 5. Deploy configurations to establish connection
+            # Reuse the canonical default mesh. Creating a transfer-specific mesh
+            # with the same wg0 interface overwrites the existing host config and
+            # leaves Caddy/API routing pointed at stale WireGuard addresses.
+            ensure_result = WireGuardService.ensure_server_in_default_mesh(
+                target_server,
+                deploy_async=False,
+            )
+            mesh = MeshNetwork.objects.get(id=ensure_result["mesh"])
             results = WireGuardService.deploy_full_mesh(mesh)
             if results.get("failed"):
                 logger.warning(

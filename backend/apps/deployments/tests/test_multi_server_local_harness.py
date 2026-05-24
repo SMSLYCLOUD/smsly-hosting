@@ -266,6 +266,34 @@ class MultiServerLocalHarnessTests(TestCase):
         )
         return mesh
 
+    @patch(
+        "apps.deployments.services.wireguard_service.WireGuardService.deploy_full_mesh",
+        return_value={"success": [], "failed": []},
+    )
+    def test_transfer_interconnect_reuses_default_mesh(self, deploy_full_mesh):
+        transfer = ServerTransfer.objects.create(
+            owner=self.user,
+            transfer_type="SERVICE",
+            service=self.service,
+            source_server_ip="10.0.0.10",
+            target_server_ip="10.0.0.12",
+            target_ssh_password="worker-b-root",
+        )
+
+        ServerTransferService(transfer)._interconnect_servers()
+
+        self.assertFalse(MeshNetwork.objects.filter(name="transfer-mesh").exists())
+        mesh = MeshNetwork.objects.get(name="default")
+        self.assertEqual(mesh.interface_name, "wg0")
+        self.assertEqual(mesh.subnet, "10.100.0.0/24")
+        self.assertTrue(mesh.peers.filter(is_local=True, is_active=True).exists())
+        self.assertTrue(
+            mesh.peers.filter(server=self.worker_b, is_active=True).exists()
+        )
+        self.worker_b.refresh_from_db()
+        self.assertEqual(self.worker_b.wg_address, "10.100.0.2")
+        deploy_full_mesh.assert_called_once_with(mesh)
+
     @patch("apps.deployments.services.wireguard_service.WireGuardService.deploy_config")
     def test_mesh_peer_registration_and_status_flow(self, deploy_config):
         mesh = self._mesh()

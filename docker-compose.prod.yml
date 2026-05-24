@@ -96,7 +96,7 @@ services:
     environment:
       UVICORN_WS_PING_INTERVAL: 20
       UVICORN_WS_PING_TIMEOUT: 20
-      CONTAINER_REGISTRY_URL: 127.0.0.1:5000
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       SMSLY_ENABLE_STARTUP_CADDY_SYNC: "True"
       SMSLY_BUILDS_DIR: /opt/smsly-hosting/builds
@@ -145,7 +145,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      CONTAINER_REGISTRY_URL: 127.0.0.1:5000
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -250,7 +250,7 @@ services:
     restart: always
     env_file: .env
     environment:
-      CONTAINER_REGISTRY_URL: 127.0.0.1:5000
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
@@ -293,7 +293,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      CONTAINER_REGISTRY_URL: 127.0.0.1:5000
+      CONTAINER_REGISTRY_URL: ${CONTAINER_REGISTRY_URL:-127.0.0.1:5000}
       DOCKER_HOST: tcp://socket-proxy:2375
       DOCKER_NETWORK: smsly-net
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
