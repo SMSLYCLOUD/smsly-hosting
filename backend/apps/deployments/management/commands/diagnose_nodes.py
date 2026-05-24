@@ -158,11 +158,9 @@ class Command(BaseCommand):
                 self.stdout.write("          Suggestion: Run --fix on the target or this master to sync tokens.")
 
         # Update server if primary candidate works
-        base = orch._candidate_base_urls()[0]
+        base = audit.get("base_url") or orch._candidate_base_urls()[0]
         if server.api_url != base:
             self.stdout.write(f"        (Updating api_url from {server.api_url} to {base})")
-            server.api_url = base
-            server.save(update_fields=["api_url"])
             server.api_url = base
             server.save(update_fields=["api_url"])
 

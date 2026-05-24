@@ -500,6 +500,22 @@ class WireGuardService:
 
         Call this after adding/removing a peer to update everyone's config.
         """
+        from apps.deployments.models_mesh import MeshNetwork
+
+        iface = cls.validate_interface_name(mesh.interface_name)
+        if mesh.name != "default":
+            conflicting_mesh = MeshNetwork.objects.filter(
+                is_active=True,
+                interface_name=iface,
+            ).exclude(id=mesh.id).first()
+            if conflicting_mesh:
+                message = (
+                    f"Refusing to deploy mesh '{mesh.name}' on interface '{iface}' "
+                    f"because active mesh '{conflicting_mesh.name}' already uses it."
+                )
+                logger.error(message)
+                return {"success": [], "failed": [{"peer": "mesh", "error": message}]}
+
         peers = mesh.peers.filter(is_active=True)
         results = {"success": [], "failed": []}
 

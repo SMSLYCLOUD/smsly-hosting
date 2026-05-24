@@ -130,30 +130,38 @@ class RemoteOrchestrator:
             "auth": False,
             "error": "",
             "latency_ms": 0,
+            "base_url": "",
         }
         
-        # 1. Network Check
-        try:
-            start = time.time()
-            # Try a raw request to health endpoint first to isolate network vs auth
-            base_urls = self._candidate_base_urls()
-            if not base_urls:
-                 results["error"] = "No candidate base URLs found."
-                 return results
-                 
-            # Try the primary base URL's health endpoint
-            health_url = f"{base_urls[0]}/health"
-            verify_health = _REMOTE_VERIFY if health_url.startswith("https://") else False
-            resp = requests.get(health_url, timeout=10, verify=verify_health)
-            results["latency_ms"] = int((time.time() - start) * 1000)
-            
-            if resp.status_code < 500:
-                results["network"] = True
-            else:
-                results["error"] = f"Health check returned {resp.status_code}"
-                return results
-        except requests.RequestException as e:
-            results["error"] = f"Network unreachable: {str(e)}"
+        # 1. Network Check. Try every candidate URL before declaring the node
+        # unreachable; mesh routes can be stale while the public node endpoint
+        # is still healthy.
+        base_urls = self._candidate_base_urls()
+        if not base_urls:
+            results["error"] = "No candidate base URLs found."
+            return results
+
+        health_errors: list[str] = []
+        for base_url in base_urls:
+            try:
+                start = time.time()
+                health_url = f"{base_url}/health"
+                verify_health = _REMOTE_VERIFY if health_url.startswith("https://") else False
+                if _is_internal_target(health_url):
+                    verify_health = False
+                resp = requests.get(health_url, timeout=10, verify=verify_health)
+                results["latency_ms"] = int((time.time() - start) * 1000)
+
+                if resp.status_code < 500:
+                    results["network"] = True
+                    results["base_url"] = base_url
+                    break
+                health_errors.append(f"{base_url}/health -> HTTP {resp.status_code}")
+            except requests.RequestException as e:
+                health_errors.append(f"{base_url}/health -> {e}")
+
+        if not results["network"]:
+            results["error"] = "Network unreachable: " + "; ".join(health_errors)
             return results
 
         # 2. Auth/API Check

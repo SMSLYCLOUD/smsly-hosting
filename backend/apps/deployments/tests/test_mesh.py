@@ -79,6 +79,23 @@ class MeshNetworkTest(TestCase):
 
         mock_ssh.assert_not_called()
 
+    @patch('apps.deployments.services.wireguard_service.WireGuardService.deploy_config')
+    def test_non_default_mesh_cannot_reuse_active_interface(self, deploy_config):
+        default_mesh = MeshNetwork.objects.create(name="default", subnet="10.100.0.0/24")
+        MeshNetwork.objects.create(
+            name="transfer-mesh",
+            subnet="10.150.0.0/24",
+            interface_name=default_mesh.interface_name,
+        )
+
+        result = WireGuardService.deploy_full_mesh(
+            MeshNetwork.objects.get(name="transfer-mesh")
+        )
+
+        self.assertEqual(result["success"], [])
+        self.assertIn("already uses it", result["failed"][0]["error"])
+        deploy_config.assert_not_called()
+
     @patch('apps.deployments.services.wireguard_service.WireGuardService._detect_local_endpoint',
            return_value='198.51.100.1:51820')
     @patch('apps.deployments.tasks_mesh.deploy_mesh_task.delay')

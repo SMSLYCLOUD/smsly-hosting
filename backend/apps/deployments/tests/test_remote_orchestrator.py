@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, Mock
 from urllib.parse import urlparse
 
+from requests.exceptions import ConnectTimeout
+
 # Import the module under test
 from apps.deployments.services.remote_orchestrator import (
     _host_is_ip,
@@ -488,6 +490,28 @@ class TestPreflightCheckOrHeal(unittest.TestCase):
         self.assertFalse(result['ok'])
         self.assertEqual(result['diagnosis'], 'network_unreachable')
         self.assertIn('network-unreachable', result['error'])
+
+    def test_check_connectivity_falls_back_after_dead_mesh_url(self):
+        """A stale mesh URL should not hide a reachable public node URL."""
+        orchestrator = RemoteOrchestrator(self.mock_server)
+        ok_health = Mock(status_code=200)
+        ok_api = Mock(status_code=200)
+
+        with patch.object(
+            orchestrator,
+            '_candidate_base_urls',
+            return_value=['http://10.100.0.2', 'http://69.164.244.51'],
+        ):
+            with patch(
+                'apps.deployments.services.remote_orchestrator.requests.get',
+                side_effect=[ConnectTimeout('mesh timed out'), ok_health],
+            ):
+                with patch.object(orchestrator, '_request', return_value=ok_api):
+                    result = orchestrator.check_connectivity()
+
+        self.assertTrue(result['network'])
+        self.assertTrue(result['auth'])
+        self.assertEqual(result['base_url'], 'http://69.164.244.51')
 
     def test_traefik_404_no_ssh_credentials(self):
         """When Traefik 404 but no SSH credentials, heal should fail gracefully."""

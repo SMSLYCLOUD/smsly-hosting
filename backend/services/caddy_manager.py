@@ -133,6 +133,17 @@ def _is_ip(domain: str) -> bool:
         return False
 
 
+def _normalize_upstream_ip(value: str) -> str:
+    """Return a bare IP from stored IP/CIDR values."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        return str(ipaddress.ip_interface(value).ip)
+    except ValueError:
+        return value.split("/", 1)[0].strip()
+
+
 def _remote_server_mesh_ip(server) -> str:
     """Return the best WireGuard address for a remote service server."""
     if not server or getattr(server, "is_primary", False):
@@ -142,18 +153,18 @@ def _remote_server_mesh_ip(server) -> str:
     try:
         peer = server.wg_peers.filter(mesh__name="default", is_active=True).first()
         if peer and peer.wg_address:
-            return str(peer.wg_address)
+            return _normalize_upstream_ip(peer.wg_address)
     except Exception:
         pass
 
     address = str(getattr(server, "wg_address", "") or "").strip()
     if address:
-        return address
+        return _normalize_upstream_ip(address)
 
     try:
         peer = server.wg_peers.filter(is_active=True).order_by("-updated_at").first()
         if peer and peer.wg_address:
-            return str(peer.wg_address)
+            return _normalize_upstream_ip(peer.wg_address)
     except Exception:  # pylint: disable=broad-exception-caught
         return ""
 
@@ -161,15 +172,26 @@ def _remote_server_mesh_ip(server) -> str:
 
 
 def _remote_upstream_url_for_service(service) -> str:
-    """Return the proxy upstream for a remote service, falling back to public IP if mesh is down."""
+    """Return proxy upstreams for a remote service, with public fallback.
+
+    Caddy accepts multiple upstreams on a single reverse_proxy line. Keeping
+    the public node host after the mesh IP prevents stale WireGuard state from
+    turning transferred services into hard 502s.
+    """
     server = getattr(service, "server", None)
     if not server or getattr(server, "is_primary", False):
         return ""
 
+    upstreams: list[str] = []
+
+    def append(url: str):
+        if url and url not in upstreams:
+            upstreams.append(url)
+
     # Priority 1: WireGuard Mesh (Secure & Private)
     mesh_ip = _remote_server_mesh_ip(server)
     if mesh_ip:
-        return f"http://{mesh_ip}"
+        append(f"http://{mesh_ip}")
 
     # Priority 2: Public IP Fallback (Remote nodes listen on port 80 via Traefik)
     host = str(server.host or "").strip()
@@ -177,9 +199,9 @@ def _remote_upstream_url_for_service(service) -> str:
         # SEC-ZT-005: Inter-server TLS enforcement is handled by the reverse_proxy
         # transport logic if the host supports HTTPS. For now, we proxy to port 80
         # as that is where Traefik expects incoming edge traffic on remote nodes.
-        return f"http://{host}"
+        append(f"http://{host}")
 
-    return ""
+    return " ".join(upstreams)
 
 
 def _service_proxy_upstream() -> str:
@@ -190,9 +212,14 @@ def _service_proxy_upstream() -> str:
 def _append_reverse_proxy(lines: list[str], upstream_url: str, upstream_host: str = ""):
     """Append a Caddy reverse_proxy stanza, including remote TLS transport if needed."""
     upstream_url = upstream_url or _service_proxy_upstream()
-    if upstream_host:
+    has_fallbacks = len(str(upstream_url).split()) > 1
+    if upstream_host or has_fallbacks:
         lines.append(f"    reverse_proxy {upstream_url} {{")
-        lines.append(f"        header_up Host {upstream_host}")
+        if has_fallbacks:
+            lines.append("        lb_try_duration 5s")
+            lines.append("        lb_try_interval 250ms")
+        if upstream_host:
+            lines.append(f"        header_up Host {upstream_host}")
         if upstream_url.startswith("https://") and upstream_host:
             lines.append("        transport http {")
             lines.append("            tls")
@@ -743,11 +770,23 @@ def generate_caddyfile(config) -> str:
                 if not hosts:
                     continue
                 matcher = f"@remote_hosts_{index}"
+                upstream_has_fallbacks = len(str(upstream_url).split()) > 1
                 wildcard_lines.extend(
                     [
                         f"    {matcher} host {' '.join(hosts)}",
                         f"    handle {matcher} {{",
                         f"        reverse_proxy {upstream_url} {{",
+                    ]
+                )
+                if upstream_has_fallbacks:
+                    wildcard_lines.extend(
+                        [
+                            "            lb_try_duration 5s",
+                            "            lb_try_interval 250ms",
+                        ]
+                    )
+                wildcard_lines.extend(
+                    [
                         "            header_up Host {host}",
                         "        }",
                         "    }",
