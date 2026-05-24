@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
+import { EcosystemSuggestion } from '@/components/dashboard/EcosystemSuggestion';
 import {
   Brain, Cpu, Zap, Shield, Eye, Activity, BarChart3, Sparkles,
   RefreshCw, Send, CheckCircle2, XCircle, Loader2, TrendingUp,
@@ -308,7 +308,7 @@ export default function IntelligencePage() {
             transition={{ duration: 0.4 }}
             className="mb-6"
           >
-            <EnhancedCrossSell variant="banner" dismissible={true} />
+            <EcosystemSuggestion context="intelligence" dismissible={true} />
           </motion.div>
 
           {/* ── Configuration Panel ────────────────────────────────── */}
