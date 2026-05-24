@@ -6,7 +6,8 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
   MarkerType,
-  Panel
+  Panel,
+  Position
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import dagre from 'dagre';
