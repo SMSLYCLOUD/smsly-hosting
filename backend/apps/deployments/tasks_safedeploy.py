@@ -71,7 +71,9 @@ def create_database_clone_job(preview_id: str):
             preview.save()
             return
 
-        clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_')
+        clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_').replace('/', '_').replace('.', '_')
+        # Ensure only valid PostgreSQL identifier characters
+        clone_db_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_db_name)  
 
         clone = DatabaseClone.objects.create(
             service=preview.service,
