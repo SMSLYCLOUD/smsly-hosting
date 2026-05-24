@@ -832,7 +832,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 server.provision_status,
                 server.id,
             )
-            server.provision_status = ManagedServer.ProvisionStatus.READY
+            server.provision_status = ManagedServer.ProvisionStatus.DONE
             server.save(update_fields=["provision_status", "updated_at"])
 
         # We only allow updates on nodes that have been provisioned or have SSH access
