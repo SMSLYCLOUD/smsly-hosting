@@ -17,7 +17,8 @@ port = 5432
 # Right-sized for a single-primary PostgreSQL 16 instance.
 # PgBouncer had MAX_CLIENT_CONN=10000 which was wildly inflated.
 connect_timeout = 5000          # ms — fail fast if DB is unreachable
-idle_timeout = 600000           # ms — 10 min idle before server conn is closed
+idle_timeout = 1800000          # ms — 30 min idle before server conn is closed
+server_lifetime = 86400000      # ms — 24h max server connection lifetime
 shutdown_timeout = 60000        # ms — graceful drain on SIGTERM
 
 # ── Query Parser (Read/Write Splitting) ───────────────────────────────────────

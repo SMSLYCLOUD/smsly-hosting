@@ -10,6 +10,7 @@ from rest_framework.test import APITestCase
 from apps.deployments.services.ecosystem_graph_builder import (
     EcosystemGraphBuilder,
     _check_tcp,
+    _check_http,
     _redis_host_port,
     _rabbitmq_host_port,
     _db_host_port,
@@ -17,10 +18,22 @@ from apps.deployments.services.ecosystem_graph_builder import (
 
 # All tests mock _check_tcp to avoid real network calls
 MOCK_TCP = patch('apps.deployments.services.ecosystem_graph_builder._check_tcp', return_value=True)
+# _check_http is patched per-class via setUp to avoid signature changes
 
 
 class EcosystemGraphBuilderNodeTests(TestCase):
     """Verify EcosystemGraphBuilder produces correct nodes."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._http_patcher = patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
+        cls._http_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._http_patcher.stop()
+        super().tearDownClass()
 
     @MOCK_TCP
     def test_build_returns_nodes_and_edges(self, _):
@@ -98,6 +111,17 @@ class EcosystemGraphBuilderNodeTests(TestCase):
 
 class EcosystemGraphBuilderEdgeTests(TestCase):
     """Verify EcosystemGraphBuilder produces correct edges."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._http_patcher = patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
+        cls._http_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._http_patcher.stop()
+        super().tearDownClass()
 
     @MOCK_TCP
     def test_all_expected_edges_present(self, _):
@@ -178,6 +202,17 @@ class EcosystemGraphBuilderEdgeTests(TestCase):
 class EcosystemGraphBuilderHealthCheckTests(TestCase):
     """Test health check logic."""
 
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls._http_patcher = patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
+        cls._http_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._http_patcher.stop()
+        super().tearDownClass()
+
     @patch('apps.deployments.services.ecosystem_graph_builder._check_tcp', return_value=True)
     def test_healthy_service_returns_healthy(self, mock_tcp):
         builder = EcosystemGraphBuilder()
@@ -222,6 +257,31 @@ class TcpCheckTests(TestCase):
         self.assertFalse(_check_tcp('localhost', 9999))
 
 
+class HttpCheckTests(TestCase):
+    """Test the _check_http helper."""
+
+    @patch('apps.deployments.services.ecosystem_graph_builder.urlopen')
+    def test_returns_true_on_success(self, mock_urlopen):
+        resp_mock = MagicMock()
+        resp_mock.status = 200
+        resp_mock.__enter__.return_value = resp_mock
+        resp_mock.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = resp_mock
+        self.assertTrue(_check_http('backend', 8000, '/health/live'))
+
+    @patch('apps.deployments.services.ecosystem_graph_builder.urlopen', side_effect=OSError)
+    def test_returns_false_on_failure(self, mock_urlopen):
+        self.assertFalse(_check_http('backend', 8000, '/health/live'))
+
+    @patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
+    def test_backend_uses_http_check(self, mock_http):
+        builder = EcosystemGraphBuilder()
+        graph = builder.build()
+        backend = next(n for n in graph['nodes'] if n['id'] == 'backend')
+        self.assertEqual(backend['status'], 'healthy')
+        mock_http.assert_called_with('backend', 8000, '/health/live', timeout=2.0)
+
+
 class HostPortExtractionTests(TestCase):
     """Test helper functions that extract host/port from Django settings."""
 
@@ -258,6 +318,12 @@ class EcosystemTopologyAPITests(APITestCase):
             email='eco@test.com',
             password='password123',
         )
+        self._http_patcher = patch('apps.deployments.services.ecosystem_graph_builder._check_http', return_value=True)
+        self._http_patcher.start()
+
+    def tearDown(self):
+        self._http_patcher.stop()
+        super().tearDown()
 
     def test_endpoint_requires_authentication(self):
         res = self.client.get('/api/v1/topology/ecosystem/')
