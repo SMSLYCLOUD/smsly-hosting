@@ -2663,6 +2663,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             path = _validate_and_sanitize_path(path)
         except Exception as e:
+            logger.warning("file_browse 400: Path validation failed for %s: %s", path, str(e))
             return Response({
                 'error': 'Path validation failed',
                 'details': str(e)
@@ -2670,6 +2671,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
 
         latest_deploy = service.deployments.filter(status='ACTIVE').first()
         if not latest_deploy:
+            logger.warning("file_browse 400: No active deployment for %s", service.id)
             return Response({
                 'error': 'No active deployment',
                 'details': f'Deployment {service.id} has no active deployments'
@@ -2740,6 +2742,20 @@ class ServiceViewSet(viewsets.ModelViewSet):
             output = resp
             if isinstance(output, bytes):
                 output = output.decode('utf-8', errors='replace')
+                
+            if 'unrecognized option' in output or 'invalid option' in output:
+                # Alpine fallback
+                resp = core_v1.connect_get_namespaced_pod_exec(
+                    pod_name, namespace,
+                    command=['ls', '-la', path],
+                    stderr=True, stdin=False,
+                    stdout=True, tty=False,
+                    _request_timeout=30,
+                )
+                output = resp
+                if isinstance(output, bytes):
+                    output = output.decode('utf-8', errors='replace')
+
             if 'No such file' in output or 'cannot access' in output:
                 fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
                 if fallback_path:
@@ -2754,6 +2770,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
                     output = resp
                     if isinstance(output, bytes):
                         output = output.decode('utf-8', errors='replace')
+                        
+                    if 'unrecognized option' in output or 'invalid option' in output:
+                        resp = core_v1.connect_get_namespaced_pod_exec(
+                            pod_name, namespace,
+                            command=['ls', '-la', path],
+                            stderr=True, stdin=False,
+                            stdout=True, tty=False,
+                            _request_timeout=30,
+                        )
+                        output = resp
+                        if isinstance(output, bytes):
+                            output = output.decode('utf-8', errors='replace')
                 else:
                     return Response({'error': 'Path not found'}, status=status.HTTP_400_BAD_REQUEST)
             files = self._parse_ls_output(output)
@@ -2798,12 +2826,18 @@ class ServiceViewSet(viewsets.ModelViewSet):
         try:
             exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
             if exit_code != 0:
+                exit_code, output = container.exec_run(["ls", "-la", path])
+                
+            if exit_code != 0:
                 fallback_path = '/' if path == '/app' else ('/app' if path == '/' else None)
                 if fallback_path:
                     path = fallback_path
                     exit_code, output = container.exec_run(["ls", "-la", "--time-style=long-iso", path])
+                    if exit_code != 0:
+                        exit_code, output = container.exec_run(["ls", "-la", path])
             if exit_code != 0:
-                return Response({'error': 'Failed to list directory', 'details': output.decode()}, status=status.HTTP_400_BAD_REQUEST)
+                logger.warning("_exec_file_list 400: ls command failed. Code: %s, Output: %s", exit_code, output.decode('utf-8', errors='replace'))
+                return Response({'error': 'Failed to list directory', 'details': output.decode('utf-8', errors='replace')}, status=status.HTTP_400_BAD_REQUEST)
             files = self._parse_ls_output(output.decode('utf-8', errors='replace'))
             return Response({'path': path, 'files': files})
         except Exception as e:
@@ -2835,25 +2869,35 @@ class ServiceViewSet(viewsets.ModelViewSet):
         return None
 
     def _parse_ls_output(self, output: str) -> list:
-        """Parse `ls -la --time-style=long-iso` output into file dicts.
-        Output format: permissions, links, owner, group, size, date(Y-M-D), time(H:M), filename...
-        """
+        """Parse `ls -la` output into file dicts. Supports standard and long-iso time styles."""
+        import re
         files = []
         lines = output.splitlines()
         if lines and lines[0].startswith('total'):
             lines = lines[1:]
         for line in lines:
             parts = line.split()
-            if len(parts) >= 8:
+            if not parts:
+                continue
+                
+            # Detect if time-style=long-iso (e.g. 2026-05-24)
+            if len(parts) >= 8 and re.match(r'\d{4}-\d{2}-\d{2}', parts[5]):
                 date = f"{parts[5]} {parts[6]}"
                 name = " ".join(parts[7:])
-                files.append({
-                    'permissions': parts[0],
-                    'user': parts[2],
-                    'size': parts[4],
-                    'date': date,
-                    'name': name,
-                })
+            elif len(parts) >= 9:
+                # Standard ls -la output: Month Day Time
+                date = f"{parts[5]} {parts[6]} {parts[7]}"
+                name = " ".join(parts[8:])
+            else:
+                continue
+                
+            files.append({
+                'permissions': parts[0],
+                'user': parts[2],
+                'size': parts[4],
+                'date': date,
+                'name': name,
+            })
         return files
 
     @action(detail=True, methods=['get'], url_path='file-download')
