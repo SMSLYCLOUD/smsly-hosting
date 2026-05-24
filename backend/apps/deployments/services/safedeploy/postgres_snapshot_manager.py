@@ -146,10 +146,11 @@ class PostgresSnapshotManager:
                 )
                 return False
 
-            # Pipe pg_dump of source into the empty clone
+            # Pipe pg_dump of source into the empty clone.
+            # source_url already contains the db name in its path,
+            # so do NOT pass source_db_name as a separate argument.
             dump_proc = subprocess.Popen(
-                ['pg_dump', '-d', source_url, '--no-owner', '--no-acl',
-                 source_db_name],
+                ['pg_dump', '-d', source_url, '--no-owner', '--no-acl'],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
             restore_proc = subprocess.Popen(
