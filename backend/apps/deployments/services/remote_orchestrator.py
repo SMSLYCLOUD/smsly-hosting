@@ -451,13 +451,26 @@ class RemoteOrchestrator:
         return True
 
     def _try_gateway_token_exchange(self, base_urls: list[str] | None = None) -> bool:
-        """Try token exchange against candidate remote API base URLs."""
+        """Try token exchange against candidate remote API base URLs.
+
+        If the HMAC exchange fails (e.g. stale gateway_secret), attempt
+        SSH-based secret re-sync and retry once before giving up.
+        """
         if not str(self.server.gateway_secret or "").strip():
             return False
 
-        for base_url in base_urls or self._candidate_base_urls():
+        candidate_urls = base_urls or self._candidate_base_urls()
+        for base_url in candidate_urls:
             if self._exchange_gateway_secret_for_token(base_url):
                 return True
+
+        # HMAC exchange failed — likely a stale gateway_secret.
+        # Re-sync the secret via SSH and retry once.
+        if self.auto_authenticate():
+            for base_url in candidate_urls:
+                if self._exchange_gateway_secret_for_token(base_url):
+                    return True
+
         return False
 
     def _get_headers(
