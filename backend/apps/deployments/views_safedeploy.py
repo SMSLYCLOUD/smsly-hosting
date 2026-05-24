@@ -56,6 +56,8 @@ class PreviewEnvironmentViewSet(viewsets.ModelViewSet):
 
     def _check_service_feature_flags(self, service):
         if not service.preview_environments_enabled:
+            import logging
+            logging.getLogger(__name__).warning("Preview environment creation rejected: preview_environments_enabled is False for service %s", service.id)
             return Response(
                 {"error": "Preview environments are not enabled for this service"},
                 status=status.HTTP_403_FORBIDDEN,
