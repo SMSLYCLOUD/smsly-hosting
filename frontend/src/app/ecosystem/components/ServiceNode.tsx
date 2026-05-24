@@ -22,16 +22,16 @@ export function ServiceNode({ data }: any) {
     const isSkipped = svc.skip;
 
     return (
-        <div className={`w-[280px] bg-zinc-900 border rounded-md shadow-sm transition-all hover:border-zinc-500 hover:shadow-md ${
+        <div className={`w-[220px] bg-zinc-900 border rounded-md shadow-sm transition-all hover:border-zinc-500 hover:shadow-md ${
             isSkipped ? 'border-zinc-800 opacity-60' : 'border-zinc-700'
         }`}>
             {/* Top Handle for incoming edges */}
             <Handle type="target" position={Position.Left} className="!bg-zinc-500" />
             
-            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950/50 px-3 py-2 rounded-t-md">
-                <div className="flex items-center gap-2">
-                    <GitBranch className="h-4 w-4 text-zinc-400" />
-                    <span className="text-xs font-semibold text-zinc-200 truncate max-w-[130px]" title={svc.repo.split('/').pop()}>
+            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950/50 px-2 py-1.5 rounded-t-md">
+                <div className="flex items-center gap-1.5">
+                    <GitBranch className="h-3 w-3 text-zinc-400" />
+                    <span className="text-[10px] font-semibold text-zinc-200 truncate max-w-[100px]" title={svc.repo.split('/').pop()}>
                         {svc.repo.split('/').pop()}
                     </span>
                 </div>
@@ -52,8 +52,8 @@ export function ServiceNode({ data }: any) {
                 </div>
             </div>
 
-            <div className="p-3 space-y-3">
-                <div className="flex flex-wrap gap-1.5">
+            <div className="p-2 space-y-2">
+                <div className="flex flex-wrap gap-1">
                     {(svc.languages && svc.languages.length > 0 ? svc.languages : [svc.stack]).map((lang: string) => (
                         <span key={lang} className={`text-[9px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wider ${STACK_COLORS[lang.toLowerCase()] || STACK_COLORS.unknown}`}>
                             {lang}
@@ -69,13 +69,13 @@ export function ServiceNode({ data }: any) {
                     ))}
                 </div>
 
-                <div className="flex items-center justify-between gap-2 bg-zinc-950/50 p-2 rounded border border-zinc-800">
-                    <Server size={12} className="text-zinc-500 shrink-0" />
+                <div className="flex items-center justify-between gap-1.5 bg-zinc-950/50 p-1.5 rounded border border-zinc-800">
+                    <Server size={10} className="text-zinc-500 shrink-0" />
                     <select
                         value={svc.server_id || 'local'}
                         onChange={(e) => updateServer(idx, e.target.value)}
                         disabled={isSkipped}
-                        className="text-[10px] bg-transparent text-zinc-300 border-none rounded flex-1 outline-none transition-colors disabled:opacity-50 appearance-none"
+                        className="text-[9px] bg-transparent text-zinc-300 border-none rounded flex-1 outline-none transition-colors disabled:opacity-50 appearance-none"
                     >
                         <option value="local">Local Server</option>
                         {servers?.map((s: any) => (

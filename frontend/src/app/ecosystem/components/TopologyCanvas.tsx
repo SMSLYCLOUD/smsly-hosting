@@ -25,12 +25,12 @@ const nodeTypes = {
 const dagreGraph = new dagre.graphlib.Graph();
 dagreGraph.setDefaultEdgeLabel(() => ({}));
 
-const nodeWidth = 280;
-const nodeHeight = 150;
+const nodeWidth = 220;
+const nodeHeight = 110;
 
 const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
   const isHorizontal = direction === 'LR';
-  dagreGraph.setGraph({ rankdir: direction, ranksep: 200, nodesep: 80 });
+  dagreGraph.setGraph({ rankdir: direction, ranksep: 100, nodesep: 30 });
 
   nodes.forEach((node) => {
     // Treat addon nodes as smaller
