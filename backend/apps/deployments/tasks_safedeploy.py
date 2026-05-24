@@ -87,7 +87,7 @@ def create_database_clone_job(preview_id: str):
         preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
         preview.save()
 
-        db_manager = PostgresSnapshotManager()
+        db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
         success = db_manager.create_clone(clone.source_database_name, clone.clone_database_name)
 
         if success:
