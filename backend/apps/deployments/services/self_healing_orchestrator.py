@@ -918,33 +918,32 @@ class SelfHealingOrchestrator:
             prompt = self._build_ai_prompt(context)
 
             try:
-                from apps.deployments.ai_router import get_ollama_model_name
-                import requests as http_requests
+                from apps.intelligence.providers import ask_with_fallback
 
-                model = get_ollama_model_name() or "llama3"
-                base = getattr(ai_settings, "api_base_url", "http://localhost:11434")
-
-                response = http_requests.post(
-                    f"{base.rstrip('/')}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "stream": False,
-                    },
-                    timeout=120,
+                system_prompt = (
+                    "You are the SMSLY AI Senate Committee — a panel of AI experts "
+                    "collaborating on DevOps diagnosis and recovery.\n\n"
+                    "RULES:\n"
+                    "1. Analyze the provided diagnostic data thoroughly.\n"
+                    "2. If a command suggestion is appropriate, prefix each command with 'CMD:'.\n"
+                    "3. Be specific about root cause, not vague.\n"
+                    "4. Suggest commands that are safe to run via SSH on a production server.\n"
+                    "5. Consider all self-healing actions already attempted in the heal log."
                 )
 
-                if response.status_code == 200:
-                    data = response.json()
-                    ai_response = data.get("response", "")
-                    self._log(f"AI response received ({len(ai_response)} chars)")
+                ai_response, provider_name = ask_with_fallback(
+                    prompt, system_prompt=system_prompt, mode="senate"
+                )
 
-                    commands = self._extract_commands(ai_response)
-                    return {
-                        "success": True,
-                        "ai_response": ai_response,
-                        "suggested_commands": commands,
-                    }
+                self._log(f"Senate Committee response from {provider_name} ({len(ai_response)} chars)")
+
+                commands = self._extract_commands(ai_response)
+                return {
+                    "success": True,
+                    "ai_response": ai_response,
+                    "suggested_commands": commands,
+                    "provider": provider_name,
+                }
 
             except Exception as exc:
                 self._log(f"AI escalation failed: {exc}")

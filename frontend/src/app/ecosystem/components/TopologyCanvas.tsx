@@ -29,7 +29,7 @@ const nodeHeight = 150;
 
 const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
   const isHorizontal = direction === 'LR';
-  dagreGraph.setGraph({ rankdir: direction, ranksep: 100, nodesep: 50 });
+  dagreGraph.setGraph({ rankdir: direction, ranksep: 200, nodesep: 80 });
 
   nodes.forEach((node) => {
     // Treat addon nodes as smaller
@@ -47,6 +47,10 @@ const getLayoutedElements = (nodes: any[], edges: any[], direction = 'LR') => {
   const newNodes = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
     const newNode = { ...node };
+
+    // Required for proper smoothstep edge routing
+    newNode.targetPosition = isHorizontal ? Position.Left : Position.Top;
+    newNode.sourcePosition = isHorizontal ? Position.Right : Position.Bottom;
 
     // We are shifting the dagre node position (anchor=center center) to the top left
     // so it matches the React Flow node anchor point (top left).
@@ -95,9 +99,10 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
               id: `e-${targetSvc.repo}-${svc.repo}`,
               source: targetSvc.repo, // Dependency is source
               target: svc.repo,       // This service depends on it
+              type: 'smoothstep',
               animated: true,
-              style: { stroke: 'hsl(var(--primary))' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: 'hsl(var(--primary))' },
+              style: { stroke: '#3b82f6', strokeWidth: 2 },
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6' },
             });
           }
         });
@@ -123,8 +128,9 @@ export function TopologyCanvas({ plan, servers, callbacks }: any) {
               id: `e-${addonId}-${targetSvc.repo}`,
               source: addonId,
               target: targetSvc.repo,
+              type: 'smoothstep',
               animated: true,
-              style: { stroke: '#a855f7' }, // purple for addons
+              style: { stroke: '#a855f7', strokeWidth: 2 }, // purple for addons
               markerEnd: { type: MarkerType.ArrowClosed, color: '#a855f7' },
             });
           }
