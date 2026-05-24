@@ -72,7 +72,8 @@ class PostgresSnapshotManager:
         clone_url = self._build_db_url(clone_db_name)
 
         try:
-            logger.info(f"Cloning DB %s to %s", source_db_name, clone_db_name)
+            logger.error(f"CLONE_DEBUG >>> start: source=%s clone=%s admin_url=%s",
+                         source_db_name, clone_db_name, self.admin_db_url[:60])
 
             # 1.  Terminate other connections to the source database.
             #     We connect to 'postgres' so our own session does not hold a
@@ -83,6 +84,8 @@ class PostgresSnapshotManager:
                 f"WHERE datname = '{source_db_name}' AND pid <> pg_backend_pid();"
             )
             term_res = self._run_psql(maintenance_url, term_sql, check=False)
+            logger.error(f"CLONE_DEBUG >>> terminate rc=%s stderr=%s",
+                         term_res.returncode, term_res.stderr[:200] if term_res.stderr else '')
             if term_res.returncode != 0:
                 logger.warning(f"pg_terminate_backend non-zero exit: %s",
                                term_res.stderr.strip())
@@ -95,6 +98,8 @@ class PostgresSnapshotManager:
             # 2.  Drop any stale clone database left from a previous attempt.
             drop_sql = f'DROP DATABASE IF EXISTS "{clone_db_name}";'
             drop_res = self._run_psql(maintenance_url, drop_sql, check=False)
+            logger.error(f"CLONE_DEBUG >>> drop rc=%s stderr=%s",
+                         drop_res.returncode, drop_res.stderr[:200] if drop_res.stderr else '')
             if drop_res.returncode != 0:
                 logger.warning(f"DROP IF EXISTS stderr: %s", drop_res.stderr.strip())
 
@@ -105,11 +110,14 @@ class PostgresSnapshotManager:
             )
             try:
                 self._run_psql(maintenance_url, create_sql, check=True)
+                logger.error(f"CLONE_DEBUG >>> TEMPLATE success")
                 logger.info(f"Cloned %s → %s via TEMPLATE", source_db_name, clone_db_name)
                 return True
             except subprocess.CalledProcessError as e:
                 stderr_msg = e.stderr.strip() if e.stderr else '(empty)'
                 stdout_msg = e.stdout.strip() if e.stdout else '(empty)'
+                logger.error(f"CLONE_DEBUG >>> TEMPLATE FAILED: stderr=%s stdout=%s",
+                             stderr_msg[:300], stdout_msg[:300])
                 logger.warning(
                     f"CREATE DATABASE WITH TEMPLATE failed.\n"
                     f"  stderr: %s\n"
@@ -125,6 +133,7 @@ class PostgresSnapshotManager:
                 )
 
         except Exception as e:
+            logger.error(f"CLONE_DEBUG >>> UNEXPECTED EXCEPTION: %s", str(e), exc_info=True)
             logger.error(f"create_clone unexpected error: %s", str(e), exc_info=True)
             return False
 
