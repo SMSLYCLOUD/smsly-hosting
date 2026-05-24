@@ -149,12 +149,26 @@ def run_migration_validation_job(preview_id: str):
             db_clone = None
 
         if not db_clone or db_clone.status != DatabaseClone.Status.READY:
-            validation.status = MigrationValidation.Status.FAILED
-            validation.error_message = "No ready database clone available"
-            validation.save()
-            preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
-            preview.save()
-            return
+            # Check if this service has a PostgreSQL addon at all
+            from apps.deployments.models_addons import Addon
+            has_pg_addon = Addon.objects.filter(
+                service=preview.service, addon_type=Addon.Type.POSTGRES
+            ).exists()
+            if has_pg_addon:
+                validation.status = MigrationValidation.Status.FAILED
+                validation.error_message = "No ready database clone available"
+                validation.save()
+                preview.status = PreviewEnvironment.Status.MIGRATION_FAILED
+                preview.save()
+                return
+            else:
+                # No DB means no migrations to validate — skip gracefully
+                validation.status = MigrationValidation.Status.NOT_CONFIGURED
+                validation.save()
+                preview.status = PreviewEnvironment.Status.TESTS_RUNNING
+                preview.save()
+                run_preview_tests_job.delay(preview_id)
+                return
 
         clone_url = db_clone.clone_database_url_secret_ref
 
