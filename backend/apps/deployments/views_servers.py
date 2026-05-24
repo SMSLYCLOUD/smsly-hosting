@@ -66,6 +66,35 @@ def _candidate_api_urls(server) -> list[str]:
 
     host_port = _server_host_port(server)
     if not host_port:
+        return urls
+
+    has_explicit_port = host_port.count(":") == 1
+
+    # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
+    if _server_host_is_ip(host_port):
+        if getattr(server, 'is_lite_agent', False):
+            # Lite agents run Traefik on port 80, no Nginx on 8090
+            _append_unique(urls, f"http://{host_port}")
+            _append_unique(urls, f"http://{host_port}:8090")
+        else:
+            # Full installs: Nginx on 8090, then Traefik on 80
+            _append_unique(urls, f"http://{host_port}:8090")
+            _append_unique(urls, f"http://{host_port}")
+        _append_unique(urls, f"https://{host_port}")
+
+        # Only try 8000 if it's localhost or we are desperate
+        if host_port.startswith("127.0.0.1") or host_port.startswith("localhost"):
+            _append_unique(urls, f"http://{host_port}:8000")
+    else:
+        # Priority 2: If it's a domain, try HTTPS first
+        _append_unique(urls, f"https://{host_port}")
+        _append_unique(urls, f"http://{host_port}")
+        if not has_explicit_port:
+            _append_unique(urls, f"http://{host_port}:8090")
+
+        if host_port.startswith("localhost"):
+            _append_unique(urls, f"http://{host_port}:8000")
+
     # ── WireGuard Mesh VIP fallback ─────────────────────────────
     # When the public IP is unreachable, try the node's WireGuard
     # mesh address (internal 10.x.x.x) — encryption is handled by
@@ -79,35 +108,6 @@ def _candidate_api_urls(server) -> list[str]:
         else:
             _append_unique(urls, f"http://{wg_ip}:8090")
             _append_unique(urls, f"http://{wg_ip}")
-
-    return urls
-
-    has_explicit_port = host_port.count(":") == 1
-    
-    # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
-    if _server_host_is_ip(host_port):
-        if getattr(server, 'is_lite_agent', False):
-            # Lite agents run Traefik on port 80, no Nginx on 8090
-            _append_unique(urls, f"http://{host_port}")
-            _append_unique(urls, f"http://{host_port}:8090")
-        else:
-            # Full installs: Nginx on 8090, then Traefik on 80
-            _append_unique(urls, f"http://{host_port}:8090")
-            _append_unique(urls, f"http://{host_port}")
-        _append_unique(urls, f"https://{host_port}")
-        
-        # Only try 8000 if it's localhost or we are desperate
-        if host_port.startswith("127.0.0.1") or host_port.startswith("localhost"):
-            _append_unique(urls, f"http://{host_port}:8000")
-    else:
-        # Priority 2: If it's a domain, try HTTPS first
-        _append_unique(urls, f"https://{host_port}")
-        _append_unique(urls, f"http://{host_port}")
-        if not has_explicit_port:
-            _append_unique(urls, f"http://{host_port}:8090")
-        
-        if host_port.startswith("localhost"):
-            _append_unique(urls, f"http://{host_port}:8000")
 
     return urls
 
@@ -235,55 +235,35 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
     1. HMAC exchange: If gateway_secret is set, use it to request a token.
     2. Credential exchange: If SSH password is available, try admin login.
 
+    Tries each candidate API URL for the server in turn.
     Returns the raw token string on success, None on failure.
     """
     gateway_secret = str(server.gateway_secret or "").strip()
     ssh_password = str(server.ssh_password or "").strip()
+    candidate_urls = _candidate_api_urls(server)
 
-    # ── Strategy 1: HMAC-based exchange ──
-    if gateway_secret:
-        try:
-            ts = str(int(time.time()))
-            body = json_mod.dumps({"node_name": f"Node-{server.host}"}, sort_keys=True).encode()
-            body_hash = hashlib.sha256(body).hexdigest()
-            path = "/api/v1/auth/node-token-exchange-hmac/"
-            payload = f"POST|{path}|{ts}|{body_hash}"
-            sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    def _try_exchange_for_url(url_base: str) -> str | None:
+        url_base = str(url_base or "").strip().rstrip("/")
+        if not url_base:
+            return None
 
-            resp = requests.post(
-                f"{base_url}{path}",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Gateway-Signature-V2": sig,
-                    "X-Request-Timestamp": ts,
-                },
-                timeout=15,
-                verify=False,
-            )
-            if resp.status_code == 200:
-                token = resp.json().get("token")
-                if token:
-                    logger.info("Auto-exchanged HMAC for API token on %s", server.host)
-                    return token
-        except Exception as exc:
-            logger.debug("HMAC token exchange failed for %s: %s", server.host, exc)
-
-    allow_pw_exchange = str(os.environ.get("ALLOW_REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
-        "1", "true", "yes", "on"
-    }
-
-    # ── Strategy 2: Credential-based exchange ──
-    if ssh_password and allow_pw_exchange:
-        # Try common admin usernames
-        for username in ("admin", "root"):
+        # ── Strategy 1: HMAC-based exchange ──
+        if gateway_secret:
             try:
+                ts = str(int(time.time()))
+                body = json_mod.dumps({"node_name": f"Node-{server.host}"}, sort_keys=True).encode()
+                body_hash = hashlib.sha256(body).hexdigest()
+                path = "/api/v1/auth/node-token-exchange-hmac/"
+                payload = f"POST|{path}|{ts}|{body_hash}"
+                sig = hmac_mod.new(gateway_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
                 resp = requests.post(
-                    f"{base_url}/api/v1/auth/node-token-exchange/",
-                    json={
-                        "username": username,
-                        "password": ssh_password,
-                        "node_name": f"Node-{server.host}",
+                    f"{url_base}{path}",
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Gateway-Signature-V2": sig,
+                        "X-Request-Timestamp": ts,
                     },
                     timeout=15,
                     verify=False,
@@ -291,37 +271,71 @@ def _try_auto_token_exchange(server, base_url: str) -> str | None:
                 if resp.status_code == 200:
                     token = resp.json().get("token")
                     if token:
-                        logger.info(
-                            "Auto-exchanged credentials (%s) for API token on %s",
-                            username, server.host,
-                        )
+                        logger.info("Auto-exchanged HMAC for API token on %s via %s", server.host, url_base)
                         return token
             except Exception as exc:
-                logger.debug(
-                    "Credential token exchange (%s) failed for %s: %s",
-                    username, server.host, exc,
-                )
+                logger.debug("HMAC token exchange failed for %s via %s: %s", server.host, url_base, exc)
 
-    # ── Strategy 3: Login API (dj-rest-auth) ──
-    if ssh_password and allow_pw_exchange:
-        for username in ("admin", "root"):
-            try:
-                resp = requests.post(
-                    f"{base_url}/api/v1/auth/login/",
-                    json={"username": username, "password": ssh_password},
-                    timeout=15,
-                    verify=False,
-                )
-                if resp.status_code == 200:
-                    token = resp.json().get("key") or resp.json().get("token")
-                    if token:
-                        logger.info(
-                            "Auto-obtained DRF token via login for %s",
-                            server.host,
-                        )
-                        return token
-            except Exception:
-                pass
+        allow_pw_exchange = str(os.environ.get("ALLOW_REMOTE_PASSWORD_EXCHANGE", "")).lower() in {
+            "1", "true", "yes", "on"
+        }
+
+        # ── Strategy 2: Credential-based exchange ──
+        if ssh_password and allow_pw_exchange:
+            for username in ("admin", "root"):
+                try:
+                    resp = requests.post(
+                        f"{url_base}/api/v1/auth/node-token-exchange/",
+                        json={
+                            "username": username,
+                            "password": ssh_password,
+                            "node_name": f"Node-{server.host}",
+                        },
+                        timeout=15,
+                        verify=False,
+                    )
+                    if resp.status_code == 200:
+                        token = resp.json().get("token")
+                        if token:
+                            logger.info(
+                                "Auto-exchanged credentials (%s) for API token on %s via %s",
+                                username, server.host, url_base,
+                            )
+                            return token
+                except Exception as exc:
+                    logger.debug(
+                        "Credential token exchange (%s) failed for %s via %s: %s",
+                        username, server.host, url_base, exc,
+                    )
+
+        # ── Strategy 3: Login API (dj-rest-auth) ──
+        if ssh_password and allow_pw_exchange:
+            for username in ("admin", "root"):
+                try:
+                    resp = requests.post(
+                        f"{url_base}/api/v1/auth/login/",
+                        json={"username": username, "password": ssh_password},
+                        timeout=15,
+                        verify=False,
+                    )
+                    if resp.status_code == 200:
+                        token = resp.json().get("key") or resp.json().get("token")
+                        if token:
+                            logger.info(
+                                "Auto-obtained DRF token via login for %s via %s",
+                                server.host, url_base,
+                            )
+                            return token
+                except Exception:
+                    pass
+
+        return None
+
+    # Try each candidate URL in order, returning on first success
+    for url_base in candidate_urls:
+        token = _try_exchange_for_url(url_base)
+        if token:
+            return token
 
     return None
 
@@ -465,59 +479,53 @@ def _fetch_remote_json_with_fallback(server, kind, api_path, timeout=15):
     """
     Fetch remote JSON with token -> HMAC fallback.
 
-    This handles cases where one auth method is stale but the other is valid.
+    Tries each candidate API URL for the server in turn,
+    with multiple auth modes per URL.
     """
     normalized_path = _normalize_remote_api_path(api_path)
-    url = f"{server.api_url.rstrip('/')}{normalized_path}"
+    candidate_urls = _candidate_api_urls(server)
     modes = _iter_remote_auth_modes(server)
     retryable_statuses = {401, 403, 500, 502, 503}
 
     last_error = None
     last_status = None
 
-    for idx, mode in enumerate(modes):
-        headers = _build_remote_headers(
-            server,
-            method="GET",
-            path=normalized_path,
-            auth_mode=None if mode == "none" else mode,
-        )
-        try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
-        except requests.RequestException as exc:
-            last_error = str(exc)
-            continue
-
-        last_status = resp.status_code
-        if resp.status_code >= 400:
-            has_more_modes = idx < len(modes) - 1
-            if has_more_modes and resp.status_code in retryable_statuses:
-                continue
-            return None, _safe_remote_error_payload(
-                kind,
-                f"Remote server returned HTTP {resp.status_code}",
-                upstream_status=resp.status_code,
+    for base_url in candidate_urls:
+        url = f"{str(base_url or '').rstrip('/')}{normalized_path}"
+        for idx, mode in enumerate(modes):
+            headers = _build_remote_headers(
+                server,
+                method="GET",
+                path=normalized_path,
+                auth_mode=None if mode == "none" else mode,
             )
-
-        try:
-            return resp.json(), None
-        except ValueError:
-            has_more_modes = idx < len(modes) - 1
-            if has_more_modes:
+            try:
+                resp = requests.get(url, headers=headers, timeout=timeout)
+            except requests.RequestException as exc:
+                last_error = str(exc)
                 continue
-            return None, _safe_remote_error_payload(
-                kind,
-                "Remote server returned non-JSON payload.",
-                upstream_status=resp.status_code,
-            )
 
-    if last_status is not None:
-        return None, _safe_remote_error_payload(
-            kind,
-            f"Remote server returned HTTP {last_status}",
-            upstream_status=last_status,
-        )
-    return None, _safe_remote_error_payload(kind, last_error or "Remote request failed.")
+            last_status = resp.status_code
+            if resp.status_code >= 400:
+                has_more_modes = idx < len(modes) - 1
+                if has_more_modes and resp.status_code in retryable_statuses:
+                    continue
+                # Don't fail-fast on non-retryable status; try next candidate URL
+                break
+
+            try:
+                return resp.json(), None
+            except ValueError:
+                has_more_modes = idx < len(modes) - 1
+                if has_more_modes:
+                    continue
+                break
+
+         return None, _safe_remote_error_payload(
+        kind,
+        f"Remote server unreachable or returned HTTP {last_status}" if last_status else "Remote server unreachable",
+        upstream_status=last_status,
+    )
 
 
 def _lite_agent_proxy_response(server, request, method: str, path: str) -> Response | None:

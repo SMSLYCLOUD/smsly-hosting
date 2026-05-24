@@ -1140,7 +1140,14 @@ if os.path.exists(services_dir):
         self._verify_between_servers()
 
         if self.transfer.transfer_type == 'FULL':
-            url = f"http://{self.transfer.target_server_ip}:8000/health"
+            # Try mesh VPN address first (set up during interconnect above),
+            # then fall back to target_server_ip
+            target_server = self._target_server_record()
+            health_ip = (
+                str(getattr(target_server, 'wg_address', '') or '').strip()
+                or self.transfer.target_server_ip
+            )
+            url = f"http://{health_ip}:8000/health"
             try:
                 resp = requests.get(url, timeout=10)
                 if resp.status_code >= 500:
