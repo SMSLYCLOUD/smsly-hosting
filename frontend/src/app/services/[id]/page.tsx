@@ -10,6 +10,7 @@ import dynamic from 'next/dynamic';
 import { LogsTab } from '@/components/logs/LogsTab';
 import { AdvancedTab } from '@/components/settings/AdvancedTab';
 import { EnvVarsTab } from '@/components/settings/EnvVarsTab';
+import { AIInsightsTab } from '@/components/settings/AIInsightsTab';
 import { DomainsTab } from '@/components/settings/DomainsTab';
 import { DeploymentsTab } from '@/components/settings/DeploymentsTab';
 import { MetricsTab } from '@/components/metrics/MetricsTab';
@@ -623,6 +624,8 @@ export default function ServiceDetailPage() {
             {activeTab === 'files' && <FilesTab serviceId={service.id} />}
 
             {activeTab === 'env' && <EnvVarsTab serviceId={service.id} />}
+
+            {activeTab === 'ai-insights' && <AIInsightsTab serviceId={service.id} />}
 
             {activeTab === 'router' && (
                 <AiRouterTab

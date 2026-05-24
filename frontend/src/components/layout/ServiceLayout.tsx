@@ -1,7 +1,7 @@
 import { 
     ArrowLeft, GitCommit, Activity, Terminal, Shield, Settings, 
     Clock, Globe, Database, List, Timer, HardDrive, Puzzle, Network, Route,
-    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck
+    HeartPulse, Cpu, BarChart3, Box, FolderOpen, ShieldCheck, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -29,6 +29,7 @@ export function ServiceLayout({ service, activeTab, setActiveTab, children }: Se
         { id: 'addons', label: 'Addons', icon: Puzzle },
         { id: 'storage', label: 'Storage', icon: HardDrive },
         { id: 'env', label: 'Variables', icon: Database },
+        { id: 'ai-insights', label: 'AI Insights', icon: Sparkles },
         ...(isAiRouter ? [{ id: 'router', label: 'AI Router', icon: Route }] : []),
         { id: 'domains', label: 'Domains', icon: Globe },
         { id: 'metrics', label: 'Metrics', icon: BarChart3 },
