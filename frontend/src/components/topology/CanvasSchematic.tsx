@@ -134,10 +134,10 @@ export function CanvasSchematic({ data, loading, error }: { data: any, loading: 
         const initialEdges: any[] = (data.edges || []).map((e: TopologyEdge, idx: number) => {
           // Color by edge type
           const edgeColors: Record<string, string> = {
-            DATABASE: '#818cf8', CACHE: '#f87171', STORAGE: '#fbbf24',
-            API: '#3b82f6', DOMAIN: '#10b981', CRON: '#a78bfa',
-            TUNNEL: '#06b6d4', QUEUE: '#fb923c', SEARCH: '#38bdf8',
-            ADDON: '#6366f1',
+            PROXY_CHAIN: '#3b82f6', DATABASE: '#10b981', QUEUE: '#fb923c',
+            INTERNAL: '#a855f7', CACHE: '#06b6d4', TUNNEL: '#ec4899',
+            STORAGE: '#fbbf24', API: '#3b82f6', DOMAIN: '#10b981', 
+            CRON: '#a78bfa', SEARCH: '#38bdf8', ADDON: '#6366f1',
           };
           const color = edgeColors[e.type] || '#52525b';
 
@@ -198,7 +198,7 @@ export function CanvasSchematic({ data, loading, error }: { data: any, loading: 
             proOptions={{ hideAttribution: true }}
           >
             <Background color="#27272a" gap={20} size={1} />
-            <Controls className="!bg-zinc-800 !border-zinc-700 !fill-white" />
+            <Controls className="!bg-transparent [&_button]:!bg-zinc-900 [&_button]:!border-zinc-800 [&_button]:!fill-zinc-300 [&_button:hover]:!bg-zinc-800 [&_button]:!border-b [&_button:last-child]:!border-b-0 border border-zinc-800 rounded-md overflow-hidden shadow-lg" />
             <MiniMap
                 nodeColor={(n) => {
                     if (n.data?.status === 'ACTIVE') return '#10b981';
