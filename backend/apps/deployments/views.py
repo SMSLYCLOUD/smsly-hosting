@@ -2736,14 +2736,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 ['ls', '-la', '--time-style=long-iso', path],
                 ['ls', '-la', path],
                 ['python3', '-c', (
-                    "import os,stat,datetime,sys;"
-                    "p=sys.argv[1];"
-                    "for f in os.listdir(p):"
-                    " fp=os.path.join(p,f);"
-                    " s=os.lstat(fp);"
-                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M');"
-                    " print(stat.filemode(s.st_mode),s.st_nlink,"
-                    " s.st_uid,s.st_gid,s.st_size,mt,f)"
+                    "import os,stat,datetime,sys\n"
+                    "p=sys.argv[1]\n"
+                    "for f in os.listdir(p):\n"
+                    " fp=os.path.join(p,f)\n"
+                    " s=os.lstat(fp)\n"
+                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M')\n"
+                    " print(stat.filemode(s.st_mode),s.st_nlink,s.st_uid,s.st_gid,s.st_size,mt,f)"
                 ), path],
             ]
             output = ""
@@ -2850,14 +2849,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 ["ls", "-la", path],
                 # Python-based fallback for distroless/minimal images without ls
                 ["python3", "-c", (
-                    "import os,stat,datetime,sys;"
-                    "p=sys.argv[1];"
-                    "for f in os.listdir(p):"
-                    " fp=os.path.join(p,f);"
-                    " s=os.lstat(fp);"
-                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M');"
-                    " print(stat.filemode(s.st_mode),s.st_nlink,"
-                    " s.st_uid,s.st_gid,s.st_size,mt,f)"
+                    "import os,stat,datetime,sys\n"
+                    "p=sys.argv[1]\n"
+                    "for f in os.listdir(p):\n"
+                    " fp=os.path.join(p,f)\n"
+                    " s=os.lstat(fp)\n"
+                    " mt=datetime.datetime.fromtimestamp(s.st_mtime).strftime('%Y-%m-%d %H:%M')\n"
+                    " print(stat.filemode(s.st_mode),s.st_nlink,s.st_uid,s.st_gid,s.st_size,mt,f)"
                 ), path],
             ]
             exit_code = 1
