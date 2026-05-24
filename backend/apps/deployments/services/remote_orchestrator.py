@@ -584,6 +584,21 @@ class RemoteOrchestrator:
             https_urls = [u for u in urls if u.startswith("https://")]
             if https_urls:
                 return https_urls
+
+        # ── WireGuard Mesh VIP fallback ─────────────────────────────
+        # When the public IP is unreachable, try the node's WireGuard
+        # mesh address (internal 10.x.x.x) — encryption is handled by
+        # WireGuard, so HTTP is safe here.
+        wg_ip = str(getattr(self.server, "wg_address", "") or "").strip()
+        if wg_ip and wg_ip != host_port:
+            is_lite = getattr(self.server, "is_lite_agent", False)
+            if is_lite:
+                append(f"http://{wg_ip}")
+                append(f"http://{wg_ip}:8090")
+            else:
+                append(f"http://{wg_ip}:8090")
+                append(f"http://{wg_ip}")
+
         return urls
 
     @staticmethod
