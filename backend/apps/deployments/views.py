@@ -2229,12 +2229,14 @@ class ServiceViewSet(viewsets.ModelViewSet):
                 elif action == 'senate':
                     # Trigger AI Senate env enrichment (re‑use existing logic)
                     from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
-                    # Simplified: just re‑resolve env vars and store them
                     env_context = {}  # placeholder – real implementation would gather context
                     suggestions = EnvironmentIntelligenceService.resolve_environment(env_context, svc.stack or '', svc.name)
-                    # Update env vars (create or update)
                     from apps.deployments.models import EnvironmentVariable
+                    import re
                     for k, v in suggestions.items():
+                        if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$', k):
+                            logger.warning("Skipping invalid env var key from Senate: %s", k)
+                            continue
                         EnvironmentVariable.objects.update_or_create(service=svc, key=k, defaults={'value': v, 'is_secret': False})
                 results.append({"id": str(svc.id), "status": "ok"})
             except Exception as exc:
