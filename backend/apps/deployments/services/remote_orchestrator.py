@@ -527,10 +527,9 @@ class RemoteOrchestrator:
     def _candidate_base_urls(self) -> list[str]:
         """Return API base URLs worth trying without mutating the saved server.
 
-        Ordering mirrors _candidate_api_urls in views_servers.py:
-          - Full-install IP-based hosts: port 8090 (Nginx→Django) before port 80 (Traefik)
-          - Lite agent IP-based hosts: port 80 before port 8090
-          - Domain-based hosts: HTTPS first, then HTTP, then HTTP:8090
+        Priority order:
+          1. WireGuard mesh VPN IP (internal, encrypted by WireGuard) — HTTP only
+          2. Public IP / Domain (TLS enforced where applicable)
         """
         urls: list[str] = []
 
@@ -544,7 +543,20 @@ class RemoteOrchestrator:
             parsed = urlparse(host_port)
             host_port = parsed.netloc or parsed.path
         host_port = host_port.split("/", 1)[0].strip()
-        
+
+        wg_ip = str(getattr(self.server, "wg_address", "") or "").strip()
+        has_wg = bool(wg_ip and wg_ip != host_port)
+        is_lite = getattr(self.server, 'is_lite_agent', False)
+
+        # ── Priority 1: WireGuard Mesh VPN (secure, internal, encrypted) ──
+        if has_wg:
+            if is_lite:
+                append(f"http://{wg_ip}")
+                append(f"http://{wg_ip}:8090")
+            else:
+                append(f"http://{wg_ip}:8090")
+                append(f"http://{wg_ip}")
+
         if not host_port:
             return urls
 
@@ -557,22 +569,20 @@ class RemoteOrchestrator:
         )
 
         has_explicit_port = host_port.count(":") == 1
-        
+
+        # ── Priority 2: Public IP / Domain (fallback) ──
         if _host_is_ip(host_port):
             if getattr(self.server, 'is_lite_agent', False):
-                # Lite agents: only Traefik on port 80
                 if not enforce_tls:
                     append(f"http://{host_port}")
                     append(f"http://{host_port}:8090")
                 append(f"https://{host_port}")
             else:
-                # Full install: Nginx on 8090 → Django API, Traefik on 80
                 if not enforce_tls:
                     append(f"http://{host_port}:8090")
                     append(f"http://{host_port}")
                 append(f"https://{host_port}")
         else:
-            # Domain-based: HTTPS first, then HTTP variants
             append(self.base_url)
             append(f"https://{host_port}")
             if not enforce_tls:
@@ -584,20 +594,6 @@ class RemoteOrchestrator:
             https_urls = [u for u in urls if u.startswith("https://")]
             if https_urls:
                 return https_urls
-
-        # ── WireGuard Mesh VIP fallback ─────────────────────────────
-        # When the public IP is unreachable, try the node's WireGuard
-        # mesh address (internal 10.x.x.x) — encryption is handled by
-        # WireGuard, so HTTP is safe here.
-        wg_ip = str(getattr(self.server, "wg_address", "") or "").strip()
-        if wg_ip and wg_ip != host_port:
-            is_lite = getattr(self.server, "is_lite_agent", False)
-            if is_lite:
-                append(f"http://{wg_ip}")
-                append(f"http://{wg_ip}:8090")
-            else:
-                append(f"http://{wg_ip}:8090")
-                append(f"http://{wg_ip}")
 
         return urls
 

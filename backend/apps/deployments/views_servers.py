@@ -59,34 +59,48 @@ def _server_host_is_ip(host_port: str) -> bool:
 
 
 def _candidate_api_urls(server) -> list[str]:
-    """Return likely API base URLs in the order we should probe."""
+    """Return likely API base URLs in the order we should probe.
+
+    Priority:
+      1. WireGuard mesh VPN IP (secure, internal, encrypted)
+      2. Public IP / Domain (fallback)
+    """
     urls: list[str] = []
     current = str(server.api_url or "").strip()
     _append_unique(urls, current)
 
     host_port = _server_host_port(server)
+    wg_ip = str(getattr(server, "wg_address", "") or "").strip()
+    has_wg = bool(wg_ip and wg_ip != host_port)
+    is_lite = getattr(server, 'is_lite_agent', False)
+
+    # ── Priority 1: WireGuard Mesh VPN (secure, internal, encrypted) ──
+    if has_wg:
+        if is_lite:
+            _append_unique(urls, f"http://{wg_ip}")
+            _append_unique(urls, f"http://{wg_ip}:8090")
+        else:
+            _append_unique(urls, f"http://{wg_ip}:8090")
+            _append_unique(urls, f"http://{wg_ip}")
+
     if not host_port:
         return urls
 
     has_explicit_port = host_port.count(":") == 1
 
-    # Priority 1: If it's an IP, try HTTP first (likely no SSL on bare IP)
+    # ── Priority 2: Public IP / Domain (fallback) ──
     if _server_host_is_ip(host_port):
-        if getattr(server, 'is_lite_agent', False):
-            # Lite agents run Traefik on port 80, no Nginx on 8090
+        if is_lite:
             _append_unique(urls, f"http://{host_port}")
             _append_unique(urls, f"http://{host_port}:8090")
         else:
-            # Full installs: Nginx on 8090, then Traefik on 80
             _append_unique(urls, f"http://{host_port}:8090")
             _append_unique(urls, f"http://{host_port}")
         _append_unique(urls, f"https://{host_port}")
 
-        # Only try 8000 if it's localhost or we are desperate
         if host_port.startswith("127.0.0.1") or host_port.startswith("localhost"):
             _append_unique(urls, f"http://{host_port}:8000")
     else:
-        # Priority 2: If it's a domain, try HTTPS first
         _append_unique(urls, f"https://{host_port}")
         _append_unique(urls, f"http://{host_port}")
         if not has_explicit_port:
@@ -94,20 +108,6 @@ def _candidate_api_urls(server) -> list[str]:
 
         if host_port.startswith("localhost"):
             _append_unique(urls, f"http://{host_port}:8000")
-
-    # ── WireGuard Mesh VIP fallback ─────────────────────────────
-    # When the public IP is unreachable, try the node's WireGuard
-    # mesh address (internal 10.x.x.x) — encryption is handled by
-    # WireGuard, so HTTP is safe here.
-    wg_ip = str(getattr(server, "wg_address", "") or "").strip()
-    if wg_ip and wg_ip != host_port:
-        is_lite = getattr(server, 'is_lite_agent', False)
-        if is_lite:
-            _append_unique(urls, f"http://{wg_ip}")
-            _append_unique(urls, f"http://{wg_ip}:8090")
-        else:
-            _append_unique(urls, f"http://{wg_ip}:8090")
-            _append_unique(urls, f"http://{wg_ip}")
 
     return urls
 
