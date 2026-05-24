@@ -44,7 +44,9 @@ def create_preview_environment_job(preview_id: str):
 @shared_task
 def create_database_clone_job(preview_id: str):
     try:
+        logger.error(f"CLONE_TASK >>> START preview_id={preview_id}")
         preview = PreviewEnvironment.objects.get(id=preview_id)
+        logger.error(f"CLONE_TASK >>> preview found: status={preview.status} service={preview.service.id}")
 
         # Find the service's PostgreSQL addon to determine the source database name
         pg_addon = Addon.objects.filter(
@@ -53,18 +55,20 @@ def create_database_clone_job(preview_id: str):
         ).first()
 
         if not pg_addon:
-            logger.info("No PostgreSQL addon for service %s, skipping DB clone", preview.service.id)
+            logger.error("CLONE_TASK >>> No PostgreSQL addon for service %s, skipping DB clone", preview.service.id)
             preview.status = PreviewEnvironment.Status.MIGRATION_RUNNING
             preview.save()
             run_migration_validation_job.delay(preview_id)
             return
+
+        logger.error(f"CLONE_TASK >>> addon found: {pg_addon.id} url={pg_addon.connection_url[:60]}")
 
         # Extract the actual database name from the addon's connection URL
         from urllib.parse import urlparse
         parsed = urlparse(pg_addon.connection_url)
         source_db_name = parsed.path.lstrip('/') if parsed.path else None
         if not source_db_name:
-            logger.error("Could not determine database name from addon %s URL for service %s",
+            logger.error("CLONE_TASK >>> Could not determine database name from addon %s URL for service %s",
                          pg_addon.id, preview.service.id)
             preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
             preview.error_message = "Could not determine source database name"
@@ -74,6 +78,7 @@ def create_database_clone_job(preview_id: str):
         clone_db_name = f"preview_{source_db_name[:20]}_{preview.branch_name}_{preview.commit_sha[:8]}".replace('-', '_').replace('/', '_').replace('.', '_')
         # Ensure only valid PostgreSQL identifier characters
         clone_db_name = ''.join(c if c.isalnum() or c == '_' else '_' for c in clone_db_name)
+        logger.error(f"CLONE_TASK >>> source_db={source_db_name} clone_db={clone_db_name}")
 
         clone, created = DatabaseClone.objects.get_or_create(
             preview_environment=preview,
@@ -94,9 +99,11 @@ def create_database_clone_job(preview_id: str):
 
         preview.status = PreviewEnvironment.Status.DB_CLONE_CREATING
         preview.save()
+        logger.error(f"CLONE_TASK >>> calling create_clone...")
 
         db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
         success = db_manager.create_clone(clone.source_database_name, clone.clone_database_name)
+        logger.error(f"CLONE_TASK >>> create_clone returned: {success}")
 
         if success:
             clone.status = DatabaseClone.Status.READY
@@ -113,7 +120,9 @@ def create_database_clone_job(preview_id: str):
             preview.status = PreviewEnvironment.Status.DB_CLONE_FAILED
             preview.error_message = clone.error_message
             preview.save()
+            logger.error(f"CLONE_TASK >>> FAILED: {clone.error_message}")
     except Exception as e:
+        logger.error(f"CLONE_TASK >>> EXCEPTION: {e}", exc_info=True)
         logger.error(f"Error in create_database_clone_job: {e}", exc_info=True)
         try:
             p = PreviewEnvironment.objects.get(id=preview_id)
