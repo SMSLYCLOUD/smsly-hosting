@@ -56,6 +56,7 @@ class FailureType(Enum):
 class RecoveryAction(Enum):
     RESTART_CONTAINER = "restart_container"
     RESTART_STACK = "restart_stack"
+    RESTART_DOCKER_DAEMON = "restart_docker_daemon"
     REBUILD_CONTAINER = "rebuild_container"
     PRUNE_IMAGES = "prune_images"
     PRUNE_VOLUMES = "prune_volumes"
@@ -233,6 +234,7 @@ class SelfHealingOrchestrator:
             if not result.docker_running:
                 result.failure_type = FailureType.DOCKER_DAEMON_DOWN
                 result.error_details = "Docker daemon is not running"
+                result.suggested_actions.append(RecoveryAction.RESTART_DOCKER_DAEMON)
                 result.suggested_actions.append(RecoveryAction.RESTART_STACK)
                 self._log("Docker daemon is down")
                 self._diagnostics = result
@@ -511,6 +513,7 @@ class SelfHealingOrchestrator:
         handlers = {
             RecoveryAction.RESTART_CONTAINER: self._restart_container,
             RecoveryAction.RESTART_STACK: self._restart_stack,
+            RecoveryAction.RESTART_DOCKER_DAEMON: self._restart_docker_daemon,
             RecoveryAction.REBUILD_CONTAINER: self._rebuild_container,
             RecoveryAction.PRUNE_IMAGES: self._prune_images,
             RecoveryAction.PRUNE_VOLUMES: self._prune_volumes,
@@ -575,6 +578,31 @@ class SelfHealingOrchestrator:
             action_taken=RecoveryAction.RESTART_CONTAINER,
             details=f"Restart failed or container not running. State: {out2.strip()}",
             next_action=RecoveryAction.RESTART_STACK,
+        )
+
+    def _restart_docker_daemon(self, deployment, diagnostics: DiagnosticResult) -> RecoveryResult:
+        """Restart the Docker daemon on the remote node via SSH (systemctl)."""
+        self._log("Restarting Docker daemon via systemctl")
+
+        out, err, code = self._exec(
+            "systemctl restart docker 2>&1 && sleep 3 && docker info --format '{{.ServerVersion}}'",
+            timeout=RECOVERY_TIMEOUT,
+        )
+
+        if code == 0:
+            self._log(f"Docker daemon restarted successfully (version: {out.strip()[:50]})")
+            return RecoveryResult(
+                action_taken=RecoveryAction.RESTART_DOCKER_DAEMON,
+                success=True,
+                details="Docker daemon restarted successfully",
+                post_recovery_status=f"Docker {out.strip()[:50]}",
+                next_action=RecoveryAction.RESTART_STACK,
+            )
+
+        return RecoveryResult(
+            action_taken=RecoveryAction.RESTART_DOCKER_DAEMON,
+            details=f"Docker daemon restart failed: {out} {err}"[:500],
+            next_action=RecoveryAction.REPROVISION,
         )
 
     def _restart_stack(self, deployment, diagnostics: DiagnosticResult) -> RecoveryResult:

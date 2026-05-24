@@ -162,13 +162,20 @@ def perform_update(update_record) -> bool:
     with transaction.atomic():
         active_updates = PlatformUpdate.objects.select_for_update().filter(
             status__in=['PENDING', 'PULLING', 'BACKING_UP', 'MIGRATING', 'RESTARTING', 'HEALTH_CHECK']
-        ).exclude(id=update_record.id).exists()
+        ).exclude(id=update_record.id)
 
-        if active_updates:
-            update_record.error_message = 'Another update is currently in progress'
-            update_record.status = 'FAILED'
-            update_record.save(update_fields=['error_message', 'status'])
-            return False
+        if active_updates.exists():
+            # Clear stale in-progress updates instead of failing the new one
+            cleared = 0
+            for prev in active_updates:
+                prev.status = 'FAILED'
+                prev.error_message = 'Cleared stale update to allow new update to proceed.'
+                prev.completed_at = timezone.now()
+                prev.append_log('✗ Cleared as stale to allow new update to proceed.')
+                prev.save()
+                cleared += 1
+                logger.info("Cleared stale platform update %s (was %s) to allow %s",
+                            prev.id, prev.status, update_record.id)
 
     try:
         update_record.status = 'BACKING_UP'

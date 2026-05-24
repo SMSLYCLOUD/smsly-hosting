@@ -1090,7 +1090,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
         Body (optional):
         {
             "deployment_id": "uuid",  // specific deployment to heal
-            "action": "restart_container" | "restart_stack" | "diagnose" | "full"
+            "action": "restart_container" | "restart_stack" | "restart_docker_daemon" | "diagnose" | "full"
         }
 
         If no deployment_id is provided, runs node-level diagnostics and healing.
@@ -1130,7 +1130,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
                 "message": "Self-healing task queued",
             })
 
-        if action in ("restart_container", "restart_stack", "full"):
+        if action in ("restart_container", "restart_docker_daemon", "restart_stack", "full"):
             return self._trigger_node_healing(server, action)
 
         return Response(
@@ -1243,6 +1243,7 @@ class ManagedServerViewSet(viewsets.ModelViewSet):
 
             action_map = {
                 "restart_container": RecoveryAction.RESTART_CONTAINER,
+                "restart_docker_daemon": RecoveryAction.RESTART_DOCKER_DAEMON,
                 "restart_stack": RecoveryAction.RESTART_STACK,
                 "full": RecoveryAction.RESTART_STACK,
             }

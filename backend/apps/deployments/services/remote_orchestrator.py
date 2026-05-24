@@ -548,8 +548,13 @@ class RemoteOrchestrator:
         if not host_port:
             return urls
 
-        # Internal mesh VPN IPs should use HTTP (encryption handled by WireGuard/ZeroTier)
-        enforce_tls = _ENFORCE_TLS and not _is_internal_target(host_port)
+        # Internal mesh VPN IPs should use HTTP (encryption handled by WireGuard/ZeroTier).
+        # Lite agents on WireGuard mesh also skip TLS — they may not have HTTPS on 443.
+        enforce_tls = (
+            _ENFORCE_TLS
+            and not _is_internal_target(host_port)
+            and not getattr(self.server, 'is_lite_agent', False)
+        )
 
         has_explicit_port = host_port.count(":") == 1
         
