@@ -28,21 +28,9 @@ scrape_configs:
   # SMSLY Backend (Django)
   - job_name: 'smsly-backend'
     static_configs:
-      - targets: ['smsly-backend:8000']
+      - targets: ['backend:8000']
     metrics_path: /metrics
     scrape_interval: 30s
-
-  # PostgreSQL
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['smsly-postgres:5432']
-    # Uses postgres_exporter
-
-  # Redis
-  - job_name: 'redis'
-    static_configs:
-      - targets: ['smsly-redis:6379']
-    # Uses redis_exporter
 
   # Docker containers using cAdvisor
   - job_name: 'cadvisor'
@@ -53,3 +41,5 @@ scrape_configs:
   - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
+
+

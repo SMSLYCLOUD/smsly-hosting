@@ -76,10 +76,10 @@ class ZeroTrustHMACAuthentication(authentication.BaseAuthentication):
         if not signature or not timestamp:
             return None
 
-        # Verify timestamp freshness (5 min window)
+        # Verify timestamp freshness (1 min window)
         try:
             req_ts = int(timestamp)
-            if abs(int(time.time()) - req_ts) > 300:
+            if abs(int(time.time()) - req_ts) > 60:
                 raise authentication.AuthenticationFailed("Timestamp expired")
         except ValueError:
             raise authentication.AuthenticationFailed("Invalid timestamp")

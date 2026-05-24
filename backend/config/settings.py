@@ -253,6 +253,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     # Third party
+    'django_prometheus',
     'rest_framework',
     'corsheaders',
     'drf_spectacular',
@@ -295,6 +296,7 @@ AUTOSCALER_API_URL = os.environ.get('AUTOSCALER_API_URL', 'http://localhost:9876
 CADDY_CONFIG_DIR = os.environ.get("CADDY_CONFIG_DIR", "/caddy-config")
 
 MIDDLEWARE = [
+    'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'apps.deployments.middleware.DynamicAllowedHostsMiddleware', # Ensures multi-worker host sync
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -309,6 +311,7 @@ MIDDLEWARE = [
     'apps.core.middleware.ratelimit.RateLimitMiddleware', # App-layer Rate Limiting
     'apps.licensing.middleware.TierLimitsMiddleware', # License Tier Enforcement
     'allauth.account.middleware.AccountMiddleware',
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 if IS_AGENT_MODE:

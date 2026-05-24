@@ -125,7 +125,7 @@ def node_token_exchange_via_gateway(request):
     # Verify timestamp freshness
     try:
         req_ts = int(timestamp)
-        if abs(int(time.time()) - req_ts) > 300:
+        if abs(int(time.time()) - req_ts) > 60:
             return Response({"error": "Timestamp expired."}, status=status.HTTP_401_UNAUTHORIZED)
     except ValueError:
         return Response({"error": "Invalid timestamp."}, status=status.HTTP_400_BAD_REQUEST)

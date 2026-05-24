@@ -16,6 +16,7 @@ urlpatterns = [
     path('health', health_check, name='health-check'),
     path('health/live', liveness_check, name='health-liveness'),
     path('health/ready', readiness_check, name='health-readiness'),
+    path('metrics', include('django_prometheus.urls')),
 
     # API
     path('api/v1/', include('apps.deployments.urls')),

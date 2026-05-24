@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PlusCircle, Settings, Box, Brain,
   Server, Rocket, Globe, ChevronDown, Wifi, WifiOff,
-  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck
+  ExternalLink, Radio, Scaling, ArrowLeftRight, ShieldCheck, Activity
 } from "lucide-react";
 import { serversApi, type ManagedServer } from "@/lib/api";
 import TeamSwitcher from "@/components/team-switcher";
@@ -110,6 +110,7 @@ export function Sidebar() {
     { label: "Rollbacks",    icon: Box,     href: "/rollbacks" },
     { label: "Logs",         icon: Box,     href: "/logs" },
     { label: "Monitoring",   icon: Box,     href: "/monitoring" },
+    { label: "Grafana",      icon: Activity,href: "/grafana/" },
     { label: "System Status",icon: Box,     href: "/status" },
     { label: "Ecosystem",    icon: Globe,   href: "/ecosystem" },
     { label: "Intelligence", icon: Brain,   href: "/intelligence" },
