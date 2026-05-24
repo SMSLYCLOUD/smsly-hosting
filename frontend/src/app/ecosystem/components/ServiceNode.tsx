@@ -77,9 +77,9 @@ export function ServiceNode({ data }: any) {
                         disabled={isSkipped}
                         className="text-[9px] bg-transparent text-zinc-300 border-none rounded flex-1 outline-none transition-colors disabled:opacity-50 appearance-none"
                     >
-                        <option value="local">Local Server</option>
+                        <option value="local" className="bg-zinc-900 text-zinc-300">Local Server</option>
                         {servers?.map((s: any) => (
-                            <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                            <option key={s.id} value={s.id} className="bg-zinc-900 text-zinc-300">{s.name} ({s.host})</option>
                         ))}
                     </select>
                 </div>
