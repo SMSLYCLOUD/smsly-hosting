@@ -571,7 +571,7 @@ class ManagedServerViewTests(TestCase):
         delay_mock.assert_not_called()
 
     @patch("apps.deployments.tasks.update_remote_server_task.delay")
-    def test_update_server_rejects_when_update_already_running(self, delay_mock):
+    def test_update_server_auto_clears_stalled_status(self, delay_mock):
         server = ManagedServer.objects.create(
             owner=self.user,
             name="Busy",
@@ -582,9 +582,11 @@ class ManagedServerViewTests(TestCase):
 
         resp = self.client.post(f"/api/v1/servers/{server.id}/update-server/")
 
-        self.assertEqual(resp.status_code, 409)
-        self.assertEqual(resp.data["provision_status"], ManagedServer.ProvisionStatus.UPDATING)
-        delay_mock.assert_not_called()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data["success"])
+        server.refresh_from_db()
+        self.assertNotEqual(server.provision_status, ManagedServer.ProvisionStatus.UPDATING)
+        delay_mock.assert_called_once_with(str(server.id))
 
     def test_update_server_name(self):
         """Test that a server name can be updated via PATCH."""
