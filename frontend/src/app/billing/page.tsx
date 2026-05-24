@@ -10,7 +10,7 @@ import api, { licensingApi } from '@/lib/api';
 import { useToast } from '@/components/ui/use-toast';
 import { useTier } from '@/context/TierContext';
 import { Input } from '@/components/ui/input';
-import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
+import { EcosystemSuggestion } from '@/components/dashboard/EcosystemSuggestion';
 import { motion } from 'framer-motion';
 
 type PlanCode = 'HOBBY' | 'PRO' | 'ENTERPRISE';
@@ -254,7 +254,7 @@ export default function BillingPage() {
            transition={{ duration: 0.4 }}
            className="mb-6"
          >
-           <EnhancedCrossSell variant="compact" dismissible={true} />
+           <EcosystemSuggestion context="billing" dismissible={true} />
          </motion.div>
          
          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

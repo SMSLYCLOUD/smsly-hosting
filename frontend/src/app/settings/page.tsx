@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/ui/page-header";
-import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell";
+import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
 import { Settings as SettingsIcon, User, Bell, Shield, Cloud, Plus, Trash2, Check, Loader2, Sparkles, Eye, EyeOff, Key, Server, Globe, Lock, Users, Copy } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import api, { systemApi, aiApi, coreApi, teamsApi } from "@/lib/api";

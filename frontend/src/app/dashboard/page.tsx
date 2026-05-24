@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { SpaceOpsLegend } from "@/components/effects/SpaceOpsLegend";
-import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell";
+import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
@@ -286,7 +286,7 @@ export default function DashboardPage() {
 
            {/* SMSLY Ecosystem Cross-Sell */}
            <motion.div variants={fadeInUp}>
-             <EnhancedCrossSell variant="banner" dismissible={true} />
+             <EcosystemSuggestion context="dashboard" dismissible={true} />
            </motion.div>
 
           {/* Activity Feed + Resource Usage */}

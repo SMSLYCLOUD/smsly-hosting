@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { motion } from 'framer-motion';
 import { ServicesGrid } from '@/components/dashboard/ServicesGrid';
 import { AddonsTab } from '@/components/addons/AddonsTab';
-import { EnhancedCrossSell } from '@/components/dashboard/EnhancedCrossSell';
+import { EcosystemSuggestion } from '@/components/dashboard/EcosystemSuggestion';
 import dynamic from 'next/dynamic';
 
 
@@ -207,7 +207,7 @@ export default function ServicesPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
           >
-            <EnhancedCrossSell variant="compact" dismissible={true} />
+            <EcosystemSuggestion context="services" dismissible={true} />
           </motion.div>
         </div>
 

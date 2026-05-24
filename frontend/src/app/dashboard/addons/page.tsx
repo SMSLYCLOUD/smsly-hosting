@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { PageHeader } from "@/components/ui/page-header";
 import { DASHBOARD_ADDONS } from "@/lib/addonConstants";
-import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell";
+import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion";
 import { motion } from 'framer-motion';
 
 export default function AddonsPage() {

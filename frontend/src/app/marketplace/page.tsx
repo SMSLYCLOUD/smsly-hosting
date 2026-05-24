@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { useConfirm } from '@/components/ui/confirm-dialog'
 import { RequiresTier } from "@/components/licensing/RequiresTier"
-import { EnhancedCrossSell } from "@/components/dashboard/EnhancedCrossSell"
+import { EcosystemSuggestion } from "@/components/dashboard/EcosystemSuggestion"
 
 import { ADDON_REGISTRY, getAddonMetadata, AddonRegistryItem } from "@/lib/addonRegistry"
 
@@ -225,7 +225,7 @@ export default function MarketplacePage() {
              
              {/* SMSLY Ecosystem Cross-Sell */}
              <div className="mb-6">
-                 <EnhancedCrossSell variant="compact" dismissible={true} />
+                 <EcosystemSuggestion context="marketplace" dismissible={true} />
              </div>
 
             {/* Catalog */}
