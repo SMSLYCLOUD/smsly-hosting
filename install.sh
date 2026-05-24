@@ -624,6 +624,17 @@ sync_env_domain_allowlists() {
         cors_origins+=("http://${public_ip}:8090" "http://${public_ip}")
     fi
 
+    # Automatically add all node IPs (including WireGuard VPN mesh IPs like 10.100.x.x)
+    local current_ips
+    current_ips="$(hostname -I 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' || true)"
+    if [ -n "$current_ips" ]; then
+        for ip in $current_ips; do
+            allowed_hosts+=("$ip")
+            csrf_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+            cors_origins+=("http://${ip}:8090" "http://${ip}" "https://${ip}")
+        done
+    fi
+
     result="$(env_append_csv_values "$env_file" "ALLOWED_HOSTS" "${allowed_hosts[@]}")"
     [ "$result" = "changed" ] && changed=true
     result="$(env_append_csv_values "$env_file" "CSRF_TRUSTED_ORIGINS" "${csrf_origins[@]}")"
