@@ -3658,7 +3658,7 @@ if a_count > 0:
     # Refresh proxy/runtime edge stack so routing and TLS state is always clean.
     # NOTE: restart_edge_stack now handles Caddy validation internally (H1+H2 fix).
     restart_edge_stack
-    wait_for_traefik_api 30
+    wait_for_traefik_api 30 || true
 
     sleep 2
 
