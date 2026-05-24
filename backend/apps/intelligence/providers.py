@@ -2038,6 +2038,7 @@ def _sync_db_to_env():
         ("deepseek_model", "DEEPSEEK_MODEL", "deepseek-coder"),
         ("jules_api_key", "JULES_API_KEY", ""),
         ("jules_model", "JULES_MODEL", "jules-latest"),
+        ("jules_base_url", "JULES_BASE_URL", "https://api.jules.google.com/v1"),
         ("localllm_api_key", "LOCALLM_API_KEY", ""),
         ("localllm_model", "LOCALLM_MODEL", "local-model"),
         ("localllm_base_url", "LOCALLM_BASE_URL", "http://localhost:11434/v1"),
