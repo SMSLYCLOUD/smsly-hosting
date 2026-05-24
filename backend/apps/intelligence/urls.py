@@ -10,6 +10,7 @@ from .views import (
     ai_anomaly_history,
     ai_chat_completions,
     ai_chat_stream,
+    jules_fix_history,
 )
 
 urlpatterns = [
@@ -22,4 +23,5 @@ urlpatterns = [
     path('anomalies/', ai_anomaly_history, name='ai-anomaly-history'),
     path('chat/completions/', ai_chat_completions, name='ai-chat-completions'),
     path('chat/stream/', ai_chat_stream, name='ai-chat-stream'),
+    path('jules-history/<uuid:service_id>/', jules_fix_history, name='jules-fix-history'),
 ]

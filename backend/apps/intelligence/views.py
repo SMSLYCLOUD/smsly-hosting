@@ -492,3 +492,42 @@ def ai_anomaly_history(request):
         })
 
     return Response(_json_safe({"anomalies": data, "available": True}, {"anomalies": [], "available": True}))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def jules_fix_history(request, service_id: str):
+    """
+    Return Jules auto-fix history for a service by scanning deployment logs.
+    """
+    try:
+        from apps.deployments.models_core import Service, Deployment
+
+        service = Service.objects.get(id=service_id)
+        deployments = Deployment.objects.filter(service=service).order_by("-updated_at")[:20]
+
+        entries = []
+        for d in deployments:
+            logs = (d.provision_logs or "") + (d.build_logs or "")
+            if not logs:
+                continue
+
+            jules_lines = [line for line in logs.split("\n") if "jules" in line.lower() or "auto-fix" in line.lower() or "Jules" in line]
+            if not jules_lines:
+                continue
+
+            entries.append({
+                "deployment_id": str(d.id),
+                "branch": d.branch or "",
+                "status": d.status,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "jules_events": jules_lines[-10:],  # last 10 jules-related log lines
+                "fix_applied": any("PR created" in l for l in jules_lines),
+                "fix_failed": any("Jules auto-fix failed" in l or "Jules fix request failed" in l for l in jules_lines),
+            })
+
+        return Response({"service_id": str(service.id), "entries": entries})
+    except Service.DoesNotExist:
+        return Response({"error": "Service not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
