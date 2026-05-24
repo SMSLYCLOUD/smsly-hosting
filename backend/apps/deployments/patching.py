@@ -95,7 +95,11 @@ def is_valid_host(host_str: str) -> bool:
         return False
         
     domain = host_str.strip().lower()
-    
+
+    from django.conf import settings
+    if domain in [h.strip().lower() for h in settings.ALLOWED_HOSTS]:
+        return True
+
     # 1. PlatformConfig primary domain (and First-Run bypass)
     try:
         from apps.deployments.models import PlatformConfig
