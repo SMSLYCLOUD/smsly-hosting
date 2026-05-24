@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 class CanManagePreviews(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
+            logger.warning("CanManagePreviews denied: unauthenticated request to service_pk=%s", view.kwargs.get('service_pk'))
             return False
 
         service_id = view.kwargs.get('service_pk')
