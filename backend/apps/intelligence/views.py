@@ -508,7 +508,7 @@ def jules_fix_history(request, service_id: str):
 
         entries = []
         for d in deployments:
-            logs = (d.provision_logs or "") + (d.build_logs or "")
+            logs = (d.build_logs or "")
             if not logs:
                 continue
 
