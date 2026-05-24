@@ -383,7 +383,7 @@ def destroy_preview_environment_job(preview_id: str):
             db_clone = None
 
         if db_clone:
-            db_manager = PostgresSnapshotManager()
+        db_manager = PostgresSnapshotManager(admin_db_url=pg_addon.connection_url)
             db_manager.destroy_clone(db_clone.clone_database_name)
             db_clone.status = DatabaseClone.Status.DESTROYED
             db_clone.save()
