@@ -66,7 +66,21 @@ def _candidate_api_urls(server) -> list[str]:
 
     host_port = _server_host_port(server)
     if not host_port:
-        return urls
+    # ── WireGuard Mesh VIP fallback ─────────────────────────────
+    # When the public IP is unreachable, try the node's WireGuard
+    # mesh address (internal 10.x.x.x) — encryption is handled by
+    # WireGuard, so HTTP is safe here.
+    wg_ip = str(getattr(server, "wg_address", "") or "").strip()
+    if wg_ip and wg_ip != host_port:
+        is_lite = getattr(server, 'is_lite_agent', False)
+        if is_lite:
+            _append_unique(urls, f"http://{wg_ip}")
+            _append_unique(urls, f"http://{wg_ip}:8090")
+        else:
+            _append_unique(urls, f"http://{wg_ip}:8090")
+            _append_unique(urls, f"http://{wg_ip}")
+
+    return urls
 
     has_explicit_port = host_port.count(":") == 1
     
