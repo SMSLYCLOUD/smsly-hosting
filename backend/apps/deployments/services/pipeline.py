@@ -39,6 +39,7 @@ from apps.deployments.utils import (
     redact_values,
     parse_ai_resource_recommendation,
     estimate_resources_from_deps,
+    is_deployment_local,
 )
 from apps.intelligence.services.env_intelligence import EnvironmentIntelligenceService
 from services.builders import is_buildkit_cache_error, prune_buildkit_cache, cleanup_stuck_buildkit as _cleanup_stuck_buildkit
@@ -2169,7 +2170,13 @@ class PipelineManager:
             return
 
         registry_url = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        is_local = is_deployment_local(self.deployment)
         if not registry_url:
+            if not is_local:
+                raise SystemError(
+                    "CONTAINER_REGISTRY_URL is not configured. "
+                    "A registry is required to push/pull images for remote node deployments."
+                )
             return
 
         update_stage(self.deployment, 'Push', 'running')
@@ -2190,6 +2197,11 @@ class PipelineManager:
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(self.deployment, f"✓ Pushed: {remote_tag}\n")
             else:
+                if not is_local:
+                    raise SystemError(
+                        f"Image push failed: Local fallback is not allowed for remote deployments. "
+                        f"Target node requires a working registry to pull {remote_tag}."
+                    )
                 update_stage(self.deployment, 'Push', 'success')
                 append_log(
                     self.deployment,

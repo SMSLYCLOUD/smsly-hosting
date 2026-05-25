@@ -17,6 +17,7 @@ from apps.deployments.tasks_ecosystem import (
     _resolve_env_placeholders,
     _runtime_watch_defaults,
     _select_shared_addon_anchor,
+    _service_placeholder_target,
     _validate_resolved_env,
     ecosystem_deploy_task,
     ecosystem_scan_task,
@@ -368,6 +369,43 @@ class EcosystemScanTaskTests(TestCase):
         self.assertTrue(result["retryable"])
         self.assertIn("timed out", result["error"])
 
+    @patch("services.ecosystem.fetch_all_repos")
+    @patch("services.ecosystem.fetch_repo_tree")
+    @patch("services.ecosystem.analyze_ecosystem_chunked")
+    @patch("apps.deployments.views_github._get_github_token", return_value="gh-token")
+    def test_scan_and_analyze_auto_skips_deployed_services(self, _token_mock, mock_analyze, mock_tree, mock_repos):
+        """Verify that scan_and_analyze sets skip=True for already deployed services."""
+        mock_repos.return_value = [
+            {"full_name": "owner/existing-svc", "default_branch": "main", "private": False, "size": 100},
+            {"full_name": "owner/new-svc", "default_branch": "main", "private": False, "size": 100}
+        ]
+        mock_tree.return_value = ["package.json"]
+        mock_analyze.return_value = {
+            "services": [
+                {"name": "existing-svc", "repo": "owner/existing-svc", "stack": "node", "env_vars": {}, "addons": [], "depends_on": [], "deploy_order": 50},
+                {"name": "new-svc", "repo": "owner/new-svc", "stack": "node", "env_vars": {}, "addons": [], "depends_on": [], "deploy_order": 50}
+            ],
+            "addons": []
+        }
+        
+        # Deploy existing-svc first
+        Service.objects.create(
+            owner=self.user,
+            name="existing-svc",
+            repository_url="https://github.com/owner/existing-svc"
+        )
+        
+        result = ecosystem_scan_task.run(str(self.user.id), 30)
+        
+        services = result.get("services", [])
+        self.assertEqual(len(services), 2)
+        
+        existing_svc_plan = next(s for s in services if s["name"] == "existing-svc")
+        new_svc_plan = next(s for s in services if s["name"] == "new-svc")
+        
+        self.assertTrue(existing_svc_plan["skip"])
+        self.assertFalse(new_svc_plan["skip"])
+
 
 class EcosystemDeployTaskTests(TestCase):
     def setUp(self):
@@ -550,6 +588,62 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(result["failed"], 0)
         service = Service.objects.get(owner=self.user, name="api")
         self.assertEqual(service.buildpack, "DOCKER")
+
+    def test_service_placeholder_target_database_fallback(self):
+        """Verify that _service_placeholder_target queries the database if not in created_services."""
+        Service.objects.create(
+            owner=self.user,
+            name="auth-service",
+            provider=self.provider,
+            repository_url="https://github.com/owner/auth",
+            internal_port=8080,
+        )
+        
+        host, port = _service_placeholder_target("auth-service", {})
+        self.assertEqual(host, "auth-service")
+        self.assertEqual(port, 8080)
+
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_addon_reuse_user_wide(self, _queue_wave):
+        """Verify that deploying new services reuses existing user-wide active addons."""
+        from apps.deployments.models_addons import Addon
+        
+        # Create an existing active addon for the user
+        existing_service = Service.objects.create(
+            owner=self.user,
+            name="core-service",
+            provider=self.provider,
+            repository_url="https://github.com/owner/core",
+        )
+        Addon.objects.create(
+            service=existing_service,
+            name="postgres-shared",
+            addon_type="POSTGRES",
+            status=Addon.Status.ACTIVE,
+            connection_url="postgresql://reused-user:reused-pass@reused-db:5432/app"
+        )
+        
+        plan = {
+            "services": [
+                {
+                    "name": "new-api",
+                    "repo": "owner/new-api",
+                    "stack": "node",
+                    "port": 3000,
+                    "env_vars": {
+                        "DATABASE_URL": "{{POSTGRES_URL}}"
+                    },
+                }
+            ]
+        }
+        
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+            
+        self.assertEqual(result["failed"], 0)
+        new_svc = Service.objects.get(owner=self.user, name="new-api")
+        db_url_env = EnvironmentVariable.objects.get(service=new_svc, key="DATABASE_URL")
+        self.assertEqual(db_url_env.value, "postgresql://reused-user:reused-pass@reused-db:5432/app")
 
     def test_heuristic_analysis_is_dynamic(self):
         """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""
