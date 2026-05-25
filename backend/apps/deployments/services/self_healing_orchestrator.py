@@ -306,6 +306,14 @@ class SelfHealingOrchestrator:
             self._get_container_logs(container_name, result)
 
             state = result.container_state.lower()
+            if not state:
+                # Container doesn't exist — need to rebuild/redeploy
+                result.failure_type = FailureType.CONFIG_ERROR
+                result.suggested_actions.append(RecoveryAction.REBUILD_CONTAINER)
+                result.suggested_actions.append(RecoveryAction.RESTART_STACK)
+                self._log(f"Container {container_name} not found — will rebuild")
+                return
+
             if state in ("exited", "dead"):
                 result.failure_type = FailureType.CONTAINER_CRASHED
                 result.suggested_actions.append(RecoveryAction.RESTART_CONTAINER)
@@ -331,6 +339,12 @@ class SelfHealingOrchestrator:
                     self._log(f"Container {container_name} is running normally")
         elif service_name:
             self._find_container_by_name(service_name, result)
+            # If still no state after searching by name, container doesn't exist
+            if not result.container_state:
+                result.failure_type = FailureType.CONFIG_ERROR
+                result.suggested_actions.append(RecoveryAction.REBUILD_CONTAINER)
+                result.suggested_actions.append(RecoveryAction.RESTART_STACK)
+                self._log(f"No container found for {service_name} — will rebuild")
 
     def _diagnose_general(self, result: DiagnosticResult):
         """General diagnostics when no specific deployment is given."""
@@ -644,25 +658,72 @@ class SelfHealingOrchestrator:
             )
 
         self._log(f"Rebuilding service: {service_name}")
+
+        # First try docker-compose (for services defined in compose files)
         cmd = self._compose_cmd(f"up -d --build {shlex.quote(service_name)}")
         out, err, code = self._exec(cmd, timeout=RECOVERY_TIMEOUT)
 
-        time.sleep(POST_RECOVERY_WAIT)
-
         if code == 0:
+            time.sleep(POST_RECOVERY_WAIT)
             status = self._verify_container_running(service_name)
             if status:
                 return RecoveryResult(
                     action_taken=RecoveryAction.REBUILD_CONTAINER,
                     success=True,
-                    details=f"Service {service_name} rebuilt successfully",
+                    details=f"Service {service_name} rebuilt via compose",
+                    post_recovery_status=status,
+                )
+
+        # If compose failed, try pulling image from local registry and running directly
+        docker_image = getattr(deployment.service, "docker_image", "") or ""
+        if not docker_image:
+            # Construct image name from service name and commit hash
+            commit = getattr(deployment, "commit_hash", "") or ""
+            tag = commit[:8] if commit else "latest"
+            docker_image = f"10.100.0.1:5000/smsly/{service_name}:{tag}"
+
+        self._log(f"Pulling image: {docker_image}")
+        pull_out, pull_err, pull_code = self._exec(
+            f"docker pull {shlex.quote(docker_image)}", timeout=RECOVERY_TIMEOUT,
+        )
+
+        if pull_code != 0:
+            return RecoveryResult(
+                action_taken=RecoveryAction.REBUILD_CONTAINER,
+                details=f"Compose failed and image pull failed: {(pull_out + pull_err)[:400]}",
+                next_action=RecoveryAction.ESCALATE_TO_AI,
+            )
+
+        # Remove old container if it exists
+        self._exec(f"docker rm -f {shlex.quote(service_name)}", timeout=30)
+
+        # Run the container with the same network as the compose stack
+        port = getattr(deployment.service, "port", 8000) or 8000
+        run_cmd = (
+            f"docker run -d --name {shlex.quote(service_name)} "
+            f"--network smsly-net --restart unless-stopped "
+            f"-p {port}:{port} "
+            f"{shlex.quote(docker_image)}"
+        )
+        self._log(f"Starting container: {run_cmd}")
+        run_out, run_err, run_code = self._exec(run_cmd, timeout=RECOVERY_TIMEOUT)
+
+        time.sleep(POST_RECOVERY_WAIT)
+
+        if run_code == 0:
+            status = self._verify_container_running(service_name)
+            if status:
+                return RecoveryResult(
+                    action_taken=RecoveryAction.REBUILD_CONTAINER,
+                    success=True,
+                    details=f"Service {service_name} redeployed from image {docker_image}",
                     post_recovery_status=status,
                 )
 
         return RecoveryResult(
             action_taken=RecoveryAction.REBUILD_CONTAINER,
-            details=f"Rebuild failed: {(out + err)[:500]}",
-            next_action=RecoveryAction.RESTART_STACK,
+            details=f"Rebuild failed: {(run_out + run_err)[:500]}",
+            next_action=RecoveryAction.ESCALATE_TO_AI,
         )
 
     def _prune_images(self, deployment, diagnostics: DiagnosticResult) -> RecoveryResult:
