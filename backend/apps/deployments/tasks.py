@@ -4689,7 +4689,7 @@ fi
 echo "path=$(pwd)"
 echo "current_commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
     echo "WARNING: remote worktree has local changes; installer must handle or preserve them."
     git status --short | head -n 60
   fi
@@ -4817,9 +4817,17 @@ def update_remote_server_task(server_id: str):
         env_str = " ".join([f"{k}={shlex.quote(str(v))}" for k, v in env_vars.items()])
         update_args_str = " ".join(shlex.quote(arg) for arg in update_args)
         quoted_path = shlex.quote(hosting_path)
+        quoted_branch = shlex.quote(branch)
         cmd_update = (
             f"cd {quoted_path} && "
             "if [ \"$(id -u)\" -eq 0 ]; then SUDO=''; else SUDO='sudo -n'; fi; "
+            "git config --global --add safe.directory \"$PWD\" 2>/dev/null || true; "
+            "if [ -n \"$(git status --porcelain 2>/dev/null)\" ]; then "
+            "git stash push --include-untracked -m \"remote-update-$(date +%s)\" >/dev/null 2>&1 || true; "
+            "fi; "
+            f"git fetch origin {quoted_branch} >/dev/null 2>&1 && "
+            f"git checkout -B {quoted_branch} origin/{quoted_branch} >/dev/null 2>&1 && "
+            f"git branch --set-upstream-to=origin/{quoted_branch} {quoted_branch} >/dev/null 2>&1 || true; "
             f"$SUDO env {env_str} bash install.sh {update_args_str}"
         )
 
@@ -4863,6 +4871,10 @@ def update_remote_server_task(server_id: str):
             try:
                 hosting_path = ssh.find_hosting_path()
                 fresh_secret = ssh.get_gateway_secret(hosting_path)
+                if isinstance(fresh_secret, str):
+                    fresh_secret = fresh_secret.strip()
+                else:
+                    fresh_secret = ""
                 if fresh_secret and server.gateway_secret != fresh_secret:
                     server.gateway_secret = fresh_secret
                     update_fields.append("gateway_secret")

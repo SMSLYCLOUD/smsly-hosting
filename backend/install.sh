@@ -1772,9 +1772,9 @@ if [ -n "$UPDATE_MODE" ]; then
 
     # ─── Git Stash + Pull (CRITICAL BLINDSPOT FIX) ───────────────────────────
     echo -e "${BLUE}  → Checking for local changes...${NC}"
-    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
-        git stash push -m "install-update-$(date +%s)"
+        git stash push --include-untracked -m "install-update-$(date +%s)"
         touch "$INSTALL_DIR/.git-stash-marker"
     fi
 

@@ -489,6 +489,14 @@ is_checkpoint_done() {
     return 1
 }
 
+clear_checkpoint() {
+    local name="$1"
+    if [ -f "$STATE_FILE" ]; then
+        grep -v "^$name$" "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null || true
+        mv "${STATE_FILE}.tmp" "$STATE_FILE" 2>/dev/null || true
+    fi
+}
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 SMSLY_BRANCH="${SMSLY_BRANCH:-main}"
 SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hosting.git}"
@@ -2199,6 +2207,10 @@ if [ "${FIX_DOMAIN_MODE:-false}" = "true" ]; then
         exit 1
     fi
     cd "$INSTALL_DIR"
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
+        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
+    fi
 
     # Git pull latest code first to get all SEC-xxx fixes
     echo -e "${BLUE}  → Pulling latest installer code...${NC}"
@@ -3106,6 +3118,11 @@ if [ -n "$UPDATE_MODE" ]; then
     fi
 
     cd "$INSTALL_DIR"
+    if [ "${SMSLY_REEXEC:-}" != "1" ]; then
+        # Every new update attempt must hit GitHub. Checkpoints are only for
+        # resume/re-exec within the same attempt, not for skipping future pulls.
+        clear_checkpoint "update_git_synced"
+    fi
 
     echo -e "${BLUE}  -> Validating existing .env configuration...${NC}"
     ensure_env_runtime_defaults "$INSTALL_DIR/.env"
@@ -3134,9 +3151,9 @@ if ! is_checkpoint_done "update_git_synced"; then
         PRE_UPDATE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
     fi
     echo "$PRE_UPDATE_HEAD" > "$INSTALL_DIR/.pre-update-head" 2>/dev/null || true
-    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
         echo -e "${YELLOW}  ⚠ Local changes detected — stashing before pull${NC}"
-        git stash push -m "install-update-$(date +%s)"
+        git stash push --include-untracked -m "install-update-$(date +%s)"
         touch "$INSTALL_DIR/.git-stash-marker"
     fi
 
@@ -4357,6 +4374,10 @@ SMSLY_GIT_REMOTE="${SMSLY_GIT_REMOTE:-https://github.com/SMSLYCLOUD/smsly-hostin
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${BLUE}  → Updating existing repository ($SMSLY_BRANCH)...${NC}"
     cd "$INSTALL_DIR"
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+        echo -e "${YELLOW}  ! Local changes detected - stashing before repository sync${NC}"
+        git stash push --include-untracked -m "install-sync-$(date +%s)" >/dev/null 2>&1 || true
+    fi
     if ! git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || ! git reset --hard "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
         echo -e "${YELLOW}  ⚠️ Git update failed. The installer repository is public; check network/DNS access to GitHub and branch name.${NC}"
     fi
@@ -4368,6 +4389,9 @@ else
         cd "$INSTALL_DIR"
         git init -q
         git remote add origin "$SMSLY_GIT_REMOTE"
+        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+            git stash push --include-untracked -m "install-bootstrap-$(date +%s)" >/dev/null 2>&1 || true
+        fi
         if git fetch origin "$SMSLY_BRANCH" -q >/dev/null 2>&1 && git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1; then
             git branch --set-upstream-to="origin/$SMSLY_BRANCH" "$SMSLY_BRANCH" >/dev/null 2>&1 || true
             CLONE_SUCCESS=true
@@ -4505,6 +4529,9 @@ if [ "$(pwd)" != "$INSTALL_DIR" ]; then
              cd "$INSTALL_DIR"
              if [ -n "${SMSLY_GIT_REMOTE:-}" ]; then
                  git remote set-url origin "$SMSLY_GIT_REMOTE" 2>/dev/null || true
+             fi
+             if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+                 git stash push --include-untracked -m "install-config-sync-$(date +%s)" >/dev/null 2>&1 || true
              fi
              git fetch origin "$SMSLY_BRANCH" >/dev/null 2>&1 || true
              git checkout -B "$SMSLY_BRANCH" "origin/$SMSLY_BRANCH" >/dev/null 2>&1 || true
