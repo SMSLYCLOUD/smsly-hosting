@@ -153,14 +153,20 @@ def _addon_type_from_placeholder(token: str) -> str:
     if token in {"CACHE_URL", "REDIS_URL"}:
         return "REDIS"
 
-    for addon_type, env_key in _addon_env_key_map().items():
+    addon_map = _addon_env_key_map()
+    for addon_type, env_key in addon_map.items():
         if token == str(env_key or "").upper():
             return addon_type
 
+    candidate = ""
     if token.endswith("_URL"):
-        return token[:-4]
-    if token.endswith("_URI"):
-        return token[:-4]
+        candidate = token[:-4]
+    elif token.endswith("_URI"):
+        candidate = token[:-4]
+
+    if candidate in addon_map:
+        return candidate
+
     return ""
 
 
@@ -578,6 +584,13 @@ def _resolve_single_placeholder(
     # {{GENERATE}} is handled by the caller (full-string only)
     if token == "GENERATE":
         return None
+
+    # Default/ignore platform-specific or legacy placeholders
+    token_upper = token.upper()
+    if token_upper.startswith("CAPROVER_"):
+        if token_upper.endswith("_URL") or token_upper.endswith("_URI"):
+            return "http://localhost"
+        return ""
 
     # {{SHARED_SECRET:name}}
     if token.upper().startswith("SHARED_SECRET:"):
