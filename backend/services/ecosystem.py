@@ -629,7 +629,7 @@ ECOSYSTEM_PROMPT = """You are the Supreme DevOps Architect of the CloudNeuron AI
     """
 
 
-def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provider: str = None) -> dict:
+def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provider: str = None, existing_services: list = None) -> dict:
     """
     Use AI Senate to analyze all repos together in a temporary workspace.
     Clones repos, scans for cross-repo dependencies, and produces a plan.
@@ -738,6 +738,12 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
 
         # 5. Global Linkage & Discovery Analysis
         cross_links = []
+        if existing_services:
+            existing_desc = "ALREADY DEPLOYED SERVICES IN ECOSYSTEM (use for cross-linking):\n"
+            for s in existing_services:
+                existing_desc += f"- Service Name: {s.get('name')} | Repository URL: {s.get('repository_url') or 'unknown'} | Internal Port: {s.get('internal_port') or 3000}\n"
+            cross_links.append(existing_desc)
+
         repo_names = [rd.get('repo_name_short') for rd in repos_data if rd.get('repo_name_short')]
         for rd in repos_data:
             cd = rd.get('clone_dir')
@@ -850,7 +856,7 @@ def analyze_ecosystem(repos_data: List[dict], github_token: str = None, ai_provi
             return _build_heuristic_plan(repos_data, str(e))
 
 
-def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, ai_provider: str = None, chunk_size: int = 4) -> dict:
+def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, ai_provider: str = None, chunk_size: int = 4, existing_services: list = None) -> dict:
     """
     Analyzes repos in batches of `chunk_size` to prevent token limits.
     After accumulating the partial plans, it runs a final AI synthesis pass
@@ -867,7 +873,7 @@ def analyze_ecosystem_chunked(repos_data: List[dict], github_token: str = None, 
     def _analyze_single_chunk(idx: int, chunk: list, token: str = None, provider: str = None):
         """Analyze a single ecosystem chunk."""
         try:
-            plan = analyze_ecosystem(chunk, token, provider)
+            plan = analyze_ecosystem(chunk, token, provider, existing_services=existing_services)
             return idx, plan
         except Exception as exc:
             logger.warning("Ecosystem chunk %d failed: %s", idx, exc)
@@ -1897,7 +1903,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
 # Full Scan Pipeline
 # ──────────────────────────────────────────────────────────────────────────────
 
-def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list = None) -> dict:
+def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list = None, existing_services: list = None) -> dict:
     """
     Full pipeline: fetch all repos → analyze each → AI ecosystem plan.
     If selected_repos is provided, only processes those specific repositories.
@@ -1906,7 +1912,7 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
     """
     logger.info("Starting ecosystem scan...")
     try:
-        return _scan_and_analyze_impl(token, ai_provider=ai_provider, selected_repos=selected_repos)
+        return _scan_and_analyze_impl(token, ai_provider=ai_provider, selected_repos=selected_repos, existing_services=existing_services)
     except TypeError as exc:
         logger.exception("Ecosystem scan failed with unhashable type error: %s", exc)
         return {
@@ -1927,7 +1933,7 @@ def scan_and_analyze(token: str, ai_provider: str = None, selected_repos: list =
         }
 
 
-def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: list = None) -> dict:
+def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: list = None, existing_services: list = None) -> dict:
     """Internal implementation of scan_and_analyze."""
     logger.info("=== STARTING ECOSYSTEM SCAN ===")
     
@@ -1999,7 +2005,7 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
     # 3. AI ecosystem analysis (CHUNKED)
     logger.info("Starting AI ecosystem analysis...")
     try:
-        plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider)
+        plan = analyze_ecosystem_chunked(repos_data, github_token=token, ai_provider=ai_provider, existing_services=existing_services)
         logger.info("AI analysis completed successfully")
     except Exception as e:
         logger.error(f"AI ecosystem analysis failed: {e}")
@@ -2097,6 +2103,21 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
         for i, service in enumerate(plan.get("services", [])):
             if isinstance(service, dict):
                 try:
+                    # Check if already deployed
+                    service_name = str(service.get("name", f"service-{i}")).lower()
+                    service_repo = str(service.get("repo", "")).lower()
+                    
+                    is_existing = False
+                    if existing_services:
+                        for s in existing_services:
+                            if s.get('name', '').lower() == service_name:
+                                is_existing = True
+                                break
+                            s_repo = (s.get('repository_url') or '').lower()
+                            if s_repo and (service_repo in s_repo or s_repo in service_repo):
+                                is_existing = True
+                                break
+
                     # Ensure all critical fields are strings or can be converted to strings
                     safe_service = {
                         "name": str(service.get("name", f"service-{i}")),
@@ -2105,10 +2126,11 @@ def _scan_and_analyze_impl(token: str, ai_provider: str = None, selected_repos: 
                         "env_vars": {str(k): str(v) for k, v in service.get("env_vars", {}).items()},
                         "addons": [str(a) for a in service.get("addons", [])],
                         "depends_on": [str(d) for d in service.get("depends_on", [])],
-                        "deploy_order": _safe_order(service.get("deploy_order"), 50)
+                        "deploy_order": _safe_order(service.get("deploy_order"), 50),
+                        "skip": is_existing or bool(service.get("skip", False))
                     }
                     final_plan["services"].append(safe_service)
-                    logger.info(f"Successfully processed service: {safe_service['name']}")
+                    logger.info(f"Successfully processed service: {safe_service['name']} (skip={safe_service['skip']})")
                 except Exception as e:
                     logger.warning(f"Error processing service {i}: {e}")
                     logger.warning(f"Problematic service data: {service}")

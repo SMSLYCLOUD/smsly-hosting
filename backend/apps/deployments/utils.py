@@ -697,3 +697,42 @@ def validate_and_sanitize_path(path: str, skip_system_check: bool = False, conta
 
     return normalized_path
 
+
+def is_deployment_local(deployment) -> bool:
+    """Return True if the deployment targets the local master node, False if remote/lite-agent."""
+    if bool(getattr(deployment, "target_is_local", False)):
+        return True
+
+    service = deployment.service
+    server = getattr(deployment, "target_server", None) or getattr(service, "server", None)
+    if not server:
+        # Fallback to active runtime check
+        active_type = getattr(service, "active_target_type", None) or ""
+        if active_type.lower() in ("remote", "lite_agent"):
+            host_ip = getattr(service, "active_host_ip", None)
+            if host_ip:
+                from apps.deployments.models_core import ManagedServer
+                srv = ManagedServer.objects.filter(host=host_ip).first()
+                if srv:
+                    server = srv
+                else:
+                    srv = ManagedServer.objects.filter(private_ip=host_ip).first()
+                    if srv:
+                        server = srv
+                    else:
+                        srv = ManagedServer.objects.filter(wg_address=host_ip).first()
+                        if srv:
+                            server = srv
+
+    if not server:
+        return True
+
+    if bool(getattr(server, "is_primary", False)):
+        return True
+
+    from apps.deployments.models import PlatformConfig
+    config = PlatformConfig.objects.first()
+    server_ip = str(getattr(config, "server_ip", "") or "")
+    return str(getattr(server, "host", "") or "") == server_ip
+
+

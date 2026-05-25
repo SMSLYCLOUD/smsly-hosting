@@ -51,6 +51,7 @@ from apps.deployments.utils import (
     broadcast_status,
     build_local_source_bundle,
     update_stage,
+    is_deployment_local,
 )
 # Imports for AIProviderSettings; jules_fix is imported lazily inside tasks
 # Note: AIProviderSettings is not available in agent mode
@@ -1858,8 +1859,21 @@ def _build_function(deployment, service) -> str:
             raise
 
         registry = getattr(settings, 'CONTAINER_REGISTRY_URL', None)
+        is_local = is_deployment_local(deployment)
+        if not is_local and not registry:
+            raise RuntimeError(
+                "CONTAINER_REGISTRY_URL is not configured. "
+                "A registry is required to push/pull images for remote node deployments."
+            )
         if registry:
-            return NixpacksBuilder.push_image(tag, registry)
+            remote_tag = NixpacksBuilder.push_image(tag, registry)
+            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
+            if not pushed_to_registry and not is_local:
+                raise RuntimeError(
+                    f"Image push failed: Local fallback is not allowed for remote deployments. "
+                    f"Target node requires a working registry to pull {remote_tag}."
+                )
+            return remote_tag
         return tag
 
     finally:
@@ -1920,9 +1934,22 @@ def _build_uploaded_source(deployment, service) -> str:
             )
 
         registry = getattr(settings, "CONTAINER_REGISTRY_URL", None)
+        is_local = is_deployment_local(deployment)
+        if not is_local and not registry:
+            raise RuntimeError(
+                "CONTAINER_REGISTRY_URL is not configured. "
+                "A registry is required to push/pull images for remote node deployments."
+            )
         if registry:
             append_log(deployment, f"Pushing uploaded image to {registry}...\n")
-            image_name = NixpacksBuilder.push_image(image_name, registry)
+            remote_tag = NixpacksBuilder.push_image(image_name, registry)
+            pushed_to_registry = bool(remote_tag and remote_tag.startswith(registry))
+            if not pushed_to_registry and not is_local:
+                raise RuntimeError(
+                    f"Image push failed: Local fallback is not allowed for remote deployments. "
+                    f"Target node requires a working registry to pull {remote_tag}."
+                )
+            image_name = remote_tag
         return image_name
 
     finally:

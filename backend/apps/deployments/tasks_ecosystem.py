@@ -527,12 +527,20 @@ def _service_placeholder_target(
         created_services.get(ref_name)
         or created_services.get(ref_name.lower())
     )
+    if not ref_service:
+        try:
+            from apps.deployments.models import Service
+            ref_service = Service.objects.filter(name__iexact=ref_name).first()
+        except Exception as e:
+            logger.warning(f"Failed to lookup service {ref_name} in database: {e}")
+
     if ref_service:
         host = ref_service.name
         port = ref_service.internal_port or 3000
         return host, port
 
     return _slugify_name(ref_name), 3000
+
 
 
 def _service_placeholder_url(
@@ -1123,7 +1131,12 @@ def ecosystem_scan_task(self, user_id: str, scan_window_days: int = 30, ai_provi
 
     try:
         logger.info(f"Starting ecosystem scan for user {user_id} with selected_repos: {selected_repos}")
-        result = scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos)
+        from apps.deployments.models import Service
+        existing_services = list(
+            Service.objects.filter(owner=user)
+            .values("name", "repository_url", "internal_port", "buildpack")
+        )
+        result = scan_and_analyze(token, ai_provider=ai_provider, selected_repos=selected_repos, existing_services=existing_services)
         logger.info(f"Ecosystem scan completed successfully for user {user_id}")
 
         if plan_id:
@@ -1492,12 +1505,18 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 logger.warning("Ecosystem addon %s is not supported; skipping", addon_type)
                 continue
 
-            existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
-            if existing_addon and existing_addon.status == Addon.Status.ACTIVE and existing_addon.connection_url:
+            existing_addon = Addon.objects.filter(
+                service__owner=user,
+                addon_type=addon_type,
+                name=f"{addon_type.lower()}-shared"[:255],
+                status=Addon.Status.ACTIVE
+            ).first()
+            if existing_addon and existing_addon.connection_url:
                 provisioned_addon_urls[addon_type] = existing_addon.connection_url
-                logger.info("Reusing existing %s addon: %s", addon_type, existing_addon.id)
+                logger.info("Reusing existing user-wide %s addon: %s", addon_type, existing_addon.id)
                 continue
 
+            existing_addon = Addon.objects.filter(service=addon_anchor_service, addon_type=addon_type).first()
             if not existing_addon:
                 existing_addon = Addon.objects.create(
                     service=addon_anchor_service,

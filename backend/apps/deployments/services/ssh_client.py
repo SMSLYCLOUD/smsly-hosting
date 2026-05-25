@@ -207,6 +207,11 @@ class SSHClient:
         self.client = None
 
     def exec_command(self, command, timeout=None, raise_on_error=True):
+        if self.client:
+            transport = self.client.get_transport()
+            if not transport or not transport.is_active():
+                self.close()
+
         if not self.client:
             self.connect()
 
@@ -259,6 +264,11 @@ class SSHClient:
         return out, err, exit_status
 
     def upload_file(self, local_path, remote_path):
+        if self.client:
+            transport = self.client.get_transport()
+            if not transport or not transport.is_active():
+                self.close()
+
         if not self.client:
             self.connect()
         if not self.sftp:
@@ -268,6 +278,11 @@ class SSHClient:
         self.sftp.put(local_path, remote_path)
 
     def download_file(self, remote_path, local_path):
+        if self.client:
+            transport = self.client.get_transport()
+            if not transport or not transport.is_active():
+                self.close()
+
         if not self.client:
             self.connect()
         if not self.sftp:
