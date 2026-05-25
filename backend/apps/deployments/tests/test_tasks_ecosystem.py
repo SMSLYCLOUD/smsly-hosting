@@ -551,15 +551,25 @@ class EcosystemDeployTaskTests(TestCase):
         service = Service.objects.get(owner=self.user, name="api")
         self.assertEqual(service.buildpack, "DOCKER")
 
-    def test_heuristic_analysis_defaults_to_docker(self):
-        """Heuristic analysis build defaults to docker."""
+    def test_heuristic_analysis_is_dynamic(self):
+        """Heuristic analysis detects Dockerfile if present, otherwise defaults to nixpacks."""
         from services.ecosystem import heuristic_analysis
-        res = heuristic_analysis(["index.js", "package.json"])
-        self.assertEqual(res["build"], "docker")
+        
+        # Scenario A: No Dockerfile present -> nixpacks
+        res_nix = heuristic_analysis(["index.js", "package.json"])
+        self.assertEqual(res_nix["build"], "nixpacks")
 
-    def test_simulate_analysis_defaults_to_dockerfile(self):
-        """Simulated DevOps Agent analysis defaults to dockerfile."""
+        # Scenario B: Dockerfile present in root -> dockerfile
+        res_doc = heuristic_analysis(["index.js", "package.json", "Dockerfile"])
+        self.assertEqual(res_doc["build"], "dockerfile")
+
+    def test_simulate_analysis_is_dynamic(self):
+        """Simulated DevOps Agent analysis suggests dockerfile for Django, nixpacks for Node."""
         from services.ai_engine import DevOpsAgent
         agent = DevOpsAgent()
-        analysis = agent._simulate_analysis("https://github.com/owner/node-repo.git")
-        self.assertEqual(analysis.build_strategy, "dockerfile")
+        
+        analysis_django = agent._simulate_analysis("https://github.com/owner/django-repo.git")
+        self.assertEqual(analysis_django.build_strategy, "dockerfile")
+
+        analysis_node = agent._simulate_analysis("https://github.com/owner/node-repo.git")
+        self.assertEqual(analysis_node.build_strategy, "nixpacks")

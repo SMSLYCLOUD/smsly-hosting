@@ -152,7 +152,7 @@ class DevOpsAgent:
             stack_type="node",
             recommended_port=3000,
             required_addons=["REDIS"],
-            build_strategy="dockerfile",
+            build_strategy="nixpacks",
             cost_estimate="~$10/mo"
         )
 

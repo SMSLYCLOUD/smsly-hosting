@@ -303,7 +303,7 @@ def heuristic_analysis(files: List[str], clone_dir: str = None) -> dict:
     languages = []
     port = 3000
     addons = set()
-    build = "docker"
+    build = "nixpacks"
     seen_stacks = set()
 
     # Detect ALL stacks/languages present
@@ -1861,7 +1861,7 @@ def _build_heuristic_plan(repos_data: List[dict], error: str = "") -> dict:
             "branch": str(rd.get("default_branch") or "main"),
             "stack": h.get("stack", "unknown"),
             "port": h.get("port", 3000),
-            "build": h.get("build", "docker"),
+            "build": h.get("build", "nixpacks"),
             "addons": h.get("addons", []),
             "env_vars": _env_plan_map(h.get("env_vars", {})),
             "depends_on": [],
