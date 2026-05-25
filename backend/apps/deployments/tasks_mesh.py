@@ -57,6 +57,46 @@ def check_mesh_health_task():
                         f"Mesh {mesh.name}: peer {peer_result['wg_address']} "
                         f"is {peer_result['status']}"
                     )
+                    # Self-healing logic for unreachable peers
+                    try:
+                        peer = mesh.peers.filter(wg_address=peer_result["wg_address"], is_active=True).first()
+                        if peer and peer.server:
+                            server = peer.server
+                            from apps.deployments.models_core import ManagedServer
+                            # Only heal if the server itself is ONLINE publicly
+                            if server.status == ManagedServer.Status.ONLINE:
+                                # Check if the public or private IP endpoint changed
+                                metadata = getattr(server, "provider_metadata", {}) or {}
+                                prefer_private = str(
+                                    metadata.get("mesh_endpoint")
+                                    or metadata.get("wireguard_endpoint")
+                                    or ""
+                                ).lower() == "private" or bool(metadata.get("prefer_private_mesh"))
+                                
+                                if server.private_ip and prefer_private:
+                                    expected_endpoint = f"{server.private_ip}:{mesh.listen_port}"
+                                else:
+                                    expected_endpoint = f"{server.host}:{mesh.listen_port}"
+                                    
+                                if peer.endpoint != expected_endpoint:
+                                    logger.info(
+                                        f"Mesh {mesh.name}: Peer {peer.wg_address} endpoint changed from "
+                                        f"'{peer.endpoint}' to '{expected_endpoint}'. Updating in database."
+                                    )
+                                    peer.endpoint = expected_endpoint
+                                    peer.save(update_fields=["endpoint", "updated_at"])
+                                
+                                # Trigger recovery task (deploy_mesh_task) with 5 min cooldown rate-limit per peer
+                                heal_lock_key = f"mesh-heal-lock:{peer.id}"
+                                if cache.add(heal_lock_key, "1", timeout=300):
+                                    logger.warning(
+                                        f"Mesh {mesh.name}: Peer {peer.wg_address} is unreachable but server is ONLINE. "
+                                        f"Triggering auto-healing mesh redeployment."
+                                    )
+                                    from apps.deployments.tasks_mesh import deploy_mesh_task
+                                    deploy_mesh_task.delay(str(mesh.id))
+                    except Exception as he:
+                        logger.error(f"Failed during mesh VPN self-healing for peer {peer_result.get('wg_address')}: {he}")
         except Exception as e:
             mesh.mesh_status = "FAILED"
             mesh.mesh_last_error = str(e)
