@@ -14,8 +14,8 @@ import re
 import secrets
 import string
 from collections import defaultdict
-from urllib.parse import urlparse
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from urllib.parse import urlparse, urlunparse
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -165,19 +165,33 @@ def _addon_type_from_placeholder(token: str) -> str:
 
 
 def _placeholder_addon_types(raw_env: Any) -> Set[str]:
-    """Extract addon types referenced by env placeholders."""
+    """Extract addon types referenced by env placeholders (including embedded)."""
     addon_types: Set[str] = set()
     for value in _normalize_env_vars(raw_env).values():
         value_text = str(value or "").strip()
-        if not (value_text.startswith("{{") and value_text.endswith("}}")):
-            continue
-        token = value_text[2:-2].strip()
-        if token.upper().startswith("SHARED_SECRET:") or token.upper() == "GENERATE":
-            continue
-        addon_type = _addon_type_from_placeholder(token)
-        if addon_type:
-            addon_types.add(addon_type)
+        # Find all {{...}} tokens in the value, not just full-string ones
+        for match in re.finditer(r"\{\{(.+?)\}\}", value_text):
+            token = match.group(1).strip()
+            if token.upper().startswith("SHARED_SECRET:") or token.upper() == "GENERATE":
+                continue
+            if token.upper().startswith("SERVICE:"):
+                continue
+            addon_type = _addon_type_from_placeholder(token)
+            if addon_type:
+                addon_types.add(addon_type)
     return addon_types
+
+
+def _service_placeholder_refs(raw_env: Any) -> List[str]:
+    """Extract service references from {{SERVICE:name}} env placeholders."""
+    refs: List[str] = []
+    for value in _normalize_env_vars(raw_env).values():
+        value_text = str(value or "")
+        for match in re.finditer(r"\{\{\s*SERVICE\s*:\s*(.+?)\s*\}\}", value_text, re.IGNORECASE):
+            ref = match.group(1).strip()
+            if ref:
+                refs.append(ref)
+    return refs
 
 
 def _plan_addon_types(plan_addons: Any) -> Set[str]:
@@ -498,13 +512,118 @@ def _stack_runtime_defaults(stack: str, port: int) -> Dict[str, str]:
     return defaults
 
 
+def _service_placeholder_target(
+    ref_name: str,
+    created_services: Dict[str, Any],
+) -> Tuple[str, int]:
+    """Return the internal host and port for a service placeholder."""
+    ref_service = (
+        created_services.get(ref_name)
+        or created_services.get(ref_name.lower())
+    )
+    if ref_service:
+        host = ref_service.name
+        port = ref_service.internal_port or 3000
+        return host, port
+
+    return _slugify_name(ref_name), 3000
+
+
+def _service_placeholder_url(
+    ref_name: str,
+    created_services: Dict[str, Any],
+    *,
+    as_authority: bool = False,
+) -> str:
+    """Resolve a service reference to an internal URL or URL authority."""
+    host, port = _service_placeholder_target(ref_name, created_services)
+    authority = f"{host}:{port}"
+    if as_authority:
+        return authority
+    return f"http://{authority}"
+
+
+def _rewrite_url_path(base_url: str, suffix: str) -> str:
+    """Rewrite a URL path with a suffix like /identity."""
+    suffix_text = str(suffix or "").strip()
+    if not suffix_text:
+        return str(base_url or "")
+
+    parsed_suffix = urlparse(f"/{suffix_text.lstrip('/')}")
+    parsed_base = urlparse(str(base_url or ""))
+    if not parsed_base.scheme or not parsed_base.netloc:
+        return f"{str(base_url or '').rstrip('/')}/{suffix_text.lstrip('/')}"
+
+    return urlunparse(
+        parsed_base._replace(
+            path=parsed_suffix.path,
+            query=parsed_suffix.query or parsed_base.query,
+            fragment=parsed_suffix.fragment or parsed_base.fragment,
+        )
+    )
+
+
+def _resolve_single_placeholder(
+    token: str,
+    key: str,
+    created_services: Dict[str, Any],
+    shared_addons: Dict[str, str],
+    shared_secrets: Dict[str, str],
+) -> Optional[str]:
+    """Resolve a single {{...}} token to a concrete value.
+
+    Returns the resolved value, or None if the token is not recognised
+    (caller should leave the original placeholder text in place).
+    """
+    # {{GENERATE}} is handled by the caller (full-string only)
+    if token == "GENERATE":
+        return None
+
+    # {{SHARED_SECRET:name}}
+    if token.upper().startswith("SHARED_SECRET:"):
+        secret_name = token[14:].strip().lower()
+        if not secret_name:
+            secret_name = str(key or "shared").strip().lower()
+        return shared_secrets.setdefault(secret_name, _generate_secret())
+
+    # {{SERVICE:ref}}
+    if token.upper().startswith("SERVICE:"):
+        ref_name = token[8:].strip()
+        return _service_placeholder_url(ref_name, created_services)
+
+    # Addon URL placeholders (POSTGRES_URL, REDIS_URL, DATABASE_URL, etc.)
+    addon_type = _addon_type_from_placeholder(token)
+    if addon_type and addon_type in shared_addons:
+        return shared_addons[addon_type]
+
+    # Environment variable fallback
+    env_fallback = os.environ.get(token)
+    if env_fallback:
+        return env_fallback
+
+    # Addon placeholder that couldn't be resolved -> hard error
+    if addon_type:
+        raise ValueError(
+            f"Addon placeholder {{{{{token}}}}} for {key} could not be resolved. "
+            f"Provision addon {addon_type} or set {token}."
+        )
+
+    return None
+
+
 def _resolve_env_placeholders(
     env_vars: Dict[str, str],
     created_services: Dict[str, Any],
     shared_addons: Dict[str, str] = None,
     shared_secrets: Dict[str, str] = None,
 ) -> Dict[str, str]:
-    """Resolve known placeholders into concrete values."""
+    """Resolve known placeholders into concrete values.
+
+    Handles both full-string placeholders (e.g. "{{POSTGRES_URL}}") and
+    embedded placeholders (e.g. "{{POSTGRES_URL}}/identity" or
+    "wss://{{SERVICE:smsly-security-gateway}}").  Multiple placeholders in a
+    single value are all resolved.
+    """
     resolved: Dict[str, str] = {}
     shared_addons = shared_addons or {}
     shared_secrets = shared_secrets if shared_secrets is not None else {}
@@ -512,6 +631,7 @@ def _resolve_env_placeholders(
     for key, value in env_vars.items():
         value_text = str(value or "")
 
+        # Fast-path: full-string special tokens
         if value_text == "{{GENERATE}}":
             resolved[key] = _generate_secret()
             continue
@@ -523,50 +643,56 @@ def _resolve_env_placeholders(
             resolved[key] = shared_secrets.setdefault(secret_name, _generate_secret())
             continue
 
-        if value_text.startswith("{{SERVICE:") and value_text.endswith("}}"):
-            ref_name = value_text[10:-2].strip()
-            ref_service = created_services.get(ref_name) or created_services.get(ref_name.lower())
-            if ref_service:
-                host = ref_service.name
-                port = ref_service.internal_port or 3000
-                resolved[key] = f"http://{host}:{port}"
-            else:
-                safe_ref = _slugify_name(ref_name)
-                resolved[key] = f"http://{safe_ref}:3000"
-            continue
-
-        if value_text.startswith("{{") and value_text.endswith("}}"):
-            token = value_text[2:-2].strip()
+        addon_suffix = re.match(r"^\s*\{\{\s*([^{}]+?)\s*\}\}/(.+)$", value_text)
+        if addon_suffix:
+            token = addon_suffix.group(1).strip()
+            suffix = addon_suffix.group(2).strip()
             addon_type = _addon_type_from_placeholder(token)
-            if addon_type and addon_type in shared_addons:
-                resolved[key] = shared_addons[addon_type]
+            if (
+                addon_type in {"POSTGRES", "MYSQL", "MONGODB"}
+                and addon_type in shared_addons
+                and "{{" not in suffix
+            ):
+                resolved[key] = _rewrite_url_path(shared_addons[addon_type], suffix)
                 continue
 
-            env_fallback = os.environ.get(token)
-            if env_fallback:
-                resolved[key] = env_fallback
-                continue
-
-            if addon_type:
-                raise ValueError(
-                    f"Addon placeholder {value_text} for {key} could not be resolved. "
-                    f"Provision addon {addon_type} or set {token}."
+        # General case: resolve every {{...}} token inside the string.
+        # This handles embedded placeholders like "{{POSTGRES_URL}}/identity".
+        if "{{" in value_text:
+            def _replacer(match: re.Match) -> str:
+                token = match.group(1).strip()
+                if token.upper().startswith("SERVICE:"):
+                    prefix = value_text[:match.start()]
+                    if re.search(r"[a-z][a-z0-9+.-]*://$", prefix, re.IGNORECASE):
+                        ref_name = token[8:].strip()
+                        return _service_placeholder_url(
+                            ref_name,
+                            created_services,
+                            as_authority=True,
+                        )
+                resolved_val = _resolve_single_placeholder(
+                    token, key, created_services, shared_addons, shared_secrets,
                 )
+                return resolved_val if resolved_val is not None else match.group(0)
 
+            resolved[key] = re.sub(r"\{\{(.+?)\}\}", _replacer, value_text)
+        else:
             resolved[key] = value_text
-            continue
-
-        resolved[key] = value_text
 
     return resolved
 
 
 def _validate_resolved_env(resolved_env: Dict[str, str]) -> None:
     """Ensure no unresolved placeholders remain in resolved env vars."""
-    import re
-    for value in resolved_env.values():
-        if isinstance(value, str) and re.search(r"\{\{.*\}\}", value):
-            raise ValueError(f"Unresolved placeholder found in env var values: {value}")
+    unresolved_keys = []
+    for key, value in resolved_env.items():
+        if isinstance(value, str) and re.search(r"\{\{.*?\}\}", value):
+            unresolved_keys.append(f"{key}={value}")
+    if unresolved_keys:
+        raise ValueError(
+            "Unresolved placeholders in env vars: "
+            + "; ".join(unresolved_keys)
+        )
 
 
 def _validate_required_env(resolved_env: Dict[str, str], addon_types: Set[str] = None) -> None:
@@ -607,13 +733,20 @@ def _order_key(item: Any) -> int:
 
 
 def _normalize_buildpack(raw: Any) -> str:
-    """Map ecosystem plan build strategy to Service.buildpack choices."""
+    """Map ecosystem plan build strategy to Service.buildpack choices.
+
+    Default is DOCKER for ecosystem services.  Only falls back to NIXPACKS
+    when the plan explicitly requests it or the build type is static.
+    """
     build = str(raw or "").strip().lower()
     if build in {"docker", "dockerfile", "docker-file"}:
         return "DOCKER"
     if build in {"static", "static-site", "static_site"}:
         return "STATIC"
-    return "NIXPACKS"
+    if build in {"nixpacks"}:
+        return "NIXPACKS"
+    # Default: Docker build for ecosystem services
+    return "DOCKER"
 
 
 def _normalize_deploy_mode(svc_plan: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -762,6 +895,7 @@ def _resolve_dependency_map(
             repo_name,
             str(entry.get("name") or "").strip().lower(),
             str(entry.get("requested_name") or "").strip().lower(),
+            _slugify_name(entry.get("name") or "").lower(),
         }
         for alias in aliases:
             if not alias:
@@ -779,8 +913,17 @@ def _resolve_dependency_map(
     resolved: Dict[str, Set[str]] = {}
     for key, entry in entries_by_key.items():
         deps: Set[str] = set()
-        for token in _extract_dependencies(entry.get("depends_on", [])):
-            dep = alias_to_key.get(token.strip().lower())
+        raw_tokens = [
+            *_extract_dependencies(entry.get("depends_on", [])),
+            *_service_placeholder_refs(entry.get("plan", {}).get("env_vars", {})),
+        ]
+        for token in raw_tokens:
+            token_text = token.strip().lower()
+            dep = (
+                alias_to_key.get(token_text)
+                or alias_to_key.get(_canonical_repo_ref(token_text).lower())
+                or alias_to_key.get(_slugify_name(token_text).lower())
+            )
             if dep and dep != key:
                 deps.add(dep)
         resolved[key] = deps
@@ -1029,18 +1172,38 @@ def ecosystem_release_wave_task(
             "cancelled": 0,
         }
 
-    failed_states = {Deployment.Status.FAILED, Deployment.Status.CANCELLED}
-    in_progress_states = {Deployment.Status.QUEUED, Deployment.Status.BUILDING, Deployment.Status.HEALTH_CHECK, "STARTING"}
+    failed_states = {
+        Deployment.Status.FAILED,
+        Deployment.Status.BUILD_FAILED,
+        Deployment.Status.BACKUP_FAILED,
+        Deployment.Status.MIGRATION_FAILED,
+        Deployment.Status.CANCELLED,
+    }
+    in_progress_states = {
+        Deployment.Status.QUEUED,
+        Deployment.Status.REVIEW,
+        Deployment.Status.BUILDING,
+        Deployment.Status.AWAITING_APPROVAL,
+        Deployment.Status.BACKUP_RUNNING,
+        Deployment.Status.MIGRATION_PLANNING,
+        Deployment.Status.MIGRATION_RUNNING,
+        Deployment.Status.DEPLOYING,
+        Deployment.Status.HEALTH_CHECK,
+        Deployment.Status.TRAFFIC_SHIFTING,
+        Deployment.Status.MONITORING,
+        "STARTING",
+    }
 
     # Bug 5 Fix: Retry failed deployments once before permanently failing them.
     for dep in deployments:
-        if dep["status"] == Deployment.Status.FAILED:
+        if dep["status"] in failed_states and dep["status"] != Deployment.Status.CANCELLED:
             dep_obj = Deployment.objects.filter(id=dep["id"]).first()
-            if dep_obj and not dep_obj.build_logs.endswith("\n[Ecosystem] Retrying once...\n"):
-                # Mark as queued to retry once, and append a marker
+            if dep_obj and dep_obj.ecosystem_retry_count < 1:
+                # Mark as queued to retry once
                 dep_obj.status = Deployment.Status.QUEUED
-                dep_obj.build_logs = (dep_obj.build_logs or "") + "\n[Ecosystem] Retrying once...\n"
-                dep_obj.save(update_fields=["status", "build_logs"])
+                dep_obj.ecosystem_retry_count = (dep_obj.ecosystem_retry_count or 0) + 1
+                dep_obj.build_logs = (dep_obj.build_logs or "") + "\n[Ecosystem] Retrying (attempt 2/2)...\n"
+                dep_obj.save(update_fields=["status", "ecosystem_retry_count", "build_logs"])
 
                 # Re-queue the individual task
                 self.app.send_task(
@@ -1217,7 +1380,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             "name": source_name,
             "requested_name": requested_name,
             "stack": str(svc_plan.get("stack") or "unknown"),
-            "build": str(svc_plan.get("build") or "nixpacks"),
+            "build": str(svc_plan.get("build") or "docker"),
             "deploy_order": _order_key(svc_plan),
             "depends_on": svc_plan.get("depends_on", []),
             "plan": svc_plan,
@@ -1514,7 +1677,7 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
                 target_is_local=target_is_local,
                 build_logs=(
                     f"Ecosystem deploy: {repo} ({stack})\n"
-                    f"Port: {port} | Build: {build_method}\n"
+                    f"Port: {port} | Build strategy: {build_method}\n"
                     f"Env vars: {len(resolved_env)} configured\n"
                     f"Depends on: {', '.join(_extract_dependencies(entry['depends_on'])) or '(none)'}\n\n"
                 ),
@@ -1565,7 +1728,10 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
         if deployment_ids:
             waves.append(deployment_ids)
 
-    # Reconcile: update ALL services' addon env vars with real provisioned URLs
+    # Reconcile: update ALL services' addon env vars with real provisioned URLs.
+    # Only set env vars that are missing or still contain unresolved placeholders.
+    # Do NOT overwrite values that were already resolved with embedded suffixes
+    # (e.g. "{{POSTGRES_URL}}/identity" -> "postgres://.../identity").
     if provisioned_addon_urls:
         updated_service_ids: set = set()
         for repo_key, entry in entries_by_key.items():
@@ -1576,6 +1742,12 @@ def ecosystem_deploy_task(self, user_id: str, plan: dict, plan_id: str = None) -
             for addon_type, url in provisioned_addon_urls.items():
                 if addon_type in svc_addon_types:
                     for env_key in _addon_env_keys(addon_type):
+                        existing = EnvironmentVariable.objects.filter(
+                            service=svc, key=env_key,
+                        ).first()
+                        if existing and existing.value and not re.search(r"\{\{.*?\}\}", existing.value):
+                            # Already resolved (possibly with embedded suffix) — skip
+                            continue
                         EnvironmentVariable.objects.update_or_create(
                             service=svc,
                             key=env_key,
