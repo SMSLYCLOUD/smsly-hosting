@@ -1445,11 +1445,24 @@ class PipelineManager:
 
             # Dockerfile detection
             dockerfile_path = self._find_dockerfile(context_dir)
-            use_docker = (self.service.buildpack == 'DOCKER' and dockerfile_path)
+            use_docker = bool(dockerfile_path) and self.service.buildpack != 'STATIC'
 
             if use_docker:
+                if self.service.buildpack == 'NIXPACKS':
+                    append_log(
+                        self.deployment,
+                        "Build strategy: docker (Dockerfile detected, overriding nixpacks)\n",
+                    )
+                else:
+                    append_log(self.deployment, "Build strategy: docker\n")
                 self._build_with_docker(context_dir, dockerfile_path)
             else:
+                if self.service.buildpack == 'DOCKER':
+                    raise BuildError(
+                        "Build strategy is docker but no Dockerfile was found. "
+                        "Nixpacks fallback is disabled for Docker-selected services."
+                    )
+                append_log(self.deployment, "Build strategy: nixpacks fallback\n")
                 self._build_with_nixpacks(context_dir)
 
             update_stage(
@@ -1879,14 +1892,26 @@ class PipelineManager:
         build_args = []
         env_map = {env.key: env.value for env in self.service.env_vars.all()}
 
-        # Smart arg detection
+        # Smart arg detection – only pass non-secret build-args.
+        # Secrets (containing KEY, SECRET, PASSWORD, TOKEN, DSN, URL, etc.)
+        # are injected at runtime, never baked into the image.
+        _BUILD_ARG_SECRET_HINTS = (
+            "SECRET", "KEY", "PASSWORD", "TOKEN", "DSN",
+            "DATABASE_URL", "POSTGRES_URL", "REDIS_URL",
+            "JWT", "API_KEY", "CREDENTIAL",
+        )
         defined_args = extract_dockerfile_arg_names(dockerfile_path)
         if defined_args:
             for k in defined_args:
                 if k in env_map:
+                    upper_k = k.upper()
+                    is_secret = any(hint in upper_k for hint in _BUILD_ARG_SECRET_HINTS)
+                    if is_secret:
+                        logger.info("Skipping secret build-arg: %s", k)
+                        continue
                     build_args.extend(["--build-arg", f"{k}={env_map[k]}"])
         else:
-            # Fallback: pass frontend-like vars
+            # Fallback: pass frontend-like vars (safe, non-secret)
             for k, v in env_map.items():
                 if k.startswith(("NEXT_PUBLIC_", "VITE_", "PUBLIC_")):
                     build_args.extend(["--build-arg", f"{k}={v}"])
@@ -2109,8 +2134,8 @@ class PipelineManager:
                 )
                 # Log output (redacted)
                 output = redact_values(process.stdout + process.stderr, self.secret_values)
-                if len(output) > 5000:
-                    output = output[-5000:] + "\n...(truncated)"
+                if len(output) > 20000:
+                    output = output[-20000:] + "\n...(truncated)"
                 append_log(self.deployment, output)
                 return
 

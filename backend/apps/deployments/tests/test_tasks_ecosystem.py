@@ -9,10 +9,15 @@ from django.test import SimpleTestCase, TestCase
 
 from apps.deployments.tasks_ecosystem import (
     _apply_service_profile,
+    _build_dependency_waves,
+    _normalize_buildpack,
     _normalize_env_vars,
+    _placeholder_addon_types,
+    _resolve_dependency_map,
     _resolve_env_placeholders,
     _runtime_watch_defaults,
     _select_shared_addon_anchor,
+    _validate_resolved_env,
     ecosystem_deploy_task,
     ecosystem_scan_task,
 )
@@ -132,6 +137,199 @@ class TasksEcosystemHelpersTests(SimpleTestCase):
 
         self.assertIsNotNone(anchor)
         self.assertEqual(anchor.name, "payments-api")
+
+
+class EmbeddedPlaceholderResolutionTests(SimpleTestCase):
+    """Tests for embedded placeholder resolution in env var values."""
+
+    def test_embedded_postgres_url_with_db_suffix(self):
+        """{{POSTGRES_URL}}/identity must resolve to postgres://.../identity."""
+        env_map = {"DATABASE_URL": "{{POSTGRES_URL}}/identity"}
+        out = _resolve_env_placeholders(
+            env_map, {},
+            shared_addons={"POSTGRES": "postgres://user:pass@db:5432/main"},
+        )
+        self.assertEqual(out["DATABASE_URL"], "postgres://user:pass@db:5432/identity")
+
+    def test_embedded_service_reference_wss(self):
+        """wss://{{SERVICE:smsly-security-gateway}} must resolve."""
+        created = {
+            "smsly-security-gateway": SimpleNamespace(
+                name="smsly-security-gateway", internal_port=8000,
+            ),
+        }
+        env_map = {"WS_URL": "wss://{{SERVICE:smsly-security-gateway}}"}
+        out = _resolve_env_placeholders(env_map, created)
+        self.assertEqual(out["WS_URL"], "wss://smsly-security-gateway:8000")
+
+    def test_full_service_reference_includes_http_scheme(self):
+        """{{SERVICE:api}} as a full value must resolve to an HTTP URL."""
+        created = {
+            "api": SimpleNamespace(name="api", internal_port=8080),
+        }
+        out = _resolve_env_placeholders({"API_URL": "{{SERVICE:api}}"}, created)
+        self.assertEqual(out["API_URL"], "http://api:8080")
+
+    def test_multiple_placeholders_in_one_string(self):
+        """Multiple placeholders in one value must all resolve."""
+        env_map = {
+            "COMPOSITE": "{{POSTGRES_URL}}?redis={{REDIS_URL}}",
+        }
+        out = _resolve_env_placeholders(
+            env_map, {},
+            shared_addons={
+                "POSTGRES": "postgres://u:p@db:5432/app",
+                "REDIS": "redis://redis:6379/0",
+            },
+        )
+        self.assertEqual(
+            out["COMPOSITE"],
+            "postgres://u:p@db:5432/app?redis=redis://redis:6379/0",
+        )
+
+    def test_plain_string_without_placeholders_unchanged(self):
+        env_map = {"PORT": "3000", "NODE_ENV": "production"}
+        out = _resolve_env_placeholders(env_map, {})
+        self.assertEqual(out["PORT"], "3000")
+        self.assertEqual(out["NODE_ENV"], "production")
+
+    def test_unresolved_addon_placeholder_raises(self):
+        """Unresolved addon placeholder should raise ValueError."""
+        env_map = {"DATABASE_URL": "{{POSTGRES_URL}}"}
+        with self.assertRaises(ValueError) as ctx:
+            _resolve_env_placeholders(env_map, {}, shared_addons={})
+        self.assertIn("POSTGRES_URL", str(ctx.exception))
+
+    def test_validate_resolved_env_reports_key_names(self):
+        """Validation should report which keys have unresolved placeholders."""
+        resolved = {
+            "GOOD_KEY": "clean_value",
+            "BAD_KEY": "some {{UNRESOLVED}} value",
+            "ANOTHER_BAD": "{{ALSO_MISSING}}",
+        }
+        with self.assertRaises(ValueError) as ctx:
+            _validate_resolved_env(resolved)
+        msg = str(ctx.exception)
+        self.assertIn("BAD_KEY", msg)
+        self.assertIn("ANOTHER_BAD", msg)
+        self.assertNotIn("GOOD_KEY", msg)
+
+
+class PlaceholderAddonTypeTests(SimpleTestCase):
+    """Tests for _placeholder_addon_types with embedded placeholders."""
+
+    def test_detects_embedded_postgres_placeholder(self):
+        raw_env = {"DATABASE_URL": "{{POSTGRES_URL}}/mydb"}
+        types = _placeholder_addon_types(raw_env)
+        self.assertIn("POSTGRES", types)
+
+    def test_detects_multiple_addon_types(self):
+        raw_env = {
+            "DATABASE_URL": "{{POSTGRES_URL}}",
+            "CACHE_URL": "{{REDIS_URL}}",
+        }
+        types = _placeholder_addon_types(raw_env)
+        self.assertIn("POSTGRES", types)
+        self.assertIn("REDIS", types)
+
+    def test_ignores_service_references(self):
+        raw_env = {"API_URL": "{{SERVICE:backend}}"}
+        types = _placeholder_addon_types(raw_env)
+        self.assertEqual(len(types), 0)
+
+    def test_ignores_shared_secrets(self):
+        raw_env = {"JWT_SECRET": "{{SHARED_SECRET:jwt}}"}
+        types = _placeholder_addon_types(raw_env)
+        self.assertEqual(len(types), 0)
+
+
+class NormalizeBuildpackTests(SimpleTestCase):
+    """Tests for Docker-first build strategy normalization."""
+
+    def test_docker_keyword_returns_docker(self):
+        self.assertEqual(_normalize_buildpack("docker"), "DOCKER")
+        self.assertEqual(_normalize_buildpack("dockerfile"), "DOCKER")
+        self.assertEqual(_normalize_buildpack("Dockerfile"), "DOCKER")
+
+    def test_nixpacks_keyword_returns_nixpacks(self):
+        self.assertEqual(_normalize_buildpack("nixpacks"), "NIXPACKS")
+
+    def test_static_keyword_returns_static(self):
+        self.assertEqual(_normalize_buildpack("static"), "STATIC")
+
+    def test_empty_or_unknown_defaults_to_docker(self):
+        self.assertEqual(_normalize_buildpack(""), "DOCKER")
+        self.assertEqual(_normalize_buildpack(None), "DOCKER")
+        self.assertEqual(_normalize_buildpack("unknown"), "DOCKER")
+
+
+class DependencyWaveTests(SimpleTestCase):
+    """Tests for dependency graph and wave queueing."""
+
+    def test_services_queued_in_dependency_order(self):
+        entries = {
+            "db": {"repo": "owner/db", "deploy_order": 1, "depends_on": []},
+            "api": {"repo": "owner/api", "deploy_order": 2, "depends_on": ["owner/db"]},
+            "frontend": {"repo": "owner/frontend", "deploy_order": 3, "depends_on": ["owner/api"]},
+        }
+        deps = _resolve_dependency_map(entries)
+        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+
+        # db should be in wave 0, api in wave 1, frontend in wave 2
+        flat = [key for wave in waves for key in wave]
+        self.assertEqual(flat.index("db") < flat.index("api"), True)
+        self.assertEqual(flat.index("api") < flat.index("frontend"), True)
+        self.assertEqual(len(unresolved), 0)
+
+    def test_service_env_references_create_dependencies(self):
+        entries = {
+            "owner/backend": {
+                "repo": "owner/backend",
+                "name": "backend",
+                "requested_name": "backend",
+                "deploy_order": 1,
+                "depends_on": [],
+                "plan": {"env_vars": {}},
+            },
+            "owner/frontend": {
+                "repo": "owner/frontend",
+                "name": "frontend",
+                "requested_name": "frontend",
+                "deploy_order": 1,
+                "depends_on": [],
+                "plan": {"env_vars": {"API_URL": "{{SERVICE:backend}}"}},
+            },
+        }
+
+        deps = _resolve_dependency_map(entries)
+        self.assertEqual(deps["owner/frontend"], {"owner/backend"})
+
+        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+        self.assertEqual(waves[0], ["owner/backend"])
+        self.assertEqual(waves[1], ["owner/frontend"])
+        self.assertEqual(unresolved, [])
+
+    def test_independent_services_in_same_wave(self):
+        entries = {
+            "a": {"repo": "owner/a", "deploy_order": 1, "depends_on": []},
+            "b": {"repo": "owner/b", "deploy_order": 1, "depends_on": []},
+        }
+        deps = _resolve_dependency_map(entries)
+        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+
+        # Both should be in wave 0
+        self.assertEqual(len(waves), 1)
+        self.assertEqual(set(waves[0]), {"a", "b"})
+
+    def test_cyclic_dependencies_detected_as_unresolved(self):
+        entries = {
+            "a": {"repo": "owner/a", "deploy_order": 1, "depends_on": ["owner/b"]},
+            "b": {"repo": "owner/b", "deploy_order": 2, "depends_on": ["owner/a"]},
+        }
+        deps = _resolve_dependency_map(entries)
+        waves, unresolved = _build_dependency_waves(entries, deps, wave_size=10)
+
+        self.assertTrue(len(unresolved) > 0)
 
 
 class EcosystemScanTaskTests(TestCase):
@@ -259,3 +457,77 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(env["POSTGRES_URL"], "postgresql://u:p@db:5432/app")
         self.assertTrue(env["JWT_SECRET"])
         self.assertNotIn("{{", env["JWT_SECRET"])
+
+    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_embedded_postgres_url_with_db_suffix_resolves(self, _queue_wave, _provision):
+        """{{POSTGRES_URL}}/identity must become postgres://.../identity."""
+        plan = {
+            "addons": [{"type": "POSTGRES", "shared_by": ["api"]}],
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "https://github.com/owner/api.git",
+                    "stack": "django",
+                    "port": 8000,
+                    "env_vars": {
+                        "DATABASE_URL": "{{POSTGRES_URL}}/identity",
+                    },
+                }
+            ],
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service = Service.objects.get(owner=self.user, name="api")
+        env = {var.key: var.value for var in EnvironmentVariable.objects.filter(service=service)}
+        self.assertEqual(env["DATABASE_URL"], "postgresql://u:p@db:5432/identity")
+
+    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_dockerfile_services_choose_docker_build(self, _queue_wave, _provision):
+        """Ecosystem services should default to DOCKER buildpack."""
+        plan = {
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "https://github.com/owner/api.git",
+                    "stack": "django",
+                    "port": 8000,
+                    "build": "dockerfile",
+                    "env_vars": {},
+                }
+            ],
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service = Service.objects.get(owner=self.user, name="api")
+        self.assertEqual(service.buildpack, "DOCKER")
+
+    @patch("services.addon_provisioner.addon_provisioner.provision", return_value=("postgres-cid", "postgresql://u:p@db:5432/main"))
+    @patch("apps.deployments.tasks_ecosystem._queue_wave", return_value=1)
+    def test_unknown_build_defaults_to_docker(self, _queue_wave, _provision):
+        """Unknown/empty build type should default to DOCKER for ecosystem."""
+        plan = {
+            "services": [
+                {
+                    "name": "api",
+                    "repo": "https://github.com/owner/api.git",
+                    "stack": "django",
+                    "port": 8000,
+                    "env_vars": {},
+                }
+            ],
+        }
+
+        with self.settings(SENATE_ENABLED=False):
+            result = ecosystem_deploy_task.run(str(self.user.id), plan)
+
+        self.assertEqual(result["failed"], 0)
+        service = Service.objects.get(owner=self.user, name="api")
+        self.assertEqual(service.buildpack, "DOCKER")

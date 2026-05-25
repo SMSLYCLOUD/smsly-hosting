@@ -712,6 +712,10 @@ class Deployment(TimeStampedModel):
         default=False,
         help_text="True when this deployment was explicitly routed to the local controller")
 
+    ecosystem_retry_count = models.IntegerField(
+        default=0,
+        help_text="Number of times ecosystem deploy has retried this deployment")
+
     class Meta:
         ordering = ['-created_at']
 
