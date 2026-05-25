@@ -86,8 +86,8 @@ if not DEBUG and not IS_TESTING:
     SECURE_SSL_REDIRECT = _ssl_enabled
 
     SECURE_REDIRECT_EXEMPT = [
-        r'^api/v1/services/check-domain/',
-        r'^health/?',
+        r'^/api/v1/services/check-domain/',
+        r'^/health',
     ]
     SESSION_COOKIE_SECURE = _ssl_enabled
     CSRF_COOKIE_SECURE = _ssl_enabled

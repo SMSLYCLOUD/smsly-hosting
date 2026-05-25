@@ -141,24 +141,28 @@ class RemoteOrchestrator:
             results["error"] = "No candidate base URLs found."
             return results
 
+        health_paths = ("/health", "/health/live")
         health_errors: list[str] = []
         for base_url in base_urls:
-            try:
-                start = time.time()
-                health_url = f"{base_url}/health"
-                verify_health = _REMOTE_VERIFY if health_url.startswith("https://") else False
-                if _is_internal_target(health_url):
-                    verify_health = False
-                resp = requests.get(health_url, timeout=10, verify=verify_health)
-                results["latency_ms"] = int((time.time() - start) * 1000)
+            for health_path in health_paths:
+                try:
+                    start = time.time()
+                    health_url = f"{base_url}{health_path}"
+                    verify_health = _REMOTE_VERIFY if health_url.startswith("https://") else False
+                    if _is_internal_target(health_url):
+                        verify_health = False
+                    resp = requests.get(health_url, timeout=10, verify=verify_health, allow_redirects=False)
+                    results["latency_ms"] = int((time.time() - start) * 1000)
 
-                if resp.status_code < 500:
-                    results["network"] = True
-                    results["base_url"] = base_url
-                    break
-                health_errors.append(f"{base_url}/health -> HTTP {resp.status_code}")
-            except requests.RequestException as e:
-                health_errors.append(f"{base_url}/health -> {e}")
+                    if resp.status_code < 500:
+                        results["network"] = True
+                        results["base_url"] = base_url
+                        break
+                    health_errors.append(f"{health_url} -> HTTP {resp.status_code}")
+                except requests.RequestException as e:
+                    health_errors.append(f"{health_url} -> {e}")
+            if results["network"]:
+                break
 
         if not results["network"]:
             results["error"] = "Network unreachable: " + "; ".join(health_errors)
