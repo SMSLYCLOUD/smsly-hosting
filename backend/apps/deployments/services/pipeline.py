@@ -1893,20 +1893,14 @@ class PipelineManager:
         env_map = {env.key: env.value for env in self.service.env_vars.all()}
 
         # Smart arg detection – only pass non-secret build-args.
-        # Secrets (containing KEY, SECRET, PASSWORD, TOKEN, DSN, URL, etc.)
-        # are injected at runtime, never baked into the image.
-        _BUILD_ARG_SECRET_HINTS = (
-            "SECRET", "KEY", "PASSWORD", "TOKEN", "DSN",
-            "DATABASE_URL", "POSTGRES_URL", "REDIS_URL",
-            "JWT", "API_KEY", "CREDENTIAL",
-        )
+        # Secrets are injected at runtime, never baked into the image.
+        from apps.cloud.services.build_constants import is_secret_env_var
+
         defined_args = extract_dockerfile_arg_names(dockerfile_path)
         if defined_args:
             for k in defined_args:
                 if k in env_map:
-                    upper_k = k.upper()
-                    is_secret = any(hint in upper_k for hint in _BUILD_ARG_SECRET_HINTS)
-                    if is_secret:
+                    if is_secret_env_var(k):
                         logger.info("Skipping secret build-arg: %s", k)
                         continue
                     build_args.extend(["--build-arg", f"{k}={env_map[k]}"])

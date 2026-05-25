@@ -75,20 +75,14 @@ class NixpacksBuilder:
         elif allow_missing_start:
             command.append("--no-error-without-start")
 
-        # Build-arg secret hints: env vars matching these patterns are
+        # Build-arg secret hints: env vars detected as secrets are
         # NOT passed as --env to nixpacks to avoid leaking into build
         # layers and process listings.  They are injected at runtime.
-        _BUILD_SECRET_HINTS = (
-            "SECRET", "KEY", "PASSWORD", "TOKEN", "DSN",
-            "DATABASE_URL", "POSTGRES_URL", "REDIS_URL",
-            "JWT", "CREDENTIAL",
-        )
+        from apps.cloud.services.build_constants import is_secret_env_var
 
         if env_vars:
             for k, v in env_vars.items():
-                upper_k = k.upper()
-                is_secret = any(hint in upper_k for hint in _BUILD_SECRET_HINTS)
-                if is_secret:
+                if is_secret_env_var(k):
                     logger.info("Skipping secret env for nixpacks build: %s", k)
                     continue
                 command.extend(["--env", f"{k}={v}"])
