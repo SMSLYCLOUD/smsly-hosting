@@ -214,6 +214,25 @@ class EmbeddedPlaceholderResolutionTests(SimpleTestCase):
         self.assertIn("ANOTHER_BAD", msg)
         self.assertNotIn("GOOD_KEY", msg)
 
+    def test_caprover_placeholders_resolved_to_defaults(self):
+        """CAPROVER_ prefixed placeholders should resolve to default values and not crash."""
+        env_map = {
+            "CAPROVER_URL": "{{CAPROVER_URL}}",
+            "CAPROVER_PASSWORD": "{{CAPROVER_PASSWORD}}",
+        }
+        out = _resolve_env_placeholders(env_map, {})
+        self.assertEqual(out["CAPROVER_URL"], "http://localhost")
+        self.assertEqual(out["CAPROVER_PASSWORD"], "")
+
+    def test_arbitrary_url_placeholder_not_treated_as_addon(self):
+        """An arbitrary URL placeholder should not be treated as a provisionable addon."""
+        env_map = {"SOME_OTHER_URL": "{{SOME_OTHER_URL}}"}
+        # Should not raise ValueError since it's not a valid addon type
+        out = _resolve_env_placeholders(env_map, {})
+        self.assertEqual(out["SOME_OTHER_URL"], "{{SOME_OTHER_URL}}")
+
+
+
 
 class PlaceholderAddonTypeTests(SimpleTestCase):
     """Tests for _placeholder_addon_types with embedded placeholders."""
@@ -531,3 +550,16 @@ class EcosystemDeployTaskTests(TestCase):
         self.assertEqual(result["failed"], 0)
         service = Service.objects.get(owner=self.user, name="api")
         self.assertEqual(service.buildpack, "DOCKER")
+
+    def test_heuristic_analysis_defaults_to_docker(self):
+        """Heuristic analysis build defaults to docker."""
+        from services.ecosystem import heuristic_analysis
+        res = heuristic_analysis(["index.js", "package.json"])
+        self.assertEqual(res["build"], "docker")
+
+    def test_simulate_analysis_defaults_to_dockerfile(self):
+        """Simulated DevOps Agent analysis defaults to dockerfile."""
+        from services.ai_engine import DevOpsAgent
+        agent = DevOpsAgent()
+        analysis = agent._simulate_analysis("https://github.com/owner/node-repo.git")
+        self.assertEqual(analysis.build_strategy, "dockerfile")
