@@ -641,7 +641,32 @@ def _build_platform_healthcheck(service: Service, env_vars: dict) -> dict | None
 
 def _build_runtime_env(service: Service, image_name: str = None) -> dict:
     """Assemble runtime env vars with routing domains sourced from Service."""
-    env_vars = {env.key: env.value for env in service.env_vars.all()}
+    def _is_ciphertext(val: str) -> bool:
+        if not val or not isinstance(val, str):
+            return False
+        if val.startswith("gAAAAA"):
+            return True
+        if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):
+            try:
+                import base64
+                padded = val + '=' * (-len(val) % 4)
+                decoded = base64.urlsafe_b64decode(padded)
+                if len(decoded) >= 57 and decoded[0] == 0x80:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    env_vars = {}
+    for env in service.env_vars.all():
+        val = env.value
+        if _is_ciphertext(val):
+            logger.warning(
+                "[DB-ENCRYPT] Skipping ciphertext env var %s for service %s at runtime injection",
+                env.key, service.name,
+            )
+            continue
+        env_vars[env.key] = val
 
     # ── Locked keys: user has explicitly locked these — never override them ──
     locked_keys = set(

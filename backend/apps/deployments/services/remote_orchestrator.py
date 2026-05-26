@@ -1074,14 +1074,30 @@ class RemoteOrchestrator:
         """
         path = f"/api/v1/services/{remote_service_id}/env_vars/"
 
-        _FERNET_PREFIX = "gAAAAAB"
-
         def _is_ciphertext(val: str) -> bool:
-            return bool(val and val.startswith(_FERNET_PREFIX))
+            """Detect Fernet ciphertext that was not decrypted by the ORM."""
+            if not val or not isinstance(val, str):
+                return False
+            # Fernet tokens always start with gAAAAA (base64 of version byte + timestamp)
+            if val.startswith("gAAAAA"):
+                return True
+            # Additional heuristic: all-base64/base64url string of Fernet-typical length
+            if len(val) > 100 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for c in val):
+                try:
+                    import base64
+                    padded = val + '=' * (-len(val) % 4)
+                    decoded = base64.urlsafe_b64decode(padded)
+                    # Fernet tokens are at least 57 bytes (version + time + iv + 16-byte block + hmac)
+                    if len(decoded) >= 57 and decoded[0] == 0x80:
+                        return True
+                except Exception:
+                    pass
+            return False
 
         env_vars = EnvironmentVariable.objects.filter(service=service)
 
         safe_vars = []
+        skipped_count = 0
         for var in env_vars:
             raw_value = var.value
             if _is_ciphertext(raw_value):
@@ -1090,6 +1106,7 @@ class RemoteOrchestrator:
                     "value is ciphertext (decryption failed or double-encrypted).",
                     var.key, service.name,
                 )
+                skipped_count += 1
                 continue
             safe_vars.append({
                 "key": var.key,
@@ -1097,6 +1114,12 @@ class RemoteOrchestrator:
                 "is_secret": var.is_secret,
                 "source": var.source,
             })
+
+        if skipped_count > 0:
+            logger.warning(
+                "[DB-ENCRYPT] Skipped %d environment variables for service %s due to decryption failure/ciphertext value.",
+                skipped_count, service.name,
+            )
 
         if not safe_vars:
             logger.info(

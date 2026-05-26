@@ -117,6 +117,17 @@ class EnvironmentVariableModelTests(TestCase):
         # Expect 3: DB_HOST + DB_PASS + SMSLY_API_KEY
         self.assertEqual(len(env_dict), 3)
 
+    def test_env_var_widen_max_length(self):
+        """Should support env vars with length > 255 (up to 10000) characters."""
+        long_value = 'A' * 1000
+        env = EnvironmentVariable.objects.create(
+            service=self.service,
+            key='LONG_VAR',
+            value=long_value
+        )
+        env.refresh_from_db()
+        self.assertEqual(env.value, long_value)
+
 
 class EnvironmentVariableAPITests(APITestCase):
     """API-level tests for env var endpoints."""
@@ -192,3 +203,77 @@ class EnvironmentVariableAPITests(APITestCase):
         row = next((item for item in items if item.get('key') == 'BROKEN_VALUE'), None)
         self.assertIsNotNone(row)
         self.assertIn(row.get('value'), ['', 'not-a-valid-encrypted-token'])
+
+    def test_bulk_post_rejects_ciphertext(self):
+        """Bulk env var POST endpoint should skip Fernet ciphertext values and return a warning."""
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        f = Fernet(key)
+        ciphertext = f.encrypt(b"secret-value").decode('utf-8')
+
+        url = f'/api/v1/services/{self.service.id}/env_vars/'
+        payload = {
+            'vars': [
+                {'key': 'VALID_VAR', 'value': 'good-value'},
+                {'key': 'CIPHERTEXT_VAR', 'value': ciphertext},
+            ]
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+
+        # Ciphertext should be skipped, normal one saved
+        self.assertTrue(EnvironmentVariable.objects.filter(service=self.service, key='VALID_VAR').exists())
+        self.assertFalse(EnvironmentVariable.objects.filter(service=self.service, key='CIPHERTEXT_VAR').exists())
+
+        # Response should contain warnings/skipped info
+        self.assertIn('warning', response.data)
+        self.assertEqual(response.data['added'], 1)
+
+    def test_single_post_rejects_ciphertext(self):
+        """Single env var POST endpoint should return 400 Bad Request if value is Fernet ciphertext."""
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        f = Fernet(key)
+        ciphertext = f.encrypt(b"secret-value").decode('utf-8')
+
+        url = f'/api/v1/services/{self.service.id}/env_vars/'
+        payload = {
+            'key': 'CIPHERTEXT_VAR',
+            'value': ciphertext,
+        }
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
+        self.assertIn('value', response.data)
+        self.assertFalse(EnvironmentVariable.objects.filter(service=self.service, key='CIPHERTEXT_VAR').exists())
+
+    def test_build_runtime_env_filters_ciphertext(self):
+        """_build_runtime_env should exclude environment variables that are still Fernet ciphertext."""
+        from apps.deployments.tasks import _build_runtime_env
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        f = Fernet(key)
+        ciphertext = f.encrypt(b"secret-value").decode('utf-8')
+
+        # Create env vars directly in DB bypassing validation
+        valid_var = EnvironmentVariable.objects.create(
+            service=self.service,
+            key='VALID_VAR',
+            value='good-value'
+        )
+        ciphertext_var = EnvironmentVariable.objects.create(
+            service=self.service,
+            key='CIPHERTEXT_VAR',
+            value='temp-value'
+        )
+
+        table = EnvironmentVariable._meta.db_table
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {table} SET value = %s WHERE id = %s",
+                [ciphertext, ciphertext_var.id],
+            )
+
+        runtime_env = _build_runtime_env(self.service)
+        self.assertIn('VALID_VAR', runtime_env)
+        self.assertEqual(runtime_env['VALID_VAR'], 'good-value')
+        self.assertNotIn('CIPHERTEXT_VAR', runtime_env)
